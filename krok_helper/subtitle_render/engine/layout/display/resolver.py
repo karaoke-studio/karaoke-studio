@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from krok_helper.subtitle_render.engine.layout.layout_context import (
+    current_roll_shift_ms,
+)
+
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, replace
@@ -730,7 +734,11 @@ def apply_animation_time_guard(
         start = int(item.display_start_ms)
         end = int(item.display_end_ms)
         if item.line.display_start_override_ms is None and entry_duration > 0:
-            start = min(start, max(line_start - entry_duration, 0))
+            # 前黑开启时入场动画窗口允许伸进前黑区间（与 show-time 求解器
+            # 同一条 -偏移 下界）。
+            start = min(
+                start, max(line_start - entry_duration, -current_roll_shift_ms())
+            )
         if item.line.display_end_override_ms is None and exit_duration > 0:
             end = max(end, line_end + exit_duration)
         if start != item.display_start_ms or end != item.display_end_ms:
@@ -926,7 +934,7 @@ def apply_animation_time_guard(
                     new_start = int(incoming.display_start_ms) + entry_take
                     latest_entry_start = max(
                         line_starts[incoming_index] - entry_stop,
-                        0,
+                        -current_roll_shift_ms(),
                     )
                     new_start = min(new_start, latest_entry_start)
                     if new_start != incoming.display_start_ms:
@@ -1224,6 +1232,8 @@ def resolve_display_lines_for_style(
             id(track),
             track_signature_for_windows(track),
             lyric_layout_style_signature(style),
+            # 前黑展示层偏移改变入场窗口钳制下界，必须参与缓存键。
+            current_roll_shift_ms(),
         )
         cached = cached_display_line_resolution(cache_key)
         if cached is not None:

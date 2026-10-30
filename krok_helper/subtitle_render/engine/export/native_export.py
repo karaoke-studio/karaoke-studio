@@ -349,6 +349,7 @@ def _configure_gpu_export_with_preflight(
     realizations: bool,
     shared: bool,
     duration_ms: int | None,
+    roll_shift_ms: int,
     packed: bool,
     crop_top: int,
     crop_height: int,
@@ -444,6 +445,8 @@ def _configure_gpu_export_with_preflight(
             }
             if duration_ms is not None:
                 configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
+            if roll_shift_ms:
+                configure_kwargs["roll_shift_ms"] = int(roll_shift_ms)
             configure_invoked = True
             # configure 是阻塞调用，中途不检查取消；用旁路线程在看用户
             # 点「停止导出」时直接 abort sidecar，让阻塞的协议读立即返回。
@@ -708,6 +711,7 @@ def iter_native_rgba_frames(
     fps: int,
     total_frames: int,
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
     renderer_path: str | os.PathLike[str] | None = None,
     threads: int | None = None,
     chunk_frames: int | None = None,
@@ -726,6 +730,7 @@ def iter_native_rgba_frames(
         height=height,
         fps=fps,
         duration_ms=duration_ms,
+        roll_shift_ms=roll_shift_ms,
         renderer_path=renderer_path,
         threads=threads,
         chunk_frames=chunk_frames,
@@ -743,6 +748,7 @@ def iter_native_rgba_frames_at_times(
     height: int,
     fps: int,
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
     renderer_path: str | os.PathLike[str] | None = None,
     threads: int | None = None,
     chunk_frames: int | None = None,
@@ -764,6 +770,8 @@ def iter_native_rgba_frames_at_times(
         configure_kwargs = {"width": width, "height": height, "fps": fps}
         if duration_ms is not None:
             configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
+        if roll_shift_ms:
+            configure_kwargs["roll_shift_ms"] = int(roll_shift_ms)
         renderer.configure(track, style, **configure_kwargs)
         start_frame = 0
         while start_frame < frame_total:
@@ -961,6 +969,7 @@ def iter_gpu_rgba_frames(
     fps: int | float,
     total_frames: int,
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
     start_t_ms: int = 0,
     start_frame: int | None = None,
     renderer_path: str | os.PathLike[str] | None = None,
@@ -1045,6 +1054,7 @@ def iter_gpu_rgba_frames(
         realizations=realizations,
         shared=shared,
         duration_ms=duration_ms,
+        roll_shift_ms=roll_shift_ms,
         packed=packed,
         crop_top=crop_top,
         crop_height=crop_height,

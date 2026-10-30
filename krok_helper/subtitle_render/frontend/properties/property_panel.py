@@ -113,6 +113,14 @@ from krok_helper.subtitle_render.frontend.properties.pages.registry import (
     build_property_pages,
     property_page_index,
 )
+from krok_helper.subtitle_render.frontend.properties.pages.rolls import (
+    RollsPropertyPageBuilder,
+)
+from krok_helper.subtitle_render.domain.roll import (
+    RollSegmentConfig,
+    format_roll_source_duration,
+    roll_config_with_defaults,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     _ALIGN_SEGMENT_OPTIONS,
     _POSITION_SEGMENT_OPTIONS,
@@ -1063,6 +1071,15 @@ class PropertyPanel(QWidget):
     """图片缩放策略变化；参数为 cover（铺满）/ contain（黑边）。"""
     audioBrowseRequested = Signal()
     audioClearRequested = Signal()
+    rollBrowseRequested = Signal(str, str)
+    """前黑/后黑素材浏览：参数为段 key（pre/post）与素材 kind。"""
+    rollAudioBrowseRequested = Signal(str)
+    rollAudioClearRequested = Signal(str)
+    rollSolidColorDialogRequested = Signal(str)
+    """前黑/后黑纯色选色对话框请求（色值实时输入走 rollConfigChanged）。"""
+    rollConfigChanged = Signal(str, dict)
+    """前黑/后黑参数变化：参数为段 key（pre/post）与字段变更字典
+    （键为 RollSegmentConfig 字段名或 source_kind/solid_color）。"""
     screenSizeChanged = Signal()
     """面板内宽 / 高 / 帧率被用户改动（宿主回写导出页与预览）。"""
     trackTimingChanged = Signal(int, dict)
@@ -1150,6 +1167,28 @@ class PropertyPanel(QWidget):
             color_button_factory=ColorButton,
             kind_pages=_BACKGROUND_KIND_PAGES,
         )
+        self._rolls_page_builder = RollsPropertyPageBuilder(
+            self,
+            color_button_factory=ColorButton,
+        )
+        # 前黑/后黑控件容器（builder 填充；set_rolls_state 回填）。
+        self._roll_enabled_switches: dict[str, object] = {}
+        self._roll_kind_pills: dict[str, object] = {}
+        self._roll_kind_stacks: dict[str, object] = {}
+        self._roll_path_edits: dict[str, dict[str, object]] = {}
+        self._roll_duration_hints: dict[str, dict[str, object]] = {
+            "pre": {},
+            "post": {},
+        }
+        self._roll_default_config: RollSegmentConfig = RollSegmentConfig()
+        self._roll_solid_buttons: dict[str, object] = {}
+        self._roll_audio_edits: dict[str, object] = {}
+        self._roll_fill_combos: dict[str, object] = {}
+        self._roll_duration_spins: dict[str, object] = {}
+        self._roll_main_transition_spins: dict[str, object] = {}
+        self._roll_main_transition_combos: dict[str, object] = {}
+        self._roll_self_transition_spins: dict[str, object] = {}
+        self._roll_self_transition_combos: dict[str, object] = {}
         self._effects_page_builder = EffectsPropertyPageBuilder(
             self,
             spin_factory=_spin,
@@ -3090,6 +3129,114 @@ class PropertyPanel(QWidget):
 
     def _make_background_source_section(self) -> QFrame:
         return self._background_page_builder.make_source_section()
+
+    # ------------------------------------------------------------------ rolls page
+
+    def _make_rolls_section(self) -> QFrame:
+        return self._rolls_page_builder.make_rolls_section()
+
+    def _on_roll_segment_pill_changed(self, segment: str) -> None:
+        seg_stack = getattr(self, "_roll_segment_stack", None)
+        if seg_stack is None:
+            return
+        # 页面按 _SEGMENT_KEYS（pre, post）顺序加入。
+        index = ("pre", "post").index(segment) if segment in ("pre", "post") else 0
+        seg_stack.setCurrentIndex(index)
+
+    def _on_roll_kind_pill_changed(self, segment: str, kind: str) -> None:
+        stack = self._roll_kind_stacks.get(segment)
+        if stack is not None:
+            # 详情页按 _ROLL_KIND_PAGES 顺序加入。
+            order = ("video", "image_sequence", "image", "solid")
+            if kind in order:
+                stack.setCurrentIndex(order.index(kind))
+        if not self._syncing:
+            self.rollConfigChanged.emit(segment, {"source_kind": kind})
+
+    def set_roll_defaults(self, defaults: dict) -> None:
+        """应用 app 级「新建前黑/后黑默认值」（不影响已配置的当前工程段）。"""
+
+        self._roll_default_config = roll_config_with_defaults(defaults)
+
+    def set_rolls_state(
+        self,
+        pre: RollSegmentConfig | None,
+        post: RollSegmentConfig | None,
+    ) -> None:
+        """回填前黑/后黑两段配置（程序侧同步，不发信号）。"""
+        self._syncing = True
+        try:
+            for segment, config in (("pre", pre), ("post", post)):
+                normalized = (
+                    config.normalized()
+                    if config is not None
+                    else self._roll_default_config
+                )
+                switch = self._roll_enabled_switches.get(segment)
+                if switch is not None:
+                    switch.setChecked(normalized.enabled)
+                pill = self._roll_kind_pills.get(segment)
+                if pill is not None and hasattr(pill, "set_current"):
+                    pill.set_current(normalized.source.kind)
+                stack = self._roll_kind_stacks.get(segment)
+                if stack is not None:
+                    order = ("video", "image_sequence", "image", "solid")
+                    if normalized.source.kind in order:
+                        stack.setCurrentIndex(order.index(normalized.source.kind))
+                path_edit = self._roll_path_edits.get(segment, {}).get(
+                    normalized.source.kind
+                )
+                if path_edit is not None:
+                    path_edit.setText(normalized.source.path or "")
+                for kind, hint in self._roll_duration_hints.get(segment, {}).items():
+                    timed = (
+                        kind == normalized.source.kind
+                        and bool(normalized.source.path)
+                        and normalized.source_duration_ms > 0
+                    )
+                    hint.setText(
+                        format_roll_source_duration(normalized.source_duration_ms)
+                        if timed
+                        else ""
+                    )
+                    hint.setVisible(bool(timed))
+                audio_edit = self._roll_audio_edits.get(segment)
+                if audio_edit is not None:
+                    audio_edit.setText(normalized.audio_path or "")
+                solid = self._roll_solid_buttons.get(segment)
+                if solid is not None and hasattr(solid, "setColor"):
+                    solid.setColor(normalized.source.color)
+                self._set_combo_data(self._roll_fill_combos.get(segment), normalized.fill)
+                duration = self._roll_duration_spins.get(segment)
+                if duration is not None:
+                    duration.setValue(normalized.duration_ms / 1000.0)
+                main_ms = self._roll_main_transition_spins.get(segment)
+                if main_ms is not None:
+                    main_ms.setValue(normalized.main_transition_ms)
+                self_ms = self._roll_self_transition_spins.get(segment)
+                if self_ms is not None:
+                    self_ms.setValue(normalized.self_transition_ms)
+                self._set_combo_data(
+                    self._roll_main_transition_combos.get(segment),
+                    normalized.main_transition_style,
+                )
+                self._set_combo_data(
+                    self._roll_self_transition_combos.get(segment),
+                    normalized.self_transition_style,
+                )
+                if segment == "pre":
+                    auto = getattr(self, "_roll_auto_offset_switch", None)
+                    if auto is not None:
+                        auto.setChecked(normalized.auto_offset_subtitles)
+        finally:
+            self._syncing = False
+
+    def _set_combo_data(self, combo: object, data: object) -> None:
+        if combo is None:
+            return
+        index = combo.findData(data) if hasattr(combo, "findData") else -1
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     def _make_background_detail_page(
         self, kind: str, label: str, placeholder: str, section: QWidget

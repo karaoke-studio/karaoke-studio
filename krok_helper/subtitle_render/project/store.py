@@ -333,6 +333,8 @@ def project_payload(
     loading_settings_snapshot: Optional[dict] = None,
     extra_subtitle_sources: Optional[list] = None,
     project_role_names: Optional[list[str]] = None,
+    pre_roll: Optional[dict] = None,
+    post_roll: Optional[dict] = None,
 ) -> dict:
     """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。
 
@@ -469,6 +471,10 @@ def project_payload(
         payload["project_role_names"] = [
             str(name).strip() for name in project_role_names if str(name).strip()
         ]
+    if pre_roll is not None:
+        payload["pre_roll"] = dict(pre_roll)
+    if post_roll is not None:
+        payload["post_roll"] = dict(post_roll)
     return payload
 
 

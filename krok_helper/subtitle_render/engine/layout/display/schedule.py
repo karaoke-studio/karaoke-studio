@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from krok_helper.subtitle_render.engine.layout.layout_context import (
+    current_roll_shift_ms,
+)
 from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.line.style import (
@@ -112,7 +115,10 @@ def single_line_display_windows(
             if signal_leads is not None
             else lead
         )
-        display_start = max(line_start_ms(line) - line_lead, 0)
+        # 前黑开启时显示坐标 0 = track -偏移；入场窗口允许伸进前黑区间。
+        display_start = max(
+            line_start_ms(line) - line_lead, -current_roll_shift_ms()
+        )
         display_end = line_end_ms(line) + tail
         windows[index] = apply_display_overrides(line, display_start, display_end)
     return windows
@@ -192,7 +198,7 @@ def single_visible_display_line(
         )
         sing_start = line_start_ms(line)
         sing_end = line_end_ms(line)
-        display_start = max(sing_start - line_lead, 0)
+        display_start = max(sing_start - line_lead, -current_roll_shift_ms())
         display_end = sing_end + tail
         display_start, display_end = apply_display_overrides(
             line,

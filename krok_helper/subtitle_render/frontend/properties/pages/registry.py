@@ -87,6 +87,17 @@ def _build_background_page(
     return scroll
 
 
+def _build_rolls_page(
+    host: Any,
+    scroll_page: Callable,
+    _section_pair: Callable,
+) -> Any:
+    scroll, layout = scroll_page()
+    layout.addWidget(host._make_rolls_section())
+    layout.addStretch(1)
+    return scroll
+
+
 PROPERTY_PAGE_DEFINITIONS = (
     PropertyPageDefinition("font", "角色", _build_role_page),
     PropertyPageDefinition("layout", "布局", _build_layout_page),
@@ -94,6 +105,7 @@ PROPERTY_PAGE_DEFINITIONS = (
     PropertyPageDefinition("effects", "特效", _build_effects_page),
     PropertyPageDefinition("title", "标题", _build_title_page),
     PropertyPageDefinition("background", "背景/音频", _build_background_page),
+    PropertyPageDefinition("rolls", "前黑/后黑", _build_rolls_page),
 )
 
 PROPERTY_PAGE_SPECS = tuple(

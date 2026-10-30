@@ -22,6 +22,7 @@ class VisibleContentResolver(Protocol):
         duration_ms: int | None = None,
         logical_w: int | None = None,
         logical_h: int | None = None,
+        roll_shift_ms: int = 0,
     ) -> FrameContent: ...
 
 
@@ -69,6 +70,7 @@ def frame_has_content(
     duration_ms: int | None = None,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    roll_shift_ms: int = 0,
     ports: FrameAnalysisPorts,
 ) -> bool:
     """Return whether any main, extra, signal, or title content is visible."""
@@ -82,6 +84,7 @@ def frame_has_content(
                 duration_ms=duration_ms,
                 logical_w=logical_w,
                 logical_h=logical_h,
+                roll_shift_ms=roll_shift_ms,
             )
         )
         if display_lines or signal_lines or title_states:
@@ -93,6 +96,7 @@ def frame_has_content(
             style,
             logical_w=logical_w,
             logical_h=logical_h,
+            roll_shift_ms=roll_shift_ms,
         )
         if display_lines or signal_lines:
             return True
@@ -108,6 +112,7 @@ def frame_content_intervals(
     extra_tracks: list[TimingTrack] | None = None,
     *,
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
     ports: FrameAnalysisPorts,
 ) -> list[tuple[int, int]] | None:
     """Return unmerged, clamped vertical intervals for visible frame groups."""
@@ -130,6 +135,7 @@ def frame_content_intervals(
                 duration_ms=duration_ms if with_title else None,
                 logical_w=logical_w,
                 logical_h=logical_h,
+                roll_shift_ms=roll_shift_ms,
             )
         )
         if not with_title:
@@ -185,6 +191,7 @@ def frame_vertical_bounds(
     extra_tracks: list[TimingTrack] | None = None,
     *,
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
     ports: FrameAnalysisPorts,
 ) -> tuple[int, int] | None:
     """Return the union of all visible frame content intervals."""
@@ -197,6 +204,7 @@ def frame_vertical_bounds(
         style,
         extra_tracks,
         duration_ms=duration_ms,
+        roll_shift_ms=roll_shift_ms,
         ports=ports,
     )
     if not intervals:

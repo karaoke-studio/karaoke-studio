@@ -50,6 +50,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QColor,
+    QCursor,
     QDesktopServices,
     QImage,
     QKeySequence,
@@ -64,6 +65,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QSplitter,
     QStackedWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -92,6 +94,16 @@ from krok_helper.settings import get_settings_path, load_app_settings, save_app_
 from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
     infer_image_sequence_pattern,
+)
+from krok_helper.subtitle_render.domain.roll import (
+    RollSegmentConfig,
+    build_roll_timeline,
+    effective_roll_ms,
+    roll_config_with_defaults,
+    roll_defaults_from_dict,
+    format_roll_source_duration,
+    roll_segment_has_audio,
+    shift_style_title_overlays,
 )
 from krok_helper.subtitle_render.engine.export.encoder_select import (
     CODEC_H264,
@@ -165,6 +177,8 @@ from krok_helper.subtitle_render.sources.guide_symbols import (
 from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
     _MediaProbeWorker,
     _N3ImportWorker,
+    _RollMediaLoadWorker,
+    _RollRefreshWorker,
 )
 from krok_helper.subtitle_render.frontend.workflow.export_runtime import (
     ExportRuntimeCallbacks,
@@ -245,6 +259,9 @@ from krok_helper.subtitle_render.frontend.preview.workspace import (
     PreviewWorkspaceView,
 )
 from krok_helper.subtitle_render.frontend.preview.preview_view import PreviewPanel, TransportBar
+from krok_helper.subtitle_render.frontend.preview.roll_preview import (
+    remember_roll_preview_frame,
+)
 from krok_helper.subtitle_render.frontend.preview.preview_async import (
     DEFAULT_PREVIEW_QUALITY,
     gpu_preview_enabled,
@@ -267,6 +284,9 @@ from krok_helper.subtitle_render.frontend.project.project_autosave import (
 )
 from krok_helper.subtitle_render.frontend.project.project_recovery import (
     ProjectRecoveryController,
+)
+from krok_helper.subtitle_render.frontend.dialogs.roll_defaults import (
+    RollDefaultsDialog as _RollDefaultsDialog,
 )
 from krok_helper.subtitle_render.frontend.project.project_settings import (
     AutoSaveSettingsDialog as _AutoSaveSettingsDialog,
@@ -389,6 +409,7 @@ from krok_helper.subtitle_render.project.resources import (
     find_missing_project_resources,
 )
 from krok_helper.subtitle_render.project.recent import RecentProjectPolicy
+from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
 from krok_helper.subtitle_render.engine.timing.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
     DEFAULT_CHORUS_END_CHARS,
@@ -439,6 +460,8 @@ _UNDO_STACK_LIMIT = 200
 _PREVIEW_STYLE_REFRESH_MS = 150
 """预览重刷的纯尾沿防抖窗口：属性面板连打停止后过这么久才渲一帧。"""
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
+
+
 IMAGE_FILTER = "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;所有文件 (*.*)"
 AUDIO_FILTER = "音频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus);;所有文件 (*.*)"
 BACKGROUND_MEDIA_FILTER = (
@@ -972,6 +995,22 @@ class SubtitleRenderWindow(QWidget):
         self._project_document.audio_path = value
 
     @property
+    def _pre_roll(self) -> Optional[RollSegmentConfig]:
+        return self._project_document.pre_roll
+
+    @_pre_roll.setter
+    def _pre_roll(self, value: Optional[RollSegmentConfig]) -> None:
+        self._project_document.pre_roll = value
+
+    @property
+    def _post_roll(self) -> Optional[RollSegmentConfig]:
+        return self._project_document.post_roll
+
+    @_post_roll.setter
+    def _post_roll(self, value: Optional[RollSegmentConfig]) -> None:
+        self._project_document.post_roll = value
+
+    @property
     def _audio_info(self) -> Optional[MediaInfo]:
         return self._project_document.audio_info
 
@@ -1269,6 +1308,18 @@ class SubtitleRenderWindow(QWidget):
         self._n3_import_tooltip_timer.setInterval(400)
         self._n3_import_tooltip_timer.timeout.connect(self._show_n3_import_tooltip)
         self._handoff_probe_worker: Optional[_MediaProbeWorker] = None
+        # 前黑/后黑联动重算的代数与在途后台任务（结果过期即丢弃）。
+        self._roll_refresh_generation: int = 0
+        self._roll_refresh_tasks: list = []
+        # 素材探测/图片读取/预览代理预热也在后台线程，避免加载大素材卡 UI。
+        self._roll_media_load_generation: int = 0
+        self._roll_media_metadata_generation: int = 0
+        self._roll_media_load_tasks: list = []
+        self._roll_media_generations: dict[str, int] = {}
+        self._roll_media_metadata_generations: dict[str, int] = {}
+        self._roll_media_tooltips: dict = {}
+        # 前黑/后黑新建段默认值（app 级偏好，随 settings.json 落盘）。
+        self._roll_defaults: dict = roll_defaults_from_dict(None)
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[Any] = None
@@ -1425,6 +1476,22 @@ class SubtitleRenderWindow(QWidget):
             return
         self._host_exit_shutdown = True
         self._closing_window = True
+        self._roll_refresh_generation += 1
+        for thread, worker in self._roll_refresh_tasks:
+            thread.quit()
+            thread.wait()
+        self._roll_refresh_tasks.clear()
+        self._roll_media_load_generation += 1
+        self._roll_media_generations.clear()
+        for tooltip in self._roll_media_tooltips.values():
+            tooltip.close()
+            tooltip.deleteLater()
+        self._roll_media_tooltips.clear()
+        for thread, worker in self._roll_media_load_tasks:
+            thread.quit()
+            thread.wait()
+        self._roll_media_load_tasks.clear()
+        self._preview_panel.set_roll_plan(None)
         self._flush_persisted_state_save()
         self._stop_auto_save_runtime(wait=True)
         if self._playback is not None:
@@ -1619,6 +1686,9 @@ class SubtitleRenderWindow(QWidget):
         menu.addSeparator()
         menu.addAction(
             Action(FIF.HISTORY, "保存与备份设置…", triggered=self._open_auto_save_settings)
+        )
+        menu.addAction(
+            Action(FIF.EDIT, "前黑/后黑默认值…", triggered=self._open_roll_defaults)
         )
         menu.addAction(
             Action(FIF.FOLDER, "打开备份目录", triggered=self._open_project_backup_directory)
@@ -1880,11 +1950,34 @@ class SubtitleRenderWindow(QWidget):
         if hasattr(self, "_property_panel"):
             self._property_panel.set_project_generation(self._project_generation)
         self._project_deferred_loads = []
+        self._roll_media_load_generation += 1  # 丢弃上一工程在途的素材读取结果
+        self._roll_media_generations.clear()
+        for tooltip in self._roll_media_tooltips.values():
+            tooltip.close()
+            tooltip.deleteLater()
+        self._roll_media_tooltips.clear()
         if hasattr(self, "_project_deferred_load_timer"):
             self._project_deferred_load_timer.stop()
         self._auto_save_pending = False
         if hasattr(self, "_auto_save_timer"):
             self._auto_save_timer.stop()
+
+    def _open_roll_defaults(self) -> None:
+        """app 级「前黑/后黑默认值」：只影响之后新建的段。"""
+        dialog = _RollDefaultsDialog(self._roll_defaults, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._roll_defaults = dialog.selection()
+        self._property_panel.set_roll_defaults(self._roll_defaults)
+        self._property_panel.set_rolls_state(self._pre_roll, self._post_roll)
+        self._save_persisted_state()
+        InfoBar.success(
+            title="前黑/后黑默认值已更新",
+            content="之后新建的前黑/后黑将使用这些默认值；当前工程段保持不变。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
 
     def _open_auto_save_settings(self) -> None:
         dialog = _AutoSaveSettingsDialog(
@@ -2157,6 +2250,15 @@ class SubtitleRenderWindow(QWidget):
             audio = plan.audio_path
             if audio is not None and audio.is_file() and audio != self._video_path:
                 self.load_audio(audio)
+        # 前黑/后黑配置只在工程打开时整体替换（加载态不发信号/不平移标题）。
+        self._pre_roll = plan.pre_roll
+        self._post_roll = plan.post_roll
+        self._property_panel.set_rolls_state(self._pre_roll, self._post_roll)
+        self._roll_refresh_generation += 1  # 丢弃装载前在途的异步结果
+        roll_plan = self._current_roll_plan()
+        self._preview_panel.set_roll_plan(roll_plan if roll_plan.active else None)
+        self._transport_bar.set_roll_plan(roll_plan if roll_plan.active else None)
+        self._tracks_view.set_timing_display_offset(roll_plan.lyric_shift_ms)
         # Project/N3 role payloads are authoritative.  Populate missing role
         # schemes only after those payloads have replaced source-LRC markers;
         # otherwise a transient ``【アクア】`` marker can auto-create an unrelated
@@ -2457,6 +2559,13 @@ class SubtitleRenderWindow(QWidget):
         self._loading_project = True
         try:
             self._project_document.clear_loaded_media()
+            self._pre_roll = None
+            self._post_roll = None
+            self._roll_refresh_generation += 1  # 丢弃在途异步结果
+            self._preview_panel.set_roll_plan(None)
+            self._transport_bar.set_roll_plan(None)
+            self._tracks_view.set_timing_display_offset(0)
+            self._property_panel.set_rolls_state(None, None)
             self._active_source_index = 0
             self._active_title_index = None
             self._clear_undo_history()
@@ -3045,6 +3154,8 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar = controls.transport_bar
         self._lyrics_panel = controls.lyrics_panel
         self._property_panel = controls.property_panel
+        self._property_panel.set_roll_defaults(self._roll_defaults)
+        self._property_panel.set_rolls_state(self._pre_roll, self._post_roll)
         # 非模态确认框打开期间允许切换工程；面板按代号丢弃过期操作。
         self._property_panel.set_project_generation(self._project_generation)
         self._layout_issues_button = controls.layout_issues_button
@@ -3128,11 +3239,19 @@ class SubtitleRenderWindow(QWidget):
         )
 
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
+        # 前黑/后黑段音频作为跨段时钟锚定源（无段音频时回退墙钟/主媒体）。
+        self._transport_bar.set_roll_audio_position_provider(
+            lambda t_ms: self._preview_panel.roll_audio_display_position(t_ms)
+        )
         self._transport_bar.playbackStateChanged.connect(
             self._preview_panel.set_playing
         )
         self._transport_bar.previewQualityChanged.connect(
             self._on_preview_quality_changed
+        )
+        # 段音频走独立播放器，预览音量滑块要同步过去（新建/重建段沿用该值）。
+        self._transport_bar.previewVolumeChanged.connect(
+            self._preview_panel.set_roll_preview_volume
         )
         self._preview_panel.canvas.framePainted.connect(
             self._transport_bar.note_preview_frame_painted
@@ -3208,6 +3327,13 @@ class SubtitleRenderWindow(QWidget):
         )
         self._property_panel.audioBrowseRequested.connect(self._browse_audio)
         self._property_panel.audioClearRequested.connect(self._clear_audio)
+        self._property_panel.rollBrowseRequested.connect(self._on_roll_browse)
+        self._property_panel.rollAudioBrowseRequested.connect(self._on_roll_audio_browse)
+        self._property_panel.rollAudioClearRequested.connect(self._on_roll_audio_clear)
+        self._property_panel.rollSolidColorDialogRequested.connect(
+            self._on_roll_solid_color_dialog
+        )
+        self._property_panel.rollConfigChanged.connect(self._on_roll_config_changed)
         self._property_panel.screenSizeChanged.connect(
             self._on_panel_screen_size_changed
         )
@@ -3494,6 +3620,458 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_background_source(updated)
         self._property_panel.set_background_state(updated)
         self._mark_project_dirty()
+
+    # ------------------------------------------------------------------ 前黑/后黑
+
+    def _current_roll_plan(self):
+        """按当前工程状态推导前黑/后黑展示时间线（预览/导出/时长共用）。"""
+
+        track_end = max(
+            (track_duration_ms(track) for track in self._all_tracks()), default=0
+        )
+        background = self._background_source or BackgroundSource()
+        video_end = None
+        if background.kind == "video" and self._video_info is not None:
+            if self._video_info.duration > 0:
+                video_end = int(round(self._video_info.duration * 1000))
+        audio_end = None
+        if self._audio_info is not None and self._audio_info.duration > 0:
+            audio_end = int(round(self._audio_info.duration * 1000))
+        return build_roll_timeline(
+            self._pre_roll,
+            self._post_roll,
+            track_end_ms=track_end,
+            main_media_end_ms=video_end,
+            main_audio_end_ms=audio_end,
+            background_kind=background.kind,
+        )
+
+    def _export_includes_audio(self) -> bool:
+        """导出是否带音轨：主音频存在，或任一前黑/后黑段能提供音频。"""
+        if self._audio_info is not None and self._audio_info.audio_streams > 0:
+            return True
+        return any(
+            config is not None and roll_segment_has_audio(config)
+            for config in (self._pre_roll, self._post_roll)
+        )
+
+    def _refresh_roll_state(self) -> None:
+        """开关/修改前黑后黑后的联动刷新：重算在后台线程（异步任务）。
+
+        展示时间线推导与轨道块重建是 O(全轴行数×字符) 的纯计算，放到
+        worker 线程执行；开关/输入回调立即返回，GUI 线程只在结果回到时
+        做控件赋值级别的应用。连点/连改时按代数丢弃过期结果。
+        """
+        if not hasattr(self, "_preview_panel"):
+            return
+        self._roll_refresh_generation += 1
+        generation = self._roll_refresh_generation
+        named_tracks, tracks_style = self._tracks_view.snapshot_lane_inputs()
+        background = self._background_source or BackgroundSource()
+        video_end = None
+        if background.kind == "video" and self._video_info is not None:
+            if self._video_info.duration > 0:
+                video_end = int(round(self._video_info.duration * 1000))
+        audio_end = None
+        if self._audio_info is not None and self._audio_info.duration > 0:
+            audio_end = int(round(self._audio_info.duration * 1000))
+        thread = QThread(self)
+        worker = _RollRefreshWorker(
+            generation,
+            pre=self._pre_roll,
+            post=self._post_roll,
+            named_tracks=named_tracks,
+            tracks_style=tracks_style,
+            main_media_end_ms=video_end,
+            main_audio_end_ms=audio_end,
+            background_kind=background.kind,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_roll_refresh_done)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(lambda task=thread: self._forget_roll_refresh_task(task))
+        thread.finished.connect(thread.deleteLater)
+        worker.done.connect(thread.quit)
+        thread.start()
+        # 成对持有引用：QObject 无父且丢掉 Python 引用会被 PyQt 回收，
+        # worker 会在运行中被析构（_MediaProbeWorker 模式同理显式持有）。
+        # 先 start 再登记并清理已结束的旧任务（start 前查 isRunning 会把
+        # 刚登记的新任务误当已结束清掉）。
+        self._roll_refresh_tasks.append((thread, worker))
+
+    def _forget_roll_refresh_task(self, thread) -> None:
+        self._roll_refresh_tasks = [
+            pair for pair in self._roll_refresh_tasks if pair[0] is not thread
+        ]
+
+    def _on_roll_refresh_done(self, result: object) -> None:
+        """后台重算结果回到 GUI 线程：应用时间线/轨道块/时长/面板回填。"""
+        generation = int(getattr(result, "generation", -1))
+        if generation != self._roll_refresh_generation:
+            return  # 已有更新的请求，丢弃过期结果
+        plan = getattr(result, "plan", None)
+        lanes = getattr(result, "lanes", None)
+        if plan is None or plan != self._current_roll_plan():
+            # worker 侧计算失败（极端并发）→ 同步回退，保证状态一定落地。
+            self._apply_roll_state_now()
+            return
+        active = plan if plan.active else None
+        self._preview_panel.set_roll_plan(active)
+        self._transport_bar.set_roll_plan(active)
+        # 轨道视图按成片 display 坐标显示：直接安装后台算好的块。
+        self._tracks_view.set_timing_display_offset(plan.lyric_shift_ms, lanes=lanes)
+        self._refresh_transport_duration()
+        self._property_panel.set_rolls_state(self._pre_roll, self._post_roll)
+
+    def _apply_roll_state_now(self) -> None:
+        """同步应用联动状态（worker 失败的回退路径；语义与异步应用一致）。"""
+        plan = self._current_roll_plan()
+        active = plan if plan.active else None
+        self._preview_panel.set_roll_plan(active)
+        self._transport_bar.set_roll_plan(active)
+        # 轨道视图按成片 display 坐标显示（块/把手/余量输入自动换算回源）。
+        self._tracks_view.set_timing_display_offset(plan.lyric_shift_ms)
+        self._refresh_transport_duration()
+        self._property_panel.set_rolls_state(self._pre_roll, self._post_roll)
+
+    def _commit_roll_config(self, segment: str, updated: RollSegmentConfig) -> None:
+        """整份段配置落地：与逐字段编辑同一语义（含前黑标题平移与时长联动）。"""
+
+        config = (self._pre_roll if segment == "pre" else self._post_roll) or RollSegmentConfig()
+        if segment == "pre":
+            old_ms = effective_roll_ms(config)
+            new_ms = effective_roll_ms(updated)
+            delta = new_ms - old_ms
+            if delta != 0:
+                shifted, clamped = shift_style_title_overlays(self._style, delta)
+                if shifted is not self._style:
+                    self._apply_style(shifted)
+                if clamped > 0:
+                    InfoBar.warning(
+                        title="前黑时长已变化",
+                        content=(
+                            f"{clamped} 个标题的显示时间随前黑平移时落入负值，"
+                            "已自动钳回到 0。"
+                        ),
+                        parent=self,
+                        position=InfoBarPosition.BOTTOM_RIGHT,
+                        duration=5000,
+                    )
+        if segment == "pre":
+            self._pre_roll = updated
+        else:
+            self._post_roll = updated
+        self._refresh_roll_state()
+        self._mark_project_dirty()
+
+    def _on_roll_config_changed(self, segment: str, changes: dict) -> None:
+        """前黑/后黑参数变化（属性页逐字段信号）。"""
+
+        config = (self._pre_roll if segment == "pre" else self._post_roll) or RollSegmentConfig()
+        source = config.source
+        fields = {
+            key: value
+            for key, value in changes.items()
+            if key not in {"source_kind", "solid_color"}
+        }
+        if "source_kind" in changes:
+            kind = str(changes["source_kind"])
+            if kind in {"video", "image", "image_sequence", "solid"}:
+                source = replace(source, kind=kind)
+        if "solid_color" in changes:
+            source = replace(source, color=str(changes["solid_color"]))
+        self._commit_roll_config(segment, replace(config, source=source, **fields).normalized())
+
+    def _roll_config_for(self, segment: str) -> RollSegmentConfig:
+        existing = self._pre_roll if segment == "pre" else self._post_roll
+        return existing or roll_config_with_defaults(self._roll_defaults)
+
+    def _on_roll_browse(self, segment: str, kind: str) -> None:
+        label = "前黑" if segment == "pre" else "后黑"
+        current = self._roll_config_for(segment)
+        start_dir = str(Path(current.source.path).parent) if current.source.path else ""
+        if kind == "video":
+            path_str, _ = QFileDialog.getOpenFileName(
+                self, f"选择{label}视频", start_dir, VIDEO_FILTER
+            )
+        elif kind == "image_sequence":
+            path_str, _ = QFileDialog.getOpenFileName(
+                self, f"选择{label}图片序列首帧", start_dir, IMAGE_FILTER
+            )
+        elif kind == "image":
+            path_str, _ = QFileDialog.getOpenFileName(
+                self, f"选择{label}一图流图片", start_dir, IMAGE_FILTER
+            )
+        else:
+            return
+        if not path_str:
+            return
+        self._start_roll_media_load(segment, kind, Path(path_str))
+
+    def _start_roll_media_load(
+        self, segment: str, kind: str, path: Path
+    ) -> None:
+        """在后台线程读取素材（ffprobe/首帧/帧数）并准备普通预览源。"""
+
+        self._roll_media_load_generation += 1
+        generation = self._roll_media_load_generation
+        self._roll_media_generations[segment] = generation
+        self._roll_media_metadata_generations.pop(segment, None)
+        self._roll_media_metadata_generation = 0
+        previous = self._roll_media_tooltips.pop(segment, None)
+        if previous is not None:
+            previous.close()
+            previous.deleteLater()
+        from qfluentwidgets import ProgressBar, IndeterminateProgressBar
+        tooltip = StateToolTip("正在加载前黑素材" if segment == "pre" else "正在加载后黑素材", "读取素材信息…", self)
+        tooltip.setFixedSize(max(tooltip.width(), 320), 72)
+        tooltip.closeButton.move(tooltip.width() - 24, 19)
+        tooltip.progressBar = ProgressBar(tooltip)
+        tooltip.progressBar.setGeometry(12, 55, tooltip.width() - 24, 5)
+        tooltip.progressBar.setRange(0, 100)
+        tooltip.progressBar.hide()
+        tooltip.busyBar = IndeterminateProgressBar(tooltip)
+        tooltip.busyBar.setGeometry(12, 55, tooltip.width() - 24, 5)
+        tooltip.busyBar.start()
+        tooltip.move(tooltip.getSuitablePos())
+        tooltip.show()
+        # Match the label contrast even when the host styles the tooltip with
+        # the accent background (the default progress accent would disappear).
+        foreground = tooltip.contentLabel.palette().color(tooltip.contentLabel.foregroundRole())
+        tooltip.progressBar.setCustomBarColor(foreground, foreground)
+        tooltip.busyBar.setCustomBarColor(foreground, foreground)
+        tooltip.raise_()
+        self._roll_media_tooltips[segment] = tooltip
+        hint = self._property_panel._roll_duration_hints.get(segment, {}).get(kind)
+        if hint is not None:
+            hint.setText("读取素材信息…")
+            hint.setVisible(True)
+            hint.setToolTip("读取素材信息…")
+            path_edit = self._property_panel._roll_path_edits.get(segment, {}).get(kind)
+            if path_edit is not None:
+                path_edit.setToolTip("读取素材信息…")
+
+        thread = QThread(self)
+        worker = _RollMediaLoadWorker(
+            generation,
+            segment,
+            kind,
+            path,
+            ffprobe_path=self._resolve_ffprobe_path(),
+            preview_fps=self._export_fps_value(),
+            preview_quality=self._transport_bar.preview_quality(),
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.stageChanged.connect(
+            lambda text, seg=segment, source_kind=kind, gen=generation: (
+                self._on_roll_media_stage(gen, seg, source_kind, text)
+            )
+        )
+        worker.progressChanged.connect(self._on_roll_media_progress)
+        worker.metadataReady.connect(self._on_roll_media_metadata)
+        worker.done.connect(self._on_roll_media_loaded)
+        thread.finished.connect(
+            lambda task=thread: self._forget_roll_media_load_task(task)
+        )
+        thread.start()
+        self._roll_media_load_tasks.append((thread, worker))
+
+    def _on_roll_media_stage(
+        self, generation: int, segment: str, kind: str, text: str
+    ) -> None:
+        if generation != self._roll_media_generations.get(segment):
+            return
+        tooltip = self._roll_media_tooltips.get(segment)
+        if tooltip is not None:
+            tooltip.setContent(str(text))
+        hint = self._property_panel._roll_duration_hints.get(segment, {}).get(kind)
+        if hint is not None:
+            hint.setText(str(text))
+            hint.setVisible(True)
+            hint.setToolTip(str(text))
+            path_edit = self._property_panel._roll_path_edits.get(segment, {}).get(kind)
+            if path_edit is not None:
+                path_edit.setToolTip(str(text))
+
+
+    def _on_roll_media_progress(self, generation: int, segment: str, percent: int) -> None:
+        if generation != self._roll_media_generations.get(segment):
+            return
+        tooltip = self._roll_media_tooltips.get(segment)
+        if tooltip is not None:
+            tooltip.busyBar.stop()
+            tooltip.busyBar.hide()
+            tooltip.progressBar.show()
+            tooltip.progressBar.setRange(0, 100)
+            tooltip.progressBar.setValue(percent)
+            tooltip.setContent(f"正在准备预览… {percent}%")
+
+    def _forget_roll_media_load_task(self, thread) -> None:
+        self._roll_media_load_tasks = [
+            pair for pair in self._roll_media_load_tasks if pair[0] is not thread
+        ]
+
+    def _on_roll_media_metadata(self, result: object) -> None:
+        """元数据先回面板/时间映射；预览源准备仍在后台继续。"""
+
+        generation = int(getattr(result, "generation", -1))
+        segment = str(getattr(result, "segment", ""))
+        if generation != self._roll_media_generations.get(segment):
+            return
+        if generation == self._roll_media_metadata_generations.get(segment):
+            return
+        source = getattr(result, "source", None)
+        if source is None:
+            return
+        preview_frame = getattr(result, "preview_frame", None)
+        preview_frame_path = getattr(result, "preview_frame_path", None)
+        if preview_frame is not None and preview_frame_path is not None:
+            remember_roll_preview_frame(preview_frame_path, preview_frame)
+        segment = str(getattr(result, "segment", ""))
+        self._apply_roll_source(
+            segment,
+            source,
+            source_duration_ms=int(getattr(result, "source_duration_ms", 0) or 0),
+            source_has_audio=bool(getattr(result, "source_has_audio", False)),
+            source_width=int(getattr(result, "source_width", 0) or 0),
+            source_height=int(getattr(result, "source_height", 0) or 0),
+        )
+        self._roll_media_metadata_generation = generation
+        self._roll_media_metadata_generations[segment] = generation
+
+    def _on_roll_media_loaded(self, result: object) -> None:
+        """后台素材读取结果回到 GUI：应用源参数，提示改由面板回填。"""
+
+        segment = str(getattr(result, "segment", ""))
+        if getattr(result, "generation", -1) != self._roll_media_generations.get(segment):
+            return  # 已有更新的素材选择，丢弃过期结果
+        segment = str(getattr(result, "segment", ""))
+        kind = str(getattr(result, "kind", ""))
+        hint = self._property_panel._roll_duration_hints.get(segment, {}).get(kind)
+        error = str(getattr(result, "error", "") or "")
+        tooltip = self._roll_media_tooltips.pop(segment, None)
+        if tooltip is not None:
+            tooltip.busyBar.stop()
+            tooltip.busyBar.hide()
+            tooltip.progressBar.show()
+            tooltip.progressBar.setRange(0, 100)
+            tooltip.progressBar.setValue(100 if not error else 0)
+            tooltip.setContent("加载失败" if error else "预览素材已就绪")
+            tooltip.setState(True)
+        if error:
+            if hint is not None:
+                hint.setText("")
+                hint.setVisible(False)
+                hint.setToolTip("")
+            path_edit = self._property_panel._roll_path_edits.get(segment, {}).get(kind)
+            if path_edit is not None:
+                path_edit.setToolTip("")
+            QToolTip.hideText()
+            label = "前黑" if segment == "pre" else "后黑"
+            fluent_warning(self, f"加载{label}素材失败", error)
+            return
+        source = getattr(result, "source", None)
+        if source is None:
+            return
+        generation = int(getattr(result, "generation", -1))
+        if generation != self._roll_media_metadata_generations.get(segment):
+            self._apply_roll_source(
+                segment,
+                source,
+                source_duration_ms=int(getattr(result, "source_duration_ms", 0) or 0),
+                source_has_audio=bool(getattr(result, "source_has_audio", False)),
+                source_width=int(getattr(result, "source_width", 0) or 0),
+                source_height=int(getattr(result, "source_height", 0) or 0),
+            )
+            self._roll_media_metadata_generation = generation
+        self._roll_media_metadata_generations[segment] = generation
+        config = self._roll_config_for(segment).normalized()
+        text = ""
+        if hint is not None:
+            timed = (
+                config.source.kind == kind
+                and bool(config.source.path)
+                and config.source_duration_ms > 0
+            )
+            text = (
+                format_roll_source_duration(config.source_duration_ms)
+                if timed
+                else ""
+            )
+            hint.setText(text)
+            hint.setVisible(bool(text))
+            hint.setToolTip(text)
+        path_edit = self._property_panel._roll_path_edits.get(segment, {}).get(kind)
+        if path_edit is not None:
+            path_edit.setToolTip(text)
+        QToolTip.hideText()
+
+    def _apply_roll_source(
+        self,
+        segment: str,
+        source: BackgroundSource,
+        *,
+        source_duration_ms: int,
+        source_has_audio: bool,
+        source_width: int,
+        source_height: int,
+    ) -> None:
+        """选择新素材：整体替换素材（探针事实），**不改用户填写的持续时长**。"""
+
+        config = self._roll_config_for(segment)
+        self._commit_roll_config(
+            segment,
+            replace(
+                config,
+                source=source,
+                source_duration_ms=max(source_duration_ms, 0),
+                source_has_audio=source_has_audio,
+                source_width=max(source_width, 0),
+                source_height=max(source_height, 0),
+            ).normalized(),
+        )
+
+    def _on_roll_audio_browse(self, segment: str) -> None:
+        label = "前黑" if segment == "pre" else "后黑"
+        current = self._roll_config_for(segment)
+        start_dir = str(Path(current.audio_path).parent) if current.audio_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, f"选择{label}独立音频", start_dir, AUDIO_FILTER
+        )
+        if not path_str:
+            return
+        info = self._probe(Path(path_str), f"{label}独立音频")
+        if info is None or info.audio_streams <= 0:
+            return
+        self._commit_roll_config(
+            segment,
+            replace(self._roll_config_for(segment), audio_path=path_str).normalized(),
+        )
+
+    def _on_roll_audio_clear(self, segment: str) -> None:
+        if not self._roll_config_for(segment).audio_path:
+            return
+        self._commit_roll_config(
+            segment,
+            replace(self._roll_config_for(segment), audio_path=None).normalized(),
+        )
+
+    def _on_roll_solid_color_dialog(self, segment: str) -> None:
+        current = self._roll_config_for(segment)
+        color = QColorDialog.getColor(
+            QColor(current.source.color or "#000000"), self, "选择前黑/后黑背景颜色"
+        )
+        if not color.isValid():
+            return
+        self._commit_roll_config(
+            segment,
+            replace(
+                current,
+                source=replace(current.source, color=color.name()),
+            ).normalized(),
+        )
 
     def _clear_audio(self) -> None:
         """移除独立音频（仅图片/图片序列/纯色背景配过时有效）。"""
@@ -4866,6 +5444,14 @@ class SubtitleRenderWindow(QWidget):
         return find_tool("ffprobe", ffmpeg_dir)
 
     def _refresh_transport_duration(self) -> None:
+        roll_plan = self._current_roll_plan()
+        active = roll_plan if roll_plan.active else None
+        # 段视频沿用普通背景的预览源准备口径；项目帧率变化不重建预览素材。
+        self._preview_panel.set_roll_preview_quality(
+            self._transport_bar.preview_quality()
+        )
+        self._preview_panel.set_roll_plan(active)
+        self._transport_bar.set_roll_plan(active)
         self._preview_duration_controller.refresh(
             tracks=self._all_tracks(),
             video_info=self._video_info,
@@ -4873,6 +5459,7 @@ class SubtitleRenderWindow(QWidget):
             tracks_view=self._tracks_view,
             preview_panel=self._preview_panel,
             transport_bar=self._transport_bar,
+            roll_plan=roll_plan if roll_plan.active else None,
         )
 
     def _apply_style(self, style: Style) -> None:
@@ -5380,17 +5967,14 @@ class SubtitleRenderWindow(QWidget):
     def _derive_title_windows(self, title: TitleOverlay) -> list:
         """用当前轨道推导四档模式的实际显示窗口（切入自定义模式的预填）。
 
-        时长锚定与预览/导出同口径：媒体（视频/音频）时长优先，歌词轨时长
-        兜底——否则歌词只唱到半首时，预填的自定义窗口会在一半处截断。
+        时长锚定与预览/导出同口径：前黑/后黑生效时用时间线的
+        ``content_end_ms``（display 坐标，含前黑、不含后黑尾巴），否则按
+        媒体（视频/音频）时长优先、歌词轨兜底。
         """
         track = self._timing_track
         if track is None:
             return []
-        duration_ms = self._preview_duration_controller.resolve_duration_ms(
-            self._all_tracks(),
-            video_info=self._video_info,
-            audio_info=self._audio_info,
-        )
+        duration_ms = self._title_content_duration_ms()
         return [
             TitleTimeWindow(
                 begin_ms=begin,
@@ -5421,13 +6005,20 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_style(self._style, relayout_scope=relayout_scope)
         self._lyrics_panel.set_style(self._style)
 
-    def _title_total_duration_ms(self) -> int:
-        """标题自定义窗口默认结束时间的时长口径（媒体优先，歌词轨兜底）。"""
+    def _title_content_duration_ms(self) -> int:
+        """标题自定义窗口默认结束时间的时长口径（与预览/导出一致）。"""
+        roll_plan = self._current_roll_plan()
+        if roll_plan.active:
+            return int(roll_plan.content_end_ms)
         return self._preview_duration_controller.resolve_duration_ms(
             self._all_tracks(),
             video_info=self._video_info,
             audio_info=self._audio_info,
         )
+
+    def _title_total_duration_ms(self) -> int:
+        """标题自定义窗口默认结束时间的时长口径（媒体优先，歌词轨兜底）。"""
+        return self._title_content_duration_ms()
 
     def _project_title_layout_reference(self, name: str) -> dict:
         """按名把标题布局引用解析进当前工程目录（与新建工程物化同口径）。
@@ -7614,6 +8205,7 @@ class SubtitleRenderWindow(QWidget):
     def _on_preview_quality_changed(self, quality: str) -> None:
         """Apply and persist a local preview-only raster quality preference."""
         self._preview_preference_controller.apply_quality(quality)
+        self._preview_panel.set_roll_preview_quality(quality)
 
     def _on_gpu_export_changed(self, _enabled: bool) -> None:
         """Persist GPU subtitle export independently from encoder selection."""
@@ -9288,6 +9880,10 @@ class SubtitleRenderWindow(QWidget):
         self._export_custom_dir = ""
         self._export_name_template = DEFAULT_EXPORT_NAME_TEMPLATE
         self._reset_output_widgets_to_factory()
+        self._roll_defaults = roll_defaults_from_dict(None)
+        if hasattr(self, "_property_panel"):
+            self._property_panel.set_roll_defaults(self._roll_defaults)
+            self._property_panel.set_rolls_state(self._pre_roll, self._post_roll)
         self._save_persisted_state()
         InfoBar.success(
             title="已恢复默认偏好",
@@ -9361,6 +9957,14 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_persisted_state(self) -> None:
         raw_settings = self._load_subtitle_settings()
+        self._roll_defaults = roll_defaults_from_dict(
+            raw_settings.get("roll_defaults")
+        )
+        if hasattr(self, "_property_panel"):
+            self._property_panel.set_roll_defaults(self._roll_defaults)
+            self._property_panel.set_rolls_state(
+                self._pre_roll, self._post_roll
+            )
         # Fresh workspaces use 1080p/60 until a video is available. Resolve the
         # style at that height once; opened projects restore their own canvas.
         loaded = load_app_preferences(
@@ -9520,6 +10124,7 @@ class SubtitleRenderWindow(QWidget):
                 )
         self._app_default_style = prepared.app_default_style
         data = prepared.data
+        data["roll_defaults"] = dict(self._roll_defaults)
         try:
             self._settings_store.save(data)
         except Exception:
@@ -10071,9 +10676,7 @@ class SubtitleRenderWindow(QWidget):
                 height=self._export_height_spin.value(),
                 fps=self._export_fps_value(),
                 duration_ms=self._current_export_duration_ms(),
-                include_audio=bool(
-                    self._audio_info and self._audio_info.audio_streams > 0
-                ),
+                include_audio=self._export_includes_audio(),
                 encoder_mode=str(
                     self._export_encoder_combo.currentData() or ENCODER_CPU
                 ),
@@ -10084,6 +10687,21 @@ class SubtitleRenderWindow(QWidget):
                 gpu_export_enabled=self._gpu_export_check.isChecked(),
                 render_workers=self._export_render_workers_value(),
                 output_format=self._export_format_value(),
+                pre_roll=self._pre_roll,
+                post_roll=self._post_roll,
+                main_media_end_ms=(
+                    int(round(self._video_info.duration * 1000))
+                    if self._video_info is not None and self._video_info.duration > 0
+                    else None
+                ),
+                main_audio_end_ms=(
+                    int(round(self._audio_info.duration * 1000))
+                    if self._audio_info is not None and self._audio_info.duration > 0
+                    else None
+                ),
+                main_background_has_audio=bool(
+                    self._video_info is not None and self._video_info.audio_streams > 0
+                ),
             )
         )
         if result.used_default_name:
@@ -10096,10 +10714,12 @@ class SubtitleRenderWindow(QWidget):
         return value if value in RENDER_WORKER_OPTIONS[1:] else None
 
     def _current_export_duration_ms(self) -> int:
+        roll_plan = self._current_roll_plan()
         return self._export_job_controller.resolve_duration_ms(
             self._all_tracks(),
             video_info=self._video_info,
             audio_info=self._audio_info,
+            roll_plan=roll_plan if roll_plan.active else None,
         )
 
     def _confirm_project_saved_before_export(self) -> bool:

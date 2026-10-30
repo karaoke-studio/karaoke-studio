@@ -22,6 +22,12 @@ from krok_helper.subtitle_render.engine.export.render_job import (
     is_png_sequence,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
+from krok_helper.subtitle_render.domain.roll import (
+    RollSegmentConfig,
+    RollTimelinePlan,
+    build_roll_timeline,
+    effective_roll_ms,
+)
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
@@ -42,7 +48,7 @@ def resolved_background(job: RenderJob) -> BackgroundSource:
 
 
 def job_input_paths(job: RenderJob) -> list[Path]:
-    """导出过程中会被读取的素材路径（背景素材 + 独立音频）。"""
+    """导出过程中会被读取的素材路径（背景素材 + 独立音频 + 前黑/后黑素材）。"""
 
     paths: list[Path] = []
     background = resolved_background(job)
@@ -50,7 +56,59 @@ def job_input_paths(job: RenderJob) -> list[Path]:
         paths.append(Path(background.path))
     if job.audio_path is not None:
         paths.append(Path(job.audio_path))
+    for config in (job.pre_roll, job.post_roll):
+        if config is None:
+            continue
+        source = config.normalized().source
+        if source.kind in {"video", "image", "image_sequence"} and source.path:
+            paths.append(Path(source.path))
+        if config.normalized().audio_path:
+            paths.append(Path(config.normalized().audio_path))
     return paths
+
+
+def _validate_roll_segment(config: RollSegmentConfig, label: str) -> None:
+    """前黑/后黑素材前置校验（只在段生效时拦截，关闭态允许残缺路径）。"""
+
+    if effective_roll_ms(config) <= 0:
+        return
+    normalized = config.normalized()
+    source = normalized.source
+    if source.kind == "image_sequence":
+        if not (Path(source.path).exists() or Path(source.path).parent.exists()):
+            raise ProcessingError(f"{label}图片序列不存在: {source.path}")
+    elif source.kind != "solid":
+        if not source.path or not Path(source.path).is_file():
+            raise ProcessingError(f"{label}素材不存在: {source.path}")
+    if normalized.audio_path and not Path(normalized.audio_path).is_file():
+        raise ProcessingError(f"{label}独立音频不存在: {normalized.audio_path}")
+
+
+def resolve_roll_timeline(job: RenderJob) -> RollTimelinePlan:
+    """从 job 推导前黑/后黑展示时间线（纯函数，可重复调用结果一致）。
+
+    ``job.duration_ms``（UI 全量口径 = max(字幕轴, 主素材, 独立音频)）在视频
+    背景、且未显式提供 ``main_media_end_ms`` 时充当主段时长锚点。
+    """
+
+    background = resolved_background(job)
+    tracks = job_tracks(job)
+    track_end = max((track_duration_ms(track) for track in tracks), default=0)
+    content_anchor = (
+        int(job.duration_ms) if job.duration_ms and int(job.duration_ms) > 0 else None
+    )
+    media_end = job.main_media_end_ms
+    if background.kind == "video":
+        media_end = media_end if media_end and media_end > 0 else content_anchor
+    audio_end = job.main_audio_end_ms
+    return build_roll_timeline(
+        job.pre_roll,
+        job.post_roll,
+        track_end_ms=track_end,
+        main_media_end_ms=media_end,
+        main_audio_end_ms=audio_end,
+        background_kind=background.kind,
+    )
 
 
 def is_same_path(left: Path, right: Path) -> bool:
@@ -223,11 +281,23 @@ def validate_render_job(job: RenderJob) -> None:
     else:
         validate_output_target(job.output_path)
     ensure_output_is_not_input(job)
+    if job.pre_roll is not None:
+        _validate_roll_segment(job.pre_roll, "前黑")
+    if job.post_roll is not None:
+        _validate_roll_segment(job.post_roll, "后黑")
 
 
 def resolve_duration_ms(job: RenderJob) -> int:
-    """Resolve the explicit or track-derived export duration."""
+    """Resolve the explicit or track-derived export duration.
 
+    前黑/后黑生效时返回整体时间线时长（max(前黑+字幕轴, 前黑+主段+后黑)）。
+    """
+
+    roll_plan = resolve_roll_timeline(job)
+    if roll_plan.active:
+        if roll_plan.total_ms <= 0:
+            raise ProcessingError("字幕时长无效，无法导出。")
+        return roll_plan.total_ms
     if job.duration_ms is not None and job.duration_ms > 0:
         return job.duration_ms
     duration = max(track_duration_ms(track) for track in job_tracks(job))

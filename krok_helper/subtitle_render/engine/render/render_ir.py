@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from krok_helper.subtitle_render.engine.layout.layout_context import roll_shift_scope
 from krok_helper.subtitle_render.engine.layout.plan.semantic import layout_pass
 from krok_helper.subtitle_render.engine.render.adapters.layout_plan import (
     build_track_layout_plan,
@@ -259,6 +260,7 @@ def build_render_ir(
     extra_tracks: list[TimingTrack] | None = None,
     duration_ms: int | None = None,
     relayout_scope: str | None = None,
+    roll_shift_ms: int = 0,
 ) -> dict[str, Any]:
     """Build one JSON-friendly native snapshot from shared layout plans.
 
@@ -270,8 +272,15 @@ def build_render_ir(
       回退重建（分轴粒度：主轨/副轨各自校验各自命中），标题部分始终
       重新序列化。签名是正确性闸门，scope 只是性能提示。
     - ``"paint"``：只改颜色/填充时复用同一布局计划；完整样式仍重新
-      序列化给渲染后端，布局签名不匹配时同样自动回退重建。
+        序列化给渲染后端，布局签名不匹配时同样自动回退重建。
     其余取值一律按全量处理（防御）。
+
+    ``roll_shift_ms``：前黑开启时的歌词展示层整体后移量。只平移序列化
+    payload 里的全局 ``timing_offset_ms``，每源 ``time_offset_delta_ms``
+    仍从未平移的 style 计算——C++ 侧 ``payload全局 + meta + delta`` 对
+    跟随 / 非跟随副轨都恰好 +shift，与 CPU Painter
+    ``_effective_track_time_ms(track, t - roll_shift, style)`` 同口径。
+    标题窗口本就是展示坐标，不受影响。
     """
 
     # 扫字线像素字段与指示灯/音量柱偏移存储恒为 1080 基准:发给 sidecar
@@ -282,7 +291,9 @@ def build_render_ir(
     )
     # 局部复用仅对已知 scope 生效;未知值按全量。
     use_plan_cache = relayout_scope in {"titles", "paint"}
-    with layout_pass():
+    # 前黑偏移期间构建布局：入场/信号窗口的钳制下界随之放宽（与 CPU painter
+    # 同口径；C++ 侧行窗口 = start - lead 无钳制，天然一致）。
+    with layout_pass(), roll_shift_scope(roll_shift_ms):
         # 「跟随字体」大小推导基准（主轨信号宿主行最高频首角色方案）在
         # pass 顶部登记：IR 内不只 style 段物化尺寸，行布局（正文拓宽带/
         # union 摆放）同样消费信号尺寸，必须与 style 段同一基准；native
@@ -365,6 +376,12 @@ def build_render_ir(
             )
         _apply_band_src_caps(style_payload, str(style.line_band_image or ""))
         _apply_scanline_image_payload(style_payload, style)
+        if roll_shift_ms:
+            # 见 build_render_ir docstring：payload 全局偏移 +P，每源 delta
+            # 不动，C++ 侧全源窗口恰好 +P（标题窗口不受全局偏移影响）。
+            style_payload["timing_offset_ms"] = (
+                int(style_payload.get("timing_offset_ms") or 0) + int(roll_shift_ms)
+            )
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -432,6 +449,7 @@ def build_style_patch_ir(
     duration_ms: int | None = None,
     include_lines_style: bool = True,
     include_placement: bool = False,
+    roll_shift_ms: int = 0,
 ) -> dict[str, Any]:
     """paint scope 差分更新载荷（``gpu_configure_style``）。
 
@@ -447,7 +465,7 @@ def build_style_patch_ir(
     style = style_with_output_signal_offsets(
         style_with_output_scanline(style, height), height
     )
-    with layout_pass():
+    with layout_pass(), roll_shift_scope(roll_shift_ms):
         # 推导基准同 build_render_ir：差分载荷与全量 configure 必须物化出
         # 同一组数值（含行布局的信号消费）。
         set_signal_auto_basis(style, track)
@@ -542,6 +560,12 @@ def build_style_patch_ir(
             patch_style_payload, str(style.line_band_image or "")
         )
         _apply_scanline_image_payload(patch_style_payload, style)
+        if roll_shift_ms:
+            # 与 build_render_ir 同口径：差分 style 段也带 +P 的全局偏移。
+            patch_style_payload["timing_offset_ms"] = (
+                int(patch_style_payload.get("timing_offset_ms") or 0)
+                + int(roll_shift_ms)
+            )
         return {
             "schema": RENDER_IR_SCHEMA,
             "screen": {

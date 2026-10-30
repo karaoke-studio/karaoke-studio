@@ -16,6 +16,7 @@ A4 / A7：
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import (
@@ -34,6 +35,7 @@ from PyQt6.QtGui import (
     QMouseEvent,
     QPainter,
     QPen,
+    QPixmap,
 )
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PyQt6.QtWidgets import (
@@ -55,7 +57,14 @@ from krok_helper.subtitle_render.frontend.preview.preview_async import (
     PREVIEW_QUALITY_OPTIONS,
     normalize_preview_quality,
 )
-from krok_helper.subtitle_render.frontend.preview.preview_media import qt_playback_source
+from krok_helper.subtitle_render.frontend.preview.preview_media import (
+    protect_preview_source,
+    qt_playback_source,
+    unprotect_preview_source,
+)
+from krok_helper.subtitle_render.frontend.preview.roll_preview import (
+    RollSegmentFrameSource,
+)
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
@@ -168,6 +177,12 @@ class PreviewCanvas(QWidget):
         self._output_width: int = 1920
         self._output_height: int = 1080
         self._preview_quality = DEFAULT_PREVIEW_QUALITY
+        self._roll_plan: object = None
+        self._roll_shift_ms: int = 0
+        self._roll_offset_ms: int = 0
+        # 段帧/音频源与 graphics 预览共用（同一填充几何与过渡透明度口径）。
+        self._roll_source = RollSegmentFrameSource(self)
+        self._roll_source.frame_changed.connect(lambda: self.update())
 
         themed(
             self,
@@ -195,6 +210,7 @@ class PreviewCanvas(QWidget):
     def set_output_size(self, width: int, height: int) -> None:
         self._output_width = max(int(width), 1)
         self._output_height = max(int(height), 1)
+        self._roll_source.set_output_size(width, height)
         self.update()
 
     def set_preview_quality(self, quality: object) -> None:
@@ -205,12 +221,85 @@ class PreviewCanvas(QWidget):
         if t_ms == self._t_ms:
             return
         self._t_ms = t_ms
+        self._roll_source.set_time(t_ms, self._video_playing)
         self._sync_video_position(force=not self._video_playing)
         self.update()
 
     def set_duration(self, duration_ms: int) -> None:
         self._duration_ms = max(int(duration_ms), 0)
         self.update()
+
+    def set_roll_plan(self, plan: object) -> None:
+        """raster 回退画布的前黑/后黑支持：与 graphics 预览共用段帧源。
+
+        段背景（视频/动图/序列/纯色）与过渡透明度用同一套填充几何与
+        ``roll_layer_alphas`` 口径渲染，与导出严格一致。
+        """
+        if self._roll_plan == plan:
+            return
+        self._roll_plan = plan
+        self._roll_shift_ms = int(getattr(plan, "lyric_shift_ms", 0) or 0)
+        self._roll_offset_ms = int(getattr(plan, "pre_ms", 0) or 0)
+        self._roll_source.set_plan(plan)
+        # 暂停在正片中时切换前黑：主播放器要按新偏移重新定位（否则停在
+        # display 坐标上，首帧落在错误画面）。set_time 同值会早退，这里显式同步。
+        self._sync_video_position(force=True)
+        self.update()
+
+    def set_roll_playing(self, playing: bool) -> None:
+        self._roll_source.set_playing(playing)
+
+    def set_roll_preview_volume(self, percent: int) -> None:
+        self._roll_source.set_volume(max(0, min(100, int(percent))) / 100.0)
+
+    def set_roll_preview_quality(self, quality: object = "high") -> None:
+        self._roll_source.set_preview_quality(quality)
+
+    def roll_audio_display_position(self, t_ms: int):
+        return self._roll_source.audio_display_position(t_ms)
+
+    def _roll_main_alpha(self) -> float:
+        if self._roll_plan is None or not getattr(self._roll_plan, "active", False):
+            return 1.0
+        return self._roll_source.alphas_at(self._t_ms).main_alpha
+
+    def _paint_roll_layers(self, painter, *, pre_pass: bool) -> None:
+        """画前黑/后黑段层与白闪层（层序：前黑 → 主背景 → 后黑 → 白闪）。
+
+        段层直接用与 graphics 预览/导出同一口径的填充几何与
+        ``roll_layer_alphas`` 透明度，画到输出目标矩形。
+        """
+        if self._roll_plan is None or not getattr(self._roll_plan, "active", False):
+            return
+        source = self._roll_source
+        alphas = source.alphas_at(self._t_ms)
+        x, y, w, h = self._fit_output_rect(max(self.width(), 1), max(self.height(), 1))
+        target = QRectF(float(x), float(y), float(w), float(h))
+        segments = (
+            ((source.pre, alphas.pre_alpha),)
+            if pre_pass
+            else ((source.post, alphas.post_alpha),)
+        )
+        for segment, alpha in segments:
+            if segment is None or alpha <= 0.001:
+                continue
+            painter.setOpacity(max(0.0, min(1.0, alpha)))
+            if segment.source_kind == "solid":
+                painter.fillRect(target, source.solid_color(segment))
+            else:
+                pixmap = source.layer_pixmap(segment)
+                if pixmap is not None and not pixmap.isNull():
+                    painter.drawPixmap(
+                        target,
+                        pixmap,
+                        QRectF(0.0, 0.0, pixmap.width(), pixmap.height()),
+                    )
+            painter.setOpacity(1.0)
+        if not pre_pass and alphas.flash_alpha > 0.001:
+            painter.setOpacity(max(0.0, min(1.0, alphas.flash_alpha)))
+            painter.fillRect(target, QColor(255, 255, 255))
+            painter.setOpacity(1.0)
+
 
     @property
     def current_time_ms(self) -> int:
@@ -220,6 +309,9 @@ class PreviewCanvas(QWidget):
         """Load / clear the background video used by the preview canvas."""
         if self._video_player is not None:
             self._video_player.pause()
+        if path != self._video_path:
+            unprotect_preview_source(self._video_path)
+            protect_preview_source(path)
         self._video_path = path
         self._video_image = None
         self._scaled_video_image = None
@@ -235,7 +327,8 @@ class PreviewCanvas(QWidget):
         playback_path = qt_playback_source(path)
         player = self._ensure_video_player()
         player.setSource(QUrl.fromLocalFile(str(playback_path)))
-        player.setPosition(self._t_ms)
+        # display 坐标 → 媒体坐标（前黑开启时可能尚未进入主视频）。
+        player.setPosition(max(self._t_ms - self._roll_offset_ms, 0))
         if self._video_playing:
             player.play()
         self.update()
@@ -246,7 +339,9 @@ class PreviewCanvas(QWidget):
         self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
         if source.kind in {"image", "image_sequence"}:
             image_path = (
-                background_sequence_frame_path(source, self._t_ms)
+                background_sequence_frame_path(
+                    source, max(self._t_ms - self._roll_offset_ms, 0)
+                )
                 if source.kind == "image_sequence"
                 else Path(source.path) if source.path else None
             )
@@ -260,6 +355,7 @@ class PreviewCanvas(QWidget):
     def set_playing(self, playing: bool) -> None:
         """Mirror the transport state into the silent video preview player."""
         self._video_playing = playing
+        self._roll_source.set_playing(playing)
         if self._video_path is None:
             return
         if playing:
@@ -292,9 +388,27 @@ class PreviewCanvas(QWidget):
                 self.rect(),
                 # 非 solid 背景时画布底是纯黑：视频/图片 contain 后的黑边与
                 # 导出 pad=...:color=black 严格一致（solid 才用背景色）。
-                solid if self._background_source.kind == "solid" and solid.isValid() else QColor(0, 0, 0),
+                QColor(0, 0, 0),
             )
-            target = self._paint_background_video(painter, logical_w, logical_h, dpr)
+            self._paint_roll_layers(painter, pre_pass=True)
+            main_alpha = self._roll_main_alpha()
+            if main_alpha <= 0.001:
+                target = None
+            elif main_alpha >= 1.0:
+                painter.fillRect(self.rect(), solid if self._background_source.kind == "solid" and solid.isValid() else QColor(0, 0, 0))
+                target = self._paint_background_video(painter, logical_w, logical_h, dpr)
+            else:
+                main_layer = QPixmap(self.size())
+                main_layer.fill(solid if self._background_source.kind == "solid" and solid.isValid() else QColor(0, 0, 0))
+                main_painter = QPainter(main_layer)
+                try:
+                    target = self._paint_background_video(main_painter, logical_w, logical_h, dpr)
+                finally:
+                    main_painter.end()
+                painter.setOpacity(main_alpha)
+                painter.drawPixmap(0, 0, main_layer)
+                painter.setOpacity(1.0)
+            self._paint_roll_layers(painter, pre_pass=False)
             if target is None:
                 target = self._fit_output_rect(logical_w, logical_h)
             x, y, target_w, target_h = target
@@ -323,6 +437,7 @@ class PreviewCanvas(QWidget):
             self._style,
             self._extra_tracks,
             duration_ms=self._duration_ms,
+            roll_shift_ms=self._roll_shift_ms,
         )
 
     # ------------------------------------------------------------------ video
@@ -340,7 +455,7 @@ class PreviewCanvas(QWidget):
 
     def _sync_video_position(self, *, force: bool = False) -> None:
         if self._background_source.kind == "image_sequence":
-            image_path = background_sequence_frame_path(self._background_source, self._t_ms)
+            image_path = background_sequence_frame_path(self._background_source, max(self._t_ms - self._roll_offset_ms, 0))
             image = self._load_background_image(image_path)
             self._video_image = (
                 image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
@@ -351,9 +466,10 @@ class PreviewCanvas(QWidget):
             return
         if self._video_path is None or self._video_player is None:
             return
+        media_t = max(self._t_ms - self._roll_offset_ms, 0)
         current = self._video_player.position()
-        if force or abs(current - self._t_ms) > _VIDEO_SEEK_TOLERANCE_MS:
-            self._video_player.setPosition(self._t_ms)
+        if force or abs(current - media_t) > _VIDEO_SEEK_TOLERANCE_MS:
+            self._video_player.setPosition(media_t)
 
     def _load_background_image(self, path: Optional[Path]) -> QImage:
         if path is None:
@@ -389,11 +505,12 @@ class PreviewCanvas(QWidget):
         logical_h: int,
         dpr: float,
     ) -> Optional[QImage]:
+        media_t = max(self._t_ms - self._roll_offset_ms, 0)
         if (
             self._video_path is not None
             and self._video_player is not None
             and self._video_player.duration() > 0
-            and self._t_ms >= self._video_player.duration()
+            and media_t >= self._video_player.duration()
         ):
             return None
         if self._video_image is None or self._video_image.isNull():
@@ -537,6 +654,25 @@ class PreviewPanel(DropPanel):
         setter = getattr(self._canvas, "set_duration", None)
         if setter is not None:
             setter(duration_ms)
+
+    def set_roll_plan(self, plan: object) -> None:
+        setter = getattr(self._canvas, "set_roll_plan", None)
+        if setter is not None:
+            setter(plan)
+
+    def set_roll_preview_volume(self, percent: int) -> None:
+        setter = getattr(self._canvas, "set_roll_preview_volume", None)
+        if setter is not None:
+            setter(percent)
+
+    def set_roll_preview_quality(self, quality: object = "high") -> None:
+        setter = getattr(self._canvas, "set_roll_preview_quality", None)
+        if setter is not None:
+            setter(quality)
+
+    def roll_audio_display_position(self, t_ms: int):
+        getter = getattr(self._canvas, "roll_audio_display_position", None)
+        return getter(t_ms) if getter is not None else None
 
     def set_style(self, style: Style, *, relayout_scope: str | None = None) -> None:
         """样式变化；``relayout_scope`` 见画布 ``set_style``（None = 全量重排）。"""
@@ -701,6 +837,9 @@ class TransportBar(QWidget):
     previewQualityChanged = Signal(str)
     """用户切换预览质量时 emit 稳定的 low / medium / high 键。"""
 
+    previewVolumeChanged = Signal(int)
+    """预览音量变化时 emit 0-100（前黑/后黑段音频跟随同一音量）。"""
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TransportBar")
@@ -853,6 +992,10 @@ class TransportBar(QWidget):
         # 抑制 player ↔ slider 反馈环
         self._suppress_seek: bool = False
         self._playing_state: bool = False
+        # 前黑/后黑：主媒体 display 偏移（0 = 未启用）。
+        self._roll_offset_ms: int = 0
+        # 跨段音频锚定源：display t → 段音频 display 位置（None = 无）。
+        self._roll_audio_position_provider = None
         # FPS = 字幕预览渲染帧率。计数来自「新字幕帧」（异步 worker 产出 / 同步新 t 重栅），
         # 固定 _FPS_REFRESH_MS 周期刷新读数（不再按 paint 事件刷新 → 不忽高忽低）。
         self._fps_timer = QElapsedTimer()
@@ -872,6 +1015,36 @@ class TransportBar(QWidget):
         """设置时间轴总长（毫秒），决定滑块最大值。"""
         ms = max(ms, 1000)
         self._slider.setMaximum(ms)
+
+    def set_roll_plan(self, plan: object) -> None:
+        """前黑/后黑时间线：主媒体按 display = 媒体位置 + 前黑偏移 映射。
+
+        前黑区间（媒体头之前）与后黑尾段走视觉时钟（QElapsedTimer tick），
+        与既有「媒体早于时间轴结束」的 tail 机制同一思路；若该段配了音频，
+        ``_roll_audio_position_provider`` 提供的段播放器位置作为锚定源收敛
+        （跨段音画锁相，与主媒体音频时钟同一 deadband/收敛参数）。
+        """
+        offset = int(getattr(plan, "pre_ms", 0) or 0)
+        if offset == self._roll_offset_ms:
+            return
+        self._roll_offset_ms = offset
+        self._on_slider_changed(self.current_time_ms)
+
+    def _media_head_active(self) -> bool:
+        """当前 display 时刻落在前黑区间（主媒体尚未开始）。"""
+        if self._roll_offset_ms <= 0:
+            return False
+        player = self._controller if self._use_controller() else self._player
+        if player is None:
+            return False
+        return self.current_time_ms < self._roll_offset_ms
+
+    def _media_display_offset(self) -> int:
+        return self._roll_offset_ms
+
+    def set_roll_audio_position_provider(self, provider) -> None:
+        """注入段音频锚定源（``fn(display_ms) -> display 位置或 None``）。"""
+        self._roll_audio_position_provider = provider
 
     def set_preview_fps(self, fps: int | float) -> None:
         """设置预览播放时钟帧率；预览定时器只控制刷新请求频率。"""
@@ -954,7 +1127,7 @@ class TransportBar(QWidget):
             self.set_time(0)
         self._tick_anchor_ms = self._slider.value()
         self._tick_anchor_real.start()
-        if self._media_tail_active():
+        if self._media_tail_active() or self._media_head_active():
             self._tick_timer.start()
             self._update_play_button(True)
             return
@@ -962,13 +1135,13 @@ class TransportBar(QWidget):
             # Slider edits already seek. On resume the media clock is the
             # authority; the last UI tick may trail it by a few milliseconds.
             if _audio_clock_enabled():
-                self._tick_anchor_ms = self._controller.position()
+                self._tick_anchor_ms = self._controller.position() + self._roll_offset_ms
             self._controller.play()
             self._position_poll_timer.start()
         elif self._has_audio:
             player = self._ensure_audio_player()
             if _audio_clock_enabled():
-                self._tick_anchor_ms = int(player.position())
+                self._tick_anchor_ms = int(player.position()) + self._roll_offset_ms
             player.play()
             self._position_poll_timer.start()
         else:
@@ -1071,14 +1244,27 @@ class TransportBar(QWidget):
         if self._suppress_seek:
             return
         # 用户拖动 / 外部 set_time → 同步给 player / tick 锚点
+        media_position = max(value - self._roll_offset_ms, 0)
         if self._use_controller():
-            self._controller.seek(value)
+            self._controller.seek(media_position)
         elif self._has_audio and self._player is not None:
-            self._player.setPosition(value)
+            self._player.setPosition(media_position)
         if self._tick_timer.isActive() or self._position_poll_timer.isActive():
             self._tick_anchor_ms = value
             self._tick_anchor_real.restart()
-            if self._tick_timer.isActive() and not self._media_tail_active():
+            if self._media_head_active() or self._media_tail_active():
+                if self._use_controller():
+                    self._controller.pause()
+                elif self._has_audio and self._player is not None:
+                    self._player.pause()
+                self._position_poll_timer.stop()
+                self._tick_timer.start()
+                return
+            if (
+                self._tick_timer.isActive()
+                and not self._media_tail_active()
+                and not self._media_head_active()
+            ):
                 if self._use_controller():
                     self._tick_timer.stop()
                     self._controller.play()
@@ -1093,8 +1279,12 @@ class TransportBar(QWidget):
             return
         if self._position_poll_timer.isActive():
             return
+        # 前黑区：主媒体被钳在 0 播放/定位，播放器回报的 0 不能把播放头
+        # 推回前黑末尾（否则在头区暂停拖动会被瞬间弹到正片起点）。
+        if self._roll_offset_ms > 0 and self.current_time_ms < self._roll_offset_ms:
+            return
         # 反馈到滑块，但抑制下游回写 player（避免循环 seek）
-        self._set_slider_silently(ms)
+        self._set_slider_silently(ms + self._roll_offset_ms)
 
     def _on_player_state_changed(self, state) -> None:
         if state == QMediaPlayer.PlaybackState.StoppedState and self._has_audio:
@@ -1111,6 +1301,8 @@ class TransportBar(QWidget):
             self._controller.set_volume(volume)
         if self._audio_out is not None:
             self._audio_out.setVolume(volume)
+        # 前黑/后黑段音频走独立播放器，同样跟随预览音量。
+        self.previewVolumeChanged.emit(int(percent))
 
     def _on_preview_quality_changed(self, _index: int) -> None:
         self._update_preview_quality_tooltip()
@@ -1136,15 +1328,21 @@ class TransportBar(QWidget):
         self._preview_quality_combo.setToolTip(tooltip)
 
     def _on_audio_clock_tick(self) -> None:
-        if self._media_tail_active():
+        if self._media_tail_active() or self._media_head_active():
+            # 用户把播放头拖回前黑区间 / 越过媒体尾：主媒体停走，视觉时钟接管。
             self._position_poll_timer.stop()
+            if self._use_controller():
+                self._controller.pause()
+            elif self._has_audio and self._player is not None:
+                self._player.pause()
+            self._tick_anchor_ms = self.current_time_ms
+            self._tick_anchor_real.restart()
             self._tick_timer.start()
-            self._on_tick()
             return
         if self._use_controller():
-            audio_pos_source = self._controller.position()
+            audio_pos_source = self._controller.position() + self._roll_offset_ms
         elif self._player is not None and self._has_audio:
-            audio_pos_source = self._player.position()
+            audio_pos_source = self._player.position() + self._roll_offset_ms
         else:
             return
         elapsed = self._tick_anchor_real.elapsed()
@@ -1169,9 +1367,13 @@ class TransportBar(QWidget):
         if player is None:
             return False
         duration = int(getattr(player, "duration", lambda: 0)())
+        media_end_display = duration + self._roll_offset_ms
         return (
-            0 < duration < self._slider.maximum()
-            and (self.current_time_ms >= duration or int(player.position()) >= duration - 1)
+            0 < media_end_display < self._slider.maximum()
+            and (
+                self.current_time_ms >= media_end_display
+                or int(player.position()) >= duration - 1
+            )
         )
 
     def _on_tick(self) -> None:
@@ -1182,6 +1384,40 @@ class TransportBar(QWidget):
             self._set_slider_silently(target)
             self.pause()
             return
+        # 前黑/后黑段配了音频时，用段播放器位置收敛视觉时钟（跨段锁相）。
+        if self._roll_audio_position_provider is not None and _audio_clock_enabled():
+            segment_audio_pos = None
+            try:
+                segment_audio_pos = self._roll_audio_position_provider(target)
+            except Exception:  # noqa: BLE001 - 锚定源异常不阻断播放
+                segment_audio_pos = None
+            if segment_audio_pos is not None and segment_audio_pos > 0:
+                correction = _audio_clock_anchor_correction(target, segment_audio_pos)
+                if correction:
+                    self._tick_anchor_ms += correction
+                    target += correction
+        # 视觉时钟跨过前黑边界：主媒体可以从 (target - 前黑) 精确接续。
+        if (
+            self._roll_offset_ms > 0
+            and target >= self._roll_offset_ms
+            and not self._media_tail_active()
+            and (self._use_controller() or (self._has_audio and self._player is not None))
+        ):
+            self._set_slider_silently(target)
+            if self._use_controller():
+                self._controller.seek(target - self._roll_offset_ms)
+                self._controller.play()
+                self._tick_timer.stop()
+                self._tick_anchor_ms = target
+                self._position_poll_timer.start()
+                return
+            if self._player is not None:
+                self._player.setPosition(target - self._roll_offset_ms)
+                self._player.play()
+                self._tick_timer.stop()
+                self._tick_anchor_ms = target
+                self._position_poll_timer.start()
+                return
         self._set_slider_silently(target)
 
     # ------------------------------------------------------------------ helpers

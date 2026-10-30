@@ -5285,14 +5285,21 @@ def test_preview_graphics_video_background_is_contain_with_black_bars(qapp):
         assert graphics._letterbox_rect.isVisible()
         rect = graphics._letterbox_rect.rect()
         assert (int(rect.width()), int(rect.height())) == (1920, 1080)
-        # 背景底矩形永远可见：solid 填背景色本身，其余填纯黑。纯色不能靠
-        # 场景底色显示——实测 view 的 QSS background 会整体盖住 scene
-        # backgroundBrush（曾表现为「纯色预览永远是黑的」）。
+        # 背景底矩形永远可见：纯色填在专职的主背景色层（_main_backdrop），
+        # 黑边层（_letterbox_rect）恒为黑。纯色不能靠场景底色显示——实测
+        # view 的 QSS background 会整体盖住 scene backgroundBrush（曾表现为
+        # 「纯色预览永远是黑的」）。
         graphics.set_background_source(
             BackgroundSource(kind="solid", color="#123456")
         )
         assert graphics._letterbox_rect.isVisible()
-        assert graphics._letterbox_rect.brush().color().name().upper() == "#123456"
+        assert (
+            graphics._letterbox_rect.brush().color().name().upper() == "#000000"
+        )
+        assert graphics._main_backdrop.isVisible()
+        assert (
+            graphics._main_backdrop.brush().color().name().upper() == "#123456"
+        )
     finally:
         graphics.deleteLater()
 

@@ -27,6 +27,10 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
 )
 from krok_helper.subtitle_render.engine.timing.timeline import apply_n3_seq_line_breaks
 from krok_helper.subtitle_render.project.store import split_project_paths
+from krok_helper.subtitle_render.domain.roll import (
+    RollSegmentConfig,
+    roll_segment_from_dict,
+)
 from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_from_dict,
     line_animation_override_from_dict,
@@ -587,6 +591,8 @@ class ProjectLoadPlan:
     line_animation_overrides: Any = None
     extra_subtitle_sources: Any = None
     project_role_names: Any = None
+    pre_roll: Optional[RollSegmentConfig] = None
+    post_roll: Optional[RollSegmentConfig] = None
 
     @classmethod
     def from_data(cls, data: dict) -> "ProjectLoadPlan":
@@ -639,6 +645,16 @@ class ProjectLoadPlan:
             line_animation_overrides=source.get("line_animation_overrides"),
             extra_subtitle_sources=source.get("extra_subtitle_sources"),
             project_role_names=source.get("project_role_names"),
+            pre_roll=(
+                roll_segment_from_dict(source["pre_roll"])
+                if isinstance(source.get("pre_roll"), dict)
+                else None
+            ),
+            post_roll=(
+                roll_segment_from_dict(source["post_roll"])
+                if isinstance(source.get("post_roll"), dict)
+                else None
+            ),
         )
 
     def deferred_assets(self) -> tuple[DeferredProjectAsset, ...]:

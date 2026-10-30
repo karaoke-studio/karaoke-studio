@@ -9,6 +9,10 @@ from typing import Any, Callable, Optional
 
 from krok_helper.models import MediaInfo
 from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.roll import (
+    RollSegmentConfig,
+    roll_segment_to_dict,
+)
 from krok_helper.subtitle_render.contracts import SubtitleProjectState
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
 from krok_helper.subtitle_render.domain.timing import (
@@ -81,6 +85,8 @@ _PROJECT_OWNED_KEYS = frozenset(
         "loading_settings_snapshot",
         "extra_subtitle_sources",
         "project_role_names",
+        "pre_roll",
+        "post_roll",
     }
 )
 _PROJECT_EXTENSIBLE_FIELDS = frozenset(
@@ -96,6 +102,8 @@ _PROJECT_EXTENSIBLE_FIELDS = frozenset(
         "line_inline_guide_symbols",
         "line_animation_overrides",
         "extra_subtitle_sources",
+        "pre_roll",
+        "post_roll",
     }
 )
 
@@ -160,6 +168,10 @@ class SubtitleProjectDocument:
     audio_info: Optional[MediaInfo] = None
     style: Style = field(default_factory=Style)
     role_names: list[str] = field(default_factory=list)
+    pre_roll: Optional[RollSegmentConfig] = None
+    """前黑段配置（片头插入）；``None`` = 从未配置（写盘时省键）。"""
+    post_roll: Optional[RollSegmentConfig] = None
+    """后黑段配置（片尾追加）；``None`` = 从未配置（写盘时省键）。"""
     preserved_project_data: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def tracks(self) -> list[TimingTrack]:
@@ -304,6 +316,14 @@ class SubtitleProjectDocument:
             selected_scheme_key=selected_scheme_key,
             extra_subtitle_sources=extra_subtitle_sources,
             project_role_names=list(self.role_names),
+            pre_roll=(
+                roll_segment_to_dict(self.pre_roll) if self.pre_roll is not None else None
+            ),
+            post_roll=(
+                roll_segment_to_dict(self.post_roll)
+                if self.post_roll is not None
+                else None
+            ),
             output=dict(output),
             **track_data,
         )

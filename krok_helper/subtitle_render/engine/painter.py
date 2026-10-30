@@ -116,6 +116,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
 from krok_helper.subtitle_render.engine.layout.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
+    roll_shift_scope,
 )
 from krok_helper.subtitle_render.engine.layout.display.section_edges import (
     section_edge_context as _section_edge_context,
@@ -714,6 +715,7 @@ def _resolve_visible_content(
     duration_ms: Optional[int] = None,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    roll_shift_ms: int = 0,
 ):
     """计算某帧的可见内容元组：``(track_t_ms, display_style, display_lines,
     signal_lines, title_states)``。``title_states`` 为当前帧可见的
@@ -729,6 +731,7 @@ def _resolve_visible_content(
         duration_ms=duration_ms,
         logical_w=logical_w,
         logical_h=logical_h,
+        roll_shift_ms=roll_shift_ms,
     )
     return resolved[:5]
 
@@ -741,15 +744,38 @@ def _resolve_visible_content_with_plan(
     duration_ms: Optional[int] = None,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    roll_shift_ms: int = 0,
 ):
     """Resolve visible content and retain its shared dual-line layout plan.
 
     每轨入口的按轴样式解析点：主轨 / 跟随副轨拿到原全局 style 对象，
     非跟随副轨拿到 ``with_timing`` 叠加后的 effective style；本函数内
     之后的全部阶段（偏移、显示窗、布局计划、信号、绘制样式）只用这一份。
+
+    ``roll_shift_ms``：前黑开启时的歌词展示层整体后移量（标题不受影响，
+    标题窗口本身就是展示坐标）。GPU 侧经 style payload 的
+    ``timing_offset_ms`` 平移实现同一口径（见 ``build_render_ir``）。
     """
     style = style_for_track(style, track)
-    track_t_ms = _effective_track_time_ms(track, t_ms, style)
+    # 入场/信号窗口的钳制下界随前黑偏移放宽（schedule 侧消费）。
+    with roll_shift_scope(roll_shift_ms):
+        return _resolve_visible_content_with_plan_inner(
+            track, t_ms, style, roll_shift_ms=roll_shift_ms,
+            duration_ms=duration_ms, logical_w=logical_w, logical_h=logical_h,
+        )
+
+
+def _resolve_visible_content_with_plan_inner(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+    *,
+    roll_shift_ms: int = 0,
+    duration_ms: Optional[int] = None,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+):
+    track_t_ms = _effective_track_time_ms(track, t_ms - roll_shift_ms, style)
     display_style = _display_style_for_signal_window(style)
     layout_plan: TrackLayoutPlan | None = None
     if display_style.dual_line_layout:
@@ -868,6 +894,7 @@ def frame_has_content(
     duration_ms: Optional[int] = None,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    roll_shift_ms: int = 0,
 ) -> bool:
     """该帧是否会画出任何字幕内容（行 / 信号 / 标题）。
 
@@ -885,6 +912,7 @@ def frame_has_content(
         duration_ms=duration_ms,
         logical_w=logical_w,
         logical_h=logical_h,
+        roll_shift_ms=roll_shift_ms,
         ports=_frame_analysis_ports(),
     )
 
@@ -898,6 +926,7 @@ def frame_content_intervals(
     extra_tracks: Optional[list[TimingTrack]] = None,
     *,
     duration_ms: Optional[int] = None,
+    roll_shift_ms: int = 0,
 ) -> list[tuple[int, int]] | None:
     """Return per-source (lyric / title) vertical content intervals, **unmerged**.
 
@@ -922,6 +951,7 @@ def frame_content_intervals(
             style,
             extra_tracks,
             duration_ms=duration_ms,
+            roll_shift_ms=roll_shift_ms,
             ports=_frame_analysis_ports(),
         )
 
@@ -935,6 +965,7 @@ def frame_vertical_bounds(
     extra_tracks: Optional[list[TimingTrack]] = None,
     *,
     duration_ms: Optional[int] = None,
+    roll_shift_ms: int = 0,
 ) -> tuple[int, int] | None:
     """Return conservative vertical content bounds (union) for the current frame.
 
@@ -955,6 +986,7 @@ def frame_vertical_bounds(
             style,
             extra_tracks,
             duration_ms=duration_ms,
+            roll_shift_ms=roll_shift_ms,
             ports=_frame_analysis_ports(),
         )
 
@@ -967,6 +999,7 @@ def paint_frame(
     extra_tracks: Optional[list[TimingTrack]] = None,
     *,
     duration_ms: Optional[int] = None,
+    roll_shift_ms: int = 0,
 ) -> QImage:
     """把 ``track`` 在 ``t_ms`` 时刻的活跃行渲染到 ``image``（原地修改）。
 
@@ -991,6 +1024,7 @@ def paint_frame(
             style,
             extra_tracks,
             duration_ms=duration_ms,
+            roll_shift_ms=roll_shift_ms,
         )
     finally:
         painter.end()
@@ -1007,6 +1041,7 @@ def paint_frame_to_painter(
     extra_tracks: Optional[list[TimingTrack]] = None,
     *,
     duration_ms: Optional[int] = None,
+    roll_shift_ms: int = 0,
 ) -> None:
     """把当前字幕帧直接绘制到已打开的 ``QPainter``。
 
@@ -1015,6 +1050,9 @@ def paint_frame_to_painter(
     ``extra_tracks``：副字幕源（对标 N3 ``SourceLyricsInfos`` 多歌词文件，
     如コーラス轨）。每轨独立分页 / 分 lane / 计算显示窗口，依次叠绘到同一帧；
     标题 overlay 只随主轨绘制一次。
+
+    ``roll_shift_ms``：前黑开启时的歌词展示层整体后移量（标题时间戳本身
+    已随前黑数据级平移，不在此重复偏移）。
     """
     # 扫字线像素字段与指示灯/音量柱偏移存储恒为 1080 基准,绘制入口一次
     # 性换算成当前输出高度下的实画值;深处的各消费点继续直读画布值。
@@ -1037,10 +1075,18 @@ def paint_frame_to_painter(
                 style,
                 draw_title=True,
                 duration_ms=duration_ms,
+                roll_shift_ms=roll_shift_ms,
             )
         for extra in extra_tracks or ():
             _paint_track_to_painter(
-                painter, logical_w, logical_h, extra, t_ms, style, draw_title=False
+                painter,
+                logical_w,
+                logical_h,
+                extra,
+                t_ms,
+                style,
+                draw_title=False,
+                roll_shift_ms=roll_shift_ms,
             )
 
 
@@ -1054,6 +1100,7 @@ def _paint_track_to_painter(
     *,
     draw_title: bool,
     duration_ms: Optional[int] = None,
+    roll_shift_ms: int = 0,
 ) -> None:
     (
         track_t_ms,
@@ -1069,6 +1116,7 @@ def _paint_track_to_painter(
             duration_ms=duration_ms if draw_title else None,
             logical_w=logical_w,
             logical_h=logical_h,
+            roll_shift_ms=roll_shift_ms,
     )
     if not draw_title:
         title_states = ()

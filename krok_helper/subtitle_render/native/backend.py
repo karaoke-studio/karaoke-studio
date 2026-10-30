@@ -1143,6 +1143,7 @@ class NativeRendererProcess:
         extra_tracks: list[TimingTrack] | None = None,
         duration_ms: int | None = None,
         relayout_scope: str | None = None,
+        roll_shift_ms: int = 0,
         progress: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         ir_kwargs: dict[str, Any] = {
@@ -1158,6 +1159,8 @@ class NativeRendererProcess:
             # None = 全量重排（默认，行为同历史版本）；"titles" / "paint"
             # 分别表示仅标题或仅上色变化，歌词布局计划按签名复用。
             ir_kwargs["relayout_scope"] = relayout_scope
+        if roll_shift_ms:
+            ir_kwargs["roll_shift_ms"] = int(roll_shift_ms)
         from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
         prepare_fonts(track, style, extra_tracks)
         ir = build_render_ir(track, style, **ir_kwargs)
@@ -1221,6 +1224,7 @@ class NativeRendererProcess:
         export_crop_height: int = 0,
         export_bands: list[tuple[int, int]] | None = None,
         relayout_scope: str | None = None,
+        roll_shift_ms: int = 0,
         progress: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Configure the G1 DirectWrite scene without enabling the product path."""
@@ -1234,6 +1238,7 @@ class NativeRendererProcess:
             extra_tracks=extra_tracks,
             duration_ms=duration_ms,
             relayout_scope=relayout_scope,
+            roll_shift_ms=roll_shift_ms,
             progress=progress,
         )
         payload: dict[str, Any] = {

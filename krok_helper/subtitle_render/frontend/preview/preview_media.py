@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import uuid
+import threading
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +27,12 @@ _VIDEO_CONTAINER_SUFFIXES = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".
 _PREVIEW_CACHE_DIR_NAME = "preview-cache"
 _VIDEO_PROXY_MAX_HEIGHT = {"low": 540, "medium": 1080}
 _VIDEO_PROXY_PROFILE_VERSION = 2
+#: 当前播放器正在使用的普通背景/前黑/后黑源文件及引用数；清理时保留其全部画质代理。
+_ACTIVE_PREVIEW_SOURCES: dict[Path, int] = {}
+#: 正在写入的临时代理；缓存清扫不能删掉别的线程正在生成的文件。
+_ACTIVE_TEMPORARIES: set[Path] = set()
+_PREPARATION_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_PREPARATION_LOCK_GUARD = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -41,28 +49,80 @@ def _preview_cache_dir() -> Path:
     return temp_dir(_PREVIEW_CACHE_DIR_NAME)
 
 
+def protect_preview_source(path: Path | None) -> None:
+    """登记正在使用的源文件；缓存清扫保留其 low/medium/high 全部代理。"""
+
+    if path is None:
+        return
+    try:
+        source = Path(path)
+    except TypeError:
+        return
+    if _should_prepare_proxy(source):
+        _ACTIVE_PREVIEW_SOURCES[source] = _ACTIVE_PREVIEW_SOURCES.get(source, 0) + 1
+
+
+def unprotect_preview_source(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        source = Path(path)
+    except TypeError:
+        return
+    count = _ACTIVE_PREVIEW_SOURCES.get(source, 0)
+    if count <= 1:
+        _ACTIVE_PREVIEW_SOURCES.pop(source, None)
+    else:
+        _ACTIVE_PREVIEW_SOURCES[source] = count - 1
+
+
 def purge_preview_cache(keep: tuple[Path, ...] | set[Path] = ()) -> None:
     """清扫视频代理缓存目录：删除所有代理（含 ``*.tmp.mp4`` 半成品）。
 
     ``keep`` 里的路径豁免——用于「加载新素材」场景下保留**同一源文件**全部画质
-    的代理（画质来回切换不重转）。代理可再生——删了下次预览按源文件重新转码一次
-    即可，所以不做保留期。正被本进程或另一实例的播放器 / ffmpeg 占用的文件在
-    Windows 上删除会失败，静默跳过——这就是双开 Lin-K 时互不误删的天然豁免。
+    的代理（画质来回切换不重转）。当前普通背景/前黑/后黑正在使用的源文件也
+    通过 :func:`protect_preview_source` 登记，其全部画质代理一并豁免。代理可
+    再生——删了下次预览按源文件重新转码一次即可，所以不做保留期。正被本进程
+    或另一实例的播放器 / ffmpeg 占用的文件在 Windows 上删除会失败，静默跳过。
     非 ``.mp4`` 条目不动。
     """
+    protected = set(keep)
+    for source in tuple(_ACTIVE_PREVIEW_SOURCES):
+        for quality in ("low", "medium", "high"):
+            try:
+                protected.add(_playback_target_for(source, quality))
+            except (OSError, ValueError, TypeError):
+                continue
     try:
         entries = list(_preview_cache_dir().iterdir())
     except OSError:
         return
     for entry in entries:
         try:
-            if entry.is_file() and entry.suffix == ".mp4" and entry not in keep:
+            if (
+                entry.is_file()
+                and entry.suffix == ".mp4"
+                and entry not in protected
+                and entry not in _ACTIVE_TEMPORARIES
+            ):
                 entry.unlink()
         except OSError:
             continue
 
 
-def qt_playback_source(path: Path, preview_quality: object = "high") -> Path:
+def qt_playback_source(path: Path, preview_quality: object = "high", *,
+                       progress_callback=None, duration_seconds: float = 0) -> Path:
+    """Coalesce concurrent requests for the same preview into one preparation."""
+    key = (str(Path(path).resolve()), normalize_preview_media_quality(preview_quality))
+    with _PREPARATION_LOCK_GUARD:
+        lock = _PREPARATION_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        return _prepare_qt_playback_source(path, preview_quality,
+            progress_callback=progress_callback, duration_seconds=duration_seconds)
+
+
+def _prepare_qt_playback_source(path: Path, preview_quality: object = "high", *,
+                                progress_callback=None, duration_seconds: float = 0) -> Path:
     """Return a Qt-friendly preview source for ``path`` when possible."""
     path = Path(path)
     ready = prepared_qt_playback_source(path, preview_quality)
@@ -72,16 +132,35 @@ def qt_playback_source(path: Path, preview_quality: object = "high") -> Path:
     if preparation is None:
         return path
     try:
-        result = subprocess.run(
-            list(preparation.command),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            **_build_subprocess_kwargs(),
-        )
-        if result.returncode != 0 or not finalize_qt_playback_preparation(preparation):
+        if progress_callback is None:
+            result = subprocess.run(
+                list(preparation.command), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", check=False,
+                **_build_subprocess_kwargs(),
+            )
+            returncode = result.returncode
+        else:
+            command = list(preparation.command)
+            command[1:1] = ["-progress", "pipe:1", "-nostats"]
+            with tempfile.TemporaryFile() as errors:
+                process = subprocess.Popen(command, stdout=subprocess.PIPE,
+                    stderr=errors, text=True, encoding="utf-8", errors="replace",
+                    **_build_subprocess_kwargs())
+                try:
+                    for line in process.stdout:
+                        if line.startswith("out_time_us=") and duration_seconds > 0:
+                            try:
+                                percent = min(99, max(0, int(int(line.strip().split("=", 1)[1]) / (duration_seconds * 10000))))
+                            except ValueError:
+                                continue
+                            progress_callback(percent)
+                    returncode = process.wait()
+                finally:
+                    process.stdout.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+        if returncode != 0 or not finalize_qt_playback_preparation(preparation):
             discard_qt_playback_preparation(preparation)
             return path
         return preparation.target
@@ -134,6 +213,7 @@ def qt_playback_preparation(
         f"{target.stem}.{uuid.uuid4().hex}.tmp{target.suffix}"
     )
     target.parent.mkdir(parents=True, exist_ok=True)
+    _ACTIVE_TEMPORARIES.add(temporary)
     command = _build_qt_playback_command(
         ffmpeg_path,
         path,
@@ -157,13 +237,17 @@ def finalize_qt_playback_preparation(preparation: QtPlaybackPreparation) -> bool
         return True
     except OSError:
         return False
+    finally:
+        _ACTIVE_TEMPORARIES.discard(temporary)
 
 
 def discard_qt_playback_preparation(preparation: QtPlaybackPreparation) -> None:
     """Remove an incomplete temporary proxy, leaving any shared cache intact."""
+    temporary = preparation.temporary
+    _ACTIVE_TEMPORARIES.discard(temporary)
     try:
-        if preparation.temporary.exists():
-            preparation.temporary.unlink()
+        if temporary.exists():
+            temporary.unlink()
     except OSError:
         pass
 

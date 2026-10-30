@@ -567,23 +567,26 @@ class _AsyncSubtitleWorker(QObject):
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._duration_ms: int = 0
+        self._roll_shift_ms: int = 0
         self._extra_tracks: list[TimingTrack] = []
         self._pending_t: Optional[int] = None
         self._rendering = False
         self._stopping = False
 
-    @Slot(object, object, object, object)
+    @Slot(object, object, object, object, object)
     def set_state(
         self,
         track: Optional[TimingTrack],
         style: Optional[Style],
         extra_tracks: object = None,
         duration_ms: object = None,
+        roll_shift_ms: object = None,
     ) -> None:
         self._track = track
         self._style = style
         self._extra_tracks = list(extra_tracks) if isinstance(extra_tracks, (list, tuple)) else []
         self._duration_ms = max(int(duration_ms or 0), 0)
+        self._roll_shift_ms = max(int(roll_shift_ms or 0), 0)
 
     @Slot(int, int, float)
     def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
@@ -643,6 +646,7 @@ class _AsyncSubtitleWorker(QObject):
                         style,
                         extra_tracks,
                         duration_ms=duration_ms,
+                        roll_shift_ms=self._roll_shift_ms,
                     )
             finally:
                 painter.end()
@@ -669,7 +673,7 @@ class AsyncSubtitleRenderer(QObject):
     frame_ready = Signal(QImage, int)
     renderProgress = Signal(int, str)
     backendModeChanged = Signal(str)
-    _state_changed = Signal(object, object, object, object)
+    _state_changed = Signal(object, object, object, object, object)
     _target_changed = Signal(int, int, float)
     _frame_requested = Signal(int)
 
@@ -710,6 +714,7 @@ class AsyncSubtitleRenderer(QObject):
         *,
         duration_ms: int | None = None,
         relayout_scope: str | None = None,  # noqa: ARG002 — CPU always renders the full frame.
+        roll_shift_ms: int | None = None,
     ) -> None:
         if self._stopped:
             return
@@ -721,6 +726,7 @@ class AsyncSubtitleRenderer(QObject):
             style,
             list(extra_tracks or ()),
             max(int(duration_ms or 0), 0),
+            max(int(roll_shift_ms or 0), 0),
         )
 
     def set_size(self, width: int, height: int) -> None:
@@ -790,6 +796,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._style: Optional[Style] = None
         self._extra_tracks: list[TimingTrack] = []
         self._duration_ms: int = 0
+        self._roll_shift_ms: int = 0
         self._generation = 0
         self._request_serial = 0
         self._latest_t: Optional[int] = None
@@ -967,6 +974,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         *,
         duration_ms: int | None = None,
         relayout_scope: str | None = None,
+        roll_shift_ms: int | None = None,
     ) -> None:
         _prewarm_font_axis_capabilities(track, style, extra_tracks)
         with self._condition:
@@ -977,6 +985,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._style = style
             self._extra_tracks = list(extra_tracks or ())
             self._duration_ms = max(int(duration_ms or 0), 0)
+            self._roll_shift_ms = max(int(roll_shift_ms or 0), 0)
             # relayout_scope：None = 全量重排（默认）；"titles" / "paint"
             # 分别表示仅标题或仅上色变化，configure 时歌词布局计划按签名复用。
             self._relayout_scope = relayout_scope if relayout_scope else None
@@ -1309,6 +1318,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._native_target,
                 self._force_warp,
                 self._relayout_scope,
+                self._roll_shift_ms,
             )
 
     def _run(self) -> None:
@@ -1363,6 +1373,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     native_target,
                     force_warp,
                     relayout_scope,
+                    roll_shift_ms,
                 ) = snapshot
                 if track is None or style is None:
                     continue
@@ -1410,6 +1421,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 t_ms,
                                 generation,
                                 duration_ms,
+                                roll_shift_ms,
                             )
                     continue
                 if self._renderer_failed:
@@ -1427,6 +1439,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 width,
                                 height,
                                 dpr,
+                                roll_shift_ms,
                             )
                             continue
                         if not speculative:
@@ -1446,6 +1459,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                     t_ms,
                                     generation,
                                     duration_ms,
+                                    roll_shift_ms,
                                 )
                         continue
                     self._renderer_failed = False
@@ -1506,6 +1520,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                         dpr=dpr,
                                         extra_tracks=extra_tracks,
                                         duration_ms=duration_ms,
+                                        roll_shift_ms=roll_shift_ms,
                                         include_lines_style=(
                                             relayout_scope != "titles"
                                         ),
@@ -1542,6 +1557,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                         force_warp=force_warp,
                                         extra_tracks=extra_tracks,
                                         duration_ms=duration_ms,
+                                        roll_shift_ms=roll_shift_ms,
                                         prewarm_t_ms=t_ms,
                                         worker_count=self._worker_request_for_mode(),
                                         defer_followers=True,
@@ -1581,6 +1597,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                             force_warp=force_warp,
                                             extra_tracks=extra_tracks,
                                             duration_ms=duration_ms,
+                                            roll_shift_ms=roll_shift_ms,
                                             prewarm_t_ms=t_ms,
                                             worker_count=1,
                                             defer_followers=True,
@@ -2045,6 +2062,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 t_ms,
                                 generation,
                                 duration_ms,
+                                roll_shift_ms,
                             )
         finally:
             self._close_renderer()
@@ -2339,11 +2357,13 @@ class GpuAsyncSubtitleRenderer(QObject):
         width: int,
         height: int,
         dpr: float,
+        roll_shift_ms: int = 0,
     ) -> None:
         """CPU 回退的填缝调度（GPU 重试窗口内持续画未来帧入缓存）。"""
         def render_fill(t_ms: int) -> Optional[QImage]:
             return self._render_cpu_frame(
-                track, style, extra_tracks, duration_ms, width, height, dpr, t_ms
+                track, style, extra_tracks, duration_ms, width, height, dpr, t_ms,
+                roll_shift_ms,
             )
 
         renderer = self._renderer_owner.process
@@ -2366,6 +2386,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         height: int,
         dpr: float,
         t_ms: int,
+        roll_shift_ms: int = 0,
     ) -> Optional[QImage]:
         """用 QPainter 渲染一帧（CPU 回退的渲染体，含 EMA 更新）。"""
         paint_started = time.monotonic()
@@ -2391,6 +2412,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     style,
                     extra_tracks,
                     duration_ms=duration_ms,
+                    roll_shift_ms=roll_shift_ms,
                 )
         except Exception:  # noqa: BLE001 - 回退帧自身的异常绝不能杀死 worker 线程
             _log.exception("CPU 回退帧渲染失败（worker 继续运行）")
@@ -3107,6 +3129,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         t_ms: int,
         generation: int,
         duration_ms: int,
+        roll_shift_ms: int = 0,
     ) -> None:
         if not self._may_emit(t_ms, generation):
             self._note("stale_frames_dropped")
@@ -3131,6 +3154,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     style,
                     extra_tracks,
                     duration_ms=duration_ms,
+                    roll_shift_ms=roll_shift_ms,
                 )
         except Exception:  # noqa: BLE001 - 回退帧自身的异常绝不能杀死 worker 线程
             # 线程一旦死亡，GPU 与 CPU 两条预览路径都会永久停摆，只能重启页面。
@@ -3228,6 +3252,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._duration_ms: int = 0
+        self._roll_shift_ms: int = 0
         self._generation = 0
         self._active_generation: Optional[int] = None
         self._pending_t: Optional[int] = None
@@ -3296,6 +3321,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         *,
         duration_ms: int | None = None,
         relayout_scope: str | None = None,
+        roll_shift_ms: int | None = None,
     ) -> None:
         _prewarm_font_axis_capabilities(track, style, extra_tracks)
         with self._condition:
@@ -3304,6 +3330,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._track = track
             self._style = style
             self._duration_ms = max(int(duration_ms or 0), 0)
+            self._roll_shift_ms = max(int(roll_shift_ms or 0), 0)
             self._relayout_scope = relayout_scope if relayout_scope else None
             self._advance_generation_locked()
             self._needs_configure = True
@@ -3411,13 +3438,15 @@ class NativeAsyncSubtitleRenderer(QObject):
                 skip_current,
                 duration_ms,
                 relayout_scope,
+                roll_shift_ms,
             ) = snapshot
             if track is None or style is None:
                 continue
             if self._renderer_failed:
                 self._note_backend_mode("cpu")
                 self._emit_python_fallback(
-                    track, style, width, height, dpr, t_ms, generation, duration_ms
+                    track, style, width, height, dpr, t_ms, generation, duration_ms,
+                    roll_shift_ms,
                 )
                 continue
             try:
@@ -3425,6 +3454,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     track,
                     style,
                     duration_ms=duration_ms,
+                    roll_shift_ms=roll_shift_ms,
                     width=width,
                     height=height,
                     dpr=dpr,
@@ -3448,7 +3478,8 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._close_renderer()
                 self._note_backend_mode("cpu")
                 self._emit_python_fallback(
-                    track, style, width, height, dpr, t_ms, generation, duration_ms
+                    track, style, width, height, dpr, t_ms, generation, duration_ms,
+                    roll_shift_ms,
                 )
             except Exception as exc:  # noqa: BLE001 - worker 线程必须自愈，不得静默死亡
                 _log.exception("native 预览路径出现非预期异常（本帧回退 Painter）")
@@ -3459,7 +3490,8 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._close_renderer()
                 self._note_backend_mode("cpu")
                 self._emit_python_fallback(
-                    track, style, width, height, dpr, t_ms, generation, duration_ms
+                    track, style, width, height, dpr, t_ms, generation, duration_ms,
+                    roll_shift_ms,
                 )
 
     def _note_backend_mode(self, mode: str) -> None:
@@ -3519,6 +3551,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 skip_current,
                 self._duration_ms,
                 self._relayout_scope,
+                self._roll_shift_ms,
             )
 
     def _render_native(
@@ -3536,6 +3569,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         playing: bool,
         skip_current: bool,
         duration_ms: int = 0,
+        roll_shift_ms: int = 0,
         relayout_scope: str | None = None,
     ) -> None:
         timestamps = native_preview_timestamps(
@@ -3574,6 +3608,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                         fps=60,
                         dpr=dpr,
                         duration_ms=duration_ms,
+                        roll_shift_ms=roll_shift_ms,
                         relayout_scope=relayout_scope,
                     )
             # 资源常驻（G2 硬性要求 4）：shm_key 与 renderer 同生命周期，
@@ -3663,6 +3698,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         t_ms: int,
         generation: int,
         duration_ms: int,
+        roll_shift_ms: int = 0,
     ) -> None:
         if not self._is_current_generation(generation):
             return
@@ -3685,6 +3721,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     int(t_ms),
                     style,
                     duration_ms=duration_ms,
+                    roll_shift_ms=roll_shift_ms,
                 )
         except Exception:  # noqa: BLE001 - 回退帧自身的异常绝不能杀死 worker 线程
             _log.exception("CPU 回退帧渲染失败（worker 继续运行）")

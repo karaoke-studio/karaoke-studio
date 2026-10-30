@@ -77,6 +77,7 @@ from krok_helper.subtitle_render.engine.export.render_job_policy import (
     job_input_paths as _job_input_paths,
     job_tracks as _job_tracks,
     resolve_duration_ms as _resolve_duration_ms,
+    resolve_roll_timeline as _resolve_roll_plan,
     resolved_background as _resolved_background,
     validate_render_job as _validate_job,
 )
@@ -289,15 +290,90 @@ def render_subtitle_video(
     preview_image_path: Path | None = None,
     preview_width: int | None = None,
 ) -> Path:
+    """Render with project-clock animation frames shared by CPU and GPU export."""
+    from bisect import bisect_right
+    from tempfile import TemporaryDirectory
+    from PyQt6.QtGui import QImageReader
+
+    _validate_job(job)
+    with TemporaryDirectory(prefix="krok-roll-") as temp:
+        changes = {}
+        for name in ("pre_roll", "post_roll"):
+            config = getattr(job, name)
+            if config is None or not config.enabled or config.duration_ms <= 0:
+                continue
+            source = config.source
+            if source.kind != "image" or not source.path:
+                continue
+            reader = QImageReader(str(source.path))
+            if reader.imageCount() <= 1:
+                continue
+            folder = Path(temp) / name
+            folder.mkdir()
+            ends, paths = [], []
+            elapsed = 0
+            while reader.canRead():
+                if should_cancel is not None and should_cancel():
+                    raise ExportCancelled("导出已取消。")
+                frame = reader.read()
+                if frame.isNull():
+                    break
+                path = folder / f"{len(paths)}.png"
+                if not frame.save(str(path)):
+                    raise ProcessingError("无法准备前黑/后黑动图帧。")
+                paths.append(path.name)
+                elapsed += max(reader.nextImageDelay(), 1)
+                ends.append(elapsed)
+            if not paths:
+                raise ProcessingError("无法读取前黑/后黑动图。")
+            manifest = folder / "frames.ffconcat"
+            with manifest.open("w", encoding="utf-8") as stream:
+                stream.write("ffconcat version 1.0\n")
+                for index in range(_frame_count(config.duration_ms, job.fps)):
+                    frame_index = bisect_right(ends, (index * 1000 / job.fps) % elapsed)
+                    stream.write(f"file '{paths[frame_index]}'\noption framerate {job.fps}\nduration {1 / job.fps:.12f}\n")
+                stream.write(f"file '{paths[frame_index]}'\noption framerate {job.fps}\n")
+            changes[name] = replace(config, source=replace(source, path=str(manifest)))
+        return _render_subtitle_video_prepared(
+            replace(job, **changes), ffmpeg_dir=ffmpeg_dir, logger=logger,
+            should_cancel=should_cancel, on_process_started=on_process_started,
+            on_progress=on_progress, preview_image_path=preview_image_path,
+            preview_width=preview_width,
+        )
+
+
+def _render_subtitle_video_prepared(
+    job: RenderJob,
+    *,
+    ffmpeg_dir: Path | None = None,
+    logger: Logger | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    preview_image_path: Path | None = None,
+    preview_width: int | None = None,
+) -> Path:
     """Render ``job`` to MP4 using a transparent rawvideo subtitle pipe."""
     logger = logger or (lambda _message: None)
     _validate_job(job)
     ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)
 
+    roll_plan = _resolve_roll_plan(job)
     duration_ms = _resolve_duration_ms(job)
     # Freeze the resolved project/media duration into the job so every CPU,
     # multiprocessing and GPU path anchors title tail timing to the same clock.
-    job = replace(job, duration_ms=duration_ms)
+    # 前黑/后黑生效时同步冻结歌词展示偏移、标题锚定时长与主段时长，保证
+    # build_render_command 里重复 resolve_roll_timeline 得到同一份时间线。
+    freeze_kwargs: dict[str, object] = {"duration_ms": duration_ms}
+    if roll_plan is not None and roll_plan.active:
+        freeze_kwargs.update(
+            {
+                "roll_shift_ms": roll_plan.lyric_shift_ms,
+                "title_duration_ms": roll_plan.content_end_ms,
+                "main_media_end_ms": roll_plan.main_end_ms - roll_plan.pre_ms,
+            }
+        )
+    job = replace(job, **freeze_kwargs)
     total_frames = _frame_count(duration_ms, job.fps)
     native_export_requested = _native_export_requested(job)
     native_renderer_path = resolve_native_renderer_path() if native_export_requested else None
@@ -748,6 +824,7 @@ def _paint_overlay_strip(
     transparent: QColor,
     extra_tracks: tuple[TimingTrack, ...] = (),
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
 ) -> None:
     """把整帧字幕布局画进只有条带高的 ``buffer``。
 
@@ -769,13 +846,29 @@ def _paint_overlay_strip(
             style,
             list(extra_tracks or ()),
             duration_ms=duration_ms,
+            roll_shift_ms=roll_shift_ms,
         )
     finally:
         painter.end()
 
 
+
+def _paint_duration_ms(job: RenderJob) -> int:
+    """标题 tail 锚定时长：前黑后黑生效时为内容结束（display 坐标，不含后黑）。"""
+
+    if job.title_duration_ms is not None and job.title_duration_ms > 0:
+        return int(job.title_duration_ms)
+    return int(job.duration_ms or 0)
+
+
+def _job_roll_shift_ms(job: RenderJob) -> int:
+    """歌词展示层整体后移量（前黑自动偏移；0 = 无前黑/关闭偏移）。"""
+
+    return int(job.roll_shift_ms or 0)
+
+
 def _strip_sample_times(
-    tracks: list[TimingTrack], style: Style, duration_ms: int, total_frames: int
+    tracks: list[TimingTrack], style: Style, duration_ms: int, total_frames: int, roll_shift_ms: int = 0
 ) -> list[int]:
     """纵向并集预扫的采样时刻：均匀网格 + 每轨每行起止（含 lead-in/tail 动画极值）。
 
@@ -794,7 +887,7 @@ def _strip_sample_times(
             start = timing_line_start_ms(line)
             end = line.end_ms or start
             for tt in (start - lead, start, end, end + tail):
-                times.add(tt)
+                times.add(tt + roll_shift_ms)
     return sorted(t for t in times if 0 <= t <= duration_ms)
 
 
@@ -836,7 +929,7 @@ def _compute_subtitle_strip(
         return None
     width, height = job.width, job.height
     total_frames = _frame_count(duration_ms, job.fps)
-    times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
+    times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames, _job_roll_shift_ms(job))
     if not times:
         return None
     total_samples = len(times)
@@ -866,9 +959,10 @@ def _compute_subtitle_strip(
             t_ms,
             job.style,
             extras,
-            duration_ms=job.duration_ms,
+            duration_ms=_paint_duration_ms(job),
             logical_w=width,
             logical_h=height,
+            roll_shift_ms=_job_roll_shift_ms(job),
         ):
             continue
         bounds = frame_vertical_bounds(
@@ -878,7 +972,8 @@ def _compute_subtitle_strip(
             t_ms,
             job.style,
             extras,
-            duration_ms=job.duration_ms,
+            duration_ms=_paint_duration_ms(job),
+            roll_shift_ms=_job_roll_shift_ms(job),
         )
         if bounds is None:
             if scratch is None:
@@ -890,7 +985,8 @@ def _compute_subtitle_strip(
                 t_ms,
                 job.style,
                 extras,
-                duration_ms=job.duration_ms,
+                duration_ms=_paint_duration_ms(job),
+                roll_shift_ms=_job_roll_shift_ms(job),
             )
             bounds = _content_row_bounds(scratch)
         if bounds is None:
@@ -952,7 +1048,7 @@ def _compute_content_bands(
         return None
     width, height = job.width, job.height
     total_frames = _frame_count(duration_ms, job.fps)
-    times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
+    times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames, _job_roll_shift_ms(job))
     if not times:
         return None
     total_samples = len(times)
@@ -979,9 +1075,10 @@ def _compute_content_bands(
             t_ms,
             job.style,
             extras,
-            duration_ms=job.duration_ms,
+            duration_ms=_paint_duration_ms(job),
             logical_w=width,
             logical_h=height,
+            roll_shift_ms=_job_roll_shift_ms(job),
         ):
             continue
         intervals = frame_content_intervals(
@@ -991,7 +1088,8 @@ def _compute_content_bands(
             t_ms,
             job.style,
             extras,
-            duration_ms=job.duration_ms,
+            duration_ms=_paint_duration_ms(job),
+            roll_shift_ms=_job_roll_shift_ms(job),
         )
         if intervals is None:
             return None  # 未迁移路径，方案 B 无法保证不漏像素
@@ -1053,6 +1151,7 @@ def _paint_overlay_bands(
     transparent: QColor,
     extra_tracks: tuple[TimingTrack, ...] = (),
     duration_ms: int | None = None,
+    roll_shift_ms: int = 0,
 ) -> None:
     """把整帧字幕布局画进竖向打包的 ``buffer``（高 = 各 band 高之和）。
 
@@ -1068,7 +1167,8 @@ def _paint_overlay_bands(
     scratch = _band_full_frame_scratch(logical_w, logical_h, buffer.format())
     scratch.fill(transparent)
     paint_frame(
-        scratch, track, t_ms, style, list(extra_tracks), duration_ms=duration_ms
+        scratch, track, t_ms, style, list(extra_tracks),
+        duration_ms=duration_ms, roll_shift_ms=roll_shift_ms,
     )
     offsets = _packed_offsets(bands)
     # 按行区间做内存拷贝而非 drawImage：Qt 栅格化在两个 RGBA8888 图之间
@@ -1109,16 +1209,18 @@ def _frame_bytes_bands(
         t_ms,
         job.style,
         list(job.extra_tracks),
-        duration_ms=job.duration_ms,
+        duration_ms=_paint_duration_ms(job),
         logical_w=job.width,
         logical_h=job.height,
+        roll_shift_ms=_job_roll_shift_ms(job),
     ):
         _paint_overlay_bands(
             buffer, job.track, job.style, t_ms,
             logical_w=job.width, logical_h=job.height,
             bands=bands, transparent=transparent,
             extra_tracks=job.extra_tracks,
-            duration_ms=job.duration_ms,
+            duration_ms=_paint_duration_ms(job),
+            roll_shift_ms=_job_roll_shift_ms(job),
         )
         return _image_bytes(buffer)
     return empty_frame
@@ -1143,16 +1245,18 @@ def _frame_bytes(
         t_ms,
         job.style,
         list(job.extra_tracks),
-        duration_ms=job.duration_ms,
+        duration_ms=_paint_duration_ms(job),
         logical_w=job.width,
         logical_h=job.height,
+        roll_shift_ms=_job_roll_shift_ms(job),
     ):
         _paint_overlay_strip(
             buffer, job.track, job.style, t_ms,
             logical_w=job.width, logical_h=job.height,
             strip_top=strip_top, transparent=transparent,
             extra_tracks=job.extra_tracks,
-            duration_ms=job.duration_ms,
+            duration_ms=_paint_duration_ms(job),
+            roll_shift_ms=_job_roll_shift_ms(job),
         )
         return _image_bytes(buffer)
     return empty_frame
@@ -1176,7 +1280,8 @@ def _write_frames_native(
         height=job.height,
         fps=job.fps,
         total_frames=total_frames,
-        duration_ms=job.duration_ms,
+        duration_ms=_paint_duration_ms(job),
+        roll_shift_ms=_job_roll_shift_ms(job),
         renderer_path=renderer_path,
         should_cancel=should_cancel,
     ):
@@ -1277,7 +1382,8 @@ def _write_frames_gpu(
                 height=job.height,
                 fps=job.fps,
                 total_frames=remaining,
-                duration_ms=job.duration_ms,
+                duration_ms=_paint_duration_ms(job),
+                roll_shift_ms=_job_roll_shift_ms(job),
                 start_frame=start_frame,
                 renderer_path=renderer_path,
                 extra_tracks=list(job.extra_tracks),

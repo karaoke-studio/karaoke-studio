@@ -87,6 +87,9 @@ class PlaybackController(QObject):
     # ------------------------------------------------------------------ media
     def set_media(self, path: Optional[Path]) -> None:
         """设 source 为承载音频的文件；非法 / None → 清空。切源后回到 0。"""
+        if self._media_path != path:
+            preview_media.unprotect_preview_source(self._media_path)
+            preview_media.protect_preview_source(path)
         self._cancel_proxy_preparation()
         if not _is_real_media_file(path):
             self._player.setSource(QUrl())

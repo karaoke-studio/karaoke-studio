@@ -10,6 +10,7 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
 )
 from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.roll import RollSegmentConfig
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
@@ -92,3 +93,17 @@ class RenderJob:
     """Additional subtitle sources composited after the primary track."""
     bitrate_mbps: int = DEFAULT_VIDEO_BITRATE_MBPS
     """Average video bitrate in Mbps for VideoToolbox encoding."""
+    pre_roll: "RollSegmentConfig | None" = None
+    """前黑段配置（片头插入）；``None`` = 未启用。"""
+    post_roll: "RollSegmentConfig | None" = None
+    """后黑段配置（片尾追加）；``None`` = 未启用。"""
+    main_media_end_ms: int | None = None
+    """主背景素材时长（视频背景 = 视频时长；决定后黑接续点）。"""
+    main_audio_end_ms: int | None = None
+    """主背景独立音频时长（非视频背景参与内容长度）。"""
+    main_background_has_audio: bool = False
+    """主背景视频是否内嵌音轨（前黑/后黑混音图需要；探针事实）。"""
+    roll_shift_ms: int = 0
+    """前黑开启且自动偏移时歌词展示层整体后移量（渲染器冻结值）。"""
+    title_duration_ms: int | None = None
+    """标题 tail 锚定时长（display 坐标的内容结束时刻；前黑后黑生效时由渲染器冻结）。"""

@@ -48,6 +48,29 @@ def background_sequence_frame_path(
     return Path(raw)
 
 
+def count_image_sequence_frames(
+    pattern: Path | str, start_number: int = 0, limit: int = 100_000
+) -> int:
+    """数出图片序列的实际帧数（``%0Nd`` 模式自起始编号起连续探到断号）。"""
+
+    path = Path(pattern)
+    match = re.search(r"%0?(\d*)d", path.name)
+    if match is None:
+        return 0
+    width = int(match.group(1) or 0)
+    prefix = path.name[: match.start()]
+    suffix = path.name[match.end() :]
+    count = 0
+    index = max(int(start_number), 0)
+    while count < max(int(limit), 1):
+        stem = f"{index:0{width}d}" if width else str(index)
+        if not (path.parent / f"{prefix}{stem}{suffix}").exists():
+            break
+        count += 1
+        index += 1
+    return count
+
+
 def infer_image_sequence_pattern(path: Path) -> tuple[Path, int]:
     """Convert ``frame_0001.png`` to an ffmpeg pattern and start number."""
     match = re.search(r"(\d+)$", path.stem)

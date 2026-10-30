@@ -93,6 +93,71 @@ def test_scaled_preview_proxy_cache_key_tracks_quality_and_source_metadata(tmp_p
     assert preview_media._scaled_proxy_path_for(source, "low") != low
 
 
+def test_high_quality_preparation_remuxes_without_libx264(monkeypatch, tmp_path):
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    source = tmp_path / "roll.mp4"
+    source.write_bytes(b"video")
+    preparation = preview_media.qt_playback_preparation(source, "high")
+    assert preparation is not None
+    command = preparation.command
+    assert "-c" in command and command[command.index("-c") + 1] == "copy"
+    assert "libx264" not in command
+    assert "-vf" not in command
+    assert "-fps_mode" not in command
+
+
+def test_low_quality_preparation_reuses_normal_scaled_proxy(monkeypatch, tmp_path):
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    source = tmp_path / "roll.mp4"
+    source.write_bytes(b"video")
+    preparation = preview_media.qt_playback_preparation(source, "low")
+    assert preparation is not None
+    command = preparation.command
+    assert "min(ih,540)" in command[command.index("-vf") + 1]
+    assert command[command.index("-fps_mode") + 1] == "passthrough"
+    assert "libx264" in command
+
+
+def test_active_preview_sources_keep_all_quality_proxies(monkeypatch, tmp_path):
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    cache = tmp_path / "preview-cache"
+    cache.mkdir()
+    background = tmp_path / "background.mp4"
+    background.write_bytes(b"bg")
+    roll = tmp_path / "roll.mp4"
+    roll.write_bytes(b"roll")
+    kept: list[Path] = []
+    for source in (background, roll):
+        for quality in ("low", "medium", "high"):
+            target = preview_media._playback_target_for(source, quality)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"proxy")
+            kept.append(target)
+    preview_media.protect_preview_source(background)
+    preview_media.protect_preview_source(roll)
+    preview_media.protect_preview_source(roll)  # 前/后黑同源引用计数
+    orphan = cache / "orphan-abc123.mp4"
+    orphan.write_bytes(b"orphan")
+    monkeypatch.setattr(preview_media, "_resolve_ffmpeg_path", lambda: "ffmpeg")
+    try:
+        # 模拟“切换普通背景”：qt_playback_preparation 会清扫缓存。
+        switched = preview_media.qt_playback_preparation(orphan, "high")
+        assert switched is not None
+        preview_media.discard_qt_playback_preparation(switched)
+        for target in kept:
+            assert target.is_file(), target
+        preview_media.purge_preview_cache()
+        for target in kept:
+            assert target.is_file(), target
+        assert not orphan.exists()
+    finally:
+        preview_media.unprotect_preview_source(background)
+        preview_media.unprotect_preview_source(roll)
+        preview_media.unprotect_preview_source(roll)
+    preview_media.purge_preview_cache()
+    assert not any(target.exists() for target in kept)
+
+
 def test_purge_removes_all_proxies_but_keeps_non_mp4(monkeypatch, tmp_path):
     monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
     cache = tmp_path / "preview-cache"  # 统一根 %TEMP%\LinKLyrics 下的子目录
@@ -148,3 +213,45 @@ def test_preparation_purges_other_sources_but_keeps_current_qualities(
     assert low_proxy.is_file()
     assert not other_proxy.exists()
     assert preparation.target == preview_media._scaled_proxy_path_for(source, "medium")
+
+
+def test_concurrent_roll_preparation_reuses_one_ffmpeg(monkeypatch, tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    monkeypatch.setattr(preview_media, "_resolve_ffmpeg_path", lambda: "ffmpeg")
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        entered.set()
+        assert release.wait(5)
+        Path(command[-1]).write_bytes(b"proxy")
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(preview_media.subprocess, "run", run)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(preview_media.qt_playback_source, source)
+        assert entered.wait(5)
+        second = pool.submit(preview_media.qt_playback_source, source)
+        release.set()
+        assert first.result(timeout=5) == second.result(timeout=5)
+    assert len(calls) == 1
+
+
+def test_real_remux_reports_progress(monkeypatch, tmp_path):
+    import pytest
+    from tests.test_subtitle_render_roll_export import _ffmpeg_path
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        pytest.skip("需要 ffmpeg")
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(preview_media, "_resolve_ffmpeg_path", lambda: ffmpeg)
+    source = tmp_path / "source.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i",
+        "testsrc2=size=64x64:rate=30:duration=2", "-c:v", "libx264", str(source)], check=True)
+    progress = []
+    target = preview_media.qt_playback_source(source, progress_callback=progress.append, duration_seconds=2)
+    assert target != source and target.is_file()
+    assert progress and all(0 <= value <= 99 for value in progress)

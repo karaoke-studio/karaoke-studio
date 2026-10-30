@@ -28,7 +28,10 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     style_for_line,
     style_for_line_display_window,
 )
-from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+from krok_helper.subtitle_render.engine.layout.layout_context import (
+    current_roll_shift_ms,
+    layout_pass,
+)
 from krok_helper.subtitle_render.engine.render_progress import report_render_progress
 from krok_helper.subtitle_render.engine.layout.display.section_edges import (
     section_edge_context,
@@ -162,6 +165,9 @@ def resolve_track_layout_plan(
         # 从当前轨道重解析。none↔非none 与时长变化仍全量重排。
         track_signature_for_windows(track),
         lyric_layout_style_signature(style),
+        # 前黑展示层偏移参与缓存键：入场/信号窗口的钳制下界随偏移变化
+        # （layout_context 线程局部），同签名不同偏移必须各自成计划。
+        current_roll_shift_ms(),
     )
     if use_cache and layout_cache_enabled():
         cached = cached_track_layout_plan(cache_key)

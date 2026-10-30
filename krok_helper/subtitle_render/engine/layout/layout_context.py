@@ -8,6 +8,27 @@ from threading import local as thread_local
 
 _LAYOUT_PASS = thread_local()
 
+_ROLL_SHIFT = thread_local()
+"""前黑展示层偏移（0 = 无前黑/关闭自动偏移）：本线程当前 layout pass 内
+行显示窗口钳制下界随之变为 ``-偏移``（显示坐标 ≥ 0 ⇔ track ≥ -偏移），
+使被视频开头截断的入场动画在前黑区间内完整展开。"""
+
+
+def current_roll_shift_ms() -> int:
+    """当前线程的前黑展示层偏移（默认 0 = 未启用）。"""
+    return max(int(getattr(_ROLL_SHIFT, "value", 0) or 0), 0)
+
+
+@contextmanager
+def roll_shift_scope(shift_ms: int):
+    """在作用域内登记前黑展示层偏移（嵌套可重入）。"""
+    previous = getattr(_ROLL_SHIFT, "value", 0)
+    _ROLL_SHIFT.value = max(int(shift_ms or 0), 0)
+    try:
+        yield
+    finally:
+        _ROLL_SHIFT.value = previous
+
 
 @contextmanager
 def layout_pass():
@@ -80,4 +101,4 @@ def layout_pass():
             _LAYOUT_PASS.signature_refs = []
 
 
-__all__ = ["layout_pass"]
+__all__ = ["current_roll_shift_ms", "layout_pass", "roll_shift_scope"]

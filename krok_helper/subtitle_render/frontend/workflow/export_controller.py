@@ -11,6 +11,7 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
 )
 from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.roll import RollSegmentConfig
 from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_MP4,
     OUTPUT_FORMAT_MOV_QTRLE,
@@ -55,6 +56,11 @@ class ExportJobInputs:
     render_workers: int | None
     output_format: str = OUTPUT_FORMAT_MP4
     bitrate_mbps: int = DEFAULT_VIDEO_BITRATE_MBPS
+    pre_roll: RollSegmentConfig | None = None
+    post_roll: RollSegmentConfig | None = None
+    main_media_end_ms: int | None = None
+    main_audio_end_ms: int | None = None
+    main_background_has_audio: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,7 +81,10 @@ class ExportJobController:
         *,
         video_info: Any = None,
         audio_info: Any = None,
+        roll_plan: Any = None,
     ) -> int:
+        if roll_plan is not None and getattr(roll_plan, "active", False):
+            return int(roll_plan.total_ms)
         candidates = [track_duration_ms(track) for track in tracks]
         for media_info in (video_info, audio_info):
             if media_info is not None and media_info.duration > 0:
@@ -118,6 +127,11 @@ class ExportJobController:
             encoder_mode=inputs.encoder_mode,
             crf=inputs.crf,
             bitrate_mbps=inputs.bitrate_mbps,
+            pre_roll=inputs.pre_roll,
+            post_roll=inputs.post_roll,
+            main_media_end_ms=inputs.main_media_end_ms,
+            main_audio_end_ms=inputs.main_audio_end_ms,
+            main_background_has_audio=inputs.main_background_has_audio,
             preset=inputs.preset,
             codec=inputs.codec,
             output_format=output_format,

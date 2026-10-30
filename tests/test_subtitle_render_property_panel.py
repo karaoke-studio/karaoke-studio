@@ -1987,7 +1987,14 @@ def test_builtin_font_defaults_are_normalized_to_app_reference_height(qapp, monk
     assert saved.custom_style_schemes[TITLE_SCHEME_NAME].stroke_width_px == 5
 
 
-def test_current_style_is_resolved_for_persisted_output_height(qapp):
+def test_current_style_is_resolved_for_fresh_workspace_height(qapp):
+    """无视频/工程时启动工作区固定 1080p 基准。
+
+    ``_load_persisted_state`` 刻意不采纳存档里的画布尺寸（e25ad2f4）：没有
+    视频就没有真实画布，旧 4K 尺寸只在打开工程/载入视频时恢复，否则样式会
+    在空白工作区被提前放大到 4K。这里同时锁住「样式仍按 1080 物化」，防止
+    存档 4K 屏幕把启动样式悄悄灌成 200px。
+    """
     app_default = Style(
         font_size_px=100,
         line_gap_px=90,
@@ -2009,12 +2016,13 @@ def test_current_style_is_resolved_for_persisted_output_height(qapp):
 
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
 
+    assert (win._screen_settings.width, win._screen_settings.height) == (1920, 1080)
     assert win._app_default_style.font_size_px == 100
     assert win._app_default_style.font_reference_height == 1080
-    assert win._style.font_size_px == 200
-    assert win._style.font_reference_height == 2160
-    assert win._style.line_gap_px == 180
-    assert win._style.layout_reference_height == 2160
+    assert win._style.font_size_px == 100
+    assert win._style.font_reference_height == 1080
+    assert win._style.line_gap_px == 90
+    assert win._style.layout_reference_height == 1080
 
 
 def test_layout_defaults_require_explicit_save_at_app_reference_height(
@@ -4097,9 +4105,9 @@ def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
     panel = PropertyPanel()
 
     assert isinstance(panel._navigation, SegmentedWidget)
-    assert panel.count() == 6
+    assert panel.count() == 7
     assert [spec[1] for spec in panel._PAGE_SPECS] == [
-        "角色", "布局", "时间", "特效", "标题", "背景/音频",
+        "角色", "布局", "时间", "特效", "标题", "背景/音频", "前黑/后黑",
     ]
     for route_key, label in panel._PAGE_SPECS:
         item = panel._navigation.widget(route_key)
@@ -11486,7 +11494,7 @@ def test_ruby_latin_font_size_has_the_same_switch(qapp):
 def test_property_panel_background_page_pill_and_signals(qapp):
     panel = PropertyPanel()
 
-    assert len(panel._pages) == 6
+    assert len(panel._pages) == 7
     # 竖排类型胶囊四状态（与颜色区图层列同一 _PillSelector 模式）
     assert set(panel._background_path_edits) == {
         "video", "image", "image_sequence",
@@ -11551,7 +11559,7 @@ def test_main_window_solid_color_updates_background_and_preview(qapp, monkeypatc
     assert win._background_source.kind == "solid"
     assert win._background_source.color == "#305070"
     # 预览画布的背景底矩形即时变为纯色（承载纯色的是它，不是场景底色）
-    base = win._preview_panel.canvas._letterbox_rect
+    base = win._preview_panel.canvas._main_backdrop
     assert base.brush().color().name().upper() == "#305070"
     assert base.isVisible()
     # 面板回填后 ColorButton 显示同步

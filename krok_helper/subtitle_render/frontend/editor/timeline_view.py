@@ -194,9 +194,11 @@ class Lane:
     blocks: tuple[LineBlock, ...]
 
 
-def _raw_char_cells(line: TimingLine, end_ms: int) -> list[CharCell]:
+def _raw_char_cells(
+    line: TimingLine, end_ms: int, time_offset_ms: int = 0
+) -> list[CharCell]:
     return [
-        CharCell(char.text, start_ms, cell_end_ms)
+        CharCell(char.text, start_ms + time_offset_ms, cell_end_ms + time_offset_ms)
         for char, (start_ms, cell_end_ms) in zip(
             line.chars,
             source_char_intervals(line, end_ms),
@@ -209,6 +211,7 @@ def _visual_utopia_char_cells(
     end_ms: int,
     style: Style,
     rubies: Sequence[RubyAnnotation],
+    time_offset_ms: int = 0,
 ) -> list[CharCell] | None:
     intervals = resolve_utopia_visual_intervals(
         line,
@@ -219,7 +222,7 @@ def _visual_utopia_char_cells(
     if intervals is None:
         return None
     return [
-        CharCell(char.text, start_ms, end_ms)
+        CharCell(char.text, start_ms + time_offset_ms, end_ms + time_offset_ms)
         for char, (start_ms, end_ms) in zip(line.chars, intervals)
     ]
 
@@ -229,6 +232,7 @@ def _line_block(
     line_index: int,
     style: Style | None = None,
     rubies: Sequence[RubyAnnotation] = (),
+    time_offset_ms: int = 0,
 ) -> Optional[LineBlock]:
     if line.is_blank or not line.chars:
         return None
@@ -238,14 +242,16 @@ def _line_block(
         else line.chars[-1].start_ms + _FALLBACK_CHAR_MS
     )
     cells = (
-        _visual_utopia_char_cells(line, end_ms, style, rubies)
+        _visual_utopia_char_cells(line, end_ms, style, rubies, time_offset_ms)
         if style is not None
         else None
-    ) or _raw_char_cells(line, end_ms)
+    ) or _raw_char_cells(line, end_ms, time_offset_ms)
     return LineBlock(
         line_index=line_index,
         start_ms=cells[0].start_ms,
-        end_ms=max(end_ms, cells[-1].end_ms),
+        # 本地 end_ms 仍是源坐标，cells 已含偏移；两侧统一到 display。
+        end_ms=max(end_ms + time_offset_ms, cells[-1].end_ms),
+
         singer_id=line.singer_id,
         singer_label=line.singer_label,
         text="".join(ch.text for ch in line.chars),
@@ -259,13 +265,18 @@ def _line_block(
 def build_lanes(
     tracks: Sequence[tuple[str, TimingTrack]],
     style: Style | None = None,
+    time_offset_ms: int = 0,
 ) -> tuple[Lane, ...]:
-    """把（源名，track）列表转成轨道块结构。"""
+    """把（源名，track）列表转成轨道块结构。
+
+    ``time_offset_ms``：块/字符时刻整体平移（前黑展示层偏移），用于按
+    成片 display 坐标显示；写回轨道数据时由视图侧减回。
+    """
     lanes: list[Lane] = []
     for name, track in tracks:
         blocks = []
         for index, line in enumerate(track.lines):
-            block = _line_block(line, index, style, track.rubies)
+            block = _line_block(line, index, style, track.rubies, time_offset_ms)
             if block is not None:
                 blocks.append(block)
         lanes.append(Lane(name=name, blocks=tuple(blocks)))
@@ -337,6 +348,8 @@ class TrackTimelineView(QWidget):
         self._desired_span_ms = float(_DEFAULT_VIEW_SPAN_MS)
         """用户期望的比例尺；生效值随总时长夹取（时长后到位时恢复期望值）。"""
         self._drag: Optional[tuple] = None
+        # 前黑展示层偏移：0 = 源坐标直显。
+        self._timing_display_offset_ms: int = 0
         """进行中的拖动：("scrub",) / ("pan", 抓取点相对视口起点的毫秒差) /
         ("lead|tail", 轨道, 句块, 旧覆盖, 拖动起点毫秒) / ("zoom_left",) /
         ("zoom_right",)。拖动期间暂停播放头自动翻页。"""
@@ -381,8 +394,54 @@ class TrackTimelineView(QWidget):
     def set_display_windows(
         self, windows: Sequence[dict[int, tuple[int, int]]]
     ) -> None:
-        """宿主推送各轨道的行显示窗口（与预览同一套布局参数算出）。"""
-        self._windows = [dict(item) for item in windows]
+        """宿主推送各轨道的行显示窗口（源坐标）；视图按展示偏移平移后缓存。"""
+        offset = self._timing_display_offset_ms
+        self._windows = [
+            {
+                index: (show + offset, hide + offset)
+                for index, (show, hide) in item.items()
+            }
+            for item in windows
+        ]
+        self.update()
+
+    def snapshot_lane_inputs(self):
+        """导出轨道块重建的纯输入 ``((源名, track)..., 样式)``。
+
+        供前黑/后黑联动的后台线程计算（worker 只读这些对象，不碰控件）。
+        """
+        return (
+            tuple(zip(self._track_names, self._track_refs)),
+            self._style,
+        )
+
+    def set_timing_display_offset(self, offset_ms: int, *, lanes=None) -> None:
+        """前黑展示层偏移：块/窗口/输入一律按成片 display 坐标呈现。
+
+        写回轨道数据（把手拖动、余量编辑）时自动减回源坐标。
+        ``lanes`` 传入后台线程按新偏移预算好的轨道块时直接安装（免 GUI
+        线程重算）；``None`` 或与当前轨道数不符时在本线程重建。
+        """
+        offset = max(int(offset_ms or 0), 0)
+        previous = self._timing_display_offset_ms
+        if offset == previous and lanes is None:
+            return
+        self._timing_display_offset_ms = offset
+        # 已缓存的窗口此前按 previous 平移过，改按差值平移到新偏移。
+        delta = offset - previous
+        self._windows = [
+            {
+                index: (show + delta, hide + delta)
+                for index, (show, hide) in item.items()
+            }
+            for item in self._windows
+        ]
+        if lanes is not None and len(tuple(lanes)) == len(self._track_refs):
+            self._lanes = tuple(lanes)
+        else:
+            self._rebuild_lanes()
+        self._lanes_pixmap = None
+        self._clamp_view()
         self.update()
 
     def set_style(self, style: Style) -> None:
@@ -409,6 +468,7 @@ class TrackTimelineView(QWidget):
         self._lanes = build_lanes(
             list(zip(self._track_names, self._track_refs)),
             self._style,
+            self._timing_display_offset_ms,
         )
         self._lanes_pixmap = None
 
@@ -665,7 +725,10 @@ class TrackTimelineView(QWidget):
         self, lane_index: int, block: LineBlock, ms: int
     ) -> None:
         track = self._track_refs[lane_index]
-        track.lines[block.line_index].display_start_override_ms = ms
+        # ms 是 display 坐标；轨道数据存源坐标。
+        track.lines[block.line_index].display_start_override_ms = max(
+            ms - self._timing_display_offset_ms, 0
+        )
         if lane_index < len(self._windows):
             _old_show, hide = self._windows[lane_index].get(
                 block.line_index, (block.start_ms, block.end_ms)
@@ -682,7 +745,10 @@ class TrackTimelineView(QWidget):
         self, lane_index: int, block: LineBlock, ms: int
     ) -> None:
         track = self._track_refs[lane_index]
-        track.lines[block.line_index].display_end_override_ms = ms
+        # ms 是 display 坐标；轨道数据存源坐标。
+        track.lines[block.line_index].display_end_override_ms = max(
+            ms - self._timing_display_offset_ms, 0
+        )
         if lane_index < len(self._windows):
             show, _old_hide = self._windows[lane_index].get(
                 block.line_index, (block.start_ms, block.end_ms)

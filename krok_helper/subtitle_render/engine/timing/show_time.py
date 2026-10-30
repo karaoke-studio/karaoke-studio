@@ -26,6 +26,10 @@ N3 没有"最长挂屏"上限，也没有"同行吸附"，所以本模块同样�
 
 from __future__ import annotations
 
+from krok_helper.subtitle_render.engine.layout.layout_context import (
+    current_roll_shift_ms,
+)
+
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -323,7 +327,8 @@ class _Solver:
             scan = ()
         for line in scan:
             best = min(best, self.begins[line] - self._pre_of(line))
-        return max(best, 0)
+        # 前黑开启时显示坐标 0 = track -前黑偏移：入场提前量允许伸进前黑。
+        return max(best, -current_roll_shift_ms())
 
     def _top_show_end(self, page_index: int) -> int:
         lines = self.pages[page_index].lines
@@ -333,7 +338,10 @@ class _Solver:
         following = self.next_page[page_index]
         if len(lines) == 1 and len(self.pages[following].lines) == 1:
             return min(self.ends[lines[0]] + self.post, MAX_SHOW_TIME_MS)
-        return max(self._top_show_begin(following) - self.interval, 0)
+        return max(
+            self._top_show_begin(following) - self.interval,
+            -current_roll_shift_ms(),
+        )
 
     def _bottom_show_begin(self, page_index: int, is_bottom_align: bool) -> int:
         page = self.pages[page_index]
@@ -814,7 +822,10 @@ class _Solver:
         if self.independent_line_entry:
             for line in range(len(starts)):
                 if self.start_override[line] is None:
-                    starts[line] = max(self.begins[line] - self._pre_of(line), 0)
+                    starts[line] = max(
+                        self.begins[line] - self._pre_of(line),
+                        -current_roll_shift_ms(),
+                    )
                 self._apply_override(line)
                 self._enforce_auto_wipe_bounds(line)
         if self.adjust_same_position and self.animation_windows_active:

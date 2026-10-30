@@ -20,7 +20,11 @@ class PreviewDurationController:
         *,
         video_info: Any = None,
         audio_info: Any = None,
+        roll_plan: Any = None,
     ) -> int:
+        # 前黑/后黑生效时整体时长由时间线给出（已含字幕轴/主素材口径）。
+        if roll_plan is not None and getattr(roll_plan, "active", False):
+            return int(roll_plan.total_ms)
         candidates = [track_duration_ms(track) for track in tracks]
         for media_info in (video_info, audio_info):
             if media_info is not None and media_info.duration > 0:
@@ -36,14 +40,16 @@ class PreviewDurationController:
         tracks_view: Any,
         preview_panel: Any,
         transport_bar: Any,
+        roll_plan: Any = None,
     ) -> int:
         duration = self.resolve_duration_ms(
             tracks,
             video_info=video_info,
             audio_info=audio_info,
+            roll_plan=roll_plan,
         )
         tracks_view.set_duration(duration)
-        preview_panel.set_duration(duration)
+        preview_panel.set_duration(roll_plan.content_end_ms if roll_plan is not None and getattr(roll_plan, "active", False) else duration)
         if duration > 0:
             transport_bar.set_duration(duration)
         return duration

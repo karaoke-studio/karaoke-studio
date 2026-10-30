@@ -57,7 +57,13 @@ from krok_helper.subtitle_render.frontend.preview.preview_async import (
     preview_quality_render_scale,
     preview_render_target_size,
 )
-from krok_helper.subtitle_render.frontend.preview.preview_media import qt_playback_source
+from krok_helper.subtitle_render.frontend.preview.preview_media import (
+    protect_preview_source,
+    qt_playback_source,
+    unprotect_preview_source,
+)
+from krok_helper.subtitle_render.frontend.preview.roll_preview import RollPreviewController
+from krok_helper.subtitle_render.domain.roll import RollTimelinePlan, roll_layer_alphas
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
@@ -273,6 +279,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
             self._style,
             self._extra_tracks,
             duration_ms=self._duration_ms,
+            roll_shift_ms=getattr(self, "_roll_shift_ms", 0),
         )
         if bounds is None:
             return None
@@ -291,6 +298,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
             self._style,
             self._extra_tracks,
             duration_ms=self._duration_ms,
+            roll_shift_ms=getattr(self, "_roll_shift_ms", 0),
         )
 
 
@@ -345,7 +353,9 @@ class PreviewGraphicsView(QGraphicsView):
         # （与导出 pad=...:color=black 严格一致）。视频素材与输出画面比例
         # 不同时只加黑边，不做铺满裁切。
         self._video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
-        self._video_item.setZValue(0)
+        # 前黑/后黑分段背景层 z：前黑 0 / 主段 1 / 后黑 2 / 白闪 3（见
+        # RollPreviewController），字幕恒 10。
+        self._video_item.setZValue(1)
         scene.addItem(self._video_item)
         self._fit_video_item_to_scene()
 
@@ -358,12 +368,26 @@ class PreviewGraphicsView(QGraphicsView):
         self._letterbox_rect.setPen(QPen(Qt.PenStyle.NoPen))
         self._letterbox_rect.setZValue(-1)
         scene.addItem(self._letterbox_rect)
+        self._main_backdrop = QGraphicsRectItem()
+        self._main_backdrop.setPen(QPen(Qt.PenStyle.NoPen))
+        self._main_backdrop.setZValue(0.5)
+        scene.addItem(self._main_backdrop)
         self._update_letterbox_rect()
 
         self._image_item = QGraphicsPixmapItem()
         self._image_item.setZValue(1)
         self._image_item.setVisible(False)
         scene.addItem(self._image_item)
+
+        from PyQt6.QtWidgets import QGraphicsItemGroup, QGraphicsOpacityEffect
+        self._main_background_group = QGraphicsItemGroup()
+        scene.addItem(self._main_background_group)
+        self._main_background_group.setZValue(1)
+        self._main_background_opacity = QGraphicsOpacityEffect()
+        self._main_background_opacity.setOpacity(1.0)
+        self._main_background_group.setGraphicsEffect(self._main_background_opacity)
+        for item in (self._main_backdrop, self._video_item, self._image_item):
+            self._main_background_group.addToGroup(item)
 
         self._subtitle_item = SubtitleGraphicsItem(
             self._output_w,
@@ -372,6 +396,10 @@ class PreviewGraphicsView(QGraphicsView):
         )
         self._subtitle_item.setZValue(10)
         scene.addItem(self._subtitle_item)
+
+        # 前黑/后黑分段背景（含过渡透明度与段音频）；plan 未激活时零成本。
+        self._roll_preview = RollPreviewController(scene, self)
+        self._roll_plan: Optional[RollTimelinePlan] = None
 
         self._video_path: Optional[Path] = None
         self._background_pixmap_cache: dict[Path, QPixmap] = {}
@@ -689,6 +717,39 @@ class PreviewGraphicsView(QGraphicsView):
                 Qt.ConnectionType.QueuedConnection,
             )
 
+    def set_roll_plan(self, plan: Optional[RollTimelinePlan]) -> None:
+        """设置前黑/后黑展示时间线；None = 关闭（图层与播放器全部释放）。"""
+        if self._roll_plan == plan:
+            return
+        self._roll_plan = plan
+        self._subtitle_item._roll_shift_ms = plan.lyric_shift_ms if plan else 0
+        self._subtitle_item.update()
+        self._roll_preview.set_plan(plan)
+        self._apply_roll_layer_alphas()
+        self._refresh_async_state()
+
+    def set_roll_preview_volume(self, percent: int) -> None:
+        self._roll_preview.set_volume(max(0, min(100, int(percent))) / 100.0)
+
+    def set_roll_preview_quality(self, quality: object = "high") -> None:
+        self._roll_preview.set_preview_quality(quality)
+
+    def roll_audio_display_position(self, t_ms: int):
+        """传输条跨段时钟锚定源（前黑/后黑段音频的 display 位置）。"""
+        return self._roll_preview.audio_display_position(t_ms)
+
+    def _apply_roll_layer_alphas(self) -> None:
+        """把主段层透明度应用到主背景图层（前黑/后黑段层由控制器自理）。"""
+        if self._roll_plan is None or not self._roll_plan.active:
+            self._main_background_group.setVisible(True)
+            self._main_background_opacity.setEnabled(False)
+            self._main_background_opacity.setOpacity(1.0)
+            return
+        alphas = roll_layer_alphas(self._roll_plan, self._t_ms)
+        self._main_background_group.setVisible(alphas.main_alpha > 0.001)
+        self._main_background_opacity.setEnabled(0.001 < alphas.main_alpha < 1.0)
+        self._main_background_opacity.setOpacity(alphas.main_alpha)
+
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms
         if self._background_source.kind == "image_sequence":
@@ -699,10 +760,18 @@ class PreviewGraphicsView(QGraphicsView):
         else:
             self._subtitle_item.set_time(t_ms)
         self._sync_video_position(force=not self._video_playing)
+        if self._roll_plan is not None and self._roll_plan.active:
+            self._roll_preview.set_time(t_ms, self._video_playing)
+            self._apply_roll_layer_alphas()
 
     def _refresh_async_state(self) -> None:
         if self._async_renderer is None:
             return
+        roll_shift = (
+            self._roll_plan.lyric_shift_ms
+            if self._roll_plan is not None and self._roll_plan.active
+            else 0
+        )
         try:
             self._async_renderer.set_state(
                 self._track,
@@ -710,6 +779,7 @@ class PreviewGraphicsView(QGraphicsView):
                 self._subtitle_item._extra_tracks,  # noqa: SLF001
                 duration_ms=self._duration_ms,
                 relayout_scope=self._style_relayout_scope,
+                roll_shift_ms=roll_shift,
             )
         except TypeError:
             # Compatibility with third-party/older preview workers that only
@@ -879,6 +949,9 @@ class PreviewGraphicsView(QGraphicsView):
         w = max(int(width), 1)
         h = max(int(height), 1)
         if (w, h) == (self._output_w, self._output_h):
+            # 尺寸数值没变也要保证 roll 的纯色/白闪矩形已初始化（首次就是
+            # 默认 1920x1080 时不能依赖下面的“尺寸变化”分支）。
+            self._roll_preview.set_output_size(w, h)
             return
         self._output_w = w
         self._output_h = h
@@ -887,6 +960,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._update_letterbox_rect()
         self._refresh_background_image()
         self._subtitle_item.set_output_size(w, h)
+        self._roll_preview.set_output_size(w, h)
         self._fit_scene_to_view()
         self._refresh_async_target()
 
@@ -904,9 +978,20 @@ class PreviewGraphicsView(QGraphicsView):
             solid = QColor(source.color)
             if solid.isValid():
                 color = solid
-        self._letterbox_rect.setBrush(QBrush(color))
+        self._letterbox_rect.setBrush(QBrush(QColor(0, 0, 0)))
+        self._main_backdrop.setBrush(QBrush(color))
+        self._main_backdrop.setRect(QRectF(0, 0, self._output_w, self._output_h))
         self._letterbox_rect.setRect(QRectF(0, 0, self._output_w, self._output_h))
         self._letterbox_rect.setVisible(True)
+        # QGraphicsItemGroup 的 boundingRect 是缓存值，子树尺寸变化
+        # prepareGeometryChange 也不会重算；只有 remove/add 会重新收集子项。
+        group = getattr(self, "_main_background_group", None)
+        if group is not None:
+            children = (self._main_backdrop, self._video_item, self._image_item)
+            for item in children:
+                group.removeFromGroup(item)
+            for item in children:
+                group.addToGroup(item)
 
     def _fit_scene_to_view(self) -> None:
         self.fitInView(
@@ -949,6 +1034,7 @@ class PreviewGraphicsView(QGraphicsView):
         )
 
     def _refresh_async_target(self) -> None:
+        self._roll_preview.source.set_render_scale(self._scene_device_pixel_ratio())
         if self._async_renderer is None:
             return
         native_mode = getattr(self._async_renderer, "uses_native_preview", False)
@@ -1059,6 +1145,9 @@ class PreviewGraphicsView(QGraphicsView):
             controller.set_preview_quality(self._preview_quality)
 
     def set_video_source(self, path: Optional[Path]) -> None:
+        if path != self._video_path:
+            unprotect_preview_source(self._video_path)
+            protect_preview_source(path)
         if self._external_player is not None:
             # 视频由共享 controller 驱动；本视图只记录路径，不创建/操作自己的 player。
             self._video_path = path
@@ -1075,7 +1164,12 @@ class PreviewGraphicsView(QGraphicsView):
         playback_path = qt_playback_source(path)
         player = self._ensure_video_player()
         player.setSource(QUrl.fromLocalFile(str(playback_path)))
-        player.setPosition(self._t_ms)
+        offset = (
+            self._roll_plan.pre_ms
+            if self._roll_plan is not None and self._roll_plan.active
+            else 0
+        )
+        player.setPosition(max(self._t_ms - offset, 0))
         if self._video_playing:
             player.play()
 
@@ -1100,7 +1194,7 @@ class PreviewGraphicsView(QGraphicsView):
             self._image_item.setPixmap(QPixmap())
             return
         path = (
-            background_sequence_frame_path(source, self._t_ms)
+            background_sequence_frame_path(source, max(self._t_ms - (self._roll_plan.pre_ms if self._roll_plan else 0), 0))
             if source.kind == "image_sequence"
             else Path(source.path)
         )
@@ -1135,6 +1229,8 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_playing(self, playing: bool) -> None:
         self._video_playing = playing
+        if self._roll_plan is not None and self._roll_plan.active:
+            self._roll_preview.set_playing(playing)
         if self._async_renderer is not None and hasattr(self._async_renderer, "set_playing"):
             self._async_renderer.set_playing(playing)
         if not playing and self._async_renderer is not None and self._track is not None:
@@ -1207,9 +1303,17 @@ class PreviewGraphicsView(QGraphicsView):
     def _sync_video_position(self, *, force: bool = False) -> None:
         player = self._external_player or self._video_player
         duration = int(getattr(player, "duration", lambda: 0)())
+        offset = (
+            self._roll_plan.pre_ms
+            if self._roll_plan is not None and self._roll_plan.active
+            else 0
+        )
+        # display 坐标比媒体时长多一个前黑偏移：不能用 _t_ms 直接和 duration 比，
+        # 否则主视频会提前 pre_ms 被隐藏（导出仍播到 main_end）。
+        media_t = max(self._t_ms - offset, 0)
         self._video_item.setVisible(
             self._background_source.kind == "video"
-            and not (duration > 0 and self._t_ms >= duration)
+            and not (duration > 0 and media_t >= duration)
         )
         if self._external_player is not None:
             # 视频 seek 由 TransportBar→controller 统一驱动，本视图不再各自 seek。
@@ -1217,8 +1321,8 @@ class PreviewGraphicsView(QGraphicsView):
         if self._video_path is None or self._video_player is None:
             return
         current = self._video_player.position()
-        if force or abs(current - self._t_ms) > _VIDEO_SEEK_TOLERANCE_MS:
-            self._video_player.setPosition(self._t_ms)
+        if force or abs(current - media_t) > _VIDEO_SEEK_TOLERANCE_MS:
+            self._video_player.setPosition(media_t)
 
     def _ensure_video_player(self) -> QMediaPlayer:
         if self._video_player is not None:
