@@ -40,6 +40,25 @@ class TestBuildMuxCommand:
 
 
 class TestBuildAlignAudioCommand:
+    def test_audio_shorter_than_video_is_padded_to_video_length(
+        self, tmp_path: Path
+    ) -> None:
+        command = build_align_audio_command(
+            "ffmpeg",
+            tmp_path / "v.mp4",
+            tmp_path / "a.flac",
+            tmp_path / "out.flac",
+            pre_roll_ms=0,
+            post_roll_ms=0,
+            video_duration_ms=10_000,
+            audio_duration_ms=6_000,
+            video_has_audio=True,
+        )
+        graph = command[command.index("-filter_complex") + 1]
+        assert "apad=whole_dur=10.000000" in graph
+        assert "atrim=start=0:end=10.000000" in graph
+        assert "[0:a:0]" not in graph
+
     def test_roll_audio_is_preserved_and_main_song_starts_after_pre_roll(
         self, tmp_path: Path
     ) -> None:

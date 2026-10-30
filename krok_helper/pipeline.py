@@ -508,24 +508,22 @@ def process_output(
         should_cancel=should_cancel,
         on_process_started=on_process_started,
     )
-    aligned_audio_path = temp_audio_path
-    if pre_roll_ms > 0 or post_roll_ms > 0:
-        aligned_audio_path = temp_audio_path.with_name(
-            f"{temp_audio_path.stem}.aligned.flac"
-        )
-        align_audio_for_video(
-            ffmpeg_path,
-            logger,
-            video_info,
-            audio_info,
-            temp_audio_path,
-            aligned_audio_path,
-            label,
-            pre_roll_ms=pre_roll_ms,
-            post_roll_ms=post_roll_ms,
-            should_cancel=should_cancel,
-            on_process_started=on_process_started,
-        )
+    aligned_audio_path = temp_audio_path.with_name(
+        f"{temp_audio_path.stem}.aligned.flac"
+    )
+    align_audio_for_video(
+        ffmpeg_path,
+        logger,
+        video_info,
+        audio_info,
+        temp_audio_path,
+        aligned_audio_path,
+        label,
+        pre_roll_ms=pre_roll_ms,
+        post_roll_ms=post_roll_ms,
+        should_cancel=should_cancel,
+        on_process_started=on_process_started,
+    )
     return mux_output(
         ffmpeg_path=ffmpeg_path,
         logger=logger,
