@@ -297,6 +297,29 @@ def test_hires_success_plays_sound_and_uses_fluent_dialog(
     assert kwargs == {"ok_text": "确定", "copyable": True}
 
 
+def test_accept_subtitle_video_forwards_roll_timing(tmp_path: Path) -> None:
+    output = tmp_path / "subtitle.mp4"
+    calls: list[tuple] = []
+    app = SimpleNamespace(
+        set_video_path=lambda path, **kwargs: calls.append(
+            ("video", path, kwargs)
+        ),
+        _show_module=lambda module_id: calls.append(("show", module_id)),
+        _notify_handoff=lambda title, content: calls.append(("toast", title)),
+    )
+    KrokHelperQtApp.accept_subtitle_video(
+        app,
+        output,
+        pre_roll_ms=1200,
+        post_roll_ms=800,
+    )
+    assert calls[0] == (
+        "video",
+        output,
+        {"pre_roll_ms": 1200, "post_roll_ms": 800},
+    )
+
+
 def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Path) -> None:
     """渲染完成即定稿，下一步就是混流 —— 这条链路要跳页，与对齐/分离不同。"""
     output = tmp_path / "subtitle.mp4"

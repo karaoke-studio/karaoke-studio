@@ -535,8 +535,18 @@ class KrokHelperQtApp(QMainWindow):
 
     # ── 工作流转交入口（WorkflowHost）：素材落在 Hi-Res 页 ──────────
 
-    def set_video_path(self, path: Path) -> None:
-        self.hires_page.set_video_path(path)
+    def set_video_path(
+        self,
+        path: Path,
+        *,
+        pre_roll_ms: int | None = None,
+        post_roll_ms: int | None = None,
+    ) -> None:
+        self.hires_page.set_video_path(
+            path,
+            pre_roll_ms=pre_roll_ms,
+            post_roll_ms=post_roll_ms,
+        )
 
     def set_on_vocal_path(self, path: Path) -> None:
         self.hires_page.set_on_vocal_path(path)
@@ -1256,14 +1266,28 @@ class KrokHelperQtApp(QMainWindow):
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).debug("转交提示弹出失败", exc_info=True)
 
-    def accept_subtitle_video(self, path: Path) -> None:
+    def accept_subtitle_video(
+        self,
+        path: Path,
+        *,
+        pre_roll_ms: int | None = None,
+        post_roll_ms: int | None = None,
+    ) -> None:
         """第 5 步渲染好的成片放进第 6 步的视频卡，并切到第 6 步。
 
         **这条链路是要跳页的**，与另外几条（对齐、分离）刻意不同：渲染完成
         意味着这一版成片已经定稿，下一步就是混流；而分离/对齐往往还要在原地
         接着处理下一首，跳走反而打断。
         """
-        self.set_video_path(path)
+        try:
+            self.set_video_path(
+                path,
+                pre_roll_ms=pre_roll_ms,
+                post_roll_ms=post_roll_ms,
+            )
+        except TypeError:
+            # 外部宿主/旧兼容层可能仍只实现单参 set_video_path。
+            self.set_video_path(path)
         self._show_module(WORKFLOW_HIRES_MIX)
         self._notify_handoff("成片已交给下一步", f"「{path.name}」已放入第 6 步 Hi-Res 混流的视频卡。")
 

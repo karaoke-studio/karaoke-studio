@@ -35,8 +35,18 @@ __all__ = ["AccompanimentSink", "OnVocalSink", "SubtitleVideoSink", "WorkflowHos
 class SubtitleVideoSink(Protocol):
     """能接收第 5 步渲染好的字幕视频。"""
 
-    def accept_subtitle_video(self, path: Path) -> None:
-        """接收成片，并切到第 6 步 Hi-Res 混流。"""
+    def accept_subtitle_video(
+        self,
+        path: Path,
+        *,
+        pre_roll_ms: int | None = None,
+        post_roll_ms: int | None = None,
+    ) -> None:
+        """接收成片，并切到第 6 步 Hi-Res 混流。
+
+        ``pre_roll_ms`` / ``post_roll_ms`` 是成片前黑/后黑时长；提供给
+        Hi-Res 对齐分离音轨和保留片头片尾音频。
+        """
         ...
 
 

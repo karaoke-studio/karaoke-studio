@@ -1048,6 +1048,43 @@ def test_roll_refresh_falls_back_to_sync_on_worker_failure(qapp, monkeypatch):
         qapp.processEvents()
 
 
+def test_subtitle_export_timing_reports_actual_pre_post(qapp):
+    """交接给 Hi-Res 的前/后黑时长 = 实际时间线，而不是配置名义值。"""
+    import importlib
+
+    mw = importlib.import_module(
+        "krok_helper.subtitle_render.frontend.main_window"
+    )
+    win = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=_DictSettingsProvider()
+    )
+    try:
+        pre = RollSegmentConfig(enabled=True, duration_ms=1200)
+        post = RollSegmentConfig(enabled=True, duration_ms=800)
+        plan = build_roll_timeline(
+            pre,
+            post,
+            track_end_ms=5000,
+            main_media_end_ms=5000,
+            background_kind="video",
+        )
+        win._current_roll_plan = lambda: plan
+        assert win.subtitle_export_timing() == (1200, 800)
+        # 后黑关闭时，字幕尾超过主段也不能当成后黑音频切片。
+        no_post = build_roll_timeline(
+            pre,
+            None,
+            track_end_ms=10_000,
+            main_media_end_ms=5_000,
+            background_kind="video",
+        )
+        win._current_roll_plan = lambda: no_post
+        assert win.subtitle_export_timing() == (1200, 0)
+    finally:
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_review_post_only_and_disabled_layers(qapp):
     from PyQt6.QtWidgets import QGraphicsScene
     from krok_helper.subtitle_render.frontend.preview.roll_preview import RollPreviewController

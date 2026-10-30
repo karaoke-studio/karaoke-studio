@@ -11083,7 +11083,32 @@ class SubtitleRenderWindow(QWidget):
                     "工作台宿主缺少 accept_subtitle_video，成片无法转交下一步"
                 )
                 return
-            host.accept_subtitle_video(output_path)
+            pre_roll_ms, post_roll_ms = self.subtitle_export_timing()
+            try:
+                host.accept_subtitle_video(
+                    output_path,
+                    pre_roll_ms=pre_roll_ms,
+                    post_roll_ms=post_roll_ms,
+                )
+            except TypeError:
+                # 兼容只实现旧单参契约的外部宿主；此时其 Hi-Res 需手动填补偿。
+                host.accept_subtitle_video(output_path)
+
+    def subtitle_export_timing(self) -> tuple[int, int]:
+        """当前成片的前黑/后黑实际时长（毫秒），供第 6 步 Hi-Res 对齐音频。"""
+
+        plan = self._current_roll_plan()
+        if not plan.active:
+            return 0, 0
+        pre_ms = max(int(plan.pre_ms), 0)
+        # 后黑关闭时，字幕尾可能让 total_ms 超过 main_end_ms；那段仍属于主背景，
+        # 不能当成后黑音频切片，否则会把主歌尾部误判成片尾声。
+        post_ms = (
+            max(int(plan.total_ms) - int(plan.main_end_ms), 0)
+            if int(plan.post_ms) > 0
+            else 0
+        )
+        return pre_ms, post_ms
 
     def _open_export_folder(self, output_path: Path) -> None:
         # PNG 序列的 output_path 是文件夹本身，直接打开该文件夹。

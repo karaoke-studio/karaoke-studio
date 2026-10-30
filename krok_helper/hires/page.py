@@ -41,6 +41,7 @@ from qfluentwidgets import (
     PrimaryPushButton,
     ProgressBar as QProgressBar,
     PushButton as QPushButton,
+    SpinBox,
 )
 
 from krok_helper.qfluent_compat import show_fluent_error, show_fluent_info
@@ -810,6 +811,32 @@ class HiResPage(QWidget):
         settings_layout.addWidget(self.output_dir_label, 0, 1)
         settings_layout.addWidget(settings_button, 0, 2)
         settings_layout.setColumnStretch(1, 1)
+
+        timing_label = QLabel("前黑 / 后黑补偿")
+        timing_label.setToolTip(
+            "工作流从字幕成片转交时会自动带入；手动选择成片时按前黑/后黑时长填写。"
+        )
+        _wb_th(timing_label, lambda: f'font-size: 11pt; font-weight: 400; color: {_wb_pal().text_secondary};')
+        timing_row = QHBoxLayout()
+        timing_row.setContentsMargins(0, 0, 0, 0)
+        timing_row.setSpacing(8)
+        self.pre_roll_spin = SpinBox()
+        self.pre_roll_spin.setRange(0, 3_600_000)
+        self.pre_roll_spin.setSuffix(" ms")
+        self.pre_roll_spin.setValue(0)
+        self.pre_roll_spin.setToolTip("成片开头前黑的时长；无前黑填 0。")
+        self.post_roll_spin = SpinBox()
+        self.post_roll_spin.setRange(0, 3_600_000)
+        self.post_roll_spin.setSuffix(" ms")
+        self.post_roll_spin.setValue(0)
+        self.post_roll_spin.setToolTip("成片结尾后黑的时长；无后黑填 0。")
+        timing_row.addWidget(QLabel("前黑"))
+        timing_row.addWidget(self.pre_roll_spin)
+        timing_row.addWidget(QLabel("后黑"))
+        timing_row.addWidget(self.post_roll_spin)
+        timing_row.addStretch(1)
+        settings_layout.addWidget(timing_label, 1, 0)
+        settings_layout.addLayout(timing_row, 1, 1)
         shell.addWidget(settings_card)
 
         card_row = QHBoxLayout()
@@ -951,9 +978,18 @@ class HiResPage(QWidget):
         controls_bar.apply_button_metrics(self.hires_start_button, self.hires_cancel_button, clear_button, open_output_button)
         shell.addWidget(controls_bar)
 
-    def set_video_path(self, path: Path) -> None:
+    def set_video_path(
+        self,
+        path: Path,
+        *,
+        pre_roll_ms: int | None = None,
+        post_roll_ms: int | None = None,
+    ) -> None:
         self.video_zone.set_path(path)
         self.output_dir_label.setText(str(resolve_output_dir(path)))
+        # 工作流转交会显式带入；手动选择视频则回到“无补偿”，由用户按需填写。
+        self.pre_roll_spin.setValue(max(int(pre_roll_ms or 0), 0))
+        self.post_roll_spin.setValue(max(int(post_roll_ms or 0), 0))
 
     def set_on_vocal_path(self, path: Path) -> None:
         self.on_vocal_zone.set_path(path)
@@ -993,7 +1029,18 @@ class HiResPage(QWidget):
 
     def _validate_hires_inputs(
         self,
-    ) -> tuple[Path, Path | None, list[Path], Path, Path | None, str, str | None, str | None]:
+    ) -> tuple[
+        Path,
+        Path | None,
+        list[Path],
+        Path,
+        Path | None,
+        str,
+        str | None,
+        str | None,
+        int,
+        int,
+    ]:
         video_path = self.video_zone.path
         on_vocal_path = self.on_vocal_zone.path
         off_vocal_paths = list(self.off_vocal_zone.paths)
@@ -1033,6 +1080,8 @@ class HiResPage(QWidget):
             output_name_mode,
             on_template,
             off_template,
+            max(int(self.pre_roll_spin.value()), 0),
+            max(int(self.post_roll_spin.value()), 0),
         )
 
     def collect_settings(self) -> None:
@@ -1118,6 +1167,8 @@ class HiResPage(QWidget):
             output_name_mode,
             on_template,
             off_template,
+            pre_roll_ms,
+            post_roll_ms,
         ) = args
         # 这里才会用真实的视频文件名渲染模板，可能因文件名导致生成的输出名为空
         # 等情况抛 ProcessingError；必须在主线程上兜住，否则异常会逃逸出 Qt 槽。
@@ -1161,6 +1212,8 @@ class HiResPage(QWidget):
                 output_name_mode,
                 on_template,
                 off_template,
+                pre_roll_ms,
+                post_roll_ms,
             ) = args
             outputs = run_pipeline(
                 video_path=video_path,
@@ -1171,6 +1224,8 @@ class HiResPage(QWidget):
                 output_name_mode=output_name_mode,
                 on_name_template=on_template,
                 off_name_template=off_template,
+                pre_roll_ms=pre_roll_ms,
+                post_roll_ms=post_roll_ms,
                 logger=logger,
                 should_cancel=lambda: self._hires_cancel_requested,
                 on_process_started=self._register_hires_process,

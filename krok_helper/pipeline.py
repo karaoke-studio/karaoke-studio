@@ -249,6 +249,172 @@ def build_mux_command(
     ]
 
 
+def build_align_audio_command(
+    ffmpeg_path: str,
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    *,
+    pre_roll_ms: int,
+    post_roll_ms: int,
+    video_duration_ms: int,
+    audio_duration_ms: int,
+    video_has_audio: bool,
+    sample_rate: int = 48_000,
+) -> list[str]:
+    """Pad/align one separated stem to the final subtitle video.
+
+    前黑/后黑的音轨从成片自身的音轨里切出，主歌/伴奏只放在中间主段，
+    这样 Hi-Res 不会丢掉片头片尾音效，也不会把主歌混两遍。
+    """
+    pre_s = max(int(pre_roll_ms), 0) / 1000.0
+    post_s = max(int(post_roll_ms), 0) / 1000.0
+    video_s = max(int(video_duration_ms), 0) / 1000.0
+    audio_s = max(int(audio_duration_ms), 0) / 1000.0
+    if video_s <= 0:
+        video_s = 0.001
+    if audio_s <= 0:
+        audio_s = 0.001
+    pre_s = min(pre_s, video_s)
+    post_s = min(post_s, max(video_s - pre_s, 0.0))
+
+    filters: list[str] = []
+    labels: list[str] = []
+    has_rolls = pre_s > 0.001 or post_s > 0.001
+    sample_rate = max(int(sample_rate), 1)
+    normalize = (
+        f"aresample={sample_rate},"
+        f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:"
+        "channel_layouts=stereo"
+    )
+    if has_rolls:
+        target_s = video_s
+        main_s = max(video_s - pre_s - post_s, 0.001)
+        if pre_s > 0.001:
+            if video_has_audio:
+                filters.append(
+                    "[0:a:0]atrim=start=0:end="
+                    f"{pre_s:.6f},{normalize},asetpts=PTS-STARTPTS[roll_pre]"
+                )
+            else:
+                filters.append(
+                    f"anullsrc=r={sample_rate}:cl=stereo,"
+                    f"atrim=start=0:end={pre_s:.6f},"
+                    f"{normalize},asetpts=PTS-STARTPTS[roll_pre]"
+                )
+            labels.append("[roll_pre]")
+        # 主歌不再用 adelay：前黑音频/静音已经占住 pre_s，concat 后自然
+        # 从 pre_s 开始；adelay 会把静音也算进主段长度，挤掉后黑音频。
+        filters.append(
+            "[1:a:0]atrim=start=0:end="
+            f"{main_s:.6f},{normalize},asetpts=PTS-STARTPTS[main_song]"
+        )
+        labels.append("[main_song]")
+        if post_s > 0.001:
+            if video_has_audio:
+                filters.append(
+                    f"[0:a:0]atrim=start={video_s - post_s:.6f}:end={video_s:.6f},"
+                    f"{normalize},asetpts=PTS-STARTPTS[roll_post]"
+                )
+            else:
+                filters.append(
+                    f"anullsrc=r={sample_rate}:cl=stereo,"
+                    f"atrim=start=0:end={post_s:.6f},"
+                    f"{normalize},asetpts=PTS-STARTPTS[roll_post]"
+                )
+            labels.append("[roll_post]")
+        if len(labels) > 1:
+            filters.append(
+                "".join(labels) + f"concat=n={len(labels)}:v=0:a=1[joined]"
+            )
+            source = "[joined]"
+        else:
+            source = labels[0]
+        filters.append(
+            f"{source}apad=whole_dur={target_s:.6f},"
+            f"atrim=start=0:end={target_s:.6f}[aout]"
+        )
+    else:
+        target_s = max(video_s, audio_s)
+        filters.append(
+            "[1:a:0]"
+            f"apad=whole_dur={target_s:.6f},"
+            f"atrim=start=0:end={target_s:.6f}[aout]"
+        )
+
+    return [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video_path),
+        "-i",
+        str(audio_path),
+        "-filter_complex",
+        ";".join(filters),
+        "-map",
+        "[aout]",
+        "-vn",
+        "-c:a",
+        "flac",
+        "-compression_level",
+        "8",
+        "-sample_fmt",
+        "s32",
+        "-ac",
+        "2",
+        str(output_path),
+    ]
+
+
+def align_audio_for_video(
+    ffmpeg_path: str,
+    logger: Logger,
+    video_info: MediaInfo,
+    audio_info: MediaInfo,
+    audio_path: Path,
+    output_path: Path,
+    label: str,
+    *,
+    pre_roll_ms: int,
+    post_roll_ms: int,
+    should_cancel: Callable[[], bool] | None = None,
+    on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
+) -> Path:
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
+    command = build_align_audio_command(
+        ffmpeg_path=ffmpeg_path,
+        video_path=video_info.path,
+        audio_path=audio_path,
+        output_path=output_path,
+        pre_roll_ms=pre_roll_ms,
+        post_roll_ms=post_roll_ms,
+        video_duration_ms=int(round(video_info.duration * 1000)),
+        audio_duration_ms=int(round(audio_info.duration * 1000)),
+        video_has_audio=video_info.audio_streams > 0,
+        sample_rate=max(audio_info.sample_rate or 0, MIN_HIRES_SAMPLE_RATE),
+    )
+    logger(
+        f"对齐 {label} 到成片时间轴: 前黑 {max(int(pre_roll_ms), 0)}ms / "
+        f"后黑 {max(int(post_roll_ms), 0)}ms"
+    )
+    try:
+        run_command(
+            command,
+            logger,
+            should_cancel=should_cancel,
+            on_process_started=on_process_started,
+        )
+    except ExportCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 保留原有错误提示口径
+        raise ProcessingError(f"{label}时间轴对齐失败: {exc}") from exc
+    return output_path
+
+
 def normalize_audio(
     ffmpeg_path: str,
     logger: Logger,
@@ -328,6 +494,8 @@ def process_output(
     temp_audio_path: Path,
     label: str,
     *,
+    pre_roll_ms: int = 0,
+    post_roll_ms: int = 0,
     should_cancel: Callable[[], bool] | None = None,
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
@@ -340,11 +508,29 @@ def process_output(
         should_cancel=should_cancel,
         on_process_started=on_process_started,
     )
+    aligned_audio_path = temp_audio_path
+    if pre_roll_ms > 0 or post_roll_ms > 0:
+        aligned_audio_path = temp_audio_path.with_name(
+            f"{temp_audio_path.stem}.aligned.flac"
+        )
+        align_audio_for_video(
+            ffmpeg_path,
+            logger,
+            video_info,
+            audio_info,
+            temp_audio_path,
+            aligned_audio_path,
+            label,
+            pre_roll_ms=pre_roll_ms,
+            post_roll_ms=post_roll_ms,
+            should_cancel=should_cancel,
+            on_process_started=on_process_started,
+        )
     return mux_output(
         ffmpeg_path=ffmpeg_path,
         logger=logger,
         video_info=video_info,
-        normalized_audio_path=temp_audio_path,
+        normalized_audio_path=aligned_audio_path,
         output_path=output_path,
         label=label,
         sample_rate=target_sample_rate,
@@ -488,6 +674,8 @@ def run_pipeline(
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
     *,
     off_vocal_paths: Sequence[Path] | None = None,
+    pre_roll_ms: int = 0,
+    post_roll_ms: int = 0,
 ) -> list[Path]:
     """把字幕视频和音频混流成 Hi-Res 视频。
 
@@ -527,6 +715,11 @@ def run_pipeline(
             raise ProcessingError(f"伴奏无损文件里没有检测到音频流：{info.path.name}")
 
     log_media_summary(logger, "字幕视频", video_info)
+    if pre_roll_ms > 0 or post_roll_ms > 0:
+        logger(
+            f"前黑/后黑时间轴: 前 {max(int(pre_roll_ms), 0)}ms / "
+            f"后 {max(int(post_roll_ms), 0)}ms；Hi-Res 将保留片头片尾音频"
+        )
     if on_vocal_info is not None:
         log_media_summary(logger, "原唱无损", on_vocal_info)
     for info in off_vocal_infos:
@@ -575,6 +768,8 @@ def run_pipeline(
                     on_output,
                     temp_dir / "on_vocal.normalized.flac",
                     "On Vocal",
+                    pre_roll_ms=pre_roll_ms,
+                    post_roll_ms=post_roll_ms,
                     should_cancel=should_cancel,
                     on_process_started=on_process_started,
                 )
@@ -592,6 +787,8 @@ def run_pipeline(
                     off_output,
                     temp_dir / f"off_vocal.{index}.normalized.flac",
                     "Off Vocal" if len(off_outputs) == 1 else f"Off Vocal {index + 1}",
+                    pre_roll_ms=pre_roll_ms,
+                    post_roll_ms=post_roll_ms,
                     should_cancel=should_cancel,
                     on_process_started=on_process_started,
                 )
