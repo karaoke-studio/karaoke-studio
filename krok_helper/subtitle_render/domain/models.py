@@ -1492,6 +1492,9 @@ class Style:
     line_band_dynamic_notes_enabled: bool = True
     """五线谱预设中段的动态音符开关；关闭后改用静态变体，只保留两端静态音符。"""
 
+    line_band_static_notes_enabled: bool = True
+    """五线谱预设左右两端的静态音符开关；关闭后连端点音符一起隐藏，只留谱线/谱号。"""
+
     line_band_fill_mode: str = "three_slice"
     """填充模式：``stretch`` 拉伸 / ``repeat`` 重复 / ``cover`` 裁切 /
     ``three_slice`` 三段式（左右端点不缩放、中段循环）。"""
@@ -2742,6 +2745,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "lit_shadow",
             "line_band_enabled",
             "line_band_dynamic_notes_enabled",
+            "line_band_static_notes_enabled",
             "line_band_include_ruby",
             "line_band_shadow_enabled",
             "line_band_stroke_enabled",

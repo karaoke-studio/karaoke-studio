@@ -1157,12 +1157,29 @@ class EffectsPropertyPageBuilder:
         )
         add("中段", host._line_band_mid_combo)
 
-        # 五线谱预设：中段漂浮的动态小音符可以关闭，只保留两端静态音符。
-        # 只对该预设显示（同步时按预设是否有静态变体整行显隐）。
+        # 五线谱预设：左右两端静态音符 / 中段动态音符各自独立开关。
+        # 只对该预设显示（同步时按预设是否有音符变体整行显隐）。
+        host._line_band_static_notes_check = CheckBox("两边静态音符", section)
+        host._line_band_static_notes_check.setToolTip(
+            "五线谱预设左右两端的静态彩色音符；关闭后只保留谱线与谱号，"
+            "中段动态音符由下一个开关单独控制。"
+        )
+        host._line_band_static_notes_check.setChecked(
+            bool(getattr(host._style, "line_band_static_notes_enabled", True))
+        )
+        host._line_band_static_notes_check.toggled.connect(
+            lambda checked: host._update_style(
+                _force_global=True, line_band_static_notes_enabled=checked
+            )
+        )
+        host._line_band_static_notes_row = add(
+            None, host._line_band_static_notes_check
+        )
+
         host._line_band_dynamic_notes_check = CheckBox("中间动态音符", section)
         host._line_band_dynamic_notes_check.setToolTip(
             "五线谱预设中段漂浮的小音符（会随时间缓慢移动）；关闭后中段只保留"
-            "谱线，两端的静态音符不变。"
+            "谱线，两端的静态音符不受影响。"
         )
         host._line_band_dynamic_notes_check.setChecked(
             bool(getattr(host._style, "line_band_dynamic_notes_enabled", True))

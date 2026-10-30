@@ -16181,6 +16181,47 @@ def test_gpu_band_anchor_includes_text_stroke(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_band_staff_without_notes_keeps_clef_and_lines():
+    """两个音符开关都关：空底板 + 独立谱线/谱号层仍然绘制。"""
+    style = _g1_style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_dynamic_notes_enabled=False,
+        line_band_static_notes_enabled=False,
+        line_band_fill_mode="three_slice",
+        line_band_opacity_pct=100,
+        line_tail_ms=1200,
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="none",
+        reverse_karaoke_anim="none",
+    )
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("A", 0)], end_ms=2000,
+    )])
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1000,), force_warp=True, track=track
+        )
+    pixels = np.frombuffer(frames[0], dtype=np.uint8).reshape(360, 640, 4)
+    # 默认谱号色 #5FD8E6（青），默认谱线色 #FFFFFF。
+    clef = (
+        (pixels[:, :, 0] < 160)
+        & (pixels[:, :, 1] > 180)
+        & (pixels[:, :, 2] > 180)
+        & (pixels[:, :, 3] > 20)
+    )
+    lines = (
+        (pixels[:, :, 0] > 200)
+        & (pixels[:, :, 1] > 200)
+        & (pixels[:, :, 2] > 200)
+        & (pixels[:, :, 3] > 20)
+    )
+    assert clef.any(), "clef layer disappeared when both note switches were off"
+    assert lines.any(), "staff line layer disappeared when both note switches were off"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("appearance", ["custom", "auto"])
 @pytest.mark.parametrize("effect", [effect for effect in get_args(EntryAnimation)
     if effect not in {"none", "fade", "rise", "slide_in"}])

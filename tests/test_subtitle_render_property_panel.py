@@ -12251,6 +12251,57 @@ def test_line_band_dynamic_notes_switch_is_staff_only():
     panel.deleteLater()
 
 
+def test_line_band_static_notes_switch_is_staff_only():
+    """「两边静态音符」开关只对五线谱显示，关闭后写回样式。"""
+    from krok_helper.subtitle_render.domain.models import Style
+
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    check = panel._line_band_static_notes_check
+    row = panel._line_band_static_notes_row
+    assert check is not None and row is check
+
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:bubbles",
+        line_band_fill_mode="cover",
+    ))
+    assert check.isHidden()
+
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_fill_mode="three_slice",
+    ))
+    assert not check.isHidden()
+    assert check.isChecked()
+
+    check.setChecked(False)
+    assert emitted[-1].line_band_static_notes_enabled is False
+
+    # 回填（工程加载/撤销）保持关闭状态。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_static_notes_enabled=False,
+    ))
+    assert not check.isChecked()
+
+    # 切回其他预设隐藏；样式值保留给下次切回五线谱。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:stars",
+        line_band_static_notes_enabled=False,
+    ))
+    assert check.isHidden()
+    assert not check.isChecked()
+    staff_index = panel._line_band_preset_combo.findData("preset:staff_scroll")
+    panel._line_band_preset_combo.setCurrentIndex(staff_index)
+    assert emitted[-1].line_band_static_notes_enabled is False
+    panel.deleteLater()
+
+
 def test_line_band_image_size_follows_static_variant(qapp, tmp_path, monkeypatch):
     """端点尺寸要按当前生效素材读取（关闭动态音符后是静态变体）。"""
     from krok_helper.subtitle_render.frontend.properties import (
@@ -12269,14 +12320,20 @@ def test_line_band_image_size_follows_static_variant(qapp, tmp_path, monkeypatch
         line_band_dynamic_notes_enabled=False,
     ))
 
-    calls: list[tuple[str, bool]] = []
+    calls: list[tuple[str, bool, bool]] = []
 
-    def fake_resolve(image_spec, *, dynamic_notes_enabled=True):
-        calls.append((image_spec, bool(dynamic_notes_enabled)))
+    def fake_resolve(
+        image_spec, *, dynamic_notes_enabled=True, static_notes_enabled=True
+    ):
+        calls.append((
+            image_spec,
+            bool(dynamic_notes_enabled),
+            bool(static_notes_enabled),
+        ))
         return fake_static
 
     monkeypatch.setattr(panel_module, "resolve_band_render_image", fake_resolve)
     panel._line_band_size_cache = {}
     assert panel._line_band_image_size() == (320, 48)
-    assert calls == [("preset:staff_scroll", False)]
+    assert calls == [("preset:staff_scroll", False, True)]
     panel.deleteLater()

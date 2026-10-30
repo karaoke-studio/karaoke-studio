@@ -344,6 +344,9 @@ def build_render_ir(
             dynamic_notes_enabled=bool(
                 getattr(style, "line_band_dynamic_notes_enabled", True)
             ),
+            static_notes_enabled=bool(
+                getattr(style, "line_band_static_notes_enabled", True)
+            ),
         )
         style_payload["line_band_image"] = (
             str(band_path) if band_path is not None else ""
@@ -527,6 +530,9 @@ def build_style_patch_ir(
             str(patch_style_payload.get("line_band_image") or ""),
             dynamic_notes_enabled=bool(
                 getattr(style, "line_band_dynamic_notes_enabled", True)
+            ),
+            static_notes_enabled=bool(
+                getattr(style, "line_band_static_notes_enabled", True)
             ),
         )
         patch_style_payload["line_band_image"] = (

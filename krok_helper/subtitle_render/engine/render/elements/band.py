@@ -33,8 +33,8 @@ from krok_helper.subtitle_render.domain.band_presets import (
     default_clef_color_for,
     default_line_color_for,
     resolve_band_clef_image,
-    resolve_band_image,
     resolve_band_lines_image,
+    resolve_band_render_image,
     resolve_band_static_image,
 )
 
@@ -103,15 +103,21 @@ def band_spec(style) -> Optional[BandSpec]:
     dynamic_notes_enabled = bool(
         getattr(style, "line_band_dynamic_notes_enabled", True)
     )
-    static_path = (
-        resolve_band_static_image(image_spec)
-        if not dynamic_notes_enabled
-        else None
+    static_notes_enabled = bool(
+        getattr(style, "line_band_static_notes_enabled", True)
     )
-    path = static_path if static_path is not None else resolve_band_image(image_spec)
+    path = resolve_band_render_image(
+        image_spec,
+        dynamic_notes_enabled=dynamic_notes_enabled,
+        static_notes_enabled=static_notes_enabled,
+    )
     if path is None:
         return None
-    static_notes_only = static_path is not None
+    static_notes_only = (
+        not dynamic_notes_enabled
+        and static_notes_enabled
+        and resolve_band_static_image(image_spec) is not None
+    )
     lines_path = resolve_band_lines_image(image_spec)
     line_color = str(getattr(style, "line_band_line_color", "") or "")
     if not line_color:

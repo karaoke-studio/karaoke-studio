@@ -99,20 +99,34 @@ def test_preset_lookup_and_tint_metadata():
     ) == (50, 50, 50, 50)
 
 
-def test_only_staff_preset_ships_a_static_variant():
-    """五线谱带静态变体（关闭中间动态音符用）；其余预设没有变体。"""
+def test_only_staff_preset_ships_note_variants():
+    """五线谱带静态/动态/无音符三种变体；其余预设没有变体。"""
     from krok_helper.subtitle_render.domain.band_presets import (
+        resolve_band_dynamic_only_image,
+        resolve_band_no_notes_image,
         resolve_band_static_image,
     )
 
     for preset in BAND_PRESETS:
-        has_variant = preset.static_path is not None
-        assert has_variant == (preset.preset_id == "staff_scroll")
-        if has_variant:
-            assert preset.static_path is not None and preset.static_path.is_file()
+        is_staff = preset.preset_id == "staff_scroll"
+        assert preset.has_note_variants == is_staff
+        if is_staff:
+            for path in (
+                preset.static_path,
+                preset.dynamic_only_path,
+                preset.no_notes_path,
+            ):
+                assert path is not None and path.is_file()
             assert resolve_band_static_image(preset.image_spec) == preset.static_path
+            assert (
+                resolve_band_dynamic_only_image(preset.image_spec)
+                == preset.dynamic_only_path
+            )
+            assert resolve_band_no_notes_image(preset.image_spec) == preset.no_notes_path
         else:
             assert resolve_band_static_image(preset.image_spec) is None
+            assert resolve_band_dynamic_only_image(preset.image_spec) is None
+            assert resolve_band_no_notes_image(preset.image_spec) is None
 
 
 def test_staff_static_variant_keeps_only_end_notes(qapp):
@@ -168,6 +182,85 @@ def test_staff_static_variant_keeps_only_end_notes(qapp):
     assert Path(plain.image_path).suffix.lower() == ".webp"
 
 
+def test_staff_note_switches_pick_assets_and_content(qapp):
+    """「两边静态音符 / 中间动态音符」四组合分别用四种素材。"""
+    import numpy as np
+
+    from krok_helper.subtitle_render.engine.render.elements.band import (
+        animated_band_frames,
+    )
+
+    base = _style(
+        line_band_image="preset:staff_scroll",
+        line_band_cap_left_px=190,
+        line_band_cap_right_px=160,
+    )
+    expected = {
+        (True, True): "staff_scroll.webp",
+        (True, False): "staff_scroll_dynamic_only.webp",
+        (False, True): "staff_scroll_static.png",
+        (False, False): "staff_scroll_no_notes.png",
+    }
+    for (dynamic, static), file_name in expected.items():
+        spec = band_spec(replace(
+            base,
+            line_band_dynamic_notes_enabled=dynamic,
+            line_band_static_notes_enabled=static,
+        ))
+        assert spec is not None
+        assert Path(spec.image_path).name == file_name, (dynamic, static)
+
+    # 只有动态音符：两端端点必须全透明，中段有内容。
+    dynamic_only = band_spec(replace(
+        base,
+        line_band_dynamic_notes_enabled=True,
+        line_band_static_notes_enabled=False,
+    ))
+    assert dynamic_only is not None
+    animated = animated_band_frames(str(dynamic_only.image_path))
+    assert animated is not None
+    frame = animated[0][0].convertToFormat(QImage.Format.Format_RGBA8888)
+    bits = frame.constBits()
+    bits.setsize(frame.sizeInBytes())
+    alpha = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        frame.height(), frame.bytesPerLine() // 4, 4
+    )[:, : frame.width(), 3]
+    assert not alpha[:, :190].any()
+    assert not alpha[:, frame.width() - 160 :].any()
+    assert alpha[:, 190 : frame.width() - 160].any()
+
+    # 两边静态音符也关闭：底板全透明，只剩谱线/谱号层。
+    no_notes = band_spec(replace(
+        base,
+        line_band_dynamic_notes_enabled=False,
+        line_band_static_notes_enabled=False,
+    ))
+    assert no_notes is not None
+    empty = QImage(no_notes.image_path).convertToFormat(
+        QImage.Format.Format_RGBA8888
+    )
+    bits = empty.constBits()
+    bits.setsize(empty.sizeInBytes())
+    empty_alpha = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        empty.height(), empty.bytesPerLine() // 4, 4
+    )[:, : empty.width(), 3]
+    assert not empty_alpha.any()
+
+    # 空底板仍会叠上独立谱线/谱号层，CPU 合成结果不能是空的。
+    from krok_helper.subtitle_render.engine.render.elements.band import (
+        band_source,
+    )
+
+    source = band_source(no_notes, 0)
+    assert source is not None
+    bits = source.constBits()
+    bits.setsize(source.sizeInBytes())
+    source_alpha = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        source.height(), source.bytesPerLine() // 4, 4
+    )[:, : source.width(), 3]
+    assert source_alpha.any()
+
+
 def test_render_ir_hands_gpu_the_static_band_variant(qapp):
     """GPU 导出走 IR：关闭动态音符时必须下发静态 PNG，不能仍下发动图。"""
     from krok_helper.subtitle_render.engine.render.render_ir import (
@@ -190,6 +283,39 @@ def test_render_ir_hands_gpu_the_static_band_variant(qapp):
     assert ir["style"]["line_band_lines_image"].endswith(
         "staff_scroll_lines.png"
     )
+
+
+def test_render_ir_hands_gpu_note_variants(qapp):
+    """IR 按两个音符开关下发对应素材（含只剩谱线/谱号的无音符底板）。"""
+    from krok_helper.subtitle_render.engine.render.render_ir import (
+        build_render_ir,
+    )
+
+    expected = {
+        (True, True): "staff_scroll.webp",
+        (True, False): "staff_scroll_dynamic_only.webp",
+        (False, True): "staff_scroll_static.png",
+        (False, False): "staff_scroll_no_notes.png",
+    }
+    for (dynamic, static), file_name in expected.items():
+        ir = build_render_ir(
+            _track(),
+            _style(
+                line_band_image="preset:staff_scroll",
+                line_band_dynamic_notes_enabled=dynamic,
+                line_band_static_notes_enabled=static,
+            ),
+            width=640,
+            height=360,
+            fps=60,
+        )
+        assert str(ir["style"]["line_band_image"]).endswith(file_name)
+        assert str(ir["style"]["line_band_lines_image"]).endswith(
+            "staff_scroll_lines.png"
+        )
+        assert str(ir["style"]["line_band_clef_image"]).endswith(
+            "staff_scroll_clef.png"
+        )
 
 
 def test_style_patch_ir_switches_between_static_and_animated_band(qapp):
@@ -517,6 +643,7 @@ BAND_FIELDS = (
     "line_band_enabled",
     "line_band_image",
     "line_band_dynamic_notes_enabled",
+    "line_band_static_notes_enabled",
     "line_band_fill_mode",
     "line_band_cap_left_px",
     "line_band_cap_right_px",
@@ -685,6 +812,7 @@ def test_band_fields_survive_project_roundtrip():
         line_band_fill_mode="cover",
         line_band_mid_mode="stretch",
         line_band_dynamic_notes_enabled=False,
+        line_band_static_notes_enabled=False,
         line_band_include_ruby=True,
         line_band_offset_y_px=-7,
         line_band_opacity_pct=42,

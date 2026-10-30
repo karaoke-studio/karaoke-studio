@@ -780,6 +780,7 @@ _LINE_BAND_FIELDS = {
     "line_band_enabled",
     "line_band_image",
     "line_band_dynamic_notes_enabled",
+    "line_band_static_notes_enabled",
     "line_band_fill_mode",
     "line_band_cap_left_px",
     "line_band_cap_right_px",
@@ -6294,14 +6295,17 @@ class PropertyPanel(QWidget):
             width2_spin.setEnabled(inherited or enabled)
 
     def _line_band_image_size(self) -> tuple[int, int]:
-        """当前生效素材的源像素尺寸（静态变体优先；未知时返回 0,0）。"""
+        """当前生效素材的源像素尺寸（按音符开关选变体；未知时返回 0,0）。"""
         image = (self._style.line_band_image or "").strip()
-        # 与 band_spec 走同一套解析：关闭「中间动态音符」后端点滑条/裁剪
-        # 预览必须按静态变体的源尺寸计算，不能固定读动图素材。
+        # 与 band_spec 走同一套解析：关闭音符开关后端点滑条/裁剪预览必须
+        # 按当前生效变体的源尺寸计算，不能固定读主素材。
         path = resolve_band_render_image(
             image,
             dynamic_notes_enabled=bool(
                 getattr(self._style, "line_band_dynamic_notes_enabled", True)
+            ),
+            static_notes_enabled=bool(
+                getattr(self._style, "line_band_static_notes_enabled", True)
             ),
         )
         cache = getattr(self, "_line_band_size_cache", None)
@@ -6369,28 +6373,36 @@ class PropertyPanel(QWidget):
         if not label and image:
             label = Path(image).name
         self._line_band_image_label.setText(label)
-        # 「中间动态音符」只对带静态变体的预设（五线谱）显示；其余预设整行隐藏。
-        dynamic_notes_check = getattr(
-            self, "_line_band_dynamic_notes_check", None
+        # 两个音符开关只对带音符变体的预设（五线谱）显示；其余预设整行隐藏。
+        notes_rows_changed = False
+        supports_note_variants = (
+            preset is not None and preset.has_note_variants
         )
-        if dynamic_notes_check is not None:
-            dynamic_notes_check.setChecked(
-                bool(getattr(style, "line_band_dynamic_notes_enabled", True))
-            )
-            row = getattr(
-                self, "_line_band_dynamic_notes_row", dynamic_notes_check
-            )
-            supports_static = (
-                preset is not None
-                and preset.static_path is not None
-                and preset.static_path.is_file()
-            )
-            if row is not None and row.isHidden() == supports_static:
-                row.setVisible(supports_static)
-                grid = getattr(self, "_line_band_source_grid", None)
-                refresh = getattr(grid, "refresh_layout", None)
-                if callable(refresh):
-                    refresh()
+        for check_attr, row_attr, field_name in (
+            (
+                "_line_band_static_notes_check",
+                "_line_band_static_notes_row",
+                "line_band_static_notes_enabled",
+            ),
+            (
+                "_line_band_dynamic_notes_check",
+                "_line_band_dynamic_notes_row",
+                "line_band_dynamic_notes_enabled",
+            ),
+        ):
+            check = getattr(self, check_attr, None)
+            if check is None:
+                continue
+            check.setChecked(bool(getattr(style, field_name, True)))
+            row = getattr(self, row_attr, check)
+            if row is not None and row.isHidden() == supports_note_variants:
+                row.setVisible(supports_note_variants)
+                notes_rows_changed = True
+        if notes_rows_changed:
+            grid = getattr(self, "_line_band_source_grid", None)
+            refresh = getattr(grid, "refresh_layout", None)
+            if callable(refresh):
+                refresh()
         for combo, value in (
             (self._line_band_fill_combo, style.line_band_fill_mode),
             (self._line_band_mid_combo, style.line_band_mid_mode),

@@ -506,6 +506,8 @@ def build_staff_scroll():
     * **素材本体**：四个彩色音符（用户的独有设计，保留），运行时压在最上层；
     * **静态变体**：同一张图去掉中段漂浮的小音符（只保留四个静态音符），
       供「中间动态音符」开关关闭时使用；与动图同尺寸、同端点。
+    * **动态变体**：只保留中段漂浮的小音符，两端透明（「两边静态音符」关闭时用）。
+    * **无音符底板**：全透明，只剩独立谱线/谱号层（两个音符开关都关闭时用）。
     * 成图 1920x240，中段 1570px。
     """
     w, L, R = 1920, 190, 160
@@ -566,6 +568,7 @@ def build_staff_scroll():
     # 漂移量只有半像素级也不会「一帧跳一格」，播放依然顺滑。
     ss_frame = 2
     frames = []
+    dynamic_only_frames = []
     static = new(w * ss_frame, H * ss_frame)
     if commands:
         cap = new(L * ss_frame, H * ss_frame)
@@ -582,19 +585,27 @@ def build_staff_scroll():
         static.alpha_composite(cap, ((w - R) * ss_frame, 0))
     for frame in range(FRAME_COUNT):
         t = frame / max(FRAME_COUNT - 1, 1)
-        big = static.copy()
+        sprites = []
         for x, y, ss, color, phase, radius_x, radius_y, kind, tilt, rock in drift:
             arc = math.tau * (t + phase)
             dx = math.cos(arc) * radius_x
             dy = math.sin(arc) * radius_y
             angle = tilt + math.sin(arc) * rock
             sprite = bravura_note_sprite(ss * ss_frame, color, kind, angle)
-            big.alpha_composite(
+            sprites.append((
                 sprite,
-                (int(round((x + dx) * ss_frame - sprite.width / 2)),
-                 int(round((y + dy) * ss_frame - sprite.height / 2))),
-            )
+                (
+                    int(round((x + dx) * ss_frame - sprite.width / 2)),
+                    int(round((y + dy) * ss_frame - sprite.height / 2)),
+                ),
+            ))
+        big = static.copy()
+        dynamic_only = new(w * ss_frame, H * ss_frame)
+        for sprite, position in sprites:
+            big.alpha_composite(sprite, position)
+            dynamic_only.alpha_composite(sprite, position)
         frames.append(big.resize((w, H), Image.LANCZOS))
+        dynamic_only_frames.append(dynamic_only.resize((w, H), Image.LANCZOS))
 
     # 静态变体：与每帧同源、同缩放，只是没有中段漂浮的小音符。
     static_frame = static.resize((w, H), Image.LANCZOS)
@@ -604,7 +615,23 @@ def build_staff_scroll():
             "staff_scroll: 静态层跨过了设计端点（中段应为全透明）；"
             "请检查音符位置/大小，拒绝覆盖素材"
         )
-    return frames, L, R, lines, clef_layer, static_frame
+    # 动态变体：只保留中段漂浮的小音符，两端必须全透明（端点音符由
+    # 「两边静态音符」开关控制；关闭时直接用这块）。
+    dynamic_first = dynamic_only_frames[0]
+    _require_non_empty_asset(dynamic_first, "staff_scroll_dynamic_only")
+    if (
+        dynamic_first.crop((0, 0, L, H)).getbbox() is not None
+        or dynamic_first.crop((w - R, 0, w, H)).getbbox() is not None
+    ):
+        raise RuntimeError(
+            "staff_scroll: 动态变体两端应为全透明；请检查漂移音符是否越界"
+        )
+    # 无音符底板：完全透明，只剩独立谱线/谱号层。
+    no_notes_frame = new(w, H)
+    return (
+        frames, L, R, lines, clef_layer, static_frame,
+        dynamic_only_frames, no_notes_frame,
+    )
 
 # --------------------------------------------------------- 2. minimal stars
 def clean_star(r, alpha):
@@ -961,6 +988,8 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
         )
         lines_name = ""
         static_name = ""
+        dynamic_only_name = ""
+        no_notes_name = ""
         if len(rest) >= 4:
             _require_non_empty_asset(rest[2], preset_id + "_lines")
             _require_non_empty_asset(rest[3], preset_id + "_clef")
@@ -973,10 +1002,34 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
                 _require_non_empty_asset(rest[4], preset_id + "_static")
                 rest[4].save(str(ASSET_DIR / (preset_id + "_static.png")))
                 static_name = preset_id + "_static.png"
+            if len(rest) >= 6:
+                # 动态变体：只保留中段漂浮音符，两端透明。
+                dyn_path = ASSET_DIR / (preset_id + "_dynamic_only.webp")
+                save_animated_asset(rest[5], dyn_path, frame_ms)
+                check_animated_asset(
+                    dyn_path,
+                    total_ms=len(rest[5]) * int(frame_ms or FRAME_MS),
+                    expect_translucent=False,
+                )
+                dynamic_only_name = preset_id + "_dynamic_only.webp"
+            if len(rest) >= 7:
+                # 无音符底板：全透明，只剩独立谱线/谱号层。
+                rest[6].save(
+                    str(ASSET_DIR / (preset_id + "_no_notes.png"))
+                )
+                no_notes_name = preset_id + "_no_notes.png"
         if not static_name:
             stale_static = ASSET_DIR / (preset_id + "_static.png")
             if stale_static.exists():
                 stale_static.unlink()
+        if not dynamic_only_name:
+            stale_dynamic = ASSET_DIR / (preset_id + "_dynamic_only.webp")
+            if stale_dynamic.exists():
+                stale_dynamic.unlink()
+        if not no_notes_name:
+            stale_no_notes = ASSET_DIR / (preset_id + "_no_notes.png")
+            if stale_no_notes.exists():
+                stale_no_notes.unlink()
         for stale_name in (preset_id + ".png", preset_id + ".gif"):
             stale = ASSET_DIR / stale_name
             if stale.exists():
@@ -987,6 +1040,8 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
                         "tintable": tintable, "tint": default_tint,
                         "lines_name": lines_name, "clef_name": clef_name,
                         "static_name": static_name,
+                        "dynamic_only_name": dynamic_only_name,
+                        "no_notes_name": no_notes_name,
                         "animated": True})
         return
     if len(built) == 5:

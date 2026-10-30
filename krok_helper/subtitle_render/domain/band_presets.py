@@ -46,6 +46,10 @@ class BandPreset:
     default_clef_color: str = ""
     # 静态变体（不带中段动态音符）：与主素材同尺寸、同端点；空 = 没有变体。
     static_file_name: str = ""
+    # 动态变体（只有中段动态音符，没有两端静态音符）。
+    dynamic_only_file_name: str = ""
+    # 无音符底板（全透明，只保留独立谱线/谱号层）。
+    no_notes_file_name: str = ""
     # 预设自带的上色强度（100 = 满强度）。
     default_tint_strength_pct: int = 100
     # 预设默认填充方式：花纹类用 cover（裁切），避免平铺让中段变密。
@@ -76,6 +80,27 @@ class BandPreset:
         return BAND_PRESET_DIR / self.static_file_name
 
     @property
+    def dynamic_only_path(self) -> Optional[Path]:
+        if not self.dynamic_only_file_name:
+            return None
+        return BAND_PRESET_DIR / self.dynamic_only_file_name
+
+    @property
+    def no_notes_path(self) -> Optional[Path]:
+        if not self.no_notes_file_name:
+            return None
+        return BAND_PRESET_DIR / self.no_notes_file_name
+
+    @property
+    def has_note_variants(self) -> bool:
+        """是否带「两端静态音符 / 中间动态音符」两个内容变体（五线谱）。"""
+        return bool(
+            self.static_file_name
+            or self.dynamic_only_file_name
+            or self.no_notes_file_name
+        )
+
+    @property
     def image_spec(self) -> str:
         """Value stored in ``Style.line_band_image`` for this preset."""
         return PRESET_SCHEME + self.preset_id
@@ -89,6 +114,8 @@ BAND_PRESETS: tuple[BandPreset, ...] = (
                clef_file_name="staff_scroll_clef.png",
                default_clef_color="#5FD8E6",
                static_file_name="staff_scroll_static.png",
+               dynamic_only_file_name="staff_scroll_dynamic_only.webp",
+               no_notes_file_name="staff_scroll_no_notes.png",
                default_opacity_pct=100),
     BandPreset("stars", "星火点阵", "stars.webp",
                120, 120, 14, 14, 54, 54, default_fill_mode="cover",
@@ -137,14 +164,46 @@ def resolve_band_static_image(image: str) -> Optional[Path]:
     return static_path if static_path is not None and static_path.is_file() else None
 
 
+def resolve_band_dynamic_only_image(image: str) -> Optional[Path]:
+    """动态变体路径（只有中段动态音符，无两端静态音符）。"""
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return None
+    path = preset.dynamic_only_path
+    return path if path is not None and path.is_file() else None
+
+
+def resolve_band_no_notes_image(image: str) -> Optional[Path]:
+    """无音符底板路径（全透明，只剩谱线/谱号层）。"""
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return None
+    path = preset.no_notes_path
+    return path if path is not None and path.is_file() else None
+
+
 def resolve_band_render_image(
-    image: str, *, dynamic_notes_enabled: bool = True
+    image: str,
+    *,
+    dynamic_notes_enabled: bool = True,
+    static_notes_enabled: bool = True,
 ) -> Optional[Path]:
-    """渲染用素材：关闭「中间动态音符」时优先用预设的静态变体。"""
+    """渲染用素材：按「两端静态音符 / 中间动态音符」两个开关选预设变体。"""
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return resolve_band_image(image)
+    if not dynamic_notes_enabled and not static_notes_enabled:
+        for candidate in (
+            resolve_band_no_notes_image(image),
+            resolve_band_static_image(image),
+        ):
+            if candidate is not None:
+                return candidate
+        return resolve_band_image(image)
     if not dynamic_notes_enabled:
-        static_path = resolve_band_static_image(image)
-        if static_path is not None:
-            return static_path
+        return resolve_band_static_image(image) or resolve_band_image(image)
+    if not static_notes_enabled:
+        return resolve_band_dynamic_only_image(image) or resolve_band_image(image)
     return resolve_band_image(image)
 
 
@@ -209,6 +268,8 @@ __all__ = [
     "resolve_band_image",
     "resolve_band_render_image",
     "resolve_band_static_image",
+    "resolve_band_dynamic_only_image",
+    "resolve_band_no_notes_image",
     "default_clef_color_for",
     "resolve_band_clef_image",
     "resolve_band_lines_image",

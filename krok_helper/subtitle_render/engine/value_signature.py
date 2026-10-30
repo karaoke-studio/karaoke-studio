@@ -141,6 +141,7 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "line_band_enabled",
     "line_band_image",
     "line_band_dynamic_notes_enabled",
+    "line_band_static_notes_enabled",
     "line_band_fill_mode",
     "line_band_cap_left_px",
     "line_band_cap_right_px",
