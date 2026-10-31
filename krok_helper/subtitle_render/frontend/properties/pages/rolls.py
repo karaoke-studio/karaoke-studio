@@ -330,6 +330,15 @@ class RollsPropertyPageBuilder:
                     key, {"solid_color": str(color)}
                 )
             )
+            color_btn.screenPickRequested.connect(
+                lambda key=segment, button=color_btn: host._begin_screen_color_pick(
+                    button,
+                    lambda color, key=key: host.rollConfigChanged.emit(
+                        key,
+                        {"solid_color": color.name()},
+                    ),
+                )
+            )
             host._roll_solid_buttons[segment] = color_btn
             row.addWidget(property_field("背景颜色（点击色块输入色值）", color_btn))
             row.addStretch(1)

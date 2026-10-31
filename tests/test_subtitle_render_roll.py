@@ -1048,6 +1048,40 @@ def test_roll_refresh_falls_back_to_sync_on_worker_failure(qapp, monkeypatch):
         qapp.processEvents()
 
 
+def test_main_window_solid_color_dialog_refreshes_swatch(qapp, monkeypatch):
+    """选色对话框提交后，面板色块必须同步刷新（不是只改项目数据）。"""
+    import importlib
+
+    from PyQt6.QtGui import QColor
+
+    mw = importlib.import_module(
+        "krok_helper.subtitle_render.frontend.main_window"
+    )
+    win = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=_DictSettingsProvider()
+    )
+    try:
+        win._on_roll_config_changed(
+            "pre", {"enabled": True, "source_kind": "solid"}
+        )
+        monkeypatch.setattr(
+            mw.QColorDialog,
+            "getColor",
+            lambda *args, **kwargs: QColor("#445566"),
+        )
+        win._on_roll_solid_color_dialog("pre")
+        assert _wait_until(
+            qapp,
+            lambda: win._pre_roll is not None
+            and win._pre_roll.source.color == "#445566",
+        )
+        button = win._property_panel._roll_solid_buttons["pre"]
+        assert _wait_until(qapp, lambda: button.color == "#445566")
+    finally:
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_subtitle_export_timing_reports_actual_pre_post(qapp):
     """交接给 Hi-Res 的前/后黑时长 = 实际时间线，而不是配置名义值。"""
     import importlib

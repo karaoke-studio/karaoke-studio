@@ -86,6 +86,43 @@ def test_roll_defaults_dialog_round_trips_values(qapp):
         dialog.deleteLater()
 
 
+def test_roll_solid_color_button_refreshes_and_screen_pick_applies(qapp):
+    from PyQt6.QtGui import QColor
+
+    panel = _panel(qapp)
+    pre = RollSegmentConfig(
+        enabled=True,
+        source=BackgroundSource(kind="solid", color="#112233"),
+    )
+    panel.set_rolls_state(pre, None)
+    button = panel._roll_solid_buttons["pre"]
+    assert button.color == "#112233"
+
+    # 配色对话框/取色器最终都走 rollConfigChanged；面板回填必须刷新色块。
+    panel.set_rolls_state(
+        RollSegmentConfig(
+            enabled=True,
+            source=BackgroundSource(kind="solid", color="#445566"),
+        ),
+        None,
+    )
+    assert button.color == "#445566"
+
+    captured: dict[str, object] = {}
+    panel._begin_screen_color_pick = lambda target, callback: captured.update(
+        button=target, callback=callback
+    )
+    emitted: list[tuple[str, dict]] = []
+    panel.rollConfigChanged.connect(
+        lambda segment, changes: emitted.append((segment, changes))
+    )
+    button.screenPickRequested.emit()
+    assert captured["button"] is button
+    callback = captured["callback"]
+    callback(QColor("#778899"))
+    assert emitted == [("pre", {"solid_color": "#778899"})]
+
+
 def test_rolls_page_defaults_match_product_spec(qapp):
     panel = _panel(qapp)
     assert panel._roll_duration_spins["pre"].value() == 3.0

@@ -3205,8 +3205,8 @@ class PropertyPanel(QWidget):
                 if audio_edit is not None:
                     audio_edit.setText(normalized.audio_path or "")
                 solid = self._roll_solid_buttons.get(segment)
-                if solid is not None and hasattr(solid, "setColor"):
-                    solid.setColor(normalized.source.color)
+                if solid is not None and hasattr(solid, "set_color"):
+                    solid.set_color(normalized.source.color)
                 self._set_combo_data(self._roll_fill_combos.get(segment), normalized.fill)
                 duration = self._roll_duration_spins.get(segment)
                 if duration is not None:
