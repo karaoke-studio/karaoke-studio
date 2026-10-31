@@ -4,6 +4,7 @@
 #include "d2d_runtime_support.h"
 #include "d2d_font_fallback.h"
 #include "d2d_fx.h"
+#include "d2d_stroke_outline.h"
 
 #include <d2d1_2.h>
 #include <dwrite.h>
@@ -300,6 +301,7 @@ struct Direct2DGpuBackend::Impl {
     };
 
     struct GlyphGeometryResource {
+        std::shared_ptr<direct2d::StrokeOutlineCache> outlineCache;
         Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
         bool hasBounds = false;
         D2D1_RECT_F referenceBounds{};
@@ -307,6 +309,7 @@ struct Direct2DGpuBackend::Impl {
         std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> strokeGeometries;
         std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> stroke2Geometries;
         std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> protectedGeometries;
+        std::map<std::pair<float, float>, Microsoft::WRL::ComPtr<ID2D1Geometry>> outerStrokeRings;
         // Clipper2 预展开描边轮廓（按宽度惰性缓存）：描边 realization 与
         // 动画帧共用同一份，创建毫秒级（见 d2d_stroke_outline.h）。
         std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> preexpandedStrokes;

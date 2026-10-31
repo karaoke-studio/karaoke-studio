@@ -3901,12 +3901,22 @@ def test_gpu_rgb_only_change_preserves_realizations(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
-def test_gpu_alpha_change_rebuilds_protected_geometry(monkeypatch) -> None:
-    """透明度会改变正文保护描边拓扑，不能误走纯 RGB 快路径。"""
+@pytest.mark.parametrize("layer", ["text", "stroke", "stroke2", "shadow"])
+@pytest.mark.parametrize("mode", ["solid", "gradient_horizontal", "gradient_vertical", "split_vertical"])
+def test_gpu_alpha_change_reuses_protected_geometry(monkeypatch, layer, mode) -> None:
+    """透明度只更新画笔，复用预先准备的正文保护描边。"""
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = _g1_track()
-    first = _g1_style(stroke_width_px=12, fill_color="#FFFF0000")
-    second = replace(first, fill_color="#80FF0000")
+    def make_style(color):
+        paint = PaintFill(mode=mode, color=color,
+                          gradient_stops=[(0, color), (100, "#FFFF0000")],
+                          split_stops=[(0, color), (50, color), (100, "#FFFF0000")])
+        state = replace(KaraokeColorState(), **{layer: paint})
+        return _g1_style(stroke_width_px=12, stroke2_enabled=True,
+                         stroke2_width_px=6,
+                         karaoke_colors=KaraokeColors(before=state, after=state))
+    first = make_style("#FFFF0000")
+    second = make_style("#80FF0000")
 
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         renderer.configure_gpu(
@@ -3919,8 +3929,9 @@ def test_gpu_alpha_change_rebuilds_protected_geometry(monkeypatch) -> None:
             force_warp=False,
         )
 
-    assert changed["cache_misses"] == before["cache_misses"] + 1
-    assert changed["realization_count"] == 0
+    assert changed["cache_misses"] == before["cache_misses"]
+    assert changed["cache_hits"] == before["cache_hits"] + 1
+    assert changed["glyph_stroke_cache_misses"] == before["glyph_stroke_cache_misses"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -16289,3 +16300,107 @@ def test_floating_lamp_entry_role_and_image(effect, appearance, tmp_path):
 @pytest.mark.parametrize("effect", ["wave_in", "glow_in"])
 def test_floating_lamp_entry_hardware(effect, appearance, tmp_path):
     test_floating_lamp_entry_uses_shared_transitions(effect, appearance, tmp_path, force_warp=False)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_translucent_body_is_not_tinted_by_second_stroke():
+    """Outer stroke must not show through the interior of translucent glyphs."""
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("模", 0)], end_ms=2000)])
+    def style(alpha, strokes):
+        state = KaraokeColorState(
+            text=PaintFill(mode="solid", color=f"#{alpha}FFFFFF"),
+            stroke=PaintFill(mode="solid", color="#FF0000"),
+            stroke2=PaintFill(mode="solid", color="#FF0000"))
+        return _g1_style(font_family="Meiryo", font_size_px=160,
+            stroke_width_px=16 if strokes else 0,
+            stroke2_enabled=strokes, stroke2_width_px=12 if strokes else 0,
+            decoration_kind="none", dual_line_layout=False,
+            karaoke_colors=KaraokeColors(before=state, after=state))
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30) as renderer:
+        _, body = _render_g1_frames(renderer, style("FF", False), (500,),
+                                   force_warp=True, track=track)
+        _, colored = _render_g1_frames(renderer, style("80", True), (500,),
+                                      force_warp=True, track=track)
+    body_pixels = np.frombuffer(body[0], np.uint8).reshape(-1, 4)
+    pixels = np.frombuffer(colored[0], np.uint8).reshape(-1, 4)
+    interior = body_pixels[:, 3] == 255
+    assert np.count_nonzero(interior) > 100
+    delta = np.abs(pixels[interior, 0].astype(int) - pixels[interior, 1].astype(int))
+    assert np.percentile(delta, 99) <= 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_shared_outline_cache_keeps_different_ring_widths_distinct():
+    """The same outer width can have different inner rings on one cached glyph."""
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("模", 0)], end_ms=2000)])
+    state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#80FFFFFF"),
+        stroke=PaintFill(mode="solid", color="#8000FF00"),
+        stroke2=PaintFill(mode="solid", color="#80FF0000"))
+    base = _g1_style(font_family="Meiryo", font_size_px=160,
+        stroke_width_px=8, stroke2_enabled=True, stroke2_width_px=16,
+        decoration_kind="none", dual_line_layout=False,
+        karaoke_colors=KaraokeColors(before=state, after=state))
+    changed = replace(base, stroke_width_px=16, stroke2_width_px=8)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30) as renderer:
+        _render_g1_frames(renderer, base, (500,), force_warp=True, track=track)
+        _, warm = _render_g1_frames(renderer, changed, (500,), force_warp=True, track=track)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30) as renderer:
+        _, cold = _render_g1_frames(renderer, changed, (500,), force_warp=True, track=track)
+    delta = np.abs(np.frombuffer(warm[0], np.uint8).astype(int)
+                   - np.frombuffer(cold[0], np.uint8).astype(int))
+    assert np.percentile(delta, 99.9) <= 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("decoration", ["shadow", "glow"])
+def test_gpu_decoration_alpha_patch_matches_fresh_render(decoration):
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("模", 0)], end_ms=2000)])
+    def make(alpha):
+        state = KaraokeColorState(
+            text=PaintFill(mode="solid", color="#80FFFFFF"),
+            shadow=PaintFill(mode="solid", color=f"#{alpha}FF0000"))
+        return _g1_style(font_family="Meiryo", font_size_px=120,
+            decoration_kind=decoration, glow_radius_px=14,
+            glow_before_radius_px=14, glow_after_radius_px=14,
+            glow_concentration_level=1, shadow_offset_x=12, shadow_offset_y=12,
+            karaoke_colors=KaraokeColors(before=state, after=state))
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30) as renderer:
+        _render_g1_frames(renderer, make("FF"), (500,), force_warp=True, track=track)
+        before = renderer.gpu_diagnostics(force_warp=True)
+        configured, warm = _render_g1_frames(renderer, make("80"), (500,), force_warp=True, track=track)
+        assert configured["cache_misses"] == before["cache_misses"]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30) as renderer:
+        _, cold = _render_g1_frames(renderer, make("80"), (500,), force_warp=True, track=track)
+    delta = np.abs(np.frombuffer(warm[0], np.uint8).astype(int)
+                   - np.frombuffer(cold[0], np.uint8).astype(int))
+    assert np.percentile(delta, 99.9) <= 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("animation", ["utopia", "spin_flip", "char_drip", "karaoke_utopia"])
+def test_gpu_animated_ruby_preserves_translucent_outer_ring(animation, monkeypatch):
+    track, base = _g4_spin_scene()
+    state = KaraokeColorState(text=PaintFill(color="#80FFFFFF"),
+        stroke=PaintFill(color="#FFFFFF"), stroke2=PaintFill(color="#FF0000"))
+    style = replace(base,
+        entry_anim="none" if animation == "karaoke_utopia" else animation,
+        exit_anim="none" if animation == "karaoke_utopia" else animation,
+        karaoke_anim="utopia" if animation == "karaoke_utopia" else "none",
+        decoration_kind="none", ruby_decoration_kind="none",
+        ruby_stroke_width_px=4, ruby_stroke2_enabled=True, ruby_stroke2_width_px=6,
+        ruby_karaoke_colors=KaraokeColors(before=state, after=state))
+    def render(direct):
+        monkeypatch.setenv("KROK_GPU_DYNAMIC_DIRECT_STROKE", str(int(direct)))
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=30) as renderer:
+            return _render_g1_frames(renderer, style, (350, 950, 1150, 1600),
+                force_warp=True, track=track)[1]
+    direct, expanded = render(True), render(False)
+    for first, second in zip(direct, expanded):
+        a = np.frombuffer(first, np.uint8).reshape(-1, 4).astype(int)
+        b = np.frombuffer(second, np.uint8).reshape(-1, 4).astype(int)
+        visible = (a[:, 3] > 2) | (b[:, 3] > 2)
+        assert np.mean(np.abs(a[visible] - b[visible])) <= 1.0
+        assert np.percentile(np.abs(a[visible] - b[visible]), 99) <= 16

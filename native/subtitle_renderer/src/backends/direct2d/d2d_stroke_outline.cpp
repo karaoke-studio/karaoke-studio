@@ -7,8 +7,15 @@
 #include <cstdio>
 #include <functional>
 #include <vector>
+#include <map>
 
 namespace krok::subtitle::native::direct2d {
+
+struct StrokeOutlineCache {
+    Microsoft::WRL::ComPtr<ID2D1Geometry> source;
+    Clipper2Lib::PathsD filled;
+    std::map<float, Clipper2Lib::PathsD> expanded;
+};
 
 namespace {
 
@@ -29,7 +36,8 @@ public:
         *out = nullptr;
         return E_NOINTERFACE;
     }
-    void STDMETHODCALLTYPE SetFillMode(D2D1_FILL_MODE) override {}
+    D2D1_FILL_MODE fillMode = D2D1_FILL_MODE_WINDING;
+    void STDMETHODCALLTYPE SetFillMode(D2D1_FILL_MODE value) override { fillMode = value; }
     void STDMETHODCALLTYPE SetSegmentFlags(D2D1_PATH_SEGMENT) override {}
     void STDMETHODCALLTYPE BeginFigure(
         D2D1_POINT_2F start, D2D1_FIGURE_BEGIN
@@ -134,49 +142,72 @@ private:
 }  // namespace
 
 Microsoft::WRL::ComPtr<ID2D1PathGeometry> strokeOutlineGeometry(
-    D2DDevice &device,
+    const D2DDevice &device,
     ID2D1Geometry *source,
-    float strokeWidth
+    float strokeWidth,
+    bool outsideOnly,
+    float innerStrokeWidth,
+    std::shared_ptr<StrokeOutlineCache> *cache
 ) {
     if (source == nullptr || strokeWidth <= 0.0f) {
         return {};
     }
-    Microsoft::WRL::ComPtr<ID2D1PathGeometry> sourcePath;
-    if (FAILED(source->QueryInterface(
-            IID_PPV_ARGS(sourcePath.ReleaseAndGetAddressOf())))) {
-        return {};
+    auto prepared = cache ? *cache : nullptr;
+    if (!prepared || prepared->source.Get() != source) {
+        prepared = std::make_shared<StrokeOutlineCache>();
+        prepared->source = source;
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> sourcePath;
+        if (FAILED(source->QueryInterface(
+                IID_PPV_ARGS(sourcePath.ReleaseAndGetAddressOf())))) {
+            return {};
+        }
+        FlattenSink sink;
+        if (FAILED(sourcePath->Stream(&sink)) || sink.rings.empty()) {
+            return {};
+        }
+        Clipper2Lib::PathsD subjects;
+        for (const auto &ring : sink.rings) {
+            if (ring.size() < 3) continue;
+            Clipper2Lib::PathD path;
+            path.reserve(ring.size());
+            for (const auto &pt : ring) path.emplace_back(pt.x, pt.y);
+            subjects.push_back(std::move(path));
+        }
+        if (subjects.empty()) {
+            return {};
+        }
+        // precision=4（×10^4 取整）：precision=2 会把描摹轮廓 0.01~0.05px 的
+        // 间距打碎成数千碎片环（2026-10 校验期实测）。
+        // Direct2D's winding fill permits disjoint solid contours with opposite
+        // orientations (e.g. mirrored wings). Polygon offsetting instead expects
+        // consistent outer/hole orientations and otherwise shrinks one solid as
+        // a hole. Resolve the filled topology first: NonZero union normalizes the
+        // outer contours while retaining actual nested holes. Reversing every
+        // negative contour would incorrectly fill those holes.
+        prepared->filled = Clipper2Lib::Union(
+            subjects, sink.fillMode == D2D1_FILL_MODE_ALTERNATE
+                ? Clipper2Lib::FillRule::EvenOdd : Clipper2Lib::FillRule::NonZero, 4
+        );
+        if (cache) *cache = prepared;
     }
-    FlattenSink sink;
-    if (FAILED(sourcePath->Stream(&sink)) || sink.rings.empty()) {
-        return {};
+    const auto &filled = prepared->filled;
+    const auto expanded = [&](float width) -> const Clipper2Lib::PathsD & {
+        auto entry = prepared->expanded.find(width);
+        if (entry == prepared->expanded.end()) {
+            entry = prepared->expanded.emplace(width, Clipper2Lib::InflatePaths(
+                filled, width * 0.5, Clipper2Lib::JoinType::Round,
+                Clipper2Lib::EndType::Polygon, 2.0, 4, 0.02)).first;
+        }
+        return entry->second;
+    };
+    Clipper2Lib::PathsD inflated = expanded(strokeWidth);
+    if (outsideOnly) {
+        const auto &inner = innerStrokeWidth > 0.0f
+            ? expanded(innerStrokeWidth) : filled;
+        inflated = Clipper2Lib::Difference(
+            inflated, inner, Clipper2Lib::FillRule::NonZero, 4);
+
     }
-    Clipper2Lib::PathsD subjects;
-    for (const auto &ring : sink.rings) {
-        if (ring.size() < 3) continue;
-        Clipper2Lib::PathD path;
-        path.reserve(ring.size());
-        for (const auto &pt : ring) path.emplace_back(pt.x, pt.y);
-        subjects.push_back(std::move(path));
-    }
-    if (subjects.empty()) {
-        return {};
-    }
-    // precision=4（×10^4 取整）：precision=2 会把描摹轮廓 0.01~0.05px 的
-    // 间距打碎成数千碎片环（2026-10 校验期实测）。
-    // Direct2D's winding fill permits disjoint solid contours with opposite
-    // orientations (e.g. mirrored wings). Polygon offsetting instead expects
-    // consistent outer/hole orientations and otherwise shrinks one solid as
-    // a hole. Resolve the filled topology first: NonZero union normalizes the
-    // outer contours while retaining actual nested holes. Reversing every
-    // negative contour would incorrectly fill those holes.
-    const Clipper2Lib::PathsD filled = Clipper2Lib::Union(
-        subjects, Clipper2Lib::FillRule::NonZero, 4
-    );
-    const Clipper2Lib::PathsD inflated = Clipper2Lib::InflatePaths(
-        filled, strokeWidth * 0.5, Clipper2Lib::JoinType::Round,
-        // PathsD takes coordinate precision before arc tolerance.
-        Clipper2Lib::EndType::Polygon, 2.0, 4, 0.02
-    );
     if (inflated.empty()) {
         return {};
     }

@@ -1,4 +1,5 @@
 #include "d2d_geometry_resources.h"
+#include "d2d_stroke_outline.h"
 
 #include "../../diagnostics/long_call_watchdog.h"
 
@@ -338,10 +339,19 @@ Microsoft::WRL::ComPtr<ID2D1Geometry> outsideStrokeGeometry(
     ID2D1Factory1 *factory,
     ID2D1Geometry *body,
     float width,
-    const D2DDevice &device
+    const D2DDevice &device,
+    std::shared_ptr<StrokeOutlineCache> *cache
 ) {
     if (body == nullptr || width <= 0.0f) {
         return {};
+    }
+    // Normalize filled topology before offsetting. Direct2D Widen on dense
+    // outlines can take minutes; the polygon path also preserves overlapping
+    // winding contours and real counters instead of treating them as XOR holes.
+    if (auto outside = strokeOutlineGeometry(device, body, width, true, 0.0f, cache)) {
+        Microsoft::WRL::ComPtr<ID2D1Geometry> result;
+        checkHr(outside.As(&result), "Query polygon outside stroke", device);
+        return result;
     }
     // Widen+Combine 是单体不可中断调用，密集路径上单次可达数十秒且常跑
     // 在主线程 configure 里（此时逐段/空闲两层心跳都被它阻塞）——登记

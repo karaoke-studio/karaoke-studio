@@ -54,7 +54,6 @@ using direct2d::findFallbackFontFace;
 using direct2d::glyphIndices;
 using direct2d::loadWicBitmap;
 using direct2d::outsideStrokeGeometry;
-using direct2d::paintNeedsBodyProtection;
 using direct2d::resolveFontFaces;
 using direct2d::steadyNowMs;
 using direct2d::textFullyCovered;
@@ -72,6 +71,7 @@ void eraseRgb(RgbaColor &color) {
     color.red = 0;
     color.green = 0;
     color.blue = 0;
+    color.alpha = 255;
 }
 
 void erasePaintRgb(PaintStyle &paint) {
@@ -128,7 +128,7 @@ bool geometryStylesEqual(const std::vector<TextStyle> &left,
     return true;
 }
 
-bool sceneDiffersOnlyInRgb(const RenderScene &left, const RenderScene &right) {
+bool sceneDiffersOnlyInColor(const RenderScene &left, const RenderScene &right) {
     return left.width == right.width
         && left.height == right.height
         && left.layoutReferenceScale == right.layoutReferenceScale
@@ -741,11 +741,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         ++impl_->diagnostics.cacheHits;
         return;
     }
-    if (impl_->configured && sceneDiffersOnlyInRgb(impl_->scene, scene)) {
-        // Chroma-only edits do not alter glyph outlines, protection topology,
-        // layout, or realization meshes.  Swap the paints in place and keep
-        // every positioned geometry/realization alive; alpha/mode/image/stop
-        // topology remains part of the comparison and falls back to rebuild.
+    if (impl_->configured && sceneDiffersOnlyInColor(impl_->scene, scene)) {
+        // RGBA edits only replace brushes. Outside stroke geometry is prepared
+        // independently of paint opacity, so alpha never rebuilds outlines.
+        // Mode/image/stop topology still falls back to full configuration.
         impl_->scene = scene;
         // 帧仓登记的像素是旧色画的，随画笔一起作废（纹理同尺寸可复用）。
         clearFrameStoreRegistrations();
@@ -2135,7 +2134,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                                 };
                             }
                             auto outline = direct2d::strokeOutlineGeometry(
-                                device_, path.Get(), width
+                                device_, path.Get(), width, false, 0.0f,
+                                &glyphResource->outlineCache
                             );
                             auto stored = cache
                                 .emplace(width, std::move(outline))
@@ -2189,9 +2189,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             "ID2D1Factory::CreateTransformedGeometry(position vector stroke2)"
                         );
                     }
-                    if (charStyle.strokeWidth > 0.0f
-                        && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
-                            || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
+                    if (charStyle.strokeWidth > 0.0f) {
                         Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStroke;
                         auto &cache = glyphResource->protectedGeometries;
                         const float width = charStyle.strokeWidth;
@@ -2207,7 +2205,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                                             device_.d2dFactory(),
                                             path.Get(),
                                             width,
-                                            device_
+                                            device_, &glyphResource->outlineCache
                                         )
                                     )
                                     .first;
@@ -2244,9 +2242,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             device_
                         );
                     }
-                    if (charStyle.strokeWidth > 0.0f
-                        && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
-                            || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
+                    if (charStyle.strokeWidth > 0.0f) {
                         cached.chars.back().protectedStrokeGeometry = outsideStrokeGeometry(
                             device_.d2dFactory(),
                             cached.chars.back().geometry.Get(),
@@ -2255,6 +2251,17 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         );
                     }
                 }
+            }
+            if (path && glyphResource && charStyle.stroke2Width > 0.0f) {
+                const float inner = std::max(charStyle.strokeWidth, 0.0f);
+                const float outer = inner + charStyle.stroke2Width;
+                auto &ring = glyphResource->outerStrokeRings[{inner, outer}];
+                if (!ring) ring = direct2d::strokeOutlineGeometry(
+                    device_, path.Get(), outer, true, inner, &glyphResource->outlineCache);
+                cached.chars.back().stroke2Outline = ring;
+                cached.chars.back().stroke2Geometry = translatedGeometry(
+                    ring.Get(), cursor + pathOffset, 0.0f,
+                    "Position independent outer stroke ring");
             }
             if (layoutWidth <= 0.0f) {
                 // A cell collapsed to zero width (negative-margin bitmap
@@ -3016,9 +3023,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             )
                             : nullptr
                     );
-                    if (rubyStrokeWidthFx > 0.0f
-                        && (paintNeedsBodyProtection(rubyStyle.rubyBeforeFillPaint)
-                            || paintNeedsBodyProtection(rubyStyle.rubyAfterFillPaint))) {
+                    if (rubyStrokeWidthFx > 0.0f) {
                         auto &cache = glyph.resource->protectedGeometries;
                         const float width = rubyStrokeWidthFx;
                         auto entry = cache.find(width);
@@ -3029,7 +3034,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                                 width,
                                 outsideStrokeGeometry(
                                     device_.d2dFactory(), glyph.geometry.Get(),
-                                    width, device_
+                                    width, device_, &glyph.resource->outlineCache
                                 )
                             ).first;
                             impl_->diagnostics.glyphStrokeBuildMs += elapsedMs(buildStart);
@@ -3075,6 +3080,18 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         ruby.chars.back().protectedRealizationGeometry =
                             protectedEntry->second;
                     }
+                }
+                if (glyph.geometry && glyph.resource && rubyStroke2WidthFx > 0.0f) {
+                    const float inner = std::max(rubyStrokeWidthFx, 0.0f);
+                    const float outer = inner + rubyStroke2WidthFx;
+                    auto &ring = glyph.resource->outerStrokeRings[{inner, outer}];
+                    if (!ring) ring = direct2d::strokeOutlineGeometry(
+                        device_, glyph.geometry.Get(), outer, true, inner, &glyph.resource->outlineCache);
+                    ruby.chars.back().stroke2Outline = ring;
+                    ruby.chars.back().stroke2Geometry = translatedGeometry(
+                        ring.Get(), origin + glyph.pathOffset, ruby.baselineOffset,
+                        "Position independent ruby outer stroke ring");
+                    ruby.stroke2Geometries.back() = ruby.chars.back().stroke2Geometry;
                 }
                 ruby.chars.back().pivotX = origin + glyph.layoutWidth * 0.5f;
                 ruby.chars.back().pivotY = ruby.pivotY;

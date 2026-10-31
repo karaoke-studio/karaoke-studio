@@ -2,6 +2,7 @@
 
 #include "../render_backend.h"
 #include "d2d_device.h"
+#include "d2d_stroke_outline.h"
 
 #include <d2d1_2.h>
 
@@ -34,7 +35,8 @@ Microsoft::WRL::ComPtr<ID2D1Geometry> outsideStrokeGeometry(
     ID2D1Factory1 *factory,
     ID2D1Geometry *body,
     float width,
-    const D2DDevice &device
+    const D2DDevice &device,
+    std::shared_ptr<StrokeOutlineCache> *cache = nullptr
 );
 
 Microsoft::WRL::ComPtr<ID2D1Geometry> widenedStrokeGeometry(

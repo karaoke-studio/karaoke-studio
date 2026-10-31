@@ -13,8 +13,11 @@
 
 #include <d2d1_2.h>
 #include <wrl/client.h>
+#include <memory>
 
 namespace krok::subtitle::native::direct2d {
+
+struct StrokeOutlineCache;
 
 // 把闭合填充路径按 strokeWidth/2 圆角偏置成描边区域轮廓。
 // source 必须是 ID2D1PathGeometry（矢量字形 LRU 的 resource.path）。
@@ -22,9 +25,12 @@ namespace krok::subtitle::native::direct2d {
 // 描边路径。返回 WINDING 轮廓（与产品消费矢量字形的填充规则同口径，
 // 不做 evenodd 归一）。
 Microsoft::WRL::ComPtr<ID2D1PathGeometry> strokeOutlineGeometry(
-    D2DDevice &device,
+    const D2DDevice &device,
     ID2D1Geometry *source,
-    float strokeWidth
+    float strokeWidth,
+    bool outsideOnly = false,
+    float innerStrokeWidth = 0.0f,
+    std::shared_ptr<StrokeOutlineCache> *cache = nullptr
 );
 
 }  // namespace krok::subtitle::native::direct2d

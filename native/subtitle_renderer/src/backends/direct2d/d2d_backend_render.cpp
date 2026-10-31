@@ -53,7 +53,6 @@ using direct2d::kStrokeFlashMinWidthEm;
 using direct2d::kStrokeFlashMs;
 using direct2d::kStrokeFlashWidthBoost;
 using direct2d::OpacityLayerScope;
-using direct2d::paintNeedsBodyProtection;
 using direct2d::rectAreaPx;
 using direct2d::rubyPaintBounds;
 using direct2d::steadyNowMs;
@@ -2482,7 +2481,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             "ID2D1Factory::CreateTransformedGeometry(spin ruby stroke)"
                         );
                     }
-                    if (!impl_->dynamicDirectStrokeEnabled
+                    // The outside-only ruby ring must follow the glyph even
+                    // in direct-stroke mode; falling back to DrawGeometry
+                    // would tint translucent bodies only during animation.
+                    const bool hasOuterRing = index < ruby.chars.size()
+                        && ruby.chars[index].stroke2Outline != nullptr;
+                    if ((!impl_->dynamicDirectStrokeEnabled || hasOuterRing)
                         && index < ruby.stroke2Geometries.size()) {
                         transformRubyStroke(
                             ruby.stroke2Geometries[index].Get(),
@@ -7463,13 +7467,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float outerWidth = stroke2Width > 0.0f
                 ? std::max(strokeWidth, 0.0f) + stroke2Width
                 : std::max(strokeWidth, 0.0f);
-            if (transformed && impl_->dynamicDirectStrokeEnabled) {
-                if (outerWidth > 0.0f) {
-                    context->DrawGeometry(geometry, brush, outerWidth);
-                }
-            } else if (transformed && animatedOuterGeometry != nullptr) {
-                context->FillGeometry(animatedOuterGeometry, brush);
-            } else if (outerWidth > 0.0f) {
+            // The visible second stroke is an outside-only ring. A shadow
+            // needs the full expanded silhouette, including the primary edge.
+            if (outerWidth > 0.0f) {
                 context->DrawGeometry(geometry, brush, outerWidth);
             }
             context->FillGeometry(geometry, brush);
@@ -7837,7 +7837,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // Recolour the same geometry/realization used by the body so that
         // the scan-line cannot expose a different outline at VF intersections.
         const auto drawMainGlyphLayer = [&](std::size_t charIndex, int layer,
-                                             ID2D1Brush *brush, bool protect) {
+                                             ID2D1Brush *brush) {
+            // Opacity changes the brush, never the stroke silhouette.
+            constexpr bool protect = true;
             const Impl::CachedChar &ch = line->chars[charIndex];
             ID2D1Geometry *geometry = charGeometryAt(charIndex);
             const TextStyle &charStyle = ch.styleIndex >= 0
@@ -7876,6 +7878,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     return;
                 }
                 ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
+                if (ch.stroke2Outline && animatedStroke2) {
+                    fillStrokeWithRealization(ch.stroke2Realization.Get(),
+                        animatedStroke2, brush, true,
+                        ch.stroke2RealizationTransform, realizationEligible);
+                    return;
+                }
+
                 // 有预展开轮廓（矢量字形）且未放大时优先填充（亚毫秒），
                 // 没有或放大态才对原路径逐帧 DrawGeometry（密集 SVG
                 // ~4ms/帧；放大时是设备精度兜底，见 magnified 注释）。
@@ -8052,11 +8061,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
             drawMainGlyphLayer(
-                charIndex, layer, brush,
-                paintNeedsBodyProtection(
-                    after ? charStyle.afterFillPaint : charStyle.beforeFillPaint
-                )
-            );
+                charIndex, layer, brush);
         };
         const auto drawMainLayer = [&](int layer) {
             const auto drawPhasePart = [&](std::size_t charIndex,
@@ -8171,12 +8176,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 );
                                 pushScanlineStateClip(band->second, after);
                                 drawMainGlyphLayer(
-                                    charIndex, layer, brush.Get(),
-                                    paintNeedsBodyProtection(scanlinePaintFor(
-                                        sourceAfter ? charStyle.afterFillPaint
-                                                    : charStyle.beforeFillPaint
-                                    ))
-                                );
+                                    charIndex, layer, brush.Get());
                                 context->PopAxisAlignedClip();
                                 context->PopAxisAlignedClip();
                             }
@@ -8308,12 +8308,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                         );
                                     }
                                     drawMainGlyphLayer(
-                                        charIndex, layer, brush.Get(),
-                                        paintNeedsBodyProtection(scanlinePaintFor(
-                                            sourceAfter ? charStyle.afterFillPaint
-                                                        : charStyle.beforeFillPaint
-                                        ))
-                                    );
+                                        charIndex, layer, brush.Get());
                                     if (!scanlineUniform) {
                                         context->PopAxisAlignedClip();
                                     }
@@ -9205,8 +9200,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                                std::size_t index,
                                                ID2D1Brush *fill,
                                                ID2D1Brush *stroke,
-                                               ID2D1Brush *stroke2,
-                                               bool protect) {
+                                               ID2D1Brush *stroke2) {
+            constexpr bool protect = true;
             const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
@@ -9222,7 +9217,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             // 与主字形同口径：存在即用（2026-10 用户二次确认）。
             const bool realizationEligible = !rubyTransformed;
             if (stroke2 != nullptr && rubyStyle.rubyStroke2Width > 0.0f) {
-                if (rubyTransformed && animatedStroke2 != nullptr) {
+                if (rubyChar && rubyChar->stroke2Outline && animatedStroke2) {
+                    fillStrokeWithRealization(rubyChar->stroke2Realization.Get(),
+                        animatedStroke2, stroke2, true,
+                        rubyChar->stroke2RealizationTransform, realizationEligible);
+                } else if (rubyTransformed && animatedStroke2 != nullptr) {
                     fillCountedStroke(
                         animatedStroke2, stroke2, true
                     );
@@ -9416,12 +9415,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                 }
                 drawRubyGlyphLayers(
-                    rubyIndex, index, fill.Get(), stroke.Get(), stroke2.Get(),
-                    paintNeedsBodyProtection(
-                        after ? rubyStyle.rubyAfterFillPaint
-                              : rubyStyle.rubyBeforeFillPaint
-                    )
-                );
+                    rubyIndex, index, fill.Get(), stroke.Get(), stroke2.Get());
                 if (pushedUtopiaClip) {
                     context->PopAxisAlignedClip();
                 }
@@ -9643,12 +9637,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                     rubyIndex, unitIndex,
                                     layer == 2 ? brush.Get() : nullptr,
                                     layer == 1 ? brush.Get() : nullptr,
-                                    layer == 0 ? brush.Get() : nullptr,
-                                    paintNeedsBodyProtection(scanlinePaintFor(
-                                        sourceAfter ? rubyStyle.rubyAfterFillPaint
-                                                    : rubyStyle.rubyBeforeFillPaint
-                                    ))
-                                );
+                                    layer == 0 ? brush.Get() : nullptr);
                                 context->PopAxisAlignedClip();
                                 context->PopAxisAlignedClip();
                             }
