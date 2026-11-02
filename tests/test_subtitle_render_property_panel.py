@@ -2271,7 +2271,7 @@ def test_deleting_a_role_refreshes_the_lyrics_role_column(qapp, tmp_path):
     assert display_row is not None
     assert win._lyrics_panel._table.item(display_row, 1).text() == "角色方案A"
 
-    panel._confirm_role_deletion = lambda name: True
+    panel._confirm_role_deletion = lambda name: ""
     panel._singer_combo.setCurrentIndex(
         panel._singer_combo.findData("custom:角色方案A")
     )
@@ -2351,6 +2351,246 @@ def test_role_rename_and_its_references_undo_as_one_step(qapp, tmp_path):
     win._redo_edit()
     assert win._timing_track.role_options == ["角色方案A 1"]
     assert "角色方案A 1" in win._style.custom_style_schemes
+
+
+def test_deleting_a_role_can_migrate_its_references_to_another_role(qapp, tmp_path):
+    """删除弹窗选「迁移到 B」：歌词 / 副轨 / 导唱符 / 标题引用全部改指 B，一步撤销。"""
+
+    from krok_helper.subtitle_render.domain.timing import (
+        GuideSymbol,
+        guide_symbol_role_labels,
+    )
+
+    win, primary, chorus = _role_reference_window(
+        _FontMigrationSettingsProvider, tmp_path, "角色方案A"
+    )
+    panel = win._property_panel
+    panel._add_custom_scheme("角色方案B")
+    primary.lines[0].guide_symbol = GuideSymbol(count=1, role_labels=("角色方案A",))
+    win._style = replace(
+        win._style,
+        title_overlays=[
+            TitleOverlay(
+                text_template="AB",
+                char_role_labels=[["角色方案A", None]],
+                guide_symbols={0: GuideSymbol(count=1, role_labels=("角色方案A",))},
+            )
+        ],
+    )
+    panel.set_style(win._style)
+    win._undo_stack = []
+    panel._confirm_role_deletion = lambda name: "角色方案B"
+    panel._singer_combo.setCurrentIndex(
+        panel._singer_combo.findData("custom:角色方案A")
+    )
+
+    panel._delete_current_role()
+
+    assert primary.lines[0].chars[0].role_label == "角色方案B"
+    assert chorus.lines[0].chars[0].role_label == "角色方案B"
+    assert guide_symbol_role_labels(primary.lines[0].guide_symbol) == ("角色方案B",)
+    title = win._style.title_overlays[0]
+    assert title.char_role_labels == [["角色方案B", None]]
+    assert guide_symbol_role_labels(title.guide_symbols[0]) == ("角色方案B",)
+    assert "角色方案A" not in win._style.custom_style_schemes
+    assert "角色方案B" in win._style.custom_style_schemes
+    assert panel.role_names == ["角色方案B"]
+    assert win._merged_role_options() == ["角色方案B"]
+    # 删除后停在迁移目标上，方便接着编辑它。
+    assert panel.current_scheme_key() == "custom:角色方案B"
+    # 样式 + 轨道合成一步撤销（撤销会用快照替换轨道对象，按窗口当前轨道断言）。
+    assert win._undo_stack[-1][0] == "style_tracks"
+    win._undo_edit()
+    assert win._timing_track.lines[0].chars[0].role_label == "角色方案A"
+    assert win._extra_sources[0].track.lines[0].chars[0].role_label == "角色方案A"
+    assert "角色方案A" in win._style.custom_style_schemes
+    assert "角色方案A" in panel.role_names
+
+
+def test_role_registry_mirrors_the_scheme_table(qapp):
+    """方案表是角色全集的唯一事实源：外部写入的方案键登记进下拉，方案没了的名字不再显示。"""
+
+    panel = PropertyPanel()
+    panel.set_roles(["角色A"])
+    # 外部（物化 / 预设导入）直接往方案表写入一个新键，没有经过注册表。
+    panel.set_style(
+        replace(
+            panel.subtitle_style,
+            custom_style_schemes={
+                **panel.subtitle_style.custom_style_schemes,
+                "角色B": SubtitleStyleScheme(),
+            },
+        )
+    )
+    assert "角色B" not in panel.role_names
+
+    panel.merge_roles([])
+
+    assert panel.role_names == ["角色A", "角色B"]
+    assert panel._singer_combo.findData("custom:角色B") >= 0
+    assert TITLE_SCHEME_NAME not in panel.role_names
+
+    # 方案表里删掉「角色A」后，再同步一次注册表就不该再显示它，也不能被
+    # _ensure_role_schemes 复活成一个空壳方案。
+    schemes = dict(panel.subtitle_style.custom_style_schemes)
+    schemes.pop("角色A")
+    panel.set_style(replace(panel.subtitle_style, custom_style_schemes=schemes))
+    panel.merge_roles([])
+
+    assert panel.role_names == ["角色B"]
+    assert "角色A" not in panel.subtitle_style.custom_style_schemes
+    assert panel._singer_combo.findData("custom:角色A") == -1
+
+
+def test_materializing_a_role_registers_it_even_without_a_lyrics_track(qapp):
+    """纯标题工程（没有字幕源）里逐字符分配的角色也要进方案表与下拉。"""
+
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    assert win._active_track() is None
+
+    win._materialize_role_schemes({"标题角色"})
+
+    assert "标题角色" in win._style.custom_style_schemes
+    assert "标题角色" in win._property_panel.role_names
+
+
+def test_materializing_a_role_whose_scheme_already_exists_registers_it(qapp):
+    """方案在、注册表不在（孤儿方案）：名字再出现时必须重新登记进下拉。"""
+
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    panel = win._property_panel
+    win._style = replace(
+        win._style,
+        custom_style_schemes={
+            **win._style.custom_style_schemes,
+            "孤儿": SubtitleStyleScheme(fill_color="#123456"),
+        },
+    )
+    panel.set_style(win._style)
+    panel._role_controller.replace([])
+    assert "孤儿" not in panel.role_names
+
+    win._materialize_role_schemes({"孤儿"})
+
+    assert panel.role_names == ["孤儿"]
+    # 既有方案原样保留，不被自动建的空壳覆盖。
+    assert win._style.custom_style_schemes["孤儿"].fill_color == "#123456"
+
+
+def test_content_role_options_include_title_guide_symbol_roles(qapp):
+    """只挂在标题行前 / 行内导唱符上的角色也算「出现过」。"""
+
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._style = replace(
+        win._style,
+        title_overlays=[
+            TitleOverlay(
+                text_template="AB",
+                guide_symbols={0: GuideSymbol(count=1, role_labels=("行前",))},
+                inline_guide_symbols={
+                    (0, 1): GuideSymbol(count=1, role_labels=("行内",))
+                },
+            )
+        ],
+    )
+
+    assert win._content_role_options() == ["行前", "行内"]
+
+
+def test_undoing_a_role_assignment_registers_the_restored_role(qapp, tmp_path):
+    """撤销恢复出的角色名要重新物化进方案表并进下拉，且撤销期间不污染撤销栈。"""
+
+    win, primary, chorus = _role_reference_window(
+        _FontMigrationSettingsProvider, tmp_path, "角色方案A"
+    )
+    panel = win._property_panel
+    # 当前内容里已经没有任何地方引用「角色方案A」，只剩一条可撤销的分配记录。
+    primary.lines[0].chars[0].role_label = None
+    chorus.lines[0].chars[0].role_label = None
+    win._undo_stack = [("char_roles", 0, 0, ("角色方案A",), (None,))]
+    win._redo_stack = []
+    # 模拟方案表 / 注册表都已失去「角色方案A」（外部清理）。
+    schemes = dict(win._style.custom_style_schemes)
+    schemes.pop("角色方案A", None)
+    win._style = replace(win._style, custom_style_schemes=schemes)
+    panel.set_style(win._style)
+    panel._role_controller.replace([])
+    assert "角色方案A" not in panel.role_names
+
+    win._undo_edit()
+
+    assert primary.lines[0].chars[0].role_label == "角色方案A"
+    assert "角色方案A" in win._style.custom_style_schemes
+    assert "角色方案A" in panel.role_names
+    # 补建方案是修复性副作用：不新增撤销条目，被撤销的命令留在 redo 栈。
+    assert win._undo_stack == []
+    assert [entry[0] for entry in win._redo_stack] == ["char_roles"]
+
+    # 重做走同一批恢复处理器：栈保持干净，方案（已物化）与登记仍在。
+    win._redo_edit()
+
+    assert primary.lines[0].chars[0].role_label is None
+    assert [entry[0] for entry in win._undo_stack] == ["char_roles"]
+    assert win._redo_stack == []
+    assert "角色方案A" in win._style.custom_style_schemes
+    assert "角色方案A" in panel.role_names
+
+
+def test_role_delete_dialog_offers_other_roles_and_maps_the_choice(qapp, monkeypatch):
+    """迁移下拉 = 「回归全局默认」+ 其余角色（过滤掉被删角色），选中项映射到返回值。
+
+    正文沿用原确认框的两行文案：默认项与原文案一字不差，选了目标则第二行
+    改成「迁移到」；弹窗按最长文案预先撑开，切到长目标名时正文不被裁。
+    """
+
+    from krok_helper.subtitle_render.frontend.dialogs import fluent_dialogs as fd
+
+    long_name = "一个名字特别长的和声角色方案名称"
+    seen: dict[str, object] = {}
+
+    def fake_exec(self):
+        combo = self.findChild(ComboBox)
+        seen["items"] = [combo.itemText(i) for i in range(combo.count())]
+        seen["default_text"] = self.contentLabel.text()
+        combo.setCurrentIndex(3)
+        label = self.contentLabel
+        seen["long_text"] = label.text()
+        seen["long_fits"] = label.width() >= max(
+            label.fontMetrics().horizontalAdvance(line)
+            for line in label.text().split("\n")
+        )
+        self.findChild(CheckBox).setChecked(True)
+        return 1
+
+    monkeypatch.setattr(fd.FluentMessageDialog, "exec", fake_exec)
+
+    confirmed, target, dont_ask = fd.fluent_role_delete_dialog(
+        None, "角色A", ["角色A", "角色B", " 角色C ", "角色B", "", long_name]
+    )
+
+    assert seen["items"] == ["回归全局默认", "角色B", "角色C", long_name]
+    assert seen["default_text"] == (
+        "确定删除角色「角色A」吗？\n引用该角色的歌词、标题与导唱符会回到默认样式。"
+    )
+    assert seen["long_text"] == (
+        f"确定删除角色「角色A」吗？\n引用该角色的歌词、标题与导唱符会迁移到「{long_name}」。"
+    )
+    assert seen["long_fits"] is True
+    assert (confirmed, target, dont_ask) == (True, long_name, True)
+
+    # 首项（回归全局默认）映射为 None；取消时 confirmed 为 False。
+    def fake_exec_cancel(self):
+        self.findChild(ComboBox).setCurrentIndex(0)
+        return 0
+
+    monkeypatch.setattr(fd.FluentMessageDialog, "exec", fake_exec_cancel)
+    confirmed, target, dont_ask = fd.fluent_role_delete_dialog(None, "角色A", ["角色B"])
+    assert (confirmed, target, dont_ask) == (False, None, False)
 
 
 def test_layout_deletion_repairs_all_tracks_in_combined_style_undo(qapp, tmp_path):
@@ -8659,7 +8899,7 @@ def test_property_panel_delete_role_keeps_same_named_preset(qapp):
 
     assert panel.subtitle_style.custom_style_schemes["fhana"].fill_color == "#123456"
 
-    panel._confirm_role_deletion = lambda name: True
+    panel._confirm_role_deletion = lambda name: ""
     panel._delete_current_role()
 
     assert panel._singer_combo.findData("custom:fhana") == -1
@@ -8680,17 +8920,20 @@ def test_property_panel_role_delete_confirmation_and_session_suppression(
 
     def cancel_with_dont_ask(*args, **kwargs):
         calls.append((args, kwargs))
-        return False, True
+        return False, None, True
 
-    monkeypatch.setattr(pp, "fluent_question_with_checkbox", cancel_with_dont_ask)
+    monkeypatch.setattr(pp, "fluent_role_delete_dialog", cancel_with_dont_ask)
     panel._delete_current_role()
 
     assert len(calls) == 1
+    # 弹窗收到的候选迁移目标不含被删角色自己。
+    assert calls[0][0][1] == "角色A"
+    assert list(calls[0][0][2]) == ["角色B"]
     assert "角色A" in panel.role_names
     assert pp._ROLE_DELETE_CONFIRM_SUPPRESSED is False
 
     monkeypatch.setattr(
-        pp, "fluent_question_with_checkbox", lambda *a, **k: (True, True)
+        pp, "fluent_role_delete_dialog", lambda *a, **k: (True, None, True)
     )
     panel._delete_current_role()
 
@@ -8701,7 +8944,7 @@ def test_property_panel_role_delete_confirmation_and_session_suppression(
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色B"))
     monkeypatch.setattr(
         pp,
-        "fluent_question_with_checkbox",
+        "fluent_role_delete_dialog",
         lambda *a, **k: pytest.fail("suppressed deletion must not ask again"),
     )
     panel._delete_current_role()
@@ -8729,11 +8972,9 @@ def test_property_panel_delete_role_aborts_when_project_changed_during_prompt(
     def switch_project_then_confirm(*_args, **_kwargs):
         # 对话框打开期间宿主切到另一个工程（代号推进）。
         panel.set_project_generation(8)
-        return True, True
+        return True, None, True
 
-    monkeypatch.setattr(
-        pp, "fluent_question_with_checkbox", switch_project_then_confirm
-    )
+    monkeypatch.setattr(pp, "fluent_role_delete_dialog", switch_project_then_confirm)
     panel._delete_current_role()
 
     assert panel.role_names == ["角色A"]
@@ -8758,14 +8999,42 @@ def test_property_panel_delete_role_aborts_when_target_changed_during_prompt(
         panel._singer_combo.setCurrentIndex(
             panel._singer_combo.findData("custom:角色B")
         )
-        return True, True
+        return True, None, True
 
-    monkeypatch.setattr(
-        pp, "fluent_question_with_checkbox", switch_target_then_confirm
-    )
+    monkeypatch.setattr(pp, "fluent_role_delete_dialog", switch_target_then_confirm)
     panel._delete_current_role()
 
     assert panel.role_names == ["角色A", "角色B"]
+
+
+def test_property_panel_delete_role_aborts_when_migration_target_vanished(
+    qapp, monkeypatch
+):
+    """确认期间迁移目标角色被删掉 / 改名，不能把引用改写成悬空名。"""
+
+    monkeypatch.setattr(pp, "_ROLE_DELETE_CONFIRM_SUPPRESSED", False)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        pp.InfoBar,
+        "warning",
+        lambda **kwargs: warnings.append(str(kwargs.get("content") or "")),
+    )
+    panel = PropertyPanel()
+    panel.set_roles(["角色A", "角色B"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
+
+    def pick_vanished_target(*_args, **_kwargs):
+        # 对话框打开期间「角色B」被另一条路径删掉了。
+        panel._role_controller.remove("角色B")
+        return True, "角色B", True
+
+    monkeypatch.setattr(pp, "fluent_role_delete_dialog", pick_vanished_target)
+    panel._delete_current_role()
+
+    assert "角色A" in panel.role_names
+    assert "角色A" in panel.subtitle_style.custom_style_schemes
+    assert any("迁移目标" in text for text in warnings)
+    assert pp._ROLE_DELETE_CONFIRM_SUPPRESSED is False
 
 
 def test_property_panel_delete_role_recovers_when_style_update_is_gated(qapp):
@@ -8777,7 +9046,7 @@ def test_property_panel_delete_role_recovers_when_style_update_is_gated(qapp):
     panel = PropertyPanel()
     panel.set_roles(["角色A"])
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
-    panel._confirm_role_deletion = lambda name: True
+    panel._confirm_role_deletion = lambda name: ""
     panel._syncing = True
 
     panel._delete_current_role()
@@ -8864,7 +9133,7 @@ def test_undoing_role_creation_and_deletion_reconciles_the_role_registry(
     panel._add_custom_scheme("角色A")
     win._lyrics_panel.roleChangeRequested.emit([0], "角色A")
     time.sleep(1.3)
-    panel._confirm_role_deletion = lambda name: True
+    panel._confirm_role_deletion = lambda name: ""
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
     panel._delete_current_role()
     assert panel.role_names == []

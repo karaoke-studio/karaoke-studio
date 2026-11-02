@@ -225,6 +225,54 @@ def test_existing_roles_are_kept(window) -> None:
     assert _labels(track.lines[0]) == "CXCC"
 
 
+def test_unreferenced_roles_survive_auto_chorus(window) -> None:
+    """自动识别和声不能把当前没人引用、但配色方案还在的角色清出下拉。"""
+    track = _track(["（あ）"])
+    window._timing_track = track
+    # 用户在面板新建了「主唱」，还没分配给任何字。
+    window._property_panel._add_custom_scheme("主唱")
+    assert "主唱" in window._property_panel.role_names
+
+    window._apply_auto_chorus_roles(
+        track, role="和声", begin_chars="（(", end_chars="）)", overwrite=False
+    )
+
+    assert "主唱" in window._property_panel.role_names
+    assert "主唱" in window._style.custom_style_schemes
+    assert "和声" in window._property_panel.role_names
+
+
+def test_a_chorus_role_with_an_existing_scheme_is_registered(window) -> None:
+    """和声角色已有配色方案但不在下拉里（孤儿方案）时，跑完必须回到下拉。
+
+    这是规格锁定而非回归守卫：旧实现靠结尾整表替换也能把它登记回去，
+    真正的回归守卫是 test_unreferenced_roles_survive_auto_chorus（旧实现会
+    把没人引用的角色清掉）。这里额外盯住既有方案不被空壳覆盖。
+    """
+    from dataclasses import replace
+
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+
+    track = _track(["（あ）"])
+    window._timing_track = track
+    scheme = SubtitleStyleScheme(fill_color="#123456")
+    window._style = replace(
+        window._style,
+        custom_style_schemes={**window._style.custom_style_schemes, "和声": scheme},
+    )
+    window._property_panel.set_style(window._style)
+    window._property_panel._role_controller.replace([])
+    assert "和声" not in window._property_panel.role_names
+
+    window._apply_auto_chorus_roles(
+        track, role="和声", begin_chars="（(", end_chars="）)", overwrite=False
+    )
+
+    assert "和声" in window._property_panel.role_names
+    # 既有方案原样保留，没被自动建的空壳覆盖。
+    assert window._style.custom_style_schemes["和声"].fill_color == "#123456"
+
+
 def test_nothing_to_do_returns_no_rows_and_no_undo(window) -> None:
     """没有括号时不该留下一条空的撤销记录。"""
     track = _track(["月を見あげた"])

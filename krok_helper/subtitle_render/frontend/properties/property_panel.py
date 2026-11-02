@@ -105,7 +105,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_get_text,
     fluent_info,
     fluent_question,
-    fluent_question_with_checkbox,
+    fluent_role_delete_dialog,
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.registry import (
@@ -1843,15 +1843,43 @@ class PropertyPanel(QWidget):
         self._sync_font_preview()
 
     def set_roles(self, role_names: list[str]) -> None:
-        """Replace the current project's role registry and refresh navigation."""
+        """Replace the current project's role registry and refresh navigation.
+
+        传入的名字是「出现的角色」：缺方案的会被 ``_ensure_role_schemes`` 补建。
+        随后注册表会按方案表对齐（``_reconcile_registry_with_schemes``），所以
+        本方法只决定顺序，**不能把注册表缩到方案表以下**——方案还在的角色
+        即使不在 ``role_names`` 里也会留在下拉；要清掉角色得走删除。
+        """
         previous = self._role_controller.names
         self._role_controller.replace(role_names)
         self._sync_role_registry(previous)
+
+    def _reconcile_registry_with_schemes(self) -> None:
+        """把注册表对齐成方案表的镜像：加漏键、删悬空键，保现有顺序。
+
+        方案表（``custom_style_schemes``，除「标题」）是角色全集的唯一事实源；
+        注册表只负责显示顺序。任何经 ``set_roles`` / ``merge_roles`` 的变更
+        之后都要对齐一次：外部写入的方案键（物化 / 预设导入）登记进下拉，
+        方案已不存在的注册项不再显示。
+        """
+        scheme_keys = [
+            name
+            for name in self._style.custom_style_schemes
+            if name != TITLE_SCHEME_NAME
+        ]
+        scheme_set = set(scheme_keys)
+        reconciled = [
+            name for name in self._role_controller.names if name in scheme_set
+        ]
+        seen = set(reconciled)
+        reconciled.extend(name for name in scheme_keys if name not in seen)
+        self._role_controller.replace(reconciled)
 
     def _sync_role_registry(self, previous: list[str]) -> None:
         """Refresh role-backed controls and publish one model change."""
         scheme_names_before = set(self._style.custom_style_schemes)
         self._ensure_role_schemes()
+        self._reconcile_registry_with_schemes()
         current_key = self._current_scheme_key()
         schemes_changed = set(self._style.custom_style_schemes) != scheme_names_before
         self._syncing = True
@@ -1872,6 +1900,10 @@ class PropertyPanel(QWidget):
     def merge_roles(self, role_names: list[str]) -> None:
         """Add newly discovered roles without dropping earlier project roles."""
         previous = self._role_controller.names
+        # 先按方案表剪掉已失去方案的旧注册项，再并入本次出现的名字：传入的
+        # 名字是「出现的角色」，要补建方案；旧项没了方案说明外部已删，不能
+        # 借 _ensure_role_schemes 复活。
+        self._reconcile_registry_with_schemes()
         self._role_controller.merge(role_names)
         self._sync_role_registry(previous)
 
@@ -6030,12 +6062,16 @@ class PropertyPanel(QWidget):
         name = self._current_custom_scheme_name()
         if name is None or name == TITLE_SCHEME_NAME:
             return  # 全局默认 / 内置「标题」方案不能删
-        if not self._confirm_role_deletion(name):
+        decision = self._confirm_role_deletion(name)
+        if decision is None:
             return
+        # "" = 回归全局默认（引用改写为 None）；非空 = 迁移到该角色。
+        target = decision or None
         previous_roles = self._role_controller.names
         changes = self._role_controller.delete_changes(self._style, name)
-        # 删除角色后，引用它的句子回到默认样式，而不是留下悬空名。
-        self.roleReferencesRemapped.emit(name, None)
+        # 删除角色后，引用它的句子迁移到目标角色或回到默认样式，而不是留下
+        # 悬空名。迁移与改名共用宿主那条改写链（内容 / 标题 / 扫字线 / 粒子）。
+        self.roleReferencesRemapped.emit(name, target)
         self._update_style(**changes)
         # 兜底：_update_style 可能被自身的 _syncing 门挡掉（例如删除按钮在
         # 别的同步流程里被间接触发）。那样方案表会留着旧名，内容引用也不会
@@ -6046,46 +6082,48 @@ class PropertyPanel(QWidget):
             remaining = dict(schemes)
             remaining.pop(name, None)
             self._style = replace(self._style, custom_style_schemes=remaining)
-            self.roleReferencesRemapped.emit(name, None)
+            self.roleReferencesRemapped.emit(name, target)
             self.styleChanged.emit(self._style)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
         try:
-            self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)
+            self._refresh_scheme_combo(
+                f"{_CUSTOM_SCHEME_PREFIX}{target}" if target else _GLOBAL_SCHEME_KEY
+            )
         finally:
             self._syncing = False
         # 刷新下拉时屏蔽了 currentIndexChanged；这里补发一次选择变化，
-        # 让宿主把 _selected_scheme_key 从已删除的 custom:旧名 收回 global，
-        # 不然偏好 / 工程里会一直记着一个查不到方案的目标。
+        # 让宿主把 _selected_scheme_key 从已删除的 custom:旧名 收回 global
+        # （或停在迁移目标），不然偏好 / 工程里会一直记着一个查不到方案的目标。
         self.schemeSelectionChanged.emit(self.current_scheme_key())
         self._sync_subtitle_scheme_controls()
         self._sync_title_controls()
 
-    def _confirm_role_deletion(self, name: str) -> bool:
-        """删除角色的二次确认；勾选「本次运行内不再提醒」后进程内跳过。
+    def _confirm_role_deletion(self, name: str) -> Optional[str]:
+        """删除角色的二次确认，返回迁移目标；``None`` = 取消。
+
+        返回 ``""`` 表示回归全局默认，非空字符串表示迁移到该角色。勾选
+        「本次运行内不再提醒」后进程内跳过弹窗并按「回归全局默认」执行——
+        不记忆迁移目标：切到别的工程后目标角色可能不存在，静默迁移会把
+        引用改写成悬空名。
 
         确认框不是窗口模态：打开期间主窗口仍可切工程 / 换编辑目标。返回
         前必须核对工程代号与删除目标仍是发起确认时的那个，否则取消这次
         删除——特别是「切到另一个恰好有同名角色的工程」时，按名字删会把
-        新工程里的角色误删。
+        新工程里的角色误删。迁移目标同样要在确认后复核仍是可用角色。
         """
         global _ROLE_DELETE_CONFIRM_SUPPRESSED
         if _ROLE_DELETE_CONFIRM_SUPPRESSED:
-            return True
+            return ""
         generation = self._project_generation
-        confirmed, dont_ask = fluent_question_with_checkbox(
+        confirmed, target, dont_ask = fluent_role_delete_dialog(
             self,
-            "删除角色",
-            f"确定删除角色「{name}」吗？\n"
-            "引用该角色的歌词、标题与导唱符会回到默认样式。",
-            "本次运行内不再提醒",
-            yes_text="删除",
-            no_text="取消",
-            default_cancel=True,
+            name,
+            [role for role in self._role_controller.names if role != name],
         )
         if not confirmed:
-            return False
+            return None
         if self._project_generation != generation:
             InfoBar.warning(
                 title="删除已取消",
@@ -6093,7 +6131,7 @@ class PropertyPanel(QWidget):
                 parent=self,
                 duration=4000,
             )
-            return False
+            return None
         if (
             self._current_custom_scheme_name() != name
             or name not in self._role_controller.names
@@ -6105,10 +6143,23 @@ class PropertyPanel(QWidget):
                 parent=self,
                 duration=4000,
             )
-            return False
+            return None
+        if target is not None and (
+            target == name
+            or target == TITLE_SCHEME_NAME
+            or target not in self._role_controller.names
+            or target not in self._style.custom_style_schemes
+        ):
+            InfoBar.warning(
+                title="删除已取消",
+                content=f"迁移目标「{target}」已不可用，未删除「{name}」。",
+                parent=self,
+                duration=4000,
+            )
+            return None
         if dont_ask:
             _ROLE_DELETE_CONFIRM_SUPPRESSED = True
-        return True
+        return target if target is not None else ""
 
     def _sync_subtitle_scheme_controls(
         self, groups: Optional[set[str]] = None

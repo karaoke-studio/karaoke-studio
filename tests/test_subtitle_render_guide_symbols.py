@@ -2060,6 +2060,24 @@ def test_track_role_assignment_updates_guide_and_character_roles_together():
     assert track.lines[0].chars[0].role_label == "和声"
 
 
+def test_track_role_options_include_inline_guide_symbol_roles():
+    """只挂在行内导唱符上的角色也算「出现过」，与改名 / 删除的改写覆盖面一致。"""
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("甲", 1000), TimingChar("乙", 1500)],
+                guide_symbol=GuideSymbol(count=1, role_labels=("行前",)),
+                inline_guide_symbols={
+                    1: GuideSymbol(count=1, role_labels=("行内",)),
+                },
+            )
+        ]
+    )
+    track.lines[0].chars[0].role_label = "正文"
+
+    assert track.role_options == ["行前", "行内", "正文"]
+
+
 def test_batch_role_button_reads_project_roles_when_clicked(monkeypatch):
     track = TimingTrack(
         lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])]

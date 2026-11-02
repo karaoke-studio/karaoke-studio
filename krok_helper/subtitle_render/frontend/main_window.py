@@ -1247,6 +1247,9 @@ class SubtitleRenderWindow(QWidget):
         # 字幕轨道编辑的撤销/重做栈：兼容显示窗口四元组与逐行动画批量命令。
         self._undo_stack: list[tuple] = []
         self._redo_stack: list[tuple] = []
+        # 正在执行撤销/重做恢复：期间触发的样式回流（如为恢复出的角色名
+        # 自动补建配色方案）属于修复性副作用，不得入栈、也不得清空 redo。
+        self._in_history_restore = False
         # 副字幕源（N3 多歌词文件，如コーラス轨）与主字幕同帧叠绘。
         self._active_source_index = 0
         """歌词列表当前显示的源：0 = 主字幕，k >= 1 = ``_extra_sources[k-1]``。"""
@@ -2586,7 +2589,10 @@ class SubtitleRenderWindow(QWidget):
             self._preview_panel.set_video_source(None)
             self._preview_panel.set_populated(False)
             self._video_settings_panel.set_populated(False)
-            self._property_panel.set_roles([])
+            # 角色注册表不在这里清：它是方案表的镜像，set_roles([]) 会被面板
+            # 按当前（旧工程）方案表重新填满，只多发一次 rolesChanged；调用方
+            # 紧接着的 _apply_project_data → _apply_project_role_options 会按
+            # 新工程的方案表重建它。
             # 播放条 + 字幕轨道复位
             self._preview_window_controller.forget_position()
             self._transport_bar.set_audio_source(None)
@@ -5654,8 +5660,9 @@ class SubtitleRenderWindow(QWidget):
             self._margin_check_timer.start()
         self._schedule_persisted_state_save()
         self._mark_project_dirty()
-        # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈。
-        if previous is not style:
+        # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈；
+        # 撤销/重做恢复期间的样式回流（补建配色方案等修复性副作用）同样不入栈。
+        if previous is not style and not self._in_history_restore:
             if affected_pages or role_remap_applied:
                 tracks_after = tuple(
                     deepcopy(track) for track in self._all_tracks()
@@ -6636,6 +6643,18 @@ class SubtitleRenderWindow(QWidget):
             return False
         for row, value in zip(rows, values):
             track.lines[row].guide_symbol = value
+        # 导唱符本身也按名字挂角色：恢复出的符号若带标签，同样要物化登记
+        # （目前的生产方导入的是不带标签的新符号，这里是与其余恢复处理器
+        # 一致的加固）。
+        restored_labels = {
+            label
+            for value in values
+            if value is not None
+            for label in guide_symbol_role_labels(value)
+            if label
+        }
+        if restored_labels:
+            self._materialize_role_schemes(restored_labels)
         if track_index == self._active_source_index:
             self._refresh_after_guide_symbols_changed(rows)
         else:
@@ -6661,6 +6680,13 @@ class SubtitleRenderWindow(QWidget):
         line.guide_symbol = symbol
         for char, label in zip(line.chars, labels):
             char.role_label = label
+        # 恢复出的角色名重新物化入方案表并登记进下拉（方案还在时幂等）。
+        restored_labels = {label for label in labels if label}
+        if symbol is not None:
+            restored_labels.update(
+                label for label in guide_symbol_role_labels(symbol) if label
+            )
+        self._materialize_role_schemes(restored_labels)
         if track_index == self._active_source_index:
             self._refresh_after_guide_symbols_changed((row,))
         else:
@@ -6702,6 +6728,8 @@ class SubtitleRenderWindow(QWidget):
         line.inline_guide_symbols = inline_symbols
         for char, label in zip(line.chars, labels):
             char.role_label = label
+        # 恢复出的角色名重新物化入方案表并登记进下拉（方案还在时幂等）。
+        self._materialize_role_schemes({label for label in labels if label})
         if track_index == self._active_source_index:
             self._refresh_after_guide_symbols_changed((row,))
         else:
@@ -6760,6 +6788,7 @@ class SubtitleRenderWindow(QWidget):
             return False
         if len(rows) != len(values) or any(not 0 <= row < len(track.lines) for row in rows):
             return False
+        restored_labels: set[str] = set()
         for row, value in zip(rows, values):
             if not isinstance(value, tuple) or len(value) != 2:
                 return False
@@ -6769,6 +6798,13 @@ class SubtitleRenderWindow(QWidget):
             track.lines[row].guide_symbol = symbol
             for char, label in zip(track.lines[row].chars, labels):
                 char.role_label = label
+            restored_labels.update(label for label in labels if label)
+            if symbol is not None:
+                restored_labels.update(
+                    label for label in guide_symbol_role_labels(symbol) if label
+                )
+        # 恢复出的角色名重新物化入方案表并登记进下拉（方案还在时幂等）。
+        self._materialize_role_schemes(restored_labels)
         if track_index == self._active_source_index:
             self._refresh_after_guide_symbols_changed(rows)
         else:
@@ -6778,11 +6814,19 @@ class SubtitleRenderWindow(QWidget):
 
     def _undo_edit(self) -> None:
         """Ctrl+Z：撤销最近一次样式（字体/布局等）、轨道时间或逐行特效编辑。"""
-        undo_edit(self._undo_stack, self._redo_stack, self)
+        self._in_history_restore = True
+        try:
+            undo_edit(self._undo_stack, self._redo_stack, self)
+        finally:
+            self._in_history_restore = False
 
     def _redo_edit(self) -> None:
         """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的样式或字幕轨道编辑。"""
-        redo_edit(self._undo_stack, self._redo_stack, self)
+        self._in_history_restore = True
+        try:
+            redo_edit(self._undo_stack, self._redo_stack, self)
+        finally:
+            self._in_history_restore = False
 
     def _clear_undo_history(self) -> None:
         self._undo_stack.clear()
@@ -8269,8 +8313,9 @@ class SubtitleRenderWindow(QWidget):
 
         预设库只是可复用模板，不代表当前项目里的角色；但用户通过预设库
         “导入为项目角色”的方案已经进入属性面板角色导航，必须在首次分配前
-        同步到左侧歌词表格。直接读取 ``role_names`` 还能排除 N3 覆盖后残留的
-        旧 LRC 标签，因为 ``set_roles`` 会以当前内容角色重建该列表。
+        同步到左侧歌词表格。``role_names`` 是方案表的镜像（见面板
+        ``_reconcile_registry_with_schemes``），内容反推只用来兜住尚未物化的
+        名字——正常流程下两者一致，并集只是防御。
         """
         if hasattr(self, "_property_panel"):
             options = self._property_panel.role_names
@@ -8298,6 +8343,18 @@ class SubtitleRenderWindow(QWidget):
                 title.text_template, title.char_role_labels
             ):
                 for label in row:
+                    name = str(label or "").strip()
+                    if name and name != TITLE_SCHEME_NAME and name not in seen:
+                        seen.add(name)
+                        options.append(name)
+            # 标题的行前 / 行内导唱符同样按名字引用角色（改名 / 删除的改写
+            # 链也覆盖它们），这里漏扫会让只挂在导唱符上的角色对「出现的
+            # 角色必须入方案表」的统计不可见。
+            for symbol in (
+                *title.guide_symbols.values(),
+                *title.inline_guide_symbols.values(),
+            ):
+                for label in guide_symbol_role_labels(symbol):
                     name = str(label or "").strip()
                     if name and name != TITLE_SCHEME_NAME and name not in seen:
                         seen.add(name)
@@ -8583,12 +8640,12 @@ class SubtitleRenderWindow(QWidget):
         for row, labels in zip(rows, new_values):
             for ch, label in zip(track.lines[row].chars, labels):
                 ch.role_label = label
+        # 全新的角色名靠 _materialize_role_schemes → merge_roles →
+        # _ensure_role_schemes 建出配色方案（不建 painter 解析不到、颜色不会
+        # 变）。它会另外留一条 style 撤销记录（"新建了一个配色方案"本来就该
+        # 能单独撤销），排在角色那条前面，所以第一次撤销撤的仍然是角色分配。
+        # merge 只增不减：暂时没有字符引用的角色（配色方案还在）不会被清出下拉。
         self._materialize_role_schemes({role})
-        # 全新的角色名要靠 set_roles → _ensure_role_schemes 才会真的建出配色方案，
-        # 不建 painter 解析不到、颜色不会变。它会另外留一条 style 撤销记录（"新建了
-        # 一个配色方案"本来就该能单独撤销），排在角色那条前面，所以第一次撤销撤的
-        # 仍然是角色分配。
-        self._property_panel.set_roles(self._content_role_options())
         self._undo_stack.append(
             (
                 "char_roles_batch",
@@ -9381,47 +9438,48 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_after_role_labels_changed(row)
 
     def _materialize_role_schemes(self, labels: set[str]) -> None:
-        """把还没有配色方案的角色名物化进 custom_style_schemes。
+        """把出现的角色名物化进方案表并登记进角色下拉。
 
         预设库命中的深拷贝预设；全新名字（对话框「＋新建」）交给
-        ``set_roles`` → ``_ensure_role_schemes`` 按当前面板值自动建。
+        ``merge_roles`` → ``_ensure_role_schemes`` 按当前面板值自动建。
         不物化 painter 就解析不到，改了角色毫无视觉变化。
+        方案表是角色全集的唯一事实源：名字只要出现（正文 / 导唱符 / 标题 /
+        撤销恢复）就必须有方案并进下拉，与当前是否加载了字幕源无关。
         """
         missing = [label for label in labels if label not in self._style.custom_style_schemes]
-        if not missing:
-            return
-        from_presets: dict[str, SubtitleStyleScheme] = {}
-        for label in missing:
-            matches = [
-                preset
-                for preset in self._style_presets.values()
-                if preset.name == label
-            ]
-            if len(matches) == 1:
-                # 预设库存的是基准高度下的值，物化进工程时换算到工程输出高度。
-                from_presets[label] = rescale_scheme_font_sizes(
-                    matches[0].scheme,
-                    matches[0].reference_height,
-                    self._style.font_reference_height,
-                )
-        if from_presets:
-            schemes = dict(self._style.custom_style_schemes)
-            schemes.update(from_presets)
-            self._style = replace(self._style, custom_style_schemes=schemes)
-            self._property_panel.set_style(self._style)
-            self._property_panel.mark_style_relayout_full()
-            self._preview_panel.set_style(self._style)
-            self._lyrics_panel.set_style(self._style)
-            self._schedule_persisted_state_save()
-        if any(label not in from_presets for label in missing):
-            track = self._active_track()
-            if track is not None:
-                # 触发属性面板为新角色自动建方案（styleChanged 回流 _apply_style）
-                self._property_panel.merge_roles(
-                    self._content_role_options()
-                    + [label for label in missing if label not in self._content_role_options()]
-                )
-                self._lyrics_panel.set_role_options(self._merged_role_options())
+        if missing:
+            from_presets: dict[str, SubtitleStyleScheme] = {}
+            for label in missing:
+                matches = [
+                    preset
+                    for preset in self._style_presets.values()
+                    if preset.name == label
+                ]
+                if len(matches) == 1:
+                    # 预设库存的是基准高度下的值，物化进工程时换算到工程输出高度。
+                    from_presets[label] = rescale_scheme_font_sizes(
+                        matches[0].scheme,
+                        matches[0].reference_height,
+                        self._style.font_reference_height,
+                    )
+            if from_presets:
+                schemes = dict(self._style.custom_style_schemes)
+                schemes.update(from_presets)
+                self._style = replace(self._style, custom_style_schemes=schemes)
+                self._property_panel.set_style(self._style)
+                self._property_panel.mark_style_relayout_full()
+                self._preview_panel.set_style(self._style)
+                self._lyrics_panel.set_style(self._style)
+                self._schedule_persisted_state_save()
+        # 无条件登记：merge → ensure 给无方案的名字自动建方案（styleChanged
+        # 回流 _apply_style），面板随后的 reconcile 把方案表全量镜像进下拉
+        # （含上面预设物化出的键）。标题写回发生在这之后，新标签要显式带上。
+        content_roles = self._content_role_options()
+        self._property_panel.merge_roles(
+            content_roles
+            + [label for label in labels if label and label not in content_roles]
+        )
+        self._lyrics_panel.set_role_options(self._merged_role_options())
 
     def _refresh_after_role_labels_changed(self, rows: int | tuple[int, ...]) -> None:
         # track 是就地修改的，预览（含异步渲染 worker）不会自己发现——
@@ -9453,6 +9511,8 @@ class SubtitleRenderWindow(QWidget):
             return False
         for ch, label in zip(track.lines[row].chars, labels):
             ch.role_label = label
+        # 恢复出的角色名重新物化入方案表并登记进下拉（方案还在时幂等）。
+        self._materialize_role_schemes({label for label in labels if label})
         if track_index == 0 and self._timing_track is not None:
             self._preview_panel.set_track(self._timing_track)
         else:
@@ -9483,9 +9543,13 @@ class SubtitleRenderWindow(QWidget):
                 or len(labels) != len(track.lines[row].chars)
             ):
                 return False
+        restored_labels: set[str] = set()
         for row, labels in zip(rows, values):
             for ch, label in zip(track.lines[row].chars, labels):
                 ch.role_label = label
+            restored_labels.update(label for label in labels if label)
+        # 恢复出的角色名重新物化入方案表并登记进下拉（方案还在时幂等）。
+        self._materialize_role_schemes(restored_labels)
         if track_index == 0 and self._timing_track is not None:
             self._preview_panel.set_track(self._timing_track)
         else:

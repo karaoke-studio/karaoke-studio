@@ -3671,7 +3671,14 @@ def test_char_role_dialog_identifies_same_color_schemes_by_name(qapp):
 
 
 def test_char_role_options_match_current_property_panel_roles(qapp, monkeypatch, tmp_path):
-    """导入覆盖逐字标签后，不应把旧歌词标签留下的预设继续列为可分配角色。"""
+    """逐字符编辑器的可选角色与角色导航同源：两边都以方案表为准。
+
+    方案表是角色全集的唯一事实源。首次 ``set_roles`` 已把旧歌词标签物化成
+    项目方案，之后内容被导入覆盖，这些方案仍在项目里，就仍是可分配角色
+    （要清掉得由用户删除，删除时可迁移）；新出现的标签则被物化并登记。
+    真实 N3 导入不会物化过渡标签——``_apply_project_role_options`` 在
+    payload 覆盖完标签之后才跑。
+    """
     monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
     win = _make_window(qapp, monkeypatch)
     track = TimingTrack(
@@ -3688,15 +3695,20 @@ def test_char_role_options_match_current_property_panel_roles(qapp, monkeypatch,
     )
     win._timing_track = track
     win._property_panel.set_roles(track.role_options)
+    assert set(win._style.custom_style_schemes) >= {"1", "裏声", "标准配色2"}
 
-    # 模拟 N3 的 char_role_labels 覆盖：当前导航只剩实际可用的两个角色，
-    # 但初次载入歌词时自动生成的旧预设仍留在 preset 库中。
+    # 模拟 N3 的 char_role_labels 覆盖：内容里只剩两个标签，其中一个是新名字。
     track.lines[0].chars[0].role_label = "1"
     track.lines[0].chars[1].role_label = "【裏声】"
     track.lines[0].chars[2].role_label = None
     win._property_panel.set_roles(track.role_options)
 
-    assert win._merged_role_options() == ["1", "【裏声】"]
+    panel_roles = win._property_panel.role_names
+    assert panel_roles == ["1", "【裏声】", "裏声", "标准配色2"]
+    assert win._merged_role_options() == panel_roles
+    assert set(panel_roles) == {
+        name for name in win._style.custom_style_schemes if name != TITLE_SCHEME_NAME
+    }
 
 
 def test_imported_project_role_is_immediately_available_in_lyrics_panel(

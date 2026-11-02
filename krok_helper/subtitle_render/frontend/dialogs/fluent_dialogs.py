@@ -151,6 +151,90 @@ def fluent_question_with_checkbox(
     return confirmed, checkbox.isChecked()
 
 
+def fluent_role_delete_dialog(
+    parent: Optional[QWidget],
+    name: str,
+    target_options: Sequence[str],
+    *,
+    checkbox_text: str = "本次运行内不再提醒",
+    yes_text: str = "删除",
+    no_text: str = "取消",
+) -> tuple[bool, Optional[str], bool]:
+    """删除角色确认框：选择把引用迁移到另一角色，或回归全局默认。
+
+    返回 ``(confirmed, target, dont_ask)``：``target`` 为 ``None`` 表示回归
+    全局默认，否则为迁移目标角色名；``target_options`` 里与被删角色同名的
+    项会被过滤。「本次运行内不再提醒」是否记忆由调用方决定（本函数不落盘）。
+
+    正文沿用原确认框的两行文案，第二行随迁移目标变化（默认项与原文案一致）。
+    """
+
+    def message(target: Optional[str]) -> str:
+        if target is None:
+            return (
+                f"确定删除角色「{name}」吗？\n"
+                "引用该角色的歌词、标题与导唱符会回到默认样式。"
+            )
+        return (
+            f"确定删除角色「{name}」吗？\n"
+            f"引用该角色的歌词、标题与导唱符会迁移到「{target}」。"
+        )
+
+    # 首项恒为「回归全局默认」（target=None）；其余为候选迁移目标，
+    # 被删角色自己不能做目标。
+    targets: list[Optional[str]] = [None]
+    seen: set[str] = {str(name)}
+    for role in target_options:
+        role = str(role).strip()
+        if not role or role in seen:
+            continue
+        seen.add(role)
+        targets.append(role)
+
+    dialog = FluentMessageDialog("删除角色", message(None), parent)
+    dialog.yesButton.setText(yes_text)
+    dialog.cancelButton.setText(no_text)
+
+    row = QHBoxLayout()
+    row.addWidget(BodyLabel("迁移到：", dialog))
+    combo = ComboBox(dialog)
+    combo.addItem("回归全局默认")
+    for role in targets[1:]:
+        combo.addItem(role)
+    row.addWidget(combo, 1)
+    checkbox = CheckBox(checkbox_text, dialog)
+    dialog.textLayout.addLayout(row)
+    dialog.textLayout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def current_target() -> Optional[str]:
+        index = combo.currentIndex()
+        return targets[index] if 0 <= index < len(targets) else None
+
+    def sync_message(*_args) -> None:
+        dialog.content = message(current_target())
+        dialog._adjustText()
+
+    combo.currentIndexChanged.connect(sync_message)
+    # Dialog 构造时 setFixedSize(240, 192)，之后只会随布局最小尺寸长大、
+    # 不会缩回；宽度由正文最长的一行决定。先按最长的一种文案撑开并锁定，
+    # 再换回当前选项的文案：切换迁移目标时正文不会被裁，弹窗宽度也与
+    # 原来的两行确认框一致，而不是卡在 240 把下拉挤成一条。
+    metrics = dialog.contentLabel.fontMetrics()
+    dialog.content = max(
+        (message(target) for target in targets),
+        key=lambda text: max(
+            metrics.horizontalAdvance(line) for line in text.split("\n")
+        ),
+    )
+    dialog._adjustText()
+    dialog.textLayout.activate()
+    dialog.setFixedSize(dialog.size())
+    sync_message()
+    dialog.cancelButton.setFocus()
+    confirmed = bool(dialog.exec())
+    return confirmed, current_target(), checkbox.isChecked()
+
+
 #: 会话级「本次运行不再提示」标记（按用途分键；不落盘，重启即恢复询问）。
 _DONT_ASK_SESSION_FLAGS: dict[str, bool] = {}
 

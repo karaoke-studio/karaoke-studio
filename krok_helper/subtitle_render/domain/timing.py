@@ -543,12 +543,22 @@ class TimingTrack:
 
     @property
     def role_options(self) -> list[str]:
-        """字幕里出现过的「角色 / 配色」标签，按首次出现顺序去重。"""
+        """字幕里出现过的「角色 / 配色」标签，按首次出现顺序去重。
+
+        覆盖面与 :func:`remap_track_role_labels` 对齐：行前导唱符、行内
+        导唱符与可见字符的标签都算「出现过」，否则只挂在行内导唱符上的
+        角色对角色清单统计不可见。
+        """
         seen: set[str] = set()
         options: list[str] = []
         for line in self.lines:
             if line.guide_symbol is not None:
                 for label in guide_symbol_role_labels(line.guide_symbol):
+                    if label and label not in seen:
+                        seen.add(label)
+                        options.append(label)
+            for inline in line.inline_guide_symbols.values():
+                for label in guide_symbol_role_labels(inline):
                     if label and label not in seen:
                         seen.add(label)
                         options.append(label)
