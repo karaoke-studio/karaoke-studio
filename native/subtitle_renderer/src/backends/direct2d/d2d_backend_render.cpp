@@ -34,6 +34,7 @@ using direct2d::checkHr;
 using direct2d::createPaintBrush;
 using direct2d::createScanlineColumnBitmap;
 using direct2d::createScanlineMaskBrush;
+using direct2d::createScanlinePillarBrush;
 using direct2d::elapsedMs;
 using direct2d::fallEntryLeadMs;
 using direct2d::fxSpriteForKind;
@@ -8993,35 +8994,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleRim;
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleHi;
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleCore;
-                Microsoft::WRL::ComPtr<ID2D1GradientStopCollection>
-                    pillarStops;
-                Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> pillarBrush;
                 context->CreateSolidColorBrush(bubbleBase, &bubbleFill);
                 context->CreateSolidColorBrush(bubbleEdge, &bubbleRim);
                 context->CreateSolidColorBrush(bubbleHighlight, &bubbleHi);
                 context->CreateSolidColorBrush(bubbleEdge, &bubbleCore);
-                const D2D1_GRADIENT_STOP pillarGradientStops[5] = {
-                    {0.00f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.0f)},
-                    {0.14f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.18f)},
-                    {0.50f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.50f)},
-                    {0.86f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.18f)},
-                    {1.00f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.0f)},
-                };
-                context->CreateGradientStopCollection(
-                    pillarGradientStops, 5, &pillarStops
-                );
+                Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> pillarBrush =
+                    createScanlinePillarBrush(
+                        context,
+                        bubbleBase,
+                        D2D1::Point2F(wipeEdge, pillarTop),
+                        D2D1::Point2F(wipeEdge, pillarTop + pillarHeight)
+                    );
                 D2D1_MATRIX_3X2_F previousTransform =
                     D2D1::Matrix3x2F::Identity();
                 context->GetTransform(&previousTransform);
                 context->SetTransform(realizationBaseTransform);
-                context->CreateLinearGradientBrush(
-                    D2D1::LinearGradientBrushProperties(
-                        D2D1::Point2F(wipeEdge, pillarTop),
-                        D2D1::Point2F(wipeEdge, pillarTop + pillarHeight)
-                    ),
-                    pillarStops.Get(),
-                    &pillarBrush
-                );
 
                 const auto drawBubble = [&](int i, bool inFront) {
                     const auto index = static_cast<std::uint32_t>(i);
@@ -9099,6 +9086,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 };
 
                 const auto drawPillar = [&]() {
+                    if (pillarBrush == nullptr) {
+                        return;
+                    }
                     const float layerOpacities[3] = {0.35f, 0.55f, 0.45f};
                     const float layerScales[3] = {1.0f, 0.58f, 0.24f};
                     const float pillarPulse = 0.90f

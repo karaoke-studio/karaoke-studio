@@ -550,9 +550,10 @@ def build_baked_path_stack(
     after: bool = True,
 ) -> tuple[QImage, int, int] | None:
     style = style_for_state(style, after=after)
-    if not after:
-        shadow_dx = style.shadow_offset_x
-        shadow_dy = style.shadow_offset_y
+    # 阴影偏移由调用方按层传入：主文字层给 ``before_style.shadow_offset_*``，
+    # 注音层给 ``ruby_shadow_d*``。这里不能再拿 ``style.shadow_offset_*`` 覆盖
+    # ——那只是主文字的走字前槽位，会把注音层的注音阴影换成主文字阴影
+    # （2026-11 竖排注音阴影 bounds 与 GPU 对不上即此因）。
     is_glow = style.decoration_kind == "glow"
     stroke_extent = ports.visual_stroke_extent(stroke_width, stroke2_width)
     glow_extra = (

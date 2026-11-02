@@ -36,6 +36,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import (
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
     fx_unit_hash,
 )
+from krok_helper.subtitle_render.engine.render.elements.scanline_image_asset import (
+    scanline_image_available,
+)
 from krok_helper.subtitle_render.engine.render.effects import (
     main_stroke2_width,
     paint_fill_path,
@@ -108,16 +111,13 @@ class ScanlineParams:
         """自定义图片形态关闭「文字高亮」时不再画普通高亮带。
 
         仅当素材**可用**才抑制：素材缺失时保持普通高亮带（用户口径的
-        回退普通高光模式）。路径解析在 :mod:`..scanline_image`，这里
-        延迟导入避免模块环。
+        回退普通高光模式）。路径解析在叶子模块
+        :mod:`..scanline_image_asset`，避免与 :mod:`..scanline_image`
+        的取色 helper 互相 import 成环。
         """
 
         if self.shape != "image" or self.image_band_enabled:
             return False
-        from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
-            scanline_image_available,
-        )
-
         return scanline_image_available(self.image_path)
 
     @property

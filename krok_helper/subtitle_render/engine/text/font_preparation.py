@@ -4,7 +4,8 @@ import logging
 from typing import Optional
 from PyQt6.QtCore import QThread
 from PyQt6.QtGui import QGuiApplication
-from krok_helper.subtitle_render.domain.models import Style, TimingTrack
+from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.native.protocol import collect_referenced_font_families
 _log = logging.getLogger(__name__)
 

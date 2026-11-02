@@ -198,6 +198,39 @@ D2D1_RECT_F rubyPaintBounds(
     return paint.mode == "gradient_horizontal" ? horizontalBounds : localBounds;
 }
 
+Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> createScanlinePillarBrush(
+    ID2D1DeviceContext *context,
+    const D2D1_COLOR_F &baseColor,
+    const D2D1_POINT_2F &start,
+    const D2D1_POINT_2F &end
+) {
+    const D2D1_GRADIENT_STOP stops[5] = {
+        {0.00f, D2D1::ColorF(baseColor.r, baseColor.g, baseColor.b, 0.0f)},
+        {0.14f, D2D1::ColorF(baseColor.r, baseColor.g, baseColor.b, 0.18f)},
+        {0.50f, D2D1::ColorF(baseColor.r, baseColor.g, baseColor.b, 0.50f)},
+        {0.86f, D2D1::ColorF(baseColor.r, baseColor.g, baseColor.b, 0.18f)},
+        {1.00f, D2D1::ColorF(baseColor.r, baseColor.g, baseColor.b, 0.0f)},
+    };
+    Microsoft::WRL::ComPtr<ID2D1GradientStopCollection> collection;
+    context->CreateGradientStopCollection(
+        stops,
+        5,
+        D2D1_GAMMA_2_2,
+        D2D1_EXTEND_MODE_CLAMP,
+        collection.ReleaseAndGetAddressOf()
+    );
+    if (collection == nullptr) {
+        return nullptr;
+    }
+    Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> brush;
+    context->CreateLinearGradientBrush(
+        D2D1::LinearGradientBrushProperties(start, end),
+        collection.Get(),
+        brush.ReleaseAndGetAddressOf()
+    );
+    return brush;
+}
+
 void updatePaintBrush(
     ID2D1Brush *brush,
     const PaintStyle &paint,

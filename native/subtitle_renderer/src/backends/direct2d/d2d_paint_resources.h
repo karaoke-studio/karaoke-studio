@@ -56,6 +56,15 @@ D2D1_RECT_F rubyPaintBounds(
     const D2D1_RECT_F &horizontalBounds
 );
 
+// 扫字线水泡形态的中心光柱：5 档纵向渐变（两端全透明、中段半透明）只在
+// 这里构造，render 侧只传基色与锋面位置，不直接碰 D2D 渐变资源。
+Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> createScanlinePillarBrush(
+    ID2D1DeviceContext *context,
+    const D2D1_COLOR_F &baseColor,
+    const D2D1_POINT_2F &start,
+    const D2D1_POINT_2F &end
+);
+
 void updatePaintBrush(
     ID2D1Brush *brush,
     const PaintStyle &paint,

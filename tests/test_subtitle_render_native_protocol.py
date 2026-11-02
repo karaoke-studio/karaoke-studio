@@ -3834,14 +3834,23 @@ def test_sidecar_environment_uses_frozen_pyqt_runtime(tmp_path, monkeypatch):
     plugin_root = qt_bin.parent / "plugins"
     qt_bin.mkdir(parents=True)
     (plugin_root / "platforms").mkdir(parents=True)
+    (plugin_root / "imageformats").mkdir(parents=True)
     (qt_bin / "Qt6Core.dll").write_bytes(b"")
     (plugin_root / "platforms" / "qwindows.dll").write_bytes(b"")
+    (plugin_root / "imageformats" / "qwebp.dll").write_bytes(b"")
     app_exe = package_root / "Karaoke Studio.exe"
     sidecar_exe = package_root / "krok_subtitle_renderer.exe"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(app_exe))
     monkeypatch.delattr(sys, "_MEIPASS", raising=False)
     monkeypatch.setenv("PATH", "existing")
+    # 打包形态下 PyQt6 本身就在 _internal 里：`_sidecar_plugin_roots` 为补
+    # qwebp 追加的 PyQt6 插件根与平台插件根是同一个目录，必须去重。
+    import PyQt6
+
+    monkeypatch.setattr(
+        PyQt6, "__file__", str(package_root / "_internal" / "PyQt6" / "__init__.py")
+    )
 
     assert _sidecar_qt_bin_dir(sidecar_exe) == qt_bin
     env = _sidecar_environment(sidecar_exe)

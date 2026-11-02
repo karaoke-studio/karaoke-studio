@@ -30,7 +30,10 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_section,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
-from krok_helper.subtitle_render.frontend.properties.controls.widgets import SubGroup
+from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
+    LineBandCapPreview,
+    SubGroup,
+)
 
 
 ENTRY_ANIMATION_OPTIONS = (
@@ -1212,10 +1215,6 @@ class EffectsPropertyPageBuilder:
         image_layout.addWidget(host._line_band_pick_btn)
         image_layout.addWidget(host._line_band_clear_btn)
         layout.addWidget(image_row)
-
-        from krok_helper.subtitle_render.frontend.properties.property_panel import (
-            LineBandCapPreview,
-        )
 
         host._line_band_preview = LineBandCapPreview(section)
         host._line_band_preview.setMinimumHeight(84)

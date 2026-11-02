@@ -4627,21 +4627,35 @@ def test_front_particles_paint_after_ruby_layer():
 
     source = inspect.getsource(painter_module._paint_line_static)
     lines = [line.strip() for line in source.splitlines()]
-    hits = 0
+
+    # 只认括号深度 0 的「顶层语句」：多行调用的实参行不单独算一步，
+    # 扫字线形态 overlay 调用整段（含 canvas_scale 等关键字）也只算一步。
+    statements: dict[int, str] = {}
+    depth = 0
     for index, line in enumerate(lines):
-        if not line.startswith("paint_fx_particles(front=True)"):
-            continue
-        probe = index - 1
-        while probe >= 0 and (
-            not lines[probe]
-            or lines[probe].startswith("#")
-            or lines[probe].startswith("_paint_scanline_shape_overlay(")
-            or lines[probe] == ")"
-            or lines[probe].startswith("display_")
-            or lines[probe] in {"painter,", "layout,", "t_ms,", "style,"}
+        if depth == 0 and line and not line.startswith("#"):
+            statements[index] = line
+        depth += line.count("(") - line.count(")")
+    ordered = sorted(statements)
+
+    def previous_statement(index: int) -> int | None:
+        """front 粒子之前最近的、非 overlay 调用的顶层语句下标。"""
+
+        probe = max((start for start in ordered if start < index), default=None)
+        while probe is not None and statements[probe].startswith(
+            "_paint_scanline_shape_overlay("
         ):
-            probe -= 1
-        assert lines[probe] == "paint_rubies_on_top()"
+            probe = max(
+                (start for start in ordered if start < probe), default=None
+            )
+        return probe
+
+    hits = 0
+    for index in ordered:
+        if not statements[index].startswith("paint_fx_particles(front=True)"):
+            continue
+        probe = previous_statement(index)
+        assert probe is not None and statements[probe] == "paint_rubies_on_top()"
         hits += 1
     assert hits >= 3
 

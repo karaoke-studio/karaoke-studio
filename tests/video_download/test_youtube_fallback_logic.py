@@ -375,9 +375,12 @@ def test_cli_download_fallback_403_clears_partial_and_retries_without_cookie(mon
         extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
     )
 
+    # 换 fallback extractor args、以及换「无 cookie」重试之前都会先清掉上一轮
+    # 残留分片（0ba88c9e「clean fragments before fallback」），所以只有首次
+    # 调用还能看到测试预埋的 stale part。
     assert calls == [
         ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS, True),
-        ("cookies.txt", YOUTUBE_FALLBACK_EXTRACTOR_ARGS, True),
+        ("cookies.txt", YOUTUBE_FALLBACK_EXTRACTOR_ARGS, False),
         ("", YOUTUBE_FALLBACK_EXTRACTOR_ARGS, False),
     ]
 

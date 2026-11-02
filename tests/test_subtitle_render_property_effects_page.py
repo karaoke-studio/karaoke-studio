@@ -41,6 +41,19 @@ class _Host:
     def _clear_lit_image(self) -> None:
         self.updates.append({"lit_image_path": ""})
 
+    # 与真实宿主同名的文件选择入口：builder 只做信号接线，桩里给空实现即可。
+    def _choose_scanline_image(self) -> None:
+        pass
+
+    def _clear_scanline_image(self) -> None:
+        pass
+
+    def _choose_line_band_image(self) -> None:
+        pass
+
+    def _clear_line_band_image(self) -> None:
+        pass
+
     def _on_section_edge_toggled(self, checked: bool) -> None:
         # 真实宿主还读 self._style；builder 契约测试只关心启用联动与字段路由。
         self._section_head_anim_combo.setEnabled(checked)
@@ -139,15 +152,15 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
         for key in host._fx_target_pill.items
     ] == ["入退场动画", "唱字装饰粒子", "扫字线特效"]
     assert host._fx_target_pill.currentRouteKey() == "sing"
-    # 扫字线形态：普通高亮/烈焰棒/水泡（独立形态替换高亮带）。
+    # 扫字线形态：普通高亮/烈焰棒/水泡/自定义图片（独立形态替换高亮带）。
     assert [
         host._scanline_shape_combo.itemData(index)
         for index in range(host._scanline_shape_combo.count())
-    ] == ["band", "flame", "bubble"]
+    ] == ["band", "flame", "bubble", "image"]
     assert [
         host._scanline_shape_combo.itemText(index)
         for index in range(host._scanline_shape_combo.count())
-    ] == ["普通高亮", "烈焰棒", "水泡"]
+    ] == ["普通高亮", "烈焰棒", "水泡", "自定义图片"]
     # 下方粒子/闪光单独 3 列网格，和扫字线参数分栏。
     assert host._fx_grid._max_columns == 3
     # 粒子速度调整：项目通用 slider+输入框复合控件，-1000~1000%，默认 0。

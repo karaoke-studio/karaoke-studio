@@ -67,9 +67,16 @@ def test_background_screen_size_builder_preserves_control_contracts(qapp) -> Non
     assert host._screen_size_height_spin.minimum() == 90
     assert host._screen_size_height_spin.maximum() == 4320
     assert host._screen_size_height_spin.value() == 1080
-    assert host._screen_size_fps_combo.count() == 2
-    assert host._screen_size_fps_combo.itemData(0) == 60
-    assert host._screen_size_fps_combo.itemData(1) == 120
+    # 4.4.0 起帧率下拉在 60/120 之前插入「跟随原视频 / 原视频 2×」、之后
+    # 追加「自定义」，共 5 项；默认停在 60 fps。
+    assert host._screen_size_fps_combo.count() == 5
+    assert [
+        host._screen_size_fps_combo.itemText(index) for index in range(5)
+    ] == ["跟随原视频", "原视频 2×", "60 fps", "120 fps", "自定义"]
+    assert [
+        host._screen_size_fps_combo.itemData(index) for index in range(5)
+    ] == ["source", "source_2x", 60, 120, "custom"]
+    assert host._screen_size_fps_combo.currentData() == 60
 
 
 def test_background_screen_size_builder_routes_each_change_to_host(qapp) -> None:
@@ -80,7 +87,9 @@ def test_background_screen_size_builder_routes_each_change_to_host(qapp) -> None
     host._screen_size_height_spin.setValue(720)
     host._screen_size_fps_combo.setCurrentIndex(1)
 
-    assert host.screen_changes == 3
+    # 宽、高各通知 1 次；预置下拉跟着宽高自动跳格式（1920×1080 →「自定义」
+    # → 1280×720 命中 HDV 720）再通知 2 次；帧率切换 1 次。
+    assert host.screen_changes == 5
 
 
 def test_background_screen_size_preset_combo_fills_values(qapp) -> None:
@@ -94,7 +103,8 @@ def test_background_screen_size_preset_combo_fills_values(qapp) -> None:
     assert host._screen_size_width_spin.value() == 3840
     assert host._screen_size_height_spin.value() == 2160
     assert combo.currentData() == "4k"
-    assert host.screen_changes == 2
+    # 下拉本身 1 次 + 预置回填宽、高各 1 次。
+    assert host.screen_changes == 3
 
 
 def test_background_screen_size_preset_combo_jumps_to_custom_on_edit(qapp) -> None:
