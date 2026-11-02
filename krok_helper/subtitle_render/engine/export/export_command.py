@@ -395,6 +395,13 @@ def roll_background_graph(
     分居剪切点两侧，出场段在剪切点前半个窗口淡到过渡色、入场段在剪切点后
     半个窗口从过渡色淡入；两段都保持自己的内容连续播放，不冻结帧，总时长
     不变。交叉溶解仍沿用重叠窗口 + 冻结首帧的 xfade。
+
+    ``concat`` 拼出的段必须紧跟 ``fps=工程帧率`` 重新采样：concat 输出的时间基
+    是 1/1000000、帧率元数据也不可靠，直接喂给 ``xfade`` 会因 timebase/帧率
+    不匹配在滤镜配置阶段报 Invalid argument（成片零帧、导出失败）；喂给末尾
+    ``tpad=stop_mode=add:stop=-1`` 时还可能补出 PTS 不前进的帧，``trim`` 永远
+    裁不到目标时长（无限补帧）。黑/白场与交叉溶解混用（前黑黑场 + 后黑交叉
+    溶解等）正是最常踩到的组合。
     """
 
     background = resolved_background(job)
@@ -438,7 +445,10 @@ def roll_background_graph(
                 roll_segment_input_args(plan.post, job, plan.post_ms / 1000.0)
             )
         if plan.has_pre and plan.has_post:
-            graph_parts.append("[rollpre][rollpost]concat=n=2:v=1:a=0[rollall];")
+            graph_parts.append(
+                "[rollpre][rollpost]concat=n=2:v=1:a=0"
+                f",fps={frame_rate_text(job.fps)}[rollall];"
+            )
         elif plan.has_pre:
             graph_parts.append("[rollpre]null[rollall];")
         elif plan.has_post:
@@ -531,7 +541,10 @@ def roll_background_graph(
             f":duration={_seconds(pre_v)}:offset={_seconds(plan.pre_ms - pre_v)}[rollpm];"
         )
     elif plan.has_pre:
-        graph_parts.append("[rollpre][rollmain]concat=n=2:v=1:a=0[rollpm];")
+        graph_parts.append(
+            "[rollpre][rollmain]concat=n=2:v=1:a=0"
+            f",fps={frame_rate_text(job.fps)}[rollpm];"
+        )
     else:
         graph_parts.append("[rollmain]null[rollpm];")
 
@@ -562,7 +575,8 @@ def roll_background_graph(
         else:
             graph_parts.append(
                 f"[rollpm]trim=duration={_seconds(plan.main_end_ms)},setpts=PTS-STARTPTS[rollpmt];"
-                "[rollpmt][rollpost]concat=n=2:v=1:a=0[rollall];"
+                "[rollpmt][rollpost]concat=n=2:v=1:a=0"
+                f",fps={frame_rate_text(job.fps)}[rollall];"
             )
     else:
         graph_parts.append("[rollpm]null[rollall];")
