@@ -21,9 +21,12 @@ from PyQt6.QtWidgets import (
     QApplication,
     QColorDialog,
     QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QWidget,
 )
@@ -338,6 +341,7 @@ class ColorButton(QWidget):
         if not self._apply_color_entry():
             self._color_edit.selectAll()
             return
+        self._remember_entered_color()
         self._end_color_entry()
         self.editFinished.emit()
 
@@ -347,8 +351,15 @@ class ColorButton(QWidget):
         self._live_apply_timer.stop()
         if self._swatch_stack.currentWidget() is self._color_edit:
             self._apply_color_entry()
+            self._remember_entered_color()
             self._end_color_entry()
             self.editFinished.emit()
+
+    def _remember_entered_color(self) -> None:
+        # Only a finished edit counts as "used": live keystrokes preview the
+        # color but would otherwise litter the recent colors.
+        if self.color != self._entry_original_color:
+            record_recent_color(QColor(self.color))
 
     def _end_color_entry(self) -> None:
         self._ending_color_entry = True
@@ -450,6 +461,7 @@ class ScreenColorPicker(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             color = self.color_at(event.globalPosition().toPoint())
             if color.isValid():
+                record_recent_color(color)
                 self.colorPicked.emit(color)
             self._finish()
             event.accept()
@@ -630,17 +642,43 @@ class _AlphaSlider(QWidget):
 class _ColorDialog(QColorDialog):
     """Qt color dialog with a visible alpha slider beside the hue strip.
 
-    The custom-colors row doubles as the app's recent colors, newest first.
-    Qt treats those slots as RGB-only in practice (its getter reports them
-    opaque and picking a swatch never touches alpha) and its own "add" button
-    writes wherever its cursor points, so the dialog keeps a slot -> color map
-    to put the remembered alpha back on a pick, and re-sorts the row from the
-    recent list right after an in-dialog add or drop.
+    The custom-colors row doubles as the app's recent colors, newest first
+    and filled row by row. Qt treats those slots as RGB-only in practice (its
+    getter reports them opaque and picking a swatch never touches alpha) and
+    its own "add" button writes wherever its cursor points, so the dialog
+    keeps a slot -> color map to put the remembered alpha back on a pick and
+    re-sorts the row from the recent list right after an in-dialog add or
+    drop. Its built-in captions are relabelled in Chinese here because the
+    app installs no qtbase translator.
     """
 
-    # QColorDialog lays the custom row out as 2 rows x 8 columns and indexes
-    # slots column-major: index = row + rows * col.
+    # QColorDialog lays the custom row out as 2 rows x 8 columns (its
+    # customCount() of 16) and indexes slots column-major:
+    # index = row + rows * col.
     _CUSTOM_ROWS = 2
+    _CUSTOM_COLS = 8
+
+    # Qt's source captions with the mnemonic '&' stripped -> Chinese.
+    _LABEL_TEXTS = {
+        "Basic colors": "基本颜色(&B)",
+        "Custom colors": "自定义颜色(&C)",
+        "Hue:": "色调(&E):",
+        "Sat:": "饱和度(&S):",
+        "Val:": "亮度(&V):",
+        "Red:": "红色(&R):",
+        "Green:": "绿色(&G):",
+        "Blue:": "蓝色(&U):",
+        "Alpha channel:": "Alpha 通道(&L):",
+        "HTML:": "HTML(&H):",
+    }
+    _BUTTON_TEXTS = {
+        "Pick Screen Color": "选择屏幕颜色(&P)",
+        "Add to Custom Colors": "添加到自定义颜色(&A)",
+    }
+    _STANDARD_BUTTON_TEXTS = {
+        QDialogButtonBox.StandardButton.Ok: "确定",
+        QDialogButtonBox.StandardButton.Cancel: "取消",
+    }
 
     def __init__(
         self, current: QColor, parent: Optional[QWidget] = None
@@ -648,20 +686,70 @@ class _ColorDialog(QColorDialog):
         super().__init__(current, parent)
         self._recent_slot_colors: dict[int, QColor] = {}
         self._custom_well: Optional[QWidget] = None
+        self._alpha_spin_box: Optional[QSpinBox] = None
         self._recent_hooks_installed = False
         self.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
         self.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        # Ruling out the native dialog guarantees the widget tree exists.
+        self._localize_builtin_texts()
+        self._alpha_spin_box = self._find_alpha_spin_box()
+        self._install_recent_color_hooks()
         self.setCurrentColor(current)
         self._alpha_slider = _AlphaSlider(self.currentColor(), self)
         self._alpha_slider.alphaChanged.connect(self._set_current_alpha)
         self.currentColorChanged.connect(self._alpha_slider.set_color)
 
-    def _set_current_alpha(self, alpha: int) -> None:
-        color = self.currentColor()
-        if color.alpha() == alpha:
+    @classmethod
+    def recent_slot_index(cls, position: int) -> int:
+        """Qt slot holding the ``position``-th recent color.
+
+        Rows fill left to right; the second row only once the first is full.
+        """
+        row, col = divmod(position, cls._CUSTOM_COLS)
+        return row + cls._CUSTOM_ROWS * col
+
+    def _localize_builtin_texts(self) -> None:
+        for label in self.findChildren(QLabel):
+            text = self._LABEL_TEXTS.get(label.text().replace("&", ""))
+            if text is not None:
+                label.setText(text)
+        for button in self.findChildren(QPushButton):
+            text = self._BUTTON_TEXTS.get(button.text().replace("&", ""))
+            if text is not None:
+                button.setText(text)
+        box = self.findChild(QDialogButtonBox)
+        if box is not None:
+            for standard, text in self._STANDARD_BUTTON_TEXTS.items():
+                button = box.button(standard)
+                if button is not None:
+                    button.setText(text)
+
+    def _find_alpha_spin_box(self) -> Optional[QSpinBox]:
+        for label in self.findChildren(QLabel):
+            buddy = label.buddy()
+            caption = label.text().replace("&", "").lower()
+            if isinstance(buddy, QSpinBox) and "alpha" in caption:
+                return buddy
+        return None
+
+    def _apply_alpha(self, alpha: int) -> None:
+        """Change only the alpha of the current color.
+
+        setCurrentColor() would also run Qt's selectColor(), which looks the
+        RGB up in the basic-colors grid first and moves selection and focus
+        there whenever it matches; driving the alpha spin box updates the
+        color without that side effect.
+        """
+        if self._alpha_spin_box is not None:
+            self._alpha_spin_box.setValue(alpha)
             return
+        color = self.currentColor()
         color.setAlpha(alpha)
         self.setCurrentColor(color)
+
+    def _set_current_alpha(self, alpha: int) -> None:
+        if self.currentColor().alpha() != alpha:
+            self._apply_alpha(alpha)
 
     def _position_alpha_slider(self) -> None:
         candidates = [
@@ -692,6 +780,10 @@ class _ColorDialog(QColorDialog):
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        if self._alpha_spin_box is None:
+            # A platform that builds the widget tree late gets a second pass.
+            self._localize_builtin_texts()
+            self._alpha_spin_box = self._find_alpha_spin_box()
         self._install_recent_color_hooks()
         self._position_alpha_slider()
         # 共享对话框会被反复 hide/exec，Windows 不保证重新显示的顶层窗口
@@ -710,7 +802,8 @@ class _ColorDialog(QColorDialog):
     def set_recent_slot_colors(self, colors: list[QColor]) -> None:
         """Remember what each custom slot was seeded with, alpha included."""
         self._recent_slot_colors = {
-            index: QColor(color) for index, color in enumerate(colors)
+            self.recent_slot_index(position): QColor(color)
+            for position, color in enumerate(colors)
         }
 
     def _custom_color_well(self) -> Optional[QWidget]:
@@ -757,7 +850,7 @@ class _ColorDialog(QColorDialog):
         if remembered is None or remembered.rgb() != current.rgb():
             return
         if remembered.alpha() != current.alpha():
-            self.setCurrentColor(QColor(remembered))
+            self._apply_alpha(remembered.alpha())
 
     def _refresh_recent_slots(self) -> None:
         """Re-sort the row newest-first after Qt wrote at its own cursor."""
@@ -781,12 +874,13 @@ _shared_color_dialog: Optional[_ColorDialog] = None
 # fills it on its own: only the dialog's "add to custom colors" button or a
 # drop onto the row writes there, so the row stays blank unless the user does
 # that bookkeeping by hand. The app treats those slots as the recently picked
-# colors instead: every accepted pick, "add" click and drop lands at the front
-# of this list, and the list is written back into the slots right before the
-# dialog opens and right after an in-dialog add or drop, so the row always
-# reads newest-first with the oldest pushed out. It lives for the process
-# only. Alpha is kept here and restored by _ColorDialog on swatch picks, since
-# Qt itself treats the slots as RGB-only.
+# colors instead: dialog picks, screen picks and committed hex edits (or
+# pastes) all land at the front of this list, and the list is written back
+# into the slots right before the dialog opens and right after an in-dialog
+# add or drop, so the row always reads newest-first, filled row by row, with
+# the oldest pushed out. It lives for the process only. Alpha is kept here
+# and restored by _ColorDialog on swatch picks, since Qt itself treats the
+# slots as RGB-only.
 _recent_colors: list[QColor] = []
 
 
@@ -813,15 +907,20 @@ def _seed_custom_color_slots(dialog: _ColorDialog) -> None:
     """Write the recent colors into Qt's custom slots, newest first.
 
     Runs before ``dialog`` opens and again after an in-dialog add or drop.
-    Unused slots are reset to white, Qt's own "empty" value, so the row shows
-    exactly the recent list and nothing stale from an earlier open. The dialog
-    is told what went where so it can restore alpha when a swatch is picked.
+    The first row fills left to right, the second only once the first is
+    full. Unused slots are reset to white, Qt's own "empty" value, so the row
+    shows exactly the recent list and nothing stale from an earlier open. The
+    dialog is told what went where so it can restore alpha when a swatch is
+    picked.
     """
     count = QColorDialog.customCount()
     empty = QColor(Qt.GlobalColor.white)
     for index in range(count):
-        color = _recent_colors[index] if index < len(_recent_colors) else empty
-        QColorDialog.setCustomColor(index, QColor(color))
+        QColorDialog.setCustomColor(index, QColor(empty))
+    for position, color in enumerate(_recent_colors[:count]):
+        QColorDialog.setCustomColor(
+            _ColorDialog.recent_slot_index(position), QColor(color)
+        )
     dialog.set_recent_slot_colors(_recent_colors)
 
 

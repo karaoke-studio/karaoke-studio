@@ -5408,10 +5408,11 @@ def test_select_color_records_recent_picks_into_custom_slots(qapp, monkeypatch):
         ]
         # 首次打开没有历史：全部是白（Qt 的空槽值）。
         assert set(slots_on_open[0]) == {"#FFFFFF"}
-        # 第二次打开：上一次选中的颜色已在首格。
+        # 第二次打开：上一次选中的颜色在第 1 行第 1 列。
         assert slots_on_open[1][0] == "#112233"
-        # 第三次打开：最新的在前，没选过的槽位仍是白。
-        assert slots_on_open[2][:3] == ["#445566", "#112233", "#FFFFFF"]
+        # 第三次打开（第 3 次取色之前）：最新在前、按行填充（第 1 格 → 第 2
+        # 格 → 换行），没选过的槽位仍是白。
+        assert slots_on_open[2][:3] == ["#445566", "#FFFFFF", "#112233"]
         # 重复选择只提到最前，不重复占格；alpha 一并记住。
         recent = [
             c.name(QColor.NameFormat.HexArgb).upper()
@@ -5462,13 +5463,11 @@ def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(qapp):
             for c in color_controls_module.recent_colors()
         ]
         assert recent == ["#FF123456", "#FFFFFFFF", "#80ABCDEF"]
-        # 对话框里那排也立刻按最近在前重排，不停在 Qt 游标写入的位置。
-        assert [QColorDialog.customColor(i).name().upper() for i in range(4)] == [
-            "#123456",
-            "#FFFFFF",
-            "#ABCDEF",
-            "#FFFFFF",
-        ]
+        # 对话框里那排也立刻按最近在前、按行填充重排，不停在 Qt 游标写的位置。
+        assert QColorDialog.customColor(0).name().upper() == "#123456"
+        assert QColorDialog.customColor(2).name().upper() == "#FFFFFF"
+        assert QColorDialog.customColor(4).name().upper() == "#ABCDEF"
+        assert QColorDialog.customColor(1).name().upper() == "#FFFFFF"
 
         for value in range(20):
             color_controls_module.record_recent_color(QColor(value, value, value))
@@ -5509,20 +5508,17 @@ def test_custom_swatch_click_restores_remembered_alpha(qapp):
         qapp.processEvents()
         assert dialog.currentColor().name(hex_argb).upper() == "#40FFFFFF"
 
-        # 同一次打开里刚「添加」的色立刻排到第 1 格、其余后移；点它和点后移
-        # 的旧色都能还原各自的 alpha。
+        # 同一次打开里刚「添加」的色立刻排到第 1 行第 1 格、其余右移；点它和
+        # 点右移到第 2 格的旧色都能还原各自的 alpha。
         dialog.setCurrentColor(QColor("#60ABCDEF"))
         dialog._add_custom_button().click()
-        assert [QColorDialog.customColor(i).name().upper() for i in range(3)] == [
-            "#ABCDEF",
-            "#445566",
-            "#FFFFFF",
-        ]
+        assert QColorDialog.customColor(0).name().upper() == "#ABCDEF"
+        assert QColorDialog.customColor(2).name().upper() == "#445566"
         dialog.setCurrentColor(QColor("#FF000000"))
         _click_custom_cell(well, 0, 0)
         qapp.processEvents()
         assert dialog.currentColor().name(hex_argb).upper() == "#60ABCDEF"
-        _click_custom_cell(well, 1, 0)
+        _click_custom_cell(well, 0, 1)
         qapp.processEvents()
         assert dialog.currentColor().name(hex_argb).upper() == "#80445566"
     finally:
@@ -5601,13 +5597,13 @@ def test_alpha_only_edit_and_slot_pick_reorder_on_accept(qapp, monkeypatch):
         ]
         assert recent == ["#40222222", "#80222222", "#FF111111"]
 
-        # ② 点槽 1（#80222222，即第 2 行第 1 列的格子）后确定 → 连 alpha
+        # ② 点第 1 行第 2 格（#80222222，最近列表第 2 项）后确定 → 连 alpha
         # 一起还原并提到最前。
         monkeypatch.setattr(
             _ColorDialog,
             "exec",
             accept_after(
-                lambda dlg: _click_custom_cell(dlg._custom_color_well(), 1, 0)
+                lambda dlg: _click_custom_cell(dlg._custom_color_well(), 0, 1)
             ),
         )
         picked = color_controls_module._select_color(
@@ -5642,10 +5638,15 @@ def test_add_button_inserts_at_front_and_shifts_older_slots(qapp):
             dialog.setCurrentColor(color)
             button.click()
             added.append(color)
-            # 第 1 格永远是刚添加的色；前面的依次后移一位。
+            # 第 1 行第 1 格永远是刚添加的色；更早的右移、第二行装第一行
+            # 装满后的余量，超出 16 的被顶出。
+            expected = [0xFFFFFFFF] * 16
+            for position, earlier in enumerate(reversed(added[-16:])):
+                expected[
+                    _ColorDialog.recent_slot_index(position)
+                ] = earlier.rgb()
             visible = [QColorDialog.customColor(i).rgb() for i in range(16)]
-            expected = [c.rgb() for c in reversed(added[-16:])]
-            assert visible == expected + [0xFFFFFFFF] * (16 - len(expected))
+            assert visible == expected
 
         recent = color_controls_module.recent_colors()
         assert len(recent) == QColorDialog.customCount() == 16
@@ -5655,6 +5656,167 @@ def test_add_button_inserts_at_front_and_shifts_older_slots(qapp):
     finally:
         color_controls_module.clear_recent_colors()
         dialog.close()
+
+
+def test_recent_slots_fill_row_by_row(qapp):
+    """第一行从左到右填满后才用第二行，而不是一列一列往下填。"""
+    QColorDialog = color_controls_module.QColorDialog
+    color_controls_module.clear_recent_colors()
+    for value in range(9):
+        color_controls_module.record_recent_color(QColor.fromRgb(0xFF000000 | (value + 1)))
+    dialog = _ColorDialog(QColor("#000000"))
+    try:
+        color_controls_module._seed_custom_color_slots(dialog)
+        # 前 8 个占满第一行（Qt 槽位 0,2,4,…,14），第 9 个进第二行第 1 格。
+        first_row = [
+            QColorDialog.customColor(_ColorDialog.recent_slot_index(p)).rgb()
+            for p in range(8)
+        ]
+        assert first_row == [0xFF000000 | value for value in range(9, 1, -1)]
+        assert (
+            QColorDialog.customColor(_ColorDialog.recent_slot_index(8)).rgb()
+            == 0xFF000001
+        )
+        # 第二行其余位置仍是空槽白。
+        assert QColorDialog.customColor(_ColorDialog.recent_slot_index(9)).rgb() == 0xFFFFFFFF
+    finally:
+        color_controls_module.clear_recent_colors()
+        dialog.close()
+
+
+def test_color_dialog_builtin_texts_are_chinese(qapp):
+    """Qt 自带的英文文案全部替换为中文（应用不加载 qtbase 翻译）。"""
+    from PyQt6.QtWidgets import QDialogButtonBox, QLabel, QPushButton
+
+    dialog = _ColorDialog(QColor("#4093E9"))
+    try:
+        label_texts = {label.text() for label in dialog.findChildren(QLabel)}
+        assert {
+            "基本颜色(&B)",
+            "自定义颜色(&C)",
+            "色调(&E):",
+            "饱和度(&S):",
+            "亮度(&V):",
+            "红色(&R):",
+            "绿色(&G):",
+            "蓝色(&U):",
+            "Alpha 通道(&L):",
+            "HTML(&H):",
+        } <= label_texts
+        assert not any(
+            text.replace("&", "") in _ColorDialog._LABEL_TEXTS for text in label_texts
+        )
+        button_texts = {b.text() for b in dialog.findChildren(QPushButton)}
+        assert {"选择屏幕颜色(&P)", "添加到自定义颜色(&A)"} <= button_texts
+        box = dialog.findChild(QDialogButtonBox)
+        assert box is not None
+        assert box.button(QDialogButtonBox.StandardButton.Ok).text() == "确定"
+        assert box.button(QDialogButtonBox.StandardButton.Cancel).text() == "取消"
+    finally:
+        dialog.close()
+
+
+def test_custom_swatch_pick_does_not_steal_basic_color_selection(qapp):
+    """点自定义色块不会因为 RGB 撞上基本颜色而被上方的选中抢走。"""
+    hex_argb = QColor.NameFormat.HexArgb
+    color_controls_module.clear_recent_colors()
+    # 纯红在基本颜色里；半透明红会触发按 RGB 匹配的基本色二次选中。
+    color_controls_module.record_recent_color(QColor("#80FF0000"))
+    dialog = _ColorDialog(QColor("#FF00FF00"))
+    try:
+        color_controls_module._seed_custom_color_slots(dialog)
+        dialog.show()
+        qapp.processEvents()
+        wells = [
+            child
+            for child in dialog.findChildren(QWidget)
+            if child.metaObject().className() == "QColorWell"
+        ]
+        standard = max(wells, key=lambda well: well.sizeHint().height())
+        custom = dialog._custom_color_well()
+        assert custom is not None and custom is not standard
+        custom.setFocus()
+        qapp.processEvents()
+
+        _click_custom_cell(custom, 0, 0)
+        qapp.processEvents()
+
+        assert dialog.currentColor().name(hex_argb).upper() == "#80FF0000"
+        assert dialog._alpha_slider.alpha == 0x80
+        # 选中与焦点都留在自定义色块，没有被基本颜色抢走。
+        assert qapp.focusWidget() is not standard
+    finally:
+        color_controls_module.clear_recent_colors()
+        dialog.close()
+
+
+def test_hex_entry_and_screen_pick_record_recent_colors(qapp):
+    """手动输入色号（含粘贴）和屏幕取色也按同一规则进入最近颜色。"""
+    hex_argb = QColor.NameFormat.HexArgb
+    color_controls_module.clear_recent_colors()
+    button = ColorButton("#000000")
+    picker = ScreenColorPicker()
+    image = QImage(4, 4, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#776655"))
+    picker._screens = [(QRect(0, 0, 10, 10), image)]
+    picked: list[QColor] = []
+    picker.colorPicked.connect(picked.append)
+    try:
+        # 输入过程只预览不记账，焦点离开（输入完成）才记。
+        button._begin_color_entry()
+        button._color_edit.setText("#80ABCDEF")
+        button._apply_live_color_entry()
+        assert color_controls_module.recent_colors() == []
+        button._finish_color_entry()
+        recent = [
+            c.name(hex_argb).upper() for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#80ABCDEF"]
+
+        # 回车提交同样记账。
+        button._begin_color_entry()
+        button._color_edit.setText("#123456")
+        button._commit_color_entry()
+        recent = [
+            c.name(hex_argb).upper() for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#FF123456", "#80ABCDEF"]
+
+        # 取消（Esc）不记账。
+        button._begin_color_entry()
+        button._color_edit.setText("#654321")
+        button._cancel_color_entry()
+        recent = [
+            c.name(hex_argb).upper() for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#FF123456", "#80ABCDEF"]
+
+        # 粘贴色号记账。
+        QApplication.clipboard().setText("#0A0B0C")
+        assert button._paste_color_from_clipboard()
+        recent = [
+            c.name(hex_argb).upper() for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#FF0A0B0C", "#FF123456", "#80ABCDEF"]
+
+        # 屏幕取色（左键确认）记账，右键/取消路径不经过这里。
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(2, 2),
+            QPointF(2, 2),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        picker.mousePressEvent(event)
+        assert [c.name(hex_argb).upper() for c in picked] == ["#FF776655"]
+        recent = [
+            c.name(hex_argb).upper() for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#FF776655", "#FF0A0B0C", "#FF123456", "#80ABCDEF"]
+    finally:
+        color_controls_module.clear_recent_colors()
+        button.deleteLater()
 
 
 def test_color_dialog_brings_itself_to_front_each_time_it_is_shown(qapp):
