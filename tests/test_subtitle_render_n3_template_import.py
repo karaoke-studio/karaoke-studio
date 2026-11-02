@@ -128,6 +128,12 @@ def test_load_template_scales_every_font_domain_and_decor(tmp_path):
     assert scheme.glow_radius_px == 5
     assert scheme.glow_before_radius_px == 5
     assert scheme.glow_after_radius_px == 5
+    # 走字前后装饰参数解耦后，模板也要把走字前槽位落成同一组显式值，
+    # 否则应用预设时会继承目标工程原有的走字前装饰。
+    assert scheme.decoration_kind == "glow"
+    assert scheme.decoration_kind_before == "glow"
+    assert scheme.glow_concentration_level == 1
+    assert scheme.glow_before_concentration_level == 1
 
 
 def test_retained_template_payload_resolves_again_for_new_output_height(tmp_path):

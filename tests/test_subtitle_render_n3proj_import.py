@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -419,13 +420,66 @@ def test_import_decor_kind_none_as_explicit_no_decoration(tmp_path):
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
+    scheme = style.custom_style_schemes["標準配色"]
 
-    assert style.custom_style_schemes["標準配色"].decoration_kind == "none"
+    assert scheme.decoration_kind == "none"
+    assert scheme.decoration_kind_before == "none"
+    assert scheme.shadow_before_offset_x == 0
+    assert scheme.shadow_before_offset_y == 0
+
+
+def test_import_materializes_decoupled_before_decoration_slots(tmp_path):
+    """N3 只有一套装饰，走字前/后解耦后两侧都必须落成同一组显式值。"""
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"][1]["BlurLevel"] = 2
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    # DecorKind.Shadow：走字前阴影 X/Y 也是 DecorSize，不能留 None 去继承全局。
+    shadow_scheme = style.custom_style_schemes["標準配色"]
+    assert shadow_scheme.decoration_kind == "shadow"
+    assert shadow_scheme.decoration_kind_before == "shadow"
+    assert shadow_scheme.shadow_offset_x == 5
+    assert shadow_scheme.shadow_before_offset_x == 5
+    assert shadow_scheme.shadow_before_offset_y == 5
+
+    # DecorKind.Blur：走字前发光宽度与浓度同样来自 DecorSize / BlurLevel。
+    glow_scheme = style.custom_style_schemes["青配色"]
+    assert glow_scheme.decoration_kind == "glow"
+    assert glow_scheme.decoration_kind_before == "glow"
+    assert glow_scheme.glow_radius_px == 10
+    assert glow_scheme.glow_before_radius_px == 10
+    assert glow_scheme.glow_after_radius_px == 10
+    assert glow_scheme.glow_concentration_level == 2
+    assert glow_scheme.glow_before_concentration_level == 2
+
+
+def test_imported_before_decoration_does_not_leak_project_global(tmp_path):
+    """把 N3 方案叠到已有工程时，走字前槽位不能被工程全局值顶掉。"""
+    payload = _project_payload(tmp_path)
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    style = replace(
+        style,
+        decoration_kind_before="glow",
+        glow_before_concentration_level=2,
+        shadow_before_offset_x=-9,
+        shadow_before_offset_y=-9,
+    )
+
+    resolved = style_for_role(style, "標準配色")
+
+    assert resolved.decoration_kind_before == "shadow"
+    assert resolved.shadow_before_offset_x == 5
+    assert resolved.shadow_before_offset_y == 5
 
 
 def test_import_first_font_settings_become_a_named_scheme(imported):
     """第 0 套 フォント設定 也是一个具名角色，不再摊进全局默认。"""
     style = style_from_dict(imported.project_data["style"])
+    # 打开工程时直接停在导入的第一套方案，而不是全局默认。
+    assert imported.project_data["selected_scheme_key"] == "custom:標準配色"
     assert style.layout_semantics == "n3_1074"
     scheme = style.custom_style_schemes["標準配色"]
     assert scheme.n3_font_inheritance is True
@@ -517,6 +571,128 @@ def test_import_applies_explicit_latin_and_ruby_latin_strokes(tmp_path):
     assert scheme.ruby_latin_stroke_width_px == 6
     assert scheme.ruby_latin_stroke2_enabled is False
     assert scheme.ruby_latin_stroke2_width_px == 2
+
+
+def test_import_keeps_ruby_stroke2_follow_state(tmp_path):
+    """N3 的 ``UseEdge2=null`` 必须保留为“跟随主文字”，不能被物化成开启。"""
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    infos[0]["UseEdge2"] = True
+    infos[3]["UseEdge2"] = None
+    infos[5]["UseEdge2"] = None
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    scheme = style.custom_style_schemes["標準配色"]
+
+    assert scheme.ruby_stroke2_enabled is None
+    assert scheme.ruby_latin_stroke2_enabled is None
+    # 合并到角色样式后仍是 None：渲染端按主文字开关解析，而不是写成开。
+    resolved = style_for_role(style, "標準配色")
+    assert resolved.ruby_stroke2_enabled is None
+    assert resolved.stroke2_enabled is True
+
+
+def test_import_collapses_redundant_child_stroke2_when_text_follows(tmp_path):
+    """父组与子组都为开、且子组文字跟随父组时，子组描边2 收成“跟随”。"""
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    infos[0]["UseEdge2"] = True
+    infos[2].update(
+        FontName="",
+        FontFaceName="",
+        CharSize=_size(0),
+        EdgeSize=_size(0),
+        EdgeSize2=_size(4),
+        UseEdge2=True,
+    )
+    infos[3].update(FontName="", FontFaceName="", UseEdge2=True)
+    infos[5].update(
+        FontName="",
+        FontFaceName="",
+        CharSize=_size(0),
+        EdgeSize=_size(0),
+        EdgeSize2=_size(1),
+        UseEdge2=True,
+    )
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    scheme = style_from_dict(result.project_data["style"]).custom_style_schemes[
+        "標準配色"
+    ]
+
+    assert scheme.stroke2_enabled is True
+    assert scheme.latin_stroke2_enabled is None
+    assert scheme.ruby_stroke2_enabled is None
+    assert scheme.ruby_latin_stroke2_enabled is None
+    # 只收起开关；各槽自己保存的二重描边宽度原样保留。
+    assert scheme.latin_stroke2_width_px == 4
+    assert scheme.ruby_stroke2_width_px == 3
+    assert scheme.ruby_latin_stroke2_width_px == 1
+
+
+def test_import_keeps_child_stroke2_when_text_does_not_follow(tmp_path):
+    """文字没有跟随父组时，子组自己的描边2 开必须保留，不能强行收成跟随。"""
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    infos[0]["UseEdge2"] = True
+    infos[2].update(FontName="Comic Sans MS", FontFaceName="Negreta", UseEdge2=True)
+    infos[3].update(FontName="Ruby Font", FontFaceName="Bold", UseEdge2=True)
+    infos[5].update(
+        FontName="Comic Sans MS",
+        FontFaceName="Negreta",
+        CharSize=_size(30),
+        UseEdge2=True,
+    )
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    scheme = style_from_dict(result.project_data["style"]).custom_style_schemes[
+        "標準配色"
+    ]
+
+    assert scheme.latin_stroke2_enabled is True
+    assert scheme.ruby_stroke2_enabled is True
+    assert scheme.ruby_latin_stroke2_enabled is True
+
+
+def test_import_collapses_child_stroke2_when_parent_and_child_are_both_closed(tmp_path):
+    """false+false 也收成跟随；父/子同为关时不需要两个独立的不勾。"""
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    infos[0]["UseEdge2"] = False
+    for index in (2, 3, 5):
+        infos[index].update(FontName="", FontFaceName="", UseEdge2=False)
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    scheme = style_from_dict(result.project_data["style"]).custom_style_schemes[
+        "標準配色"
+    ]
+
+    assert scheme.stroke2_enabled is False
+    assert scheme.latin_stroke2_enabled is None
+    assert scheme.ruby_stroke2_enabled is None
+    assert scheme.ruby_latin_stroke2_enabled is None
+
+
+def test_import_keeps_child_stroke2_when_state_differs_from_parent(tmp_path):
+    """父开子关/父关子开是显式覆盖，不能收成跟随。"""
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    infos[0]["UseEdge2"] = True
+    infos[2].update(FontName="", FontFaceName="", UseEdge2=False)
+    infos[3].update(FontName="", FontFaceName="", UseEdge2=False)
+    infos[5].update(FontName="", FontFaceName="", UseEdge2=True)
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    scheme = style_from_dict(result.project_data["style"]).custom_style_schemes[
+        "標準配色"
+    ]
+
+    assert scheme.stroke2_enabled is True
+    assert scheme.latin_stroke2_enabled is False
+    assert scheme.ruby_stroke2_enabled is False
+    # 注音英数的直接父组（注音日文）是关，子组显式开属于覆盖。
+    assert scheme.ruby_latin_stroke2_enabled is True
 
 
 def test_import_ignores_kana_slots_and_uses_japanese_settings(tmp_path):

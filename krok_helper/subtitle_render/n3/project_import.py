@@ -550,7 +550,12 @@ def load_n3proj(
         "background": background,
         "style": style_to_dict(style),
         "screen": screen,
-        "selected_scheme_key": "global",
+        # 打开工程直接停在第一套 N3 方案：字体/颜色卡立即显示导入的描边、
+        # 装饰和走字前后配色，而不是全局默认的出厂值。没有字体方案时才回
+        # 到全局默认。
+        "selected_scheme_key": (
+            f"custom:{font_names[0]}" if font_names else "global"
+        ),
         "output": output,
     }
     if line_layout_indices is not None:

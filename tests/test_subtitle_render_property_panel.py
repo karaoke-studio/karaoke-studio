@@ -570,6 +570,31 @@ def test_property_style_controller_resolves_role_inheritance_and_legacy_colors()
     ) == {"font_size_px": 48}
 
 
+def test_changes_from_n3_scheme_clears_child_slots_for_follow_main():
+    """N3 方案应用到全局时，子槽的 None（方案内 fallback）要落成“跟随主文字”。"""
+    controller = PropertyStyleController()
+    scheme = SubtitleStyleScheme(
+        n3_font_inheritance=True,
+        font_size_px=90,
+        latin_stroke2_enabled=None,
+        ruby_stroke2_enabled=None,
+        ruby_latin_stroke2_enabled=None,
+        ruby_stroke_width_px=None,
+    )
+
+    changes = controller.changes_from_scheme(scheme)
+
+    assert changes["font_size_px"] == 90
+    assert changes["latin_stroke2_enabled"] is None
+    assert changes["ruby_stroke2_enabled"] is None
+    assert changes["ruby_latin_stroke2_enabled"] is None
+    assert changes["ruby_stroke_width_px"] is None
+    # 非 N3 方案的空槽仍然表示“不动全局值”。
+    assert "ruby_stroke2_enabled" not in controller.changes_from_scheme(
+        SubtitleStyleScheme(ruby_stroke2_enabled=None)
+    )
+
+
 def test_property_panel_uses_fluent_checkboxes(qapp):
     panel = PropertyPanel()
 
@@ -8575,6 +8600,29 @@ def test_property_panel_existing_project_role_is_not_backfilled_to_presets(qapp)
 
     assert panel.subtitle_style.custom_style_schemes["fhana"].fill_color == "#123456"
     assert "fhana" not in panel.preset_schemes
+
+
+def test_apply_n3_preset_to_global_keeps_ruby_stroke2_follow(qapp):
+    """N3 模板应用到全局时，注音描边2 的空槽要保持“跟随主文字”。"""
+    panel = PropertyPanel()
+    panel._apply_preset_to_current_target(
+        SubtitleStyleScheme(
+            n3_font_inheritance=True,
+            ruby_stroke2_enabled=None,
+            ruby_latin_stroke2_enabled=None,
+        )
+    )
+
+    assert panel.subtitle_style.ruby_stroke2_enabled is None
+    assert panel.subtitle_style.ruby_latin_stroke2_enabled is None
+    assert (
+        panel._ruby_stroke2_enabled_check.checkState()
+        is Qt.CheckState.PartiallyChecked
+    )
+    assert (
+        panel._ruby_latin_stroke2_enabled_check.checkState()
+        is Qt.CheckState.PartiallyChecked
+    )
 
 
 def test_property_panel_can_apply_preset_to_global_and_role(qapp):

@@ -217,12 +217,25 @@ class PropertyStyleController:
 
     @staticmethod
     def changes_from_scheme(scheme: SubtitleStyleScheme) -> dict[str, object]:
-        """Project a reusable scheme onto the editable global style fields."""
-        return {
-            field: value
-            for field in SCHEME_FIELDS
-            if (value := getattr(scheme, field)) is not None
-        }
+        """Project a reusable scheme onto the editable global style fields.
+
+        N3 schemes store their child-slot fallback as ``None`` (the scheme is
+        ``n3_font_inheritance``).  When such a scheme is applied to the global
+        target there is no scheme-internal parent left, so those ``None`` values
+        must be written through explicitly: otherwise the global keeps its
+        previous value (factory defaults are often the opposite: ruby stroke2
+        defaults to on) and the font card shows the old state instead of
+        "follow main".  For ordinary schemes ``None`` still means "leave the
+        global value alone" and is omitted.
+        """
+        changes: dict[str, object] = {}
+        for field in SCHEME_FIELDS:
+            value = getattr(scheme, field)
+            if value is not None:
+                changes[field] = value
+            elif scheme.n3_font_inheritance and field in N3_FONT_INHERITANCE_FIELDS:
+                changes[field] = None
+        return changes
 
     def _legacy_colors(
         self,

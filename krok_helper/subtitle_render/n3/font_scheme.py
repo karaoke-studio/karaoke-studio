@@ -259,6 +259,52 @@ def _n3_default_font_family() -> str:
     return "游明朝"
 
 
+def _collapse_redundant_stroke2_follow(changes: dict[str, Any]) -> None:
+    """Collapse redundant child ``UseEdge2=true`` into "follow parent".
+
+    N3 stores the second-outline switch independently per font slot.  When a
+    child slot's text settings inherit the parent and both slots carry the same
+    boolean, the child's value is just the inherited/default state; the font
+    card should show 跟随 (半选) instead of two independent check marks.  This
+    applies to ``true`` + ``true`` and to ``false`` + ``false``.  A child whose
+    boolean differs from its parent keeps the explicit override.
+
+    Pairs use the same resolution chain as rendering:
+    main-latin/ruby-japanese → main-japanese; ruby-latin → its ruby parent.
+    """
+    main_enabled = changes.get("stroke2_enabled")
+    if not isinstance(main_enabled, bool):
+        return
+
+    def follows(child_field: str, parent_enabled: bool, text_follows: bool) -> None:
+        child = changes.get(child_field)
+        if isinstance(child, bool) and child == parent_enabled and text_follows:
+            changes[child_field] = None
+
+    latin_text_follows = (
+        changes.get("font_family_latin") is None
+        and changes.get("latin_font_size_px") is None
+        and changes.get("latin_font_weight") is None
+    )
+    follows("latin_stroke2_enabled", main_enabled, latin_text_follows)
+
+    ruby_text_follows = bool(changes.get("ruby_font_follow_main"))
+    follows("ruby_stroke2_enabled", main_enabled, ruby_text_follows)
+
+    ruby_enabled = changes.get("ruby_stroke2_enabled")
+    ruby_effective = main_enabled if ruby_enabled is None else bool(ruby_enabled)
+    ruby_latin_text_follows = (
+        changes.get("ruby_font_family_latin") is None
+        and changes.get("ruby_latin_font_size_px") is None
+        and changes.get("ruby_latin_font_weight") is None
+    )
+    follows(
+        "ruby_latin_stroke2_enabled",
+        ruby_effective,
+        ruby_latin_text_follows,
+    )
+
+
 def convert_n3_font_scheme(
     font: dict,
     lyrics_dir: Path,
@@ -346,23 +392,42 @@ def convert_n3_font_scheme(
     )
     decor_kind = _int(font.get("DecorKind"), 0)
     decor_size = size_resolver(font.get("DecorSize"))
+    # N3 stores one decoration (``DecorKind`` / ``DecorSize`` / ``BlurLevel``)
+    # for the whole scheme, so the editor's decoupled wipe-before and wipe-after
+    # slots must both be materialized from it.  Leaving the before slots as
+    # ``None`` would make a scheme/preset inherit whichever global before-state
+    # values happen to be active instead of the imported N3 appearance.
+    concentration = normalize_glow_concentration_level(font.get("BlurLevel"))
+    changes.update(
+        glow_concentration_level=concentration,
+        glow_before_concentration_level=concentration,
+    )
     if decor_kind == 2:
-        concentration = normalize_glow_concentration_level(font.get("BlurLevel"))
         changes.update(
             decoration_kind="glow",
+            decoration_kind_before="glow",
             glow_radius_px=decor_size,
             glow_before_radius_px=decor_size,
             glow_after_radius_px=decor_size,
-            glow_concentration_level=concentration,
         )
     elif decor_kind == 1:
         changes.update(
             decoration_kind="shadow",
+            decoration_kind_before="shadow",
             shadow_offset_x=decor_size,
             shadow_offset_y=decor_size,
+            shadow_before_offset_x=decor_size,
+            shadow_before_offset_y=decor_size,
         )
     else:
-        changes.update(decoration_kind="none", shadow_offset_x=0, shadow_offset_y=0)
+        changes.update(
+            decoration_kind="none",
+            decoration_kind_before="none",
+            shadow_offset_x=0,
+            shadow_offset_y=0,
+            shadow_before_offset_x=0,
+            shadow_before_offset_y=0,
+        )
 
     changes.update(
         ruby_font_follow_main=(
@@ -406,4 +471,5 @@ def convert_n3_font_scheme(
         ruby_colors_follow_main=True,
         ruby_karaoke_colors=deepcopy(colors),
     )
+    _collapse_redundant_stroke2_follow(changes)
     return changes
