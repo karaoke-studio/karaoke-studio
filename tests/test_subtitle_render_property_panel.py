@@ -5347,6 +5347,97 @@ def test_shared_color_dialog_is_owned_by_requesting_window_on_every_open(
     host.close()
 
 
+def test_select_color_records_recent_picks_into_custom_slots(qapp, monkeypatch):
+    """每次取色自动进「自定义颜色」格子，下次打开直接可点，不必手动「添加」。"""
+    QColorDialog = color_controls_module.QColorDialog
+    color_controls_module.clear_recent_colors()
+    host = QWidget()
+    host.show()
+    qapp.processEvents()
+
+    picks = iter([QColor("#112233"), QColor("#80445566"), QColor("#112233")])
+    slots_on_open: list[list[str]] = []
+
+    def fake_exec(self):
+        slots_on_open.append(
+            [
+                QColorDialog.customColor(i).name().upper()
+                for i in range(QColorDialog.customCount())
+            ]
+        )
+        self._fake_pick = next(picks)
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(_ColorDialog, "exec", fake_exec)
+    monkeypatch.setattr(_ColorDialog, "selectedColor", lambda self: self._fake_pick)
+    try:
+        results = [
+            color_controls_module._select_color(QColor("#000000"), host, "选择颜色")
+            for _ in range(3)
+        ]
+        # 返回值仍是用户选的原色（含 alpha），记录与否不影响本次结果。
+        assert [c.name(QColor.NameFormat.HexArgb).upper() for c in results] == [
+            "#FF112233",
+            "#80445566",
+            "#FF112233",
+        ]
+        # 首次打开没有历史：全部是白（Qt 的空槽值）。
+        assert set(slots_on_open[0]) == {"#FFFFFF"}
+        # 第二次打开：上一次选中的颜色已在首格。
+        assert slots_on_open[1][0] == "#112233"
+        # 第三次打开：最新的在前，没选过的槽位仍是白。
+        assert slots_on_open[2][:3] == ["#445566", "#112233", "#FFFFFF"]
+        # 重复选择只提到最前，不重复占格。槽位只记 RGB：点击色块不会改
+        # 对话框的 alpha（alpha 一律取自滑条），所以半透明色按不透明记。
+        recent = [
+            c.name(QColor.NameFormat.HexArgb).upper()
+            for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#FF112233", "#FF445566"]
+    finally:
+        color_controls_module.clear_recent_colors()
+        host.close()
+
+
+def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(
+    qapp, monkeypatch
+):
+    """对话框里手动「添加到自定义颜色」的色也要留下来；总数不超过 16 格。"""
+    QColorDialog = color_controls_module.QColorDialog
+    color_controls_module.clear_recent_colors()
+    host = QWidget()
+    host.show()
+    qapp.processEvents()
+
+    def fake_exec(self):
+        # Qt 的「添加」按钮直接写进程级槽位；用户随后取消也不该丢。
+        QColorDialog.setCustomColor(3, QColor("#ABCDEF"))
+        return int(QDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(_ColorDialog, "exec", fake_exec)
+    try:
+        result = color_controls_module._select_color(
+            QColor("#000000"), host, "选择颜色"
+        )
+        assert not result.isValid()
+        assert [c.name().upper() for c in color_controls_module.recent_colors()] == [
+            "#ABCDEF"
+        ]
+
+        for value in range(20):
+            color_controls_module.record_recent_color(QColor(value, value, value))
+        recent = color_controls_module.recent_colors()
+        assert len(recent) == QColorDialog.customCount() == 16
+        assert recent[0].name().upper() == "#131313"
+        assert all(c.name().upper() != "#ABCDEF" for c in recent)
+        # 无效颜色不入列。
+        color_controls_module.record_recent_color(QColor())
+        assert len(color_controls_module.recent_colors()) == 16
+    finally:
+        color_controls_module.clear_recent_colors()
+        host.close()
+
+
 def test_color_dialog_brings_itself_to_front_each_time_it_is_shown(qapp):
     dialog = _ColorDialog(QColor("#4093E9"))
     calls: list[str] = []

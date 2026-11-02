@@ -1065,8 +1065,8 @@ def test_main_window_solid_color_dialog_refreshes_swatch(qapp, monkeypatch):
             "pre", {"enabled": True, "source_kind": "solid"}
         )
         monkeypatch.setattr(
-            mw.QColorDialog,
-            "getColor",
+            mw,
+            "_select_color",
             lambda *args, **kwargs: QColor("#445566"),
         )
         win._on_roll_solid_color_dialog("pre")

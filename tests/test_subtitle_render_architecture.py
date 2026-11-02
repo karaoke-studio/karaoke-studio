@@ -4577,6 +4577,20 @@ def test_subtitle_property_panel_delegates_color_controls() -> None:
     assert "_SubGroup" not in inline_names
 
 
+def test_subtitle_frontend_color_pickers_share_the_custom_dialog() -> None:
+    """所有取色都走 color_controls._select_color。
+
+    静态 QColorDialog.getColor() 没有 alpha 滑条，也绕过了进程内「最近颜色」
+    槽位的回填，前黑/后黑与纯色背景曾因此与属性面板的调色板不一致。
+    """
+    offenders = sorted(
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "frontend").rglob("*.py")
+        if "QColorDialog.getColor(" in path.read_text(encoding="utf-8-sig")
+    )
+    assert offenders == []
+
+
 def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> None:
     panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"

@@ -59,7 +59,6 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QColorDialog,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -202,6 +201,9 @@ from krok_helper.subtitle_render.frontend.dialogs.workspace_dialogs import (
     layout_issue_icon as _layout_issue_icon,
 )
 from krok_helper.subtitle_render.frontend.widgets.font_loading import font_list_loading_overlay
+from krok_helper.subtitle_render.frontend.properties.color_controls import (
+    _select_color,
+)
 from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     GuideBitmapSettingsDialog,
     GuidePrefixMatch,
@@ -4061,11 +4063,12 @@ class SubtitleRenderWindow(QWidget):
 
     def _on_roll_solid_color_dialog(self, segment: str) -> None:
         current = self._roll_config_for(segment)
-        color = QColorDialog.getColor(
+        color = _select_color(
             QColor(current.source.color or "#000000"), self, "选择前黑/后黑背景颜色"
         )
         if not color.isValid():
             return
+        # 背景只收不透明色：name() 丢掉调色板滑条上的 alpha 是有意的。
         self._commit_roll_config(
             segment,
             replace(
@@ -4141,8 +4144,9 @@ class SubtitleRenderWindow(QWidget):
 
     def _choose_solid_background(self) -> None:
         initial = self._background_source.color if self._background_source else "#000000"
-        color = QColorDialog.getColor(initial=QColor(initial), parent=self, title="选择纯色背景")
+        color = _select_color(QColor(initial), self, "选择纯色背景")
         if color.isValid():
+            # 背景只收不透明色：name() 丢掉调色板滑条上的 alpha 是有意的。
             self.set_solid_background(color.name())
 
     def _browse_audio(self) -> None:
