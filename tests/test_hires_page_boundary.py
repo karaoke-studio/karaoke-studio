@@ -94,19 +94,19 @@ def test_material_handoff_lands_in_the_cards(page) -> None:
     assert ("toast", "伴奏已交给下一步") in calls
 
 
-def test_roll_timing_handoff_fills_compensation_fields(page) -> None:
+def test_roll_timing_handoff_fills_seconds_fields(page) -> None:
     widget, _ = page
     widget.set_video_path(
         Path("D:/tmp/成片.mp4"),
         pre_roll_ms=1200,
         post_roll_ms=800,
     )
-    assert widget.pre_roll_spin.value() == 1200
-    assert widget.post_roll_spin.value() == 800
-    # 手动换视频时回到无补偿，避免把上一片的时长带到新素材上。
+    assert widget.pre_roll_edit.text() == "1.200"
+    assert widget.post_roll_edit.text() == "0.800"
+    # 手动换视频时回到无前后黑，避免把上一片的时长带到新素材上。
     widget.set_video_path(Path("D:/tmp/另一个成片.mp4"))
-    assert widget.pre_roll_spin.value() == 0
-    assert widget.post_roll_spin.value() == 0
+    assert widget.pre_roll_edit.text() == "0.000"
+    assert widget.post_roll_edit.text() == "0.000"
 
 
 def test_the_page_does_not_import_the_shell() -> None:

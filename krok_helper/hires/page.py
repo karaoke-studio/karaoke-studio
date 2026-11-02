@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import time
 from pathlib import Path
@@ -21,13 +22,14 @@ from typing import Callable, Protocol, Sequence, runtime_checkable
 from PyQt6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
+    QLocale,
     QPropertyAnimation,
     QRectF,
     Qt,
     pyqtProperty,
     pyqtSignal as Signal,
 )
-from PyQt6.QtGui import QColor, QFont, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QDoubleValidator, QFont, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -37,11 +39,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    LineEdit as FluentLineEdit,
     PlainTextEdit as QPlainTextEdit,
     PrimaryPushButton,
     ProgressBar as QProgressBar,
     PushButton as QPushButton,
-    SpinBox,
 )
 
 from krok_helper.qfluent_compat import show_fluent_error, show_fluent_info
@@ -812,31 +814,23 @@ class HiResPage(QWidget):
         settings_layout.addWidget(settings_button, 0, 2)
         settings_layout.setColumnStretch(1, 1)
 
-        timing_label = QLabel("前黑 / 后黑补偿")
-        timing_label.setToolTip(
-            "工作流从字幕成片转交时会自动带入；手动选择成片时按前黑/后黑时长填写。"
+        timing_hint = (
+            "从字幕成片转交时自动带入；手动选择成片时按秒填写，例如 1.200。"
         )
-        _wb_th(timing_label, lambda: f'font-size: 11pt; font-weight: 400; color: {_wb_pal().text_secondary};')
         timing_row = QHBoxLayout()
         timing_row.setContentsMargins(0, 0, 0, 0)
         timing_row.setSpacing(8)
-        self.pre_roll_spin = SpinBox()
-        self.pre_roll_spin.setRange(0, 3_600_000)
-        self.pre_roll_spin.setSuffix(" ms")
-        self.pre_roll_spin.setValue(0)
-        self.pre_roll_spin.setToolTip("成片开头前黑的时长；无前黑填 0。")
-        self.post_roll_spin = SpinBox()
-        self.post_roll_spin.setRange(0, 3_600_000)
-        self.post_roll_spin.setSuffix(" ms")
-        self.post_roll_spin.setValue(0)
-        self.post_roll_spin.setToolTip("成片结尾后黑的时长；无后黑填 0。")
-        timing_row.addWidget(QLabel("前黑"))
-        timing_row.addWidget(self.pre_roll_spin)
-        timing_row.addWidget(QLabel("后黑"))
-        timing_row.addWidget(self.post_roll_spin)
+        self.pre_roll_edit = self._make_roll_seconds_edit(timing_hint)
+        self.post_roll_edit = self._make_roll_seconds_edit(timing_hint)
+        timing_row.addWidget(QLabel("视频前黑时长"))
+        timing_row.addWidget(self.pre_roll_edit)
+        timing_row.addWidget(QLabel("秒"))
+        timing_row.addSpacing(18)
+        timing_row.addWidget(QLabel("视频后黑时长"))
+        timing_row.addWidget(self.post_roll_edit)
+        timing_row.addWidget(QLabel("秒"))
         timing_row.addStretch(1)
-        settings_layout.addWidget(timing_label, 1, 0)
-        settings_layout.addLayout(timing_row, 1, 1)
+        settings_layout.addLayout(timing_row, 1, 0, 1, 2)
         shell.addWidget(settings_card)
 
         card_row = QHBoxLayout()
@@ -978,6 +972,35 @@ class HiResPage(QWidget):
         controls_bar.apply_button_metrics(self.hires_start_button, self.hires_cancel_button, clear_button, open_output_button)
         shell.addWidget(controls_bar)
 
+    @staticmethod
+    def _format_roll_seconds(value_ms: int | None) -> str:
+        return f"{max(int(value_ms or 0), 0) / 1000.0:.3f}"
+
+    def _make_roll_seconds_edit(self, tooltip: str) -> FluentLineEdit:
+        edit = FluentLineEdit(self)
+        edit.setFixedWidth(90)
+        edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        edit.setPlaceholderText("0.000")
+        edit.setToolTip(tooltip)
+        validator = QDoubleValidator(0.0, 3_600.0, 3, edit)
+        validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        validator.setLocale(QLocale.c())
+        edit.setValidator(validator)
+        edit.setText("0.000")
+        return edit
+
+    def _roll_seconds_value(self, edit: FluentLineEdit, label: str) -> int:
+        text = edit.text().strip()
+        if not text:
+            return 0
+        try:
+            value = float(text)
+        except ValueError as exc:
+            raise ProcessingError(f"{label}需填写秒数，例如 1.200。") from exc
+        if not math.isfinite(value) or value < 0:
+            raise ProcessingError(f"{label}需填写不小于 0 的秒数，例如 1.200。")
+        return int(round(value * 1000))
+
     def set_video_path(
         self,
         path: Path,
@@ -987,9 +1010,9 @@ class HiResPage(QWidget):
     ) -> None:
         self.video_zone.set_path(path)
         self.output_dir_label.setText(str(resolve_output_dir(path)))
-        # 工作流转交会显式带入；手动选择视频则回到“无补偿”，由用户按需填写。
-        self.pre_roll_spin.setValue(max(int(pre_roll_ms or 0), 0))
-        self.post_roll_spin.setValue(max(int(post_roll_ms or 0), 0))
+        # 工作流转交会显式带入；手动选择视频则回到“无前后黑”，由用户按秒填写。
+        self.pre_roll_edit.setText(self._format_roll_seconds(pre_roll_ms or 0))
+        self.post_roll_edit.setText(self._format_roll_seconds(post_roll_ms or 0))
 
     def set_on_vocal_path(self, path: Path) -> None:
         self.on_vocal_zone.set_path(path)
@@ -1080,8 +1103,8 @@ class HiResPage(QWidget):
             output_name_mode,
             on_template,
             off_template,
-            max(int(self.pre_roll_spin.value()), 0),
-            max(int(self.post_roll_spin.value()), 0),
+            self._roll_seconds_value(self.pre_roll_edit, "视频前黑时长"),
+            self._roll_seconds_value(self.post_roll_edit, "视频后黑时长"),
         )
 
     def collect_settings(self) -> None:
