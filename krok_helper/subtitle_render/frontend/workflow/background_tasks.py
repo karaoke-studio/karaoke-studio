@@ -282,6 +282,7 @@ class _RollMediaLoadWorker(QObject):
         ffprobe_path: str,
         preview_fps: int | float,
         preview_quality: str,
+        sequence_fps: int | float | None = None,
     ) -> None:
         super().__init__()
         self._generation = int(generation)
@@ -292,6 +293,8 @@ class _RollMediaLoadWorker(QObject):
         # 慢速序列（0.5 = 每张 2 秒）合法；非法值在 _load_image_sequence
         # 经 normalize_sequence_fps 兜底，这里不再钳到 >= 1。
         self._preview_fps = float(preview_fps)
+        # 用户在帧率弹窗里选定的序列源帧率；None = 未询问（回退工程帧率）。
+        self._sequence_fps = sequence_fps
         self._preview_quality = str(preview_quality)
 
     def run(self) -> None:
@@ -348,7 +351,10 @@ class _RollMediaLoadWorker(QObject):
         if pattern == self._path:
             result.error = "首帧文件名需要以连续编号结尾，例如 frame_0001.png。"
             return
-        fps = normalize_sequence_fps(self._preview_fps)
+        # 弹窗选定的源帧率优先；未询问时回退工程帧率（历史行为）。
+        fps = normalize_sequence_fps(
+            self._sequence_fps if self._sequence_fps is not None else self._preview_fps
+        )
         frames = count_image_sequence_frames(pattern, start_number)
         result.source = BackgroundSource(
             kind="image_sequence",

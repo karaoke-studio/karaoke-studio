@@ -1922,6 +1922,137 @@ def test_roll_browse_video_keeps_duration_and_shows_source_hint(
         qapp.processEvents()
 
 
+def test_roll_browse_sequence_uses_fluent_fps_input(qapp, tmp_path, monkeypatch):
+    """前黑图片序列：选帧后弹筛选式帧率弹窗，选定值落库并驱动素材时长。"""
+    import importlib
+    from PyQt6.QtGui import QColor, QImage
+
+    mw = importlib.import_module(
+        "krok_helper.subtitle_render.frontend.main_window"
+    )
+    for index in range(1, 4):
+        image = QImage(32, 24, QImage.Format.Format_RGB32)
+        image.fill(QColor("#305070"))
+        assert image.save(str(tmp_path / f"frame_{index:04d}.png"))
+    win = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=_DictSettingsProvider()
+    )
+    try:
+        monkeypatch.setattr(
+            mw.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(tmp_path / "frame_0001.png"), ""),
+        )
+        captured: dict[str, object] = {}
+
+        def get_fps(parent, title, label, **kwargs):
+            captured.update(parent=parent, title=title, label=label, kwargs=kwargs)
+            return 0.5, True
+
+        monkeypatch.setattr(mw, "fluent_get_fps", get_fps)
+        win._on_roll_browse("pre", "image_sequence")
+
+        assert captured["title"] == "前黑图片序列帧率"
+        assert captured["kwargs"] == {"value": win._export_fps_value()}
+        assert _wait_until(
+            qapp,
+            lambda: win._pre_roll is not None
+            and win._pre_roll.source.kind == "image_sequence"
+            and win._pre_roll.source.source_fps == 0.5
+            and win._pre_roll.source_duration_ms == 6000,
+        )
+        assert _wait_until(
+            qapp,
+            lambda: win._property_panel._roll_duration_hints["pre"][
+                "image_sequence"
+            ].text()
+            == "【素材时长： 00:00:06.000（6.000秒）】",
+        )
+    finally:
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_roll_browse_sequence_dialog_defaults_to_current_fps(
+    qapp, tmp_path, monkeypatch
+):
+    """段上已是图片序列时，弹窗默认带回当前帧率而非工程帧率。"""
+    import importlib
+    from PyQt6.QtGui import QColor, QImage
+
+    mw = importlib.import_module(
+        "krok_helper.subtitle_render.frontend.main_window"
+    )
+    for index in range(1, 4):
+        image = QImage(32, 24, QImage.Format.Format_RGB32)
+        image.fill(QColor("#305070"))
+        assert image.save(str(tmp_path / f"frame_{index:04d}.png"))
+    win = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=_DictSettingsProvider()
+    )
+    try:
+        win._pre_roll = RollSegmentConfig(
+            enabled=True,
+            duration_ms=3000,
+            source=BackgroundSource(
+                kind="image_sequence",
+                path=str(tmp_path / "frame_%04d.png"),
+                source_fps=23.976,
+                sequence_start_number=1,
+            ),
+        )
+        monkeypatch.setattr(
+            mw.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(tmp_path / "frame_0001.png"), ""),
+        )
+        captured: dict[str, object] = {}
+
+        def get_fps(parent, title, label, **kwargs):
+            captured.update(kwargs=kwargs)
+            return 23.976, True
+
+        monkeypatch.setattr(mw, "fluent_get_fps", get_fps)
+        win._on_roll_browse("pre", "image_sequence")
+
+        assert captured["kwargs"] == {"value": 23.976}
+        assert _wait_until(
+            qapp,
+            lambda: win._pre_roll.source.source_fps == 23.976,
+        )
+    finally:
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_roll_browse_sequence_dialog_cancel_aborts_load(qapp, tmp_path, monkeypatch):
+    """弹窗取消：不加载素材、不弹加载提示。"""
+    import importlib
+
+    mw = importlib.import_module(
+        "krok_helper.subtitle_render.frontend.main_window"
+    )
+    win = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=_DictSettingsProvider()
+    )
+    try:
+        monkeypatch.setattr(
+            mw.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(tmp_path / "frame_0001.png"), ""),
+        )
+        monkeypatch.setattr(
+            mw, "fluent_get_fps", lambda *args, **kwargs: (60, False)
+        )
+        win._on_roll_browse("post", "image_sequence")
+
+        assert not win._roll_media_tooltips
+        assert win._post_roll is None or win._post_roll.source.kind != "image_sequence"
+    finally:
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_roll_defaults_app_preference_round_trip(qapp):
     """app 级默认值：改一次后新建窗口/新段仍沿用，且随 settings 保存。"""
     import importlib
@@ -2116,6 +2247,52 @@ def test_roll_media_load_worker_duration_is_exact_for_fractional_fps(
     assert result.error == ""
     assert result.source.source_fps == preview_fps
     assert result.source_duration_ms == expected_duration_ms
+
+
+def test_roll_media_load_worker_sequence_fps_overrides_preview_fps(qapp, tmp_path):
+    """弹窗选定的序列源帧率优先于工程帧率；None 回退工程帧率。"""
+    from PyQt6.QtGui import QColor, QImage
+
+    from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
+        RollMediaLoadResult,
+        _RollMediaLoadWorker,
+    )
+
+    for index in range(1, 4):
+        image = QImage(32, 24, QImage.Format.Format_RGB32)
+        image.fill(QColor("#305070"))
+        assert image.save(str(tmp_path / f"frame_{index:04d}.png"))
+
+    worker = _RollMediaLoadWorker(
+        7,
+        "pre",
+        "image_sequence",
+        tmp_path / "frame_0001.png",
+        ffprobe_path="ffprobe",
+        preview_fps=60,
+        preview_quality="high",
+        sequence_fps=0.5,
+    )
+    result = RollMediaLoadResult(7, "pre", "image_sequence")
+    worker._load_image_sequence(result)
+    assert result.error == ""
+    assert result.source.source_fps == 0.5
+    assert result.source_duration_ms == 6000  # 3 帧 / 0.5fps
+
+    fallback_worker = _RollMediaLoadWorker(
+        8,
+        "pre",
+        "image_sequence",
+        tmp_path / "frame_0001.png",
+        ffprobe_path="ffprobe",
+        preview_fps=29.97,
+        preview_quality="high",
+    )
+    fallback_result = RollMediaLoadResult(8, "pre", "image_sequence")
+    fallback_worker._load_image_sequence(fallback_result)
+    assert fallback_result.error == ""
+    assert fallback_result.source.source_fps == 29.97
+    assert fallback_result.source_duration_ms == 100
 
 
 def test_open_roll_defaults_applies_and_persists(qapp, monkeypatch):

@@ -460,6 +460,32 @@ def test_build_render_command_keeps_fractional_sequence_fps(
         "-stream_loop", "-1", "-framerate", framerate_text,
         "-start_number", "0", "-i", str(first),
     ]
+    # 重采样边界对齐预览：图片序列链必须带 round=up（见真 ffmpeg 集成测试）。
+    graph = command[command.index("-filter_complex") + 1]
+    assert "fps=60:round=up," in graph
+
+
+def test_background_resample_filter_rounds_only_image_sequences(tmp_path):
+    from krok_helper.subtitle_render.engine.export.export_command import (
+        background_resample_filter,
+    )
+
+    job = _job(tmp_path)
+
+    assert background_resample_filter(job, "image_sequence") == "fps=60:round=up"
+    assert background_resample_filter(job, "video") == "fps=60"
+    assert background_resample_filter(job, "image") == "fps=60"
+    assert background_resample_filter(job, "solid") == "fps=60"
+
+
+def test_background_resample_filter_keeps_fractional_output_rate(tmp_path):
+    from krok_helper.subtitle_render.engine.export.export_command import (
+        background_resample_filter,
+    )
+
+    job = replace(_job(tmp_path), fps=30000 / 1001)
+
+    assert background_resample_filter(job, "image_sequence") == "fps=30000/1001:round=up"
 
 
 def test_roll_segment_input_args_keeps_fractional_sequence_fps(tmp_path):

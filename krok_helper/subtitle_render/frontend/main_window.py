@@ -3795,6 +3795,7 @@ class SubtitleRenderWindow(QWidget):
         label = "前黑" if segment == "pre" else "后黑"
         current = self._roll_config_for(segment)
         start_dir = str(Path(current.source.path).parent) if current.source.path else ""
+        sequence_fps = None
         if kind == "video":
             path_str, _ = QFileDialog.getOpenFileName(
                 self, f"选择{label}视频", start_dir, VIDEO_FILTER
@@ -3803,6 +3804,22 @@ class SubtitleRenderWindow(QWidget):
             path_str, _ = QFileDialog.getOpenFileName(
                 self, f"选择{label}图片序列首帧", start_dir, IMAGE_FILTER
             )
+            if not path_str:
+                return
+            # 与主背景同款筛选式帧率弹窗：默认带回当前段已设帧率，否则工程帧率。
+            sequence_fps, ok = fluent_get_fps(
+                self,
+                f"{label}图片序列帧率",
+                "源帧率（每秒图片数），可输小数或分数：0.5 = 每张 2 秒，1/30 = 每张 30 秒",
+                value=(
+                    normalize_sequence_fps(current.source.source_fps)
+                    if current.source.kind == "image_sequence"
+                    and current.source.source_fps
+                    else normalize_sequence_fps(self._export_fps_value())
+                ),
+            )
+            if not ok:
+                return
         elif kind == "image":
             path_str, _ = QFileDialog.getOpenFileName(
                 self, f"选择{label}一图流图片", start_dir, IMAGE_FILTER
@@ -3811,10 +3828,12 @@ class SubtitleRenderWindow(QWidget):
             return
         if not path_str:
             return
-        self._start_roll_media_load(segment, kind, Path(path_str))
+        self._start_roll_media_load(
+            segment, kind, Path(path_str), source_fps=sequence_fps
+        )
 
     def _start_roll_media_load(
-        self, segment: str, kind: str, path: Path
+        self, segment: str, kind: str, path: Path, *, source_fps: int | float | None = None
     ) -> None:
         """在后台线程读取素材（ffprobe/首帧/帧数）并准备普通预览源。"""
 
@@ -3865,6 +3884,7 @@ class SubtitleRenderWindow(QWidget):
             ffprobe_path=self._resolve_ffprobe_path(),
             preview_fps=self._export_fps_value(),
             preview_quality=self._transport_bar.preview_quality(),
+            sequence_fps=source_fps,
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)

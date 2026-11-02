@@ -128,6 +128,56 @@ def test_roll_graph_uses_xfade_and_segment_inputs(tmp_path):
     assert len(inputs) == 3
 
 
+def test_roll_graph_sequence_segment_resamples_with_round_up(tmp_path):
+    """前黑图片序列段的重采样必须 round=up 对齐预览边界；其他素材维持原样。"""
+    sequence = tmp_path / "frames"
+    sequence.mkdir()
+    pattern = sequence / "frame_%04d.png"
+    pre = RollSegmentConfig(
+        enabled=True,
+        source=BackgroundSource(
+            kind="image_sequence", path=str(pattern), source_fps=0.5
+        ),
+        duration_ms=4000,
+    )
+    job = _job(tmp_path, pre=pre, post=_post(tmp_path, 2000))
+    (sequence / "frame_0000.png").touch()
+
+    graph, inputs = roll_background_graph(job, resolve_roll_timeline(job), 12.0)
+
+    # 前黑段（图片序列）链带 round=up；主背景（视频）与后黑（纯色）保持原样。
+    assert "fps=30:round=up,format=yuv420p" in graph
+    assert graph.count("fps=30,") >= 2  # 主段 + 后黑纯色（r= 不在此列）
+    assert "fps=30:round=up" not in graph.replace("fps=30:round=up,format=yuv420p", "")
+    assert any("-framerate" in arg for arg in inputs[1])
+    assert inputs[1][inputs[1].index("-framerate") + 1] == "1/2"
+
+
+def test_roll_graph_sequence_main_background_resamples_with_round_up(tmp_path):
+    """主背景为图片序列时，roll 图里的主段链同样 round=up（视频段不变）。"""
+    sequence = tmp_path / "frames"
+    sequence.mkdir()
+    pattern = sequence / "frame_%04d.png"
+    (sequence / "frame_0000.png").touch()
+    job = _job(
+        tmp_path,
+        pre=_pre(tmp_path, 2000),
+        background_source=BackgroundSource(
+            kind="image_sequence", path=str(pattern), source_fps=29.97
+        ),
+    )
+
+    graph, _ = roll_background_graph(job, resolve_roll_timeline(job), 8.0)
+
+    # 主段（图片序列，cover 分支）链带 round=up，且全图仅此一处。
+    assert (
+        "crop=320:180,fps=30:round=up,format=yuv420p" in graph
+    )
+    assert graph.count("fps=30:round=up") == 1
+    # 前黑段（视频）保持 plain 重采样。
+    assert "fps=30,format=yuv420p" in graph
+
+
 def test_roll_graph_without_main_content_concats_pre_and_post(tmp_path):
     """主段时长为 0（纯前黑/后黑工程）时不能生成空的主段链。"""
     from krok_helper.subtitle_render.domain.roll import build_roll_timeline

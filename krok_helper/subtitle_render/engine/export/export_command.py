@@ -94,6 +94,19 @@ def transparent_background_chain(job: RenderJob, duration_seconds: float) -> str
     )
 
 
+def background_resample_filter(job: RenderJob, kind: str) -> str:
+    """画布帧率重采样滤镜串；图片序列用 ``round=up`` 对齐预览选帧边界。
+
+    ``fps`` 滤镜默认 ``round=near`` 会把源帧起点映射到最近的输出 tick，
+    小数源帧率（29.97@60）下导出比预览的向下取整早一帧换图；``round=up``
+    让源帧 k 首现于 ``ceil(k·r_o/r_s)`` tick，与预览
+    ``background_sequence_frame_index`` 的 ``floor(i·r_s/r_o)`` 完全一致，
+    整除边界（0.5@60 的 tick 120）不变。视频/GIF/纯色维持既有口径。
+    """
+    rate = frame_rate_text(job.fps)
+    return f"fps={rate}:round=up" if kind == "image_sequence" else f"fps={rate}"
+
+
 def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
     """Build the background scaling chain with preview-equivalent semantics."""
 
@@ -104,18 +117,19 @@ def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
     # frame. Trim afterwards so longer videos keep the requested duration.
     tail = "tpad=stop_mode=add:stop=-1:color=black," if source.kind == "video" else ""
     cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
+    resample = background_resample_filter(job, source.kind)
     if cover:
         return (
             f"[1:v:0]scale={job.width}:{job.height}"
             ":force_original_aspect_ratio=increase:force_divisible_by=2,"
             f"crop={job.width}:{job.height},"
-            f"fps={frame_rate_text(job.fps)},trim=duration={duration_seconds:.6f},"
+            f"{resample},trim=duration={duration_seconds:.6f},"
             "setpts=PTS-STARTPTS[bg];"
         )
     return (
         f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"fps={frame_rate_text(job.fps)},{tail}trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
+        f"{resample},{tail}trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
     )
 
 
@@ -315,7 +329,7 @@ def _roll_segment_chain(
     normalized = config.normalized()
     source = normalized.source
     graph = _roll_fill_chain(in_label, f"{in_label}f", job, config)
-    chain = f"fps={frame_rate_text(job.fps)},format=yuv420p"
+    chain = f"{background_resample_filter(job, source.kind)},format=yuv420p"
     if prepend_clone_ms > 0:
         chain += f",tpad=start_mode=clone:start_duration={_seconds(prepend_clone_ms)}"
     if source.kind == "video":
@@ -367,7 +381,7 @@ def _roll_main_chain(
         else f"scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black"
     )
-    chain = f"{scale},fps={frame_rate_text(job.fps)},format=yuv420p"
+    chain = f"{scale},{background_resample_filter(job, source.kind)},format=yuv420p"
     if prepend_clone_ms > 0:
         chain += f",tpad=start_mode=clone:start_duration={_seconds(prepend_clone_ms)}"
     if source.kind == "video":
