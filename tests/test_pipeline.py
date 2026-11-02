@@ -226,3 +226,47 @@ def test_original_roll_audio_exports_both_outputs_with_high_sample_rate(
         audio = next(s for s in probe["streams"] if s["codec_type"] == "audio")
         assert int(audio["sample_rate"]) == 96000
         assert abs(float(probe["format"]["duration"]) - 2.0) < 0.05
+
+
+@pytest.mark.skipif(
+    find_tool("ffmpeg") is None or find_tool("ffprobe") is None,
+    reason="本机无 ffmpeg/ffprobe",
+)
+def test_hires_output_is_always_at_least_48k_for_low_rate_sources(
+    tmp_path: Path,
+) -> None:
+    ffmpeg = Path(find_tool("ffmpeg"))
+    ffprobe = Path(find_tool("ffprobe"))
+    video = tmp_path / "low.mp4"
+    stem = tmp_path / "low.flac"
+    subprocess.run(
+        [
+            str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=size=160x90:rate=30:duration=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1:sample_rate=44100",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-shortest", str(video),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "sine=frequency=880:duration=1:sample_rate=44100",
+            "-c:a", "flac", str(stem),
+        ],
+        check=True,
+    )
+    outputs = run_pipeline(
+        video_path=video,
+        on_vocal_path=stem,
+        output_dir=tmp_path / "out",
+        ffmpeg_dir=ffmpeg.parent,
+    )
+    probe = json.loads(
+        subprocess.check_output(
+            [str(ffprobe), "-v", "error", "-show_streams", "-of", "json", str(outputs[0])]
+        )
+    )
+    audio = next(s for s in probe["streams"] if s["codec_type"] == "audio")
+    assert int(audio["sample_rate"]) == 48000
