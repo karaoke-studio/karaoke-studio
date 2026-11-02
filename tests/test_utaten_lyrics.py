@@ -286,3 +286,45 @@ def test_embedded_sug_utaten_import_preserves_katakana_ruby() -> None:
         if chars[index].ruby is not None
     ))
     assert imported_reading == "\u30eb\u30af\u30a4\u30a8\u30e0"
+
+
+def test_utaten_empty_advanced_search_uses_quick_search(monkeypatch) -> None:
+    from urllib.parse import parse_qs, urlsplit
+    import krok_helper.lyrics as lyrics
+
+    calls = []
+    def load(request):
+        params = parse_qs(urlsplit(request.full_url).query)
+        calls.append(params)
+        if "layout_search_text" not in params:
+            return "  "
+        return """<table class="searchResult"><tr>
+          <td><p class="searchResult__title"><a href="/lyric/sz26100501/">結び</a></p></td>
+          <td class="searchResult__artist"><p><a href="/artist/41747/">Ayumu Imazu</a></p></td>
+        </tr></table>"""
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+    results = UtatenLyricsProvider()._search_once(title="結び", artist="Ayumu Imazu")
+    assert results[0]["url"] == "https://utaten.com/lyric/sz26100501/"
+    assert results[0]["artist"] == "Ayumu Imazu"
+    assert calls[1] == {"layout_search_text": ["結び"], "layout_search_type": ["title"],
+                        "artist_name": ["Ayumu Imazu"]}
+
+
+def test_utaten_empty_response_is_not_no_results(monkeypatch) -> None:
+    import pytest
+    import krok_helper.lyrics as lyrics
+    monkeypatch.setattr(lyrics, "_load_text_from_request", lambda request: "")
+    with pytest.raises(lyrics.LyricsSearchError, match="空白搜索页面"):
+        UtatenLyricsProvider().search("結び")
+
+
+def test_utaten_valid_no_results_does_not_retry(monkeypatch) -> None:
+    import krok_helper.lyrics as lyrics
+    calls = []
+    def load(request):
+        calls.append(request.full_url)
+        return '<table class="searchResult"><tr><th>header</th></tr></table>'
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+    assert UtatenLyricsProvider().search("不存在") == []
+    assert len(calls) == 1

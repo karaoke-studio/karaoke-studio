@@ -412,7 +412,23 @@ class UtatenLyricsProvider:
                 "User-Agent": f"{APP_NAME}/{APP_VERSION} (lyrics search)",
             },
         )
-        return _parse_utaten_search_results(_load_text_from_request(request), base_url=self.base_url)
+        html_text = _load_text_from_request(request)
+        if not html_text.strip():
+            # The advanced endpoint can return HTTP 200 with an empty body.
+            # Use the site's quick-search form while retaining the artist filter.
+            fallback_params = {
+                "layout_search_text": title,
+                "layout_search_type": "title",
+                "artist_name": artist,
+            }
+            request = Request(
+                f"{self.base_url}/search?{urlencode(fallback_params)}",
+                headers=dict(request.header_items()),
+            )
+            html_text = _load_text_from_request(request)
+            if not html_text.strip():
+                raise LyricsSearchError("UtaTen 返回空白搜索页面，请稍后重试。")
+        return _parse_utaten_search_results(html_text, base_url=self.base_url)
 
     def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
         url = ""
