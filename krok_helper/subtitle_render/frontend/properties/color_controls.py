@@ -630,10 +630,12 @@ class _AlphaSlider(QWidget):
 class _ColorDialog(QColorDialog):
     """Qt color dialog with a visible alpha slider beside the hue strip.
 
-    The custom-colors row doubles as the app's recent colors. Qt treats those
-    slots as RGB-only in practice (its getter reports them opaque and picking
-    a swatch never touches alpha), so the dialog keeps its own slot -> color
-    map and puts the remembered alpha back itself when a swatch is picked.
+    The custom-colors row doubles as the app's recent colors, newest first.
+    Qt treats those slots as RGB-only in practice (its getter reports them
+    opaque and picking a swatch never touches alpha) and its own "add" button
+    writes wherever its cursor points, so the dialog keeps a slot -> color map
+    to put the remembered alpha back on a pick, and re-sorts the row from the
+    recent list right after an in-dialog add or drop.
     """
 
     # QColorDialog lays the custom row out as 2 rows x 8 columns and indexes
@@ -645,9 +647,7 @@ class _ColorDialog(QColorDialog):
     ) -> None:
         super().__init__(current, parent)
         self._recent_slot_colors: dict[int, QColor] = {}
-        # Mirrors QColorDialogPrivate::nextCust: the slot the next "add" click
-        # writes to (last clicked cell, advancing by one after each add).
-        self._next_custom_slot = 0
+        self._custom_well: Optional[QWidget] = None
         self._recent_hooks_installed = False
         self.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
         self.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
@@ -745,13 +745,10 @@ class _ColorDialog(QColorDialog):
         if well is None or button is None:
             return
         self._recent_hooks_installed = True
+        self._custom_well = well
         well.selected.connect(self._restore_recent_alpha)
-        well.currentChanged.connect(self._track_next_custom_slot)
         well.colorChanged.connect(self._record_dropped_custom_color)
         button.clicked.connect(self._record_added_custom_color)
-
-    def _track_next_custom_slot(self, row: int, col: int) -> None:
-        self._next_custom_slot = row + self._CUSTOM_ROWS * col
 
     def _restore_recent_alpha(self, row: int, col: int) -> None:
         remembered = self._recent_slot_colors.get(row + self._CUSTOM_ROWS * col)
@@ -762,19 +759,20 @@ class _ColorDialog(QColorDialog):
         if remembered.alpha() != current.alpha():
             self.setCurrentColor(QColor(remembered))
 
-    def _record_added_custom_color(self) -> None:
-        color = self.currentColor()
-        index = self._next_custom_slot
-        self._next_custom_slot = (index + 1) % QColorDialog.customCount()
-        record_recent_color(color)
-        if QColorDialog.customColor(index).rgb() == color.rgb():
-            self._recent_slot_colors[index] = QColor(color)
+    def _refresh_recent_slots(self) -> None:
+        """Re-sort the row newest-first after Qt wrote at its own cursor."""
+        _seed_custom_color_slots(self)
+        if self._custom_well is not None:
+            self._custom_well.update()
 
-    def _record_dropped_custom_color(self, index: int, rgb: int) -> None:
+    def _record_added_custom_color(self) -> None:
+        record_recent_color(self.currentColor())
+        self._refresh_recent_slots()
+
+    def _record_dropped_custom_color(self, _index: int, rgb: int) -> None:
         # Qt stores dropped colors opaque.
-        color = QColor.fromRgb(rgb)
-        record_recent_color(color)
-        self._recent_slot_colors[index] = color
+        record_recent_color(QColor.fromRgb(rgb))
+        self._refresh_recent_slots()
 
 
 _shared_color_dialog: Optional[_ColorDialog] = None
@@ -785,8 +783,10 @@ _shared_color_dialog: Optional[_ColorDialog] = None
 # that bookkeeping by hand. The app treats those slots as the recently picked
 # colors instead: every accepted pick, "add" click and drop lands at the front
 # of this list, and the list is written back into the slots right before the
-# dialog opens. It lives for the process only. Alpha is kept here and restored
-# by _ColorDialog on swatch picks, since Qt itself treats the slots as RGB-only.
+# dialog opens and right after an in-dialog add or drop, so the row always
+# reads newest-first with the oldest pushed out. It lives for the process
+# only. Alpha is kept here and restored by _ColorDialog on swatch picks, since
+# Qt itself treats the slots as RGB-only.
 _recent_colors: list[QColor] = []
 
 
@@ -810,8 +810,9 @@ def record_recent_color(color: QColor) -> None:
 
 
 def _seed_custom_color_slots(dialog: _ColorDialog) -> None:
-    """Write the recent colors into Qt's custom slots before ``dialog`` opens.
+    """Write the recent colors into Qt's custom slots, newest first.
 
+    Runs before ``dialog`` opens and again after an in-dialog add or drop.
     Unused slots are reset to white, Qt's own "empty" value, so the row shows
     exactly the recent list and nothing stale from an earlier open. The dialog
     is told what went where so it can restore alpha when a swatch is picked.

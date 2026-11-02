@@ -5462,6 +5462,13 @@ def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(qapp):
             for c in color_controls_module.recent_colors()
         ]
         assert recent == ["#FF123456", "#FFFFFFFF", "#80ABCDEF"]
+        # 对话框里那排也立刻按最近在前重排，不停在 Qt 游标写入的位置。
+        assert [QColorDialog.customColor(i).name().upper() for i in range(4)] == [
+            "#123456",
+            "#FFFFFF",
+            "#ABCDEF",
+            "#FFFFFF",
+        ]
 
         for value in range(20):
             color_controls_module.record_recent_color(QColor(value, value, value))
@@ -5479,6 +5486,7 @@ def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(qapp):
 
 def test_custom_swatch_click_restores_remembered_alpha(qapp):
     """点「最近颜色」色块要连 alpha 一起还原；Qt 自己只套 RGB、alpha 沿用滑条。"""
+    QColorDialog = color_controls_module.QColorDialog
     hex_argb = QColor.NameFormat.HexArgb
     color_controls_module.clear_recent_colors()
     color_controls_module.record_recent_color(QColor("#80445566"))
@@ -5501,14 +5509,149 @@ def test_custom_swatch_click_restores_remembered_alpha(qapp):
         qapp.processEvents()
         assert dialog.currentColor().name(hex_argb).upper() == "#40FFFFFF"
 
-        # 同一次打开里刚「添加」的色也能还原：Qt 把它写进最后点过的格子
-        # （0,1 → 槽 2），镜像的游标必须跟上。
+        # 同一次打开里刚「添加」的色立刻排到第 1 格、其余后移；点它和点后移
+        # 的旧色都能还原各自的 alpha。
         dialog.setCurrentColor(QColor("#60ABCDEF"))
         dialog._add_custom_button().click()
+        assert [QColorDialog.customColor(i).name().upper() for i in range(3)] == [
+            "#ABCDEF",
+            "#445566",
+            "#FFFFFF",
+        ]
         dialog.setCurrentColor(QColor("#FF000000"))
-        _click_custom_cell(well, 0, 1)
+        _click_custom_cell(well, 0, 0)
         qapp.processEvents()
         assert dialog.currentColor().name(hex_argb).upper() == "#60ABCDEF"
+        _click_custom_cell(well, 1, 0)
+        qapp.processEvents()
+        assert dialog.currentColor().name(hex_argb).upper() == "#80445566"
+    finally:
+        color_controls_module.clear_recent_colors()
+        dialog.close()
+
+
+def test_cancel_without_add_keeps_recent_colors_unchanged(qapp, monkeypatch):
+    """直接取消（哪怕点过色块、改过 alpha）也一条都不新增。"""
+    color_controls_module.clear_recent_colors()
+    color_controls_module.record_recent_color(QColor("#FF111111"))
+    host = QWidget()
+    host.show()
+    qapp.processEvents()
+
+    def fake_exec(self):
+        self.show()
+        qapp.processEvents()
+        _click_custom_cell(self._custom_color_well(), 0, 0)
+        self.setCurrentColor(QColor("#40222222"))
+        self.hide()
+        return int(QDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(_ColorDialog, "exec", fake_exec)
+    try:
+        result = color_controls_module._select_color(
+            QColor("#000000"), host, "选择颜色"
+        )
+        assert not result.isValid()
+        recent = [
+            c.name(QColor.NameFormat.HexArgb).upper()
+            for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#FF111111"]
+    finally:
+        color_controls_module.clear_recent_colors()
+        host.close()
+
+
+def test_alpha_only_edit_and_slot_pick_reorder_on_accept(qapp, monkeypatch):
+    """确定才记账：只改 alpha → 按新 RGBA 占新槽；点旧槽的色 → 提到最前。"""
+    hex_argb = QColor.NameFormat.HexArgb
+    color_controls_module.clear_recent_colors()
+    # 记录顺序：先 #FF111111（成为槽 1），再 #80222222（成为槽 0）。
+    color_controls_module.record_recent_color(QColor("#FF111111"))
+    color_controls_module.record_recent_color(QColor("#80222222"))
+    host = QWidget()
+    host.show()
+    qapp.processEvents()
+
+    def accept_after(action):
+        def fake_exec(self):
+            self.show()
+            qapp.processEvents()
+            action(self)
+            self.accept()
+            self.hide()
+            return int(QDialog.DialogCode.Accepted)
+
+        return fake_exec
+
+    try:
+        # ① 只改 alpha（RGB 保持 222222）后确定 → 新 RGBA 占槽，同 RGB 旧条目保留。
+        monkeypatch.setattr(
+            _ColorDialog,
+            "exec",
+            accept_after(lambda dlg: dlg.setCurrentColor(QColor("#40222222"))),
+        )
+        picked = color_controls_module._select_color(
+            QColor("#80222222"), host, "选择颜色"
+        )
+        assert picked.name(hex_argb).upper() == "#40222222"
+        recent = [
+            c.name(hex_argb).upper()
+            for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#40222222", "#80222222", "#FF111111"]
+
+        # ② 点槽 1（#80222222，即第 2 行第 1 列的格子）后确定 → 连 alpha
+        # 一起还原并提到最前。
+        monkeypatch.setattr(
+            _ColorDialog,
+            "exec",
+            accept_after(
+                lambda dlg: _click_custom_cell(dlg._custom_color_well(), 1, 0)
+            ),
+        )
+        picked = color_controls_module._select_color(
+            QColor("#FF000000"), host, "选择颜色"
+        )
+        assert picked.name(hex_argb).upper() == "#80222222"
+        recent = [
+            c.name(hex_argb).upper()
+            for c in color_controls_module.recent_colors()
+        ]
+        assert recent == ["#80222222", "#40222222", "#FF111111"]
+    finally:
+        color_controls_module.clear_recent_colors()
+        host.close()
+
+
+def test_add_button_inserts_at_front_and_shifts_older_slots(qapp):
+    """每次「添加」都进第 1 格、更早的依次后移，超过 16 条时最旧的被顶出。"""
+    QColorDialog = color_controls_module.QColorDialog
+    color_controls_module.clear_recent_colors()
+    dialog = _ColorDialog(QColor("#000000"))
+    try:
+        color_controls_module._seed_custom_color_slots(dialog)
+        dialog.show()
+        qapp.processEvents()
+        button = dialog._add_custom_button()
+        assert button is not None
+
+        added = []
+        for index in range(17):
+            color = QColor.fromRgb(index + 1)  # 各不相同的近黑 RGB
+            dialog.setCurrentColor(color)
+            button.click()
+            added.append(color)
+            # 第 1 格永远是刚添加的色；前面的依次后移一位。
+            visible = [QColorDialog.customColor(i).rgb() for i in range(16)]
+            expected = [c.rgb() for c in reversed(added[-16:])]
+            assert visible == expected + [0xFFFFFFFF] * (16 - len(expected))
+
+        recent = color_controls_module.recent_colors()
+        assert len(recent) == QColorDialog.customCount() == 16
+        assert recent[0].rgb() == added[-1].rgb()
+        # 第 1 条（最旧的）被顶出，其余按最新在前排列。
+        assert all(c.rgb() != added[0].rgb() for c in recent)
     finally:
         color_controls_module.clear_recent_colors()
         dialog.close()
