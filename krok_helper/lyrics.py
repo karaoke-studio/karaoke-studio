@@ -349,12 +349,18 @@ class UtatenLyricsProvider:
     def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT, page: int = 1) -> list[LyricsSearchCandidate]:
         try:
             all_items = self._search_all_variants(keyword)
+            if all_items:
+                latest = self._search_all_variants(keyword, sort="release_date_desc")
+                newest = next((item for item in latest if item["url"] != all_items[0]["url"]), None)
+                if newest is not None:
+                    all_items = [item for item in all_items if item["url"] != newest["url"]]
+                    all_items.insert(1, newest)
         except LyricsSearchError as exc:
             raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
         page_size = max(1, limit)
         start_index = max(0, (page - 1) * page_size)
         items: list[LyricsSearchCandidate] = []
-        for index, entry in enumerate(all_items[start_index : start_index + page_size], start=start_index + 1):
+        for index, entry in enumerate(all_items, start=1):
             source_url = entry["url"]
             track_id = source_url.rstrip("/").rsplit("/", 1)[-1]
             items.append(
@@ -373,14 +379,18 @@ class UtatenLyricsProvider:
                     provider_position=index,
                 )
             )
-        return items
+        for candidate in items:
+            _rank_candidate(candidate, keyword)
+        items.sort(key=_sort_key, reverse=True)
+        return items[start_index : start_index + page_size]
 
-    def _search_all_variants(self, keyword: str) -> list[dict[str, str]]:
+    def _search_all_variants(self, keyword: str, *, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
         variants: list[tuple[str, str]] = [(keyword, "")]
         tokens = [token for token in keyword.split() if token]
         if len(tokens) >= 2:
-            variants.append((tokens[0], " ".join(tokens[1:])))
-            variants.append((" ".join(tokens[:-1]), tokens[-1]))
+            for split in range(1, len(tokens)):
+                left, right = " ".join(tokens[:split]), " ".join(tokens[split:])
+                variants.extend(((left, right), (right, left)))
 
         seen_variants: set[tuple[str, str]] = set()
         seen_urls: set[str] = set()
@@ -392,20 +402,46 @@ class UtatenLyricsProvider:
                 continue
             seen_variants.add(key)
             try:
-                for entry in self._search_once(title=title, artist=artist):
+                entries = (self._search_once(title=title, artist=artist) if sort == "popular_sort_asc"
+                           else self._search_once(title=title, artist=artist, sort=sort))
+                for entry in entries:
                     if entry["url"] in seen_urls:
                         continue
                     seen_urls.add(entry["url"])
                     merged.append(entry)
             except LyricsSearchError as exc:
                 last_error = exc
+        if not merged and len(tokens) >= 2:
+            # A misspelled artist must not suppress an otherwise valid title.
+            # Retry both field orders without the server's exact artist filter.
+            seen_titles: set[str] = set()
+            for title, artist in variants[1:]:
+                if title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                try:
+                    entries = (self._search_once(title=title, artist="") if sort == "popular_sort_asc"
+                               else self._search_once(title=title, artist="", sort=sort))
+                    artist_key = _normalize_text(artist)
+                    close_matches = [entry for entry in entries if artist_key and
+                                     SequenceMatcher(None, artist_key, _normalize_text(entry["artist"])).ratio() >= 0.75]
+                    if close_matches:
+                        corrected_artist = close_matches[0]["artist"]
+                        corrected = self._search_once(title=title, artist=corrected_artist, sort=sort)
+                        entries = corrected or close_matches
+                    for entry in entries:
+                        if entry["url"] not in seen_urls:
+                            seen_urls.add(entry["url"])
+                            merged.append(entry)
+                except LyricsSearchError as exc:
+                    last_error = exc
         if not merged and last_error is not None:
             raise last_error
         return merged
 
-    def _search_once(self, *, title: str, artist: str) -> list[dict[str, str]]:
+    def _search_once(self, *, title: str, artist: str, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
         params = {
-            "sort": "popular_sort_asc",
+            "sort": sort,
             "title": title,
             "artist_name": artist,
             "beginning": "",
@@ -430,6 +466,7 @@ class UtatenLyricsProvider:
             fallback_params = {
                 "layout_search_text": title,
                 "layout_search_type": "title",
+                "sort": sort,
                 "artist_name": artist,
             }
             request = Request(
@@ -439,7 +476,13 @@ class UtatenLyricsProvider:
             html_text = _load_text_from_request(request)
             if not html_text.strip():
                 raise LyricsSearchError("UtaTen 返回空白搜索页面，请稍后重试。")
-        return _parse_utaten_search_results(html_text, base_url=self.base_url)
+        entries = _parse_utaten_search_results(html_text, base_url=self.base_url)
+        if artist:
+            artist_key = _normalize_text(artist)
+            entries = [entry for entry in entries if
+                       artist_key in _normalize_text(entry["artist"]) or
+                       SequenceMatcher(None, artist_key, _normalize_text(entry["artist"])).ratio() >= 0.75]
+        return entries
 
     def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
         url = ""
@@ -1393,7 +1436,15 @@ def _best_match_source(candidate: LyricsSearchCandidate) -> str:
     return max(field_scores.items(), key=lambda item: item[1])[0]
 
 
-def _sort_key(candidate: LyricsSearchCandidate) -> tuple[int, int, int, int, float, float, float, float, float]:
+def _sort_key(candidate: LyricsSearchCandidate) -> tuple:
+    if candidate.provider_id == "utaten":
+        # Reserve the popular/newest slots; rank the remainder by relevance.
+        pinned = 3 - candidate.provider_position if candidate.provider_position <= 2 else 0
+        return (
+            pinned, candidate.title_match_tier, candidate.title_score,
+            candidate.artist_score, candidate.album_score, candidate.lyrics_score,
+            candidate.display_score, -candidate.query_variant_index, -candidate.provider_position,
+        )
     return (
         candidate.title_match_tier,
         -candidate.query_variant_index,

@@ -645,7 +645,9 @@ class LyricsSearchPage(QWidget):
                 self.lyrics_status_label.text() + " 部分来源搜索失败：" + "；".join(batch.errors)
             )
         self.lyrics_results_summary_label.setText(
-            "结果优先保留各来源原始搜索顺位，再按歌曲、艺术家、专辑匹配度修正；同一首歌会保留不同来源。"
+            ("UtaTen：第一条人气最高，第二条为其余歌曲中发行日期最新的一首，第三条起按相关性排序。"
+             if selected_source == "UtaTen" else
+             "结果优先保留各来源原始搜索顺位，再按歌曲、艺术家、专辑匹配度修正；同一首歌会保留不同来源。")
             + (" 向下滚动可继续加载更多结果。" if self.lyrics_has_more_results else "")
         )
         self._lyrics_loading_more = False
