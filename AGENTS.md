@@ -89,7 +89,7 @@ sidecar + configure），`tests\test_subtitle_render_property_panel.py` 次之�
 **优先并行跑**（`pytest-xdist`，已列入 `requirements-dev.txt`）：
 
 ```powershell
-# 日常快循环：跳过最慢的 GPU 对照文件，约 7 分钟
+# 日常快循环：跳过最慢的 GPU 对照文件，约 9 分钟
 C:\Python314\python.exe -m pytest tests -q -n 8 --ignore=tests/test_subtitle_render_gpu_backend.py
 # 只验证 GPU/Painter 对照：约 4.5 分钟
 C:\Python314\python.exe -m pytest tests\test_subtitle_render_gpu_backend.py -q -n 6
@@ -97,7 +97,7 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_gpu_backend.py -q -
 C:\Python314\python.exe -m pytest tests -q -n 8
 ```
 
-实测：全量串行 40~60 分钟 → `-n 8` 约 12 分钟；GPU 文件 28 分钟 → `-n 6` 约 4.5 分钟。
+实测：全量串行 40~60 分钟 → `-n 8` 约 12 分钟；GPU 文件 28 分钟 → `-n 6` 约 4.5 分钟；跳过 GPU 文件的快循环 `-n 8` 约 9 分钟。
 代价是少数 GPU 用例（`test_gpu_inline_volume_uses_registered_geometry_transition`
 的个别参数、`test_gpu_band_presets_advance_frames`）在并行负载下会偶发失败，排查这类
 用例时串行单跑确认。普通 `python -m pytest` 现在可直接用：Qt/qfluentwidgets 预热已放进
