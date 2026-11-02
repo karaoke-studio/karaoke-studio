@@ -640,6 +640,10 @@ class LyricsSearchPage(QWidget):
             )
         else:
             self.lyrics_status_label.setText(f"已加载 {len(self.lyrics_search_results)} 条候选结果，当前来源：{selected_source}。")
+        if batch is not None and batch.errors:
+            self.lyrics_status_label.setText(
+                self.lyrics_status_label.text() + " 部分来源搜索失败：" + "；".join(batch.errors)
+            )
         self.lyrics_results_summary_label.setText(
             "结果优先保留各来源原始搜索顺位，再按歌曲、艺术家、专辑匹配度修正；同一首歌会保留不同来源。"
             + (" 向下滚动可继续加载更多结果。" if self.lyrics_has_more_results else "")

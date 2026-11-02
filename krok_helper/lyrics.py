@@ -77,6 +77,15 @@ class LyricsSearchError(RuntimeError):
     """Raised when lyrics searching or lyrics loading fails."""
 
 
+def _check_api_response(payload: object, provider: str, *, success: int = 0, key: str = "code") -> dict:
+    if not isinstance(payload, dict):
+        raise LyricsSearchError(f"{provider} 返回了无效数据。")
+    code = payload.get(key)
+    if code is not None and str(code) != str(success):
+        raise LyricsSearchError(f"{provider} 接口返回错误（{key}={code}）。")
+    return payload
+
+
 @dataclass(slots=True)
 class LyricsSearchCandidate:
     provider_id: str
@@ -136,6 +145,7 @@ class LyricsSearchBatch:
     overflow_results: list[LyricsSearchCandidate]
     next_provider_pages: dict[str, int]
     has_more: bool
+    errors: tuple[str, ...] = ()
 
 
 class LyricsProvider(Protocol):
@@ -247,6 +257,7 @@ class NeteaseLyricsProvider:
             except LyricsSearchError as exc:
                 raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
 
+            _check_api_response(payload, self.provider_name, success=200)
             songs = payload.get("result", {}).get("songs", []) if isinstance(payload, dict) else []
             if not isinstance(songs, list) or not songs:
                 break
@@ -521,6 +532,8 @@ class QqMusicLyricsProvider:
             except LyricsSearchError as exc:
                 raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
 
+            _check_api_response(response, self.provider_name)
+            _check_api_response(response.get("request"), self.provider_name)
             songs = response.get("request", {}).get("data", {}).get("body", {}).get("item_song", [])
             if not isinstance(songs, list) or not songs:
                 break
@@ -584,19 +597,25 @@ class QqMusicLyricsProvider:
                 "User-Agent": "Mozilla/5.0",
             },
         )
+        primary_error = None
         try:
             response = _load_json_from_request(request)
+            _check_api_response(response, self.provider_name)
         except LyricsSearchError as exc:
-            raise LyricsSearchError(f"{self.provider_name} 加载歌词失败: {exc}") from exc
+            primary_error = exc
+            response = {}
 
         line_lyrics = _coerce_qq_lyric(response.get("lyric"))
         plain_lyrics = _strip_lrc_timestamps(line_lyrics)
         translation_lyrics = _strip_qq_translation_placeholders(_coerce_qq_lyric(response.get("trans")))
         modern_payload: dict = {}
-        if not translation_lyrics:
+        if not translation_lyrics or not line_lyrics:
             try:
                 modern_payload = self._fetch_play_lyric_info(song_mid, song_id)
-            except LyricsSearchError:
+            except LyricsSearchError as exc:
+                if not line_lyrics:
+                    detail = f"主接口：{primary_error}；" if primary_error else ""
+                    raise LyricsSearchError(f"{self.provider_name} 加载歌词失败：{detail}备用接口：{exc}") from exc
                 modern_payload = {}
             if modern_payload:
                 translation_lyrics = _strip_qq_translation_placeholders(
@@ -657,7 +676,9 @@ class QqMusicLyricsProvider:
         response = _load_json_from_request(request)
         if not isinstance(response, dict):
             return {}
+        _check_api_response(response, self.provider_name)
         data = response.get("req", {})
+        _check_api_response(data, self.provider_name)
         if not isinstance(data, dict):
             return {}
         lyric_data = data.get("data", {})
@@ -695,6 +716,9 @@ class KugouLyricsProvider:
             except LyricsSearchError as exc:
                 raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
 
+            _check_api_response(payload, self.provider_name, success=1, key="status")
+            _check_api_response(payload, self.provider_name, key="error_code")
+            _check_api_response(payload, self.provider_name, key="errcode")
             songs = payload.get("data", {}).get("info", []) if isinstance(payload, dict) else []
             if not isinstance(songs, list) or not songs:
                 break
@@ -905,6 +929,7 @@ class LyricsSearchService:
             overflow_results=overflow_results,
             next_provider_pages=next_provider_pages,
             has_more=bool(next_provider_pages or overflow_results),
+            errors=tuple(dict.fromkeys(errors)),
         )
         log.info(
             "歌词检索完成 results=%s overflow=%s failed_providers=%s has_more=%s",

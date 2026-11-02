@@ -63,3 +63,45 @@ def test_qq_fetch_lyrics_falls_back_to_play_lyric_info_translation(monkeypatch) 
         "trans": 1,
         "roma": 0,
     }
+
+
+def test_search_business_errors_are_not_empty_results(monkeypatch):
+    import pytest
+    import krok_helper.lyrics as lyrics
+    for cls, payload in [
+        (lyrics.QqMusicLyricsProvider, {"code": 0, "request": {"code": 429}}),
+        (lyrics.NeteaseLyricsProvider, {"code": 405}),
+        (lyrics.KugouLyricsProvider, {"status": 0, "error_code": 20001}),
+    ]:
+        monkeypatch.setattr(lyrics, "_load_json_from_request", lambda request: payload)
+        with pytest.raises(lyrics.LyricsSearchError, match="接口返回错误"):
+            cls().search("test")
+
+
+def test_qq_primary_failure_uses_backup(monkeypatch):
+    import krok_helper.lyrics as lyrics
+    def load(request):
+        if "fcg_query_lyric_new" in request.full_url:
+            raise lyrics.LyricsSearchError("HTTP 503")
+        return {"code": 0, "req": {"code": 0, "data": {"lyric": "[00:01.00]hello"}}}
+    monkeypatch.setattr(lyrics, "_load_json_from_request", load)
+    candidate = LyricsSearchCandidate("qm", "QQ音乐", "1", "test", "artist", "", None,
+                                      provider_payload={"mid": "mid", "id": "1"})
+    assert QqMusicLyricsProvider().fetch_lyrics(candidate).line_lyrics == "[00:01.00]hello"
+
+
+def test_search_batch_preserves_partial_errors():
+    import krok_helper.lyrics as lyrics
+    class Good:
+        provider_id = "qm"
+        provider_name = "QQ音乐"
+        def search(self, *args, **kwargs):
+            return [LyricsSearchCandidate("qm", "QQ音乐", "1", "test", "artist", "", None)]
+    class Bad:
+        provider_id = "ne"
+        provider_name = "网易云音乐"
+        def search(self, *args, **kwargs):
+            raise lyrics.LyricsSearchError("网易云音乐：HTTP 503")
+    batch = lyrics.LyricsSearchService([Good(), Bad()]).search_batch("test")
+    assert len(batch.results) == 1
+    assert batch.errors == ("网易云音乐：HTTP 503",)
