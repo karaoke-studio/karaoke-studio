@@ -261,6 +261,8 @@ def build_align_audio_command(
     audio_duration_ms: int,
     video_has_audio: bool,
     sample_rate: int = 48_000,
+    pre_audio_path: Path | None = None,
+    post_audio_path: Path | None = None,
 ) -> list[str]:
     """Pad/align one separated stem to the final subtitle video.
 
@@ -282,46 +284,52 @@ def build_align_audio_command(
     labels: list[str] = []
     has_rolls = pre_s > 0.001 or post_s > 0.001
     sample_rate = max(int(sample_rate), 1)
+    command_inputs: list[str] = ["-i", str(video_path), "-i", str(audio_path)]
+    pre_audio_index: int | None = None
+    post_audio_index: int | None = None
+    if pre_audio_path is not None and Path(pre_audio_path).is_file():
+        pre_audio_index = len(command_inputs) // 2
+        command_inputs.extend(["-i", str(pre_audio_path)])
+    if post_audio_path is not None and Path(post_audio_path).is_file():
+        post_audio_index = len(command_inputs) // 2
+        command_inputs.extend(["-i", str(post_audio_path)])
     normalize = (
         f"aresample={sample_rate},"
         f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:"
         "channel_layouts=stereo"
     )
+    def _segment_source(
+        index: int | None, duration_s: float, *, main_stem: bool = False
+    ) -> str:
+        if main_stem:
+            source = "[1:a:0]"
+        elif index is not None:
+            source = f"[{index}:a:0]"
+        elif video_has_audio:
+            source = "[0:a:0]"
+        else:
+            source = f"anullsrc=r={sample_rate}:cl=stereo,"
+        return (
+            f"{source}atrim=duration={duration_s:.6f},"
+            f"apad=whole_dur={duration_s:.6f},"
+            f"atrim=start=0:end={duration_s:.6f},"
+            f"{normalize},asetpts=PTS-STARTPTS"
+        )
+
     if has_rolls:
         target_s = video_s
         main_s = max(video_s - pre_s - post_s, 0.001)
         if pre_s > 0.001:
-            if video_has_audio:
-                filters.append(
-                    "[0:a:0]atrim=start=0:end="
-                    f"{pre_s:.6f},{normalize},asetpts=PTS-STARTPTS[roll_pre]"
-                )
-            else:
-                filters.append(
-                    f"anullsrc=r={sample_rate}:cl=stereo,"
-                    f"atrim=start=0:end={pre_s:.6f},"
-                    f"{normalize},asetpts=PTS-STARTPTS[roll_pre]"
-                )
+            filters.append(_segment_source(pre_audio_index, pre_s) + "[roll_pre]")
             labels.append("[roll_pre]")
         # 主歌不再用 adelay：前黑音频/静音已经占住 pre_s，concat 后自然
         # 从 pre_s 开始；adelay 会把静音也算进主段长度，挤掉后黑音频。
         filters.append(
-            "[1:a:0]atrim=start=0:end="
-            f"{main_s:.6f},{normalize},asetpts=PTS-STARTPTS[main_song]"
+            _segment_source(None, main_s, main_stem=True) + "[main_song]"
         )
         labels.append("[main_song]")
         if post_s > 0.001:
-            if video_has_audio:
-                filters.append(
-                    f"[0:a:0]atrim=start={video_s - post_s:.6f}:end={video_s:.6f},"
-                    f"{normalize},asetpts=PTS-STARTPTS[roll_post]"
-                )
-            else:
-                filters.append(
-                    f"anullsrc=r={sample_rate}:cl=stereo,"
-                    f"atrim=start=0:end={post_s:.6f},"
-                    f"{normalize},asetpts=PTS-STARTPTS[roll_post]"
-                )
+            filters.append(_segment_source(post_audio_index, post_s) + "[roll_post]")
             labels.append("[roll_post]")
         if len(labels) > 1:
             filters.append(
@@ -348,10 +356,7 @@ def build_align_audio_command(
         "-hide_banner",
         "-loglevel",
         "error",
-        "-i",
-        str(video_path),
-        "-i",
-        str(audio_path),
+        *command_inputs,
         "-filter_complex",
         ";".join(filters),
         "-map",
@@ -380,11 +385,19 @@ def align_audio_for_video(
     *,
     pre_roll_ms: int,
     post_roll_ms: int,
+    pre_audio_path: Path | None = None,
+    post_audio_path: Path | None = None,
+    sample_rate_floor: int = 0,
     should_cancel: Callable[[], bool] | None = None,
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     if should_cancel is not None and should_cancel():
         raise ExportCancelled("生成已取消。")
+    target_sample_rate = max(
+        audio_info.sample_rate or 0,
+        MIN_HIRES_SAMPLE_RATE,
+        int(sample_rate_floor or 0),
+    )
     command = build_align_audio_command(
         ffmpeg_path=ffmpeg_path,
         video_path=video_info.path,
@@ -395,7 +408,9 @@ def align_audio_for_video(
         video_duration_ms=int(round(video_info.duration * 1000)),
         audio_duration_ms=int(round(audio_info.duration * 1000)),
         video_has_audio=video_info.audio_streams > 0,
-        sample_rate=max(audio_info.sample_rate or 0, MIN_HIRES_SAMPLE_RATE),
+        sample_rate=target_sample_rate,
+        pre_audio_path=pre_audio_path,
+        post_audio_path=post_audio_path,
     )
     logger(
         f"对齐 {label} 到成片时间轴: 前黑 {max(int(pre_roll_ms), 0)}ms / "
@@ -422,12 +437,17 @@ def normalize_audio(
     output_path: Path,
     label: str,
     *,
+    sample_rate_floor: int = 0,
     should_cancel: Callable[[], bool] | None = None,
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> int:
     if should_cancel is not None and should_cancel():
         raise ExportCancelled("生成已取消。")
-    target_sample_rate = max(audio_info.sample_rate or 0, MIN_HIRES_SAMPLE_RATE)
+    target_sample_rate = max(
+        audio_info.sample_rate or 0,
+        MIN_HIRES_SAMPLE_RATE,
+        int(sample_rate_floor or 0),
+    )
     logger(f"开始预处理 {label}: 统一为 Hi-Res FLAC 32bit / {target_sample_rate}Hz / 2ch")
 
     command = build_audio_normalization_command(
@@ -496,6 +516,9 @@ def process_output(
     *,
     pre_roll_ms: int = 0,
     post_roll_ms: int = 0,
+    pre_audio_path: Path | None = None,
+    post_audio_path: Path | None = None,
+    sample_rate_floor: int = 0,
     should_cancel: Callable[[], bool] | None = None,
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
@@ -505,6 +528,7 @@ def process_output(
         audio_info=audio_info,
         output_path=temp_audio_path,
         label=label,
+        sample_rate_floor=sample_rate_floor,
         should_cancel=should_cancel,
         on_process_started=on_process_started,
     )
@@ -521,6 +545,9 @@ def process_output(
         label,
         pre_roll_ms=pre_roll_ms,
         post_roll_ms=post_roll_ms,
+        pre_audio_path=pre_audio_path,
+        post_audio_path=post_audio_path,
+        sample_rate_floor=sample_rate_floor,
         should_cancel=should_cancel,
         on_process_started=on_process_started,
     )
@@ -674,6 +701,8 @@ def run_pipeline(
     off_vocal_paths: Sequence[Path] | None = None,
     pre_roll_ms: int = 0,
     post_roll_ms: int = 0,
+    pre_audio_path: Path | None = None,
+    post_audio_path: Path | None = None,
 ) -> list[Path]:
     """把字幕视频和音频混流成 Hi-Res 视频。
 
@@ -711,6 +740,29 @@ def run_pipeline(
     for info in off_vocal_infos:
         if info.audio_streams == 0:
             raise ProcessingError(f"伴奏无损文件里没有检测到音频流：{info.path.name}")
+
+    roll_sample_rate_floor = 0
+
+    def _validate_roll_audio(path: Path | None, label: str) -> Path | None:
+        nonlocal roll_sample_rate_floor
+        if path is None:
+            return None
+        try:
+            info = probe_media(ffprobe_path, path)
+        except Exception as exc:  # noqa: BLE001 - 回退成片音轨优先
+            logger(f"{label}原始音频读取失败，回退成片音轨：{exc}")
+            return None
+        if info.audio_streams == 0:
+            logger(f"{label}原始音频没有音频流，回退成片音轨。")
+            return None
+        roll_sample_rate_floor = max(
+            roll_sample_rate_floor, int(info.sample_rate or 0)
+        )
+        logger(f"{label}原始音频: {path.name} / {info.sample_rate or '未知'}Hz")
+        return path
+
+    pre_audio_path = _validate_roll_audio(pre_audio_path, "前黑")
+    post_audio_path = _validate_roll_audio(post_audio_path, "后黑")
 
     log_media_summary(logger, "字幕视频", video_info)
     if pre_roll_ms > 0 or post_roll_ms > 0:
@@ -768,6 +820,9 @@ def run_pipeline(
                     "On Vocal",
                     pre_roll_ms=pre_roll_ms,
                     post_roll_ms=post_roll_ms,
+                    pre_audio_path=pre_audio_path,
+                    post_audio_path=post_audio_path,
+                    sample_rate_floor=roll_sample_rate_floor,
                     should_cancel=should_cancel,
                     on_process_started=on_process_started,
                 )
@@ -787,6 +842,9 @@ def run_pipeline(
                     "Off Vocal" if len(off_outputs) == 1 else f"Off Vocal {index + 1}",
                     pre_roll_ms=pre_roll_ms,
                     post_roll_ms=post_roll_ms,
+                    pre_audio_path=pre_audio_path,
+                    post_audio_path=post_audio_path,
+                    sample_rate_floor=roll_sample_rate_floor,
                     should_cancel=should_cancel,
                     on_process_started=on_process_started,
                 )

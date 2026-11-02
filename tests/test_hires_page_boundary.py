@@ -100,13 +100,52 @@ def test_roll_timing_handoff_fills_seconds_fields(page) -> None:
         Path("D:/tmp/成片.mp4"),
         pre_roll_ms=1200,
         post_roll_ms=800,
+        pre_roll_audio_path="D:/tmp/pre.flac",
+        post_roll_audio_path="D:/tmp/post.flac",
     )
     assert widget.pre_roll_edit.text() == "1.200"
     assert widget.post_roll_edit.text() == "0.800"
-    # 手动换视频时回到无前后黑，避免把上一片的时长带到新素材上。
+    assert widget._pre_roll_audio_path == Path("D:/tmp/pre.flac")
+    assert widget._post_roll_audio_path == Path("D:/tmp/post.flac")
+    # 路径文件不存在时路径框为空（实际工作流只会传存在文件）。
+    assert widget.pre_roll_audio_edit.text() == ""
+    assert widget.post_roll_audio_edit.text() == ""
+    # 手动换视频时回到无前后黑，避免把上一片的时长/音源带到新素材上。
     widget.set_video_path(Path("D:/tmp/另一个成片.mp4"))
     assert widget.pre_roll_edit.text() == "0.000"
     assert widget.post_roll_edit.text() == "0.000"
+    assert widget._pre_roll_audio_path is None
+    assert widget._post_roll_audio_path is None
+    assert widget.pre_roll_audio_edit.text() == ""
+    assert widget.post_roll_audio_edit.text() == ""
+
+
+def test_roll_audio_path_fields_and_original_video_tag(page, tmp_path) -> None:
+    widget, _ = page
+    pre = tmp_path / "pre.flac"
+    post = tmp_path / "post.mp4"
+    pre.write_bytes(b"pre")
+    post.write_bytes(b"post")
+    widget.set_video_path(
+        Path("D:/tmp/成片.mp4"),
+        pre_roll_ms=1000,
+        post_roll_ms=500,
+        pre_roll_audio_path=str(pre),
+        post_roll_audio_path=str(post),
+    )
+    assert widget.pre_roll_audio_edit.text() == str(pre)
+    assert widget.post_roll_audio_edit.text() == str(post)
+    # 有显式音频路径时一律用路径，不显示【原视频截取】。
+    assert widget.pre_roll_audio_tag.isHidden()
+    assert widget.post_roll_audio_tag.isHidden()
+
+    # 没有路径时才从原视频截取，并显示标记。
+    widget.set_video_path(Path("D:/tmp/无音频路径成片.mp4"))
+    assert widget.pre_roll_audio_edit.text() == ""
+    assert widget.post_roll_audio_edit.text() == ""
+    assert not widget.pre_roll_audio_tag.isHidden()
+    assert not widget.post_roll_audio_tag.isHidden()
+    assert widget.pre_roll_audio_tag.text() == "【原视频截取】"
 
 
 def test_the_page_does_not_import_the_shell() -> None:

@@ -541,11 +541,15 @@ class KrokHelperQtApp(QMainWindow):
         *,
         pre_roll_ms: int | None = None,
         post_roll_ms: int | None = None,
+        pre_roll_audio_path: str | None = None,
+        post_roll_audio_path: str | None = None,
     ) -> None:
         self.hires_page.set_video_path(
             path,
             pre_roll_ms=pre_roll_ms,
             post_roll_ms=post_roll_ms,
+            pre_roll_audio_path=pre_roll_audio_path,
+            post_roll_audio_path=post_roll_audio_path,
         )
 
     def set_on_vocal_path(self, path: Path) -> None:
@@ -1272,6 +1276,8 @@ class KrokHelperQtApp(QMainWindow):
         *,
         pre_roll_ms: int | None = None,
         post_roll_ms: int | None = None,
+        pre_roll_audio_path: str | None = None,
+        post_roll_audio_path: str | None = None,
     ) -> None:
         """第 5 步渲染好的成片放进第 6 步的视频卡，并切到第 6 步。
 
@@ -1284,6 +1290,8 @@ class KrokHelperQtApp(QMainWindow):
                 path,
                 pre_roll_ms=pre_roll_ms,
                 post_roll_ms=post_roll_ms,
+                pre_roll_audio_path=pre_roll_audio_path,
+                post_roll_audio_path=post_roll_audio_path,
             )
         except TypeError:
             # 外部宿主/旧兼容层可能仍只实现单参 set_video_path。

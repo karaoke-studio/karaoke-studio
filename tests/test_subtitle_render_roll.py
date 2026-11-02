@@ -1119,6 +1119,53 @@ def test_subtitle_export_timing_reports_actual_pre_post(qapp):
         qapp.processEvents()
 
 
+def test_subtitle_export_roll_handoff_passes_original_audio_sources(
+    qapp, tmp_path
+):
+    """Hi-Res 应拿到前/后黑原始音频，而不是只能从成片 AAC 音轨里切。"""
+    import importlib
+
+    mw = importlib.import_module(
+        "krok_helper.subtitle_render.frontend.main_window"
+    )
+    pre_audio = tmp_path / "pre.flac"
+    pre_audio.write_bytes(b"pre")
+    post_video = tmp_path / "post.mp4"
+    post_video.write_bytes(b"post")
+    win = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=_DictSettingsProvider()
+    )
+    try:
+        pre = RollSegmentConfig(
+            enabled=True,
+            duration_ms=1200,
+            audio_path=str(pre_audio),
+            source=BackgroundSource(kind="image", path="D:/pre.png"),
+        )
+        post = RollSegmentConfig(
+            enabled=True,
+            duration_ms=800,
+            source=BackgroundSource(kind="video", path=str(post_video)),
+            source_has_audio=True,
+        )
+        plan = build_roll_timeline(
+            pre,
+            post,
+            track_end_ms=5000,
+            main_media_end_ms=5000,
+            background_kind="video",
+        )
+        win._current_roll_plan = lambda: plan
+        handoff = win.subtitle_export_roll_handoff()
+        assert handoff["pre_roll_ms"] == 1200
+        assert handoff["post_roll_ms"] == 800
+        assert handoff["pre_roll_audio_path"] == str(pre_audio)
+        assert handoff["post_roll_audio_path"] == str(post_video)
+    finally:
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_review_post_only_and_disabled_layers(qapp):
     from PyQt6.QtWidgets import QGraphicsScene
     from krok_helper.subtitle_render.frontend.preview.roll_preview import RollPreviewController

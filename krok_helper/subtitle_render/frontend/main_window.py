@@ -50,7 +50,6 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QColor,
-    QCursor,
     QDesktopServices,
     QImage,
     QKeySequence,
@@ -101,6 +100,7 @@ from krok_helper.subtitle_render.domain.roll import (
     roll_config_with_defaults,
     roll_defaults_from_dict,
     format_roll_source_duration,
+    roll_audio_source_path,
     roll_segment_has_audio,
     shift_style_title_overlays,
 )
@@ -11087,15 +11087,11 @@ class SubtitleRenderWindow(QWidget):
                     "工作台宿主缺少 accept_subtitle_video，成片无法转交下一步"
                 )
                 return
-            pre_roll_ms, post_roll_ms = self.subtitle_export_timing()
+            handoff = self.subtitle_export_roll_handoff()
             try:
-                host.accept_subtitle_video(
-                    output_path,
-                    pre_roll_ms=pre_roll_ms,
-                    post_roll_ms=post_roll_ms,
-                )
+                host.accept_subtitle_video(output_path, **handoff)
             except TypeError:
-                # 兼容只实现旧单参契约的外部宿主；此时其 Hi-Res 需手动填补偿。
+                # 兼容只实现旧单参契约的外部宿主；此时其 Hi-Res 需手动填时长。
                 host.accept_subtitle_video(output_path)
 
     def subtitle_export_timing(self) -> tuple[int, int]:
@@ -11113,6 +11109,35 @@ class SubtitleRenderWindow(QWidget):
             else 0
         )
         return pre_ms, post_ms
+
+    def subtitle_export_roll_handoff(self) -> dict:
+        """成片交给 Hi-Res 的 time line + 前后黑原始音频源。"""
+
+        plan = self._current_roll_plan()
+        if not plan.active:
+            return {
+                "pre_roll_ms": 0,
+                "post_roll_ms": 0,
+                "pre_roll_audio_path": None,
+                "post_roll_audio_path": None,
+            }
+        pre_ms, post_ms = self.subtitle_export_timing()
+
+        def _source(config) -> str | None:
+            path = roll_audio_source_path(config)
+            if path is None:
+                return None
+            try:
+                return str(path) if Path(path).is_file() else None
+            except OSError:
+                return None
+
+        return {
+            "pre_roll_ms": pre_ms,
+            "post_roll_ms": post_ms,
+            "pre_roll_audio_path": _source(plan.pre) if plan.has_pre else None,
+            "post_roll_audio_path": _source(plan.post) if plan.has_post else None,
+        }
 
     def _open_export_folder(self, output_path: Path) -> None:
         # PNG 序列的 output_path 是文件夹本身，直接打开该文件夹。

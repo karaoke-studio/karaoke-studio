@@ -700,6 +700,8 @@ class HiResPage(QWidget):
         self._hires_completed_outputs: list[Path] = []
         self._hires_preexisting_outputs: set[Path] = set()
         self._status_color: str | None = None
+        self._pre_roll_audio_path: Path | None = None
+        self._post_roll_audio_path: Path | None = None
         self._build_ui()
 
     def _register_task(self, task: BackgroundTask) -> BackgroundTask:
@@ -817,20 +819,79 @@ class HiResPage(QWidget):
         timing_hint = (
             "从字幕成片转交时自动带入；手动选择成片时按秒填写，例如 1.200。"
         )
-        timing_row = QHBoxLayout()
-        timing_row.setContentsMargins(0, 0, 0, 0)
-        timing_row.setSpacing(8)
-        self.pre_roll_edit = self._make_roll_seconds_edit(timing_hint)
-        self.post_roll_edit = self._make_roll_seconds_edit(timing_hint)
-        timing_row.addWidget(QLabel("视频前黑时长"))
-        timing_row.addWidget(self.pre_roll_edit)
-        timing_row.addWidget(QLabel("秒"))
-        timing_row.addSpacing(18)
-        timing_row.addWidget(QLabel("视频后黑时长"))
-        timing_row.addWidget(self.post_roll_edit)
-        timing_row.addWidget(QLabel("秒"))
-        timing_row.addStretch(1)
-        settings_layout.addLayout(timing_row, 1, 0, 1, 2)
+
+        def _make_roll_row(
+            title: str,
+            segment: str,
+        ) -> QHBoxLayout:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            time_label = QLabel(title)
+            _wb_th(
+                time_label,
+                lambda: f"font-size: 11pt; color: {_wb_pal().text_secondary};",
+            )
+            time_edit = self._make_roll_seconds_edit(timing_hint)
+            time_edit.setFixedWidth(80)
+            seconds_label = QLabel("秒")
+            path_label = QLabel("音频路径：")
+            _wb_th(
+                path_label,
+                lambda: f"font-size: 11pt; color: {_wb_pal().text_secondary};",
+            )
+            path_edit = FluentLineEdit(self)
+            path_edit.setReadOnly(True)
+            path_edit.setPlaceholderText("未设置（从原视频截取）")
+            tag = QLabel("【原视频截取】")
+            tag.setVisible(True)
+            _wb_th(
+                tag,
+                lambda: f"font-size: 10.5pt; color: {_wb_pal().accent_primary};",
+            )
+            browse = QPushButton("浏览")
+            browse.setMinimumHeight(30)
+            browse.clicked.connect(
+                lambda _checked=False, key=segment: self._choose_roll_audio(key)
+            )
+            row.addWidget(time_label)
+            row.addWidget(time_edit)
+            row.addWidget(seconds_label)
+            row.addSpacing(12)
+            row.addWidget(path_label)
+            row.addWidget(path_edit, 1)
+            row.addWidget(tag)
+            row.addWidget(browse)
+            if segment == "pre":
+                self.pre_roll_edit = time_edit
+                self.pre_roll_audio_edit = path_edit
+                self.pre_roll_audio_tag = tag
+            else:
+                self.post_roll_edit = time_edit
+                self.post_roll_audio_edit = path_edit
+                self.post_roll_audio_tag = tag
+            return row
+
+        settings_layout.addLayout(
+            _make_roll_row(
+                "视频内前黑时长：",
+                "pre",
+            ),
+            1,
+            0,
+            1,
+            3,
+        )
+        settings_layout.addLayout(
+            _make_roll_row(
+                "视频内后黑时长：",
+                "post",
+            ),
+            2,
+            0,
+            1,
+            3,
+        )
         shell.addWidget(settings_card)
 
         card_row = QHBoxLayout()
@@ -1007,12 +1068,59 @@ class HiResPage(QWidget):
         *,
         pre_roll_ms: int | None = None,
         post_roll_ms: int | None = None,
+        pre_roll_audio_path: str | None = None,
+        post_roll_audio_path: str | None = None,
     ) -> None:
         self.video_zone.set_path(path)
         self.output_dir_label.setText(str(resolve_output_dir(path)))
         # 工作流转交会显式带入；手动选择视频则回到“无前后黑”，由用户按秒填写。
         self.pre_roll_edit.setText(self._format_roll_seconds(pre_roll_ms or 0))
         self.post_roll_edit.setText(self._format_roll_seconds(post_roll_ms or 0))
+        self._pre_roll_audio_path = (
+            Path(pre_roll_audio_path) if pre_roll_audio_path else None
+        )
+        self._post_roll_audio_path = (
+            Path(post_roll_audio_path) if post_roll_audio_path else None
+        )
+        self._update_roll_audio_field("pre", self._pre_roll_audio_path)
+        self._update_roll_audio_field("post", self._post_roll_audio_path)
+
+    def _update_roll_audio_field(self, segment: str, path: Path | None) -> None:
+        edit = (
+            self.pre_roll_audio_edit if segment == "pre" else self.post_roll_audio_edit
+        )
+        tag = (
+            self.pre_roll_audio_tag if segment == "pre" else self.post_roll_audio_tag
+        )
+        available = path is not None and path.is_file()
+        edit.setText(str(path) if available else "")
+        # 没有显式路径时从所选的视频成片截取；有路径则一律用路径。
+        tag.setVisible(not available)
+        edit.setToolTip(
+            str(path)
+            if available
+            else "未设置路径时从所选视频成片截取；第五步交接会自动带入路径。"
+        )
+
+    def _choose_roll_audio(self, segment: str) -> None:
+        current = (
+            self._pre_roll_audio_path if segment == "pre" else self._post_roll_audio_path
+        )
+        start_dir = str(current.parent) if current is not None else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择视频内前黑音频" if segment == "pre" else "选择视频内后黑音频",
+            start_dir,
+            "音频/视频文件 (*.flac *.wav *.mp3 *.m4a *.aac *.ape *.alac *.mp4 *.mkv *.mov *.avi);;所有文件 (*.*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if segment == "pre":
+            self._pre_roll_audio_path = path
+        else:
+            self._post_roll_audio_path = path
+        self._update_roll_audio_field(segment, path)
 
     def set_on_vocal_path(self, path: Path) -> None:
         self.on_vocal_zone.set_path(path)
@@ -1063,6 +1171,8 @@ class HiResPage(QWidget):
         str | None,
         int,
         int,
+        Path | None,
+        Path | None,
     ]:
         video_path = self.video_zone.path
         on_vocal_path = self.on_vocal_zone.path
@@ -1103,8 +1213,10 @@ class HiResPage(QWidget):
             output_name_mode,
             on_template,
             off_template,
-            self._roll_seconds_value(self.pre_roll_edit, "视频前黑时长"),
-            self._roll_seconds_value(self.post_roll_edit, "视频后黑时长"),
+            self._roll_seconds_value(self.pre_roll_edit, "视频内前黑时长"),
+            self._roll_seconds_value(self.post_roll_edit, "视频内后黑时长"),
+            self._pre_roll_audio_path,
+            self._post_roll_audio_path,
         )
 
     def collect_settings(self) -> None:
@@ -1192,6 +1304,8 @@ class HiResPage(QWidget):
             off_template,
             pre_roll_ms,
             post_roll_ms,
+            pre_roll_audio_path,
+            post_roll_audio_path,
         ) = args
         # 这里才会用真实的视频文件名渲染模板，可能因文件名导致生成的输出名为空
         # 等情况抛 ProcessingError；必须在主线程上兜住，否则异常会逃逸出 Qt 槽。
@@ -1237,6 +1351,8 @@ class HiResPage(QWidget):
                 off_template,
                 pre_roll_ms,
                 post_roll_ms,
+                pre_roll_audio_path,
+                post_roll_audio_path,
             ) = args
             outputs = run_pipeline(
                 video_path=video_path,
@@ -1249,6 +1365,8 @@ class HiResPage(QWidget):
                 off_name_template=off_template,
                 pre_roll_ms=pre_roll_ms,
                 post_roll_ms=post_roll_ms,
+                pre_audio_path=pre_roll_audio_path,
+                post_audio_path=post_roll_audio_path,
                 logger=logger,
                 should_cancel=lambda: self._hires_cancel_requested,
                 on_process_started=self._register_hires_process,

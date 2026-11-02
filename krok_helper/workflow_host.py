@@ -41,11 +41,14 @@ class SubtitleVideoSink(Protocol):
         *,
         pre_roll_ms: int | None = None,
         post_roll_ms: int | None = None,
+        pre_roll_audio_path: str | None = None,
+        post_roll_audio_path: str | None = None,
     ) -> None:
         """接收成片，并切到第 6 步 Hi-Res 混流。
 
-        ``pre_roll_ms`` / ``post_roll_ms`` 是成片前黑/后黑时长；提供给
-        Hi-Res 对齐分离音轨和保留片头片尾音频。
+        ``pre_roll_ms`` / ``post_roll_ms`` 是视频内前黑/后黑时长；
+        ``pre_roll_audio_path`` / ``post_roll_audio_path`` 是这两个段的原始音频源；
+        没有路径时 Hi-Res 从所选视频音轨截取。
         """
         ...
 

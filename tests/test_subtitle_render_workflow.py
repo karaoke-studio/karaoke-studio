@@ -312,11 +312,18 @@ def test_accept_subtitle_video_forwards_roll_timing(tmp_path: Path) -> None:
         output,
         pre_roll_ms=1200,
         post_roll_ms=800,
+        pre_roll_audio_path="D:/roll/pre.flac",
+        post_roll_audio_path="D:/roll/post.flac",
     )
     assert calls[0] == (
         "video",
         output,
-        {"pre_roll_ms": 1200, "post_roll_ms": 800},
+        {
+            "pre_roll_ms": 1200,
+            "post_roll_ms": 800,
+            "pre_roll_audio_path": "D:/roll/pre.flac",
+            "post_roll_audio_path": "D:/roll/post.flac",
+        },
     )
 
 
