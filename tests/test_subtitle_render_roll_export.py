@@ -119,7 +119,7 @@ def test_roll_graph_uses_xfade_and_segment_inputs(tmp_path):
     assert "fade=t=out:st=6.550000:d=0.250000:color=black" in graph
     assert "fade=t=in:st=0.000000:d=0.250000:color=black" in graph
     assert "xfade=transition=custom" not in graph
-    assert "[rollpmt][rollpost]concat=n=2:v=1:a=0[rollall]" in graph
+    assert "[rollpmt][rollpost]concat=n=2:v=1:a=0,fps=30[rollall]" in graph
     # 自我过渡落到 fade 滤镜（前黑淡入黑 / 后黑淡出白）。
     assert "fade=t=in:st=0.000000:d=0.300000:color=black" in graph
     assert "fade=t=out:st=1.600000:d=0.400000:color=white" in graph
@@ -156,15 +156,35 @@ def test_roll_graph_without_main_content_concats_pre_and_post(tmp_path):
     graph, inputs = roll_background_graph(job, plan, plan.total_ms / 1000.0)
     assert "rollmain" not in graph
     assert "xfade" not in graph
-    assert "[rollpre][rollpost]concat=n=2:v=1:a=0[rollall]" in graph
+    assert "[rollpre][rollpost]concat=n=2:v=1:a=0,fps=30[rollall]" in graph
     assert len(inputs) == 3  # 主背景占位 + 前黑 + 后黑
 
 
 def test_roll_graph_concat_when_no_transition(tmp_path):
     job = _job(tmp_path, pre=_pre(tmp_path, 2000, main_transition_ms=0))
     graph, _ = roll_background_graph(job, resolve_roll_timeline(job), 8.0)
-    assert "concat=n=2:v=1:a=0[rollpm]" in graph
+    assert "concat=n=2:v=1:a=0,fps=30[rollpm]" in graph
     assert "xfade" not in graph
+
+
+def test_roll_graph_normalizes_concat_output_before_xfade(tmp_path):
+    """黑/白场（concat）+ 后黑交叉溶解（xfade）混用时必须统一时间基。
+
+    concat 输出的时间基是 1/1000000、帧率元数据不可靠，直接喂 xfade 会被
+    ffmpeg 拒绝（timebase 不匹配），导出零帧失败；重采样到工程帧率后才能
+    正常拼接，且总时长不变。
+    """
+
+    job = _job(
+        tmp_path,
+        pre=_pre(tmp_path, 2000, main_transition_ms=600, main_transition_style="black"),
+        post=_post(tmp_path, 2000, main_transition_ms=600,
+                   main_transition_style="crossfade"),
+    )
+    graph, _ = roll_background_graph(job, resolve_roll_timeline(job), 10.0)
+    assert "[rollpre][rollmain]concat=n=2:v=1:a=0,fps=30[rollpm]" in graph
+    assert "[rollpmt][rollpost]xfade=transition=fade:duration=0.600000:offset=7.400000" in graph
+    assert "concat=n=2:v=1:a=0[rollpm]" not in graph
 
 
 def test_roll_graph_tile_fill_builds_xstack(tmp_path):
@@ -712,3 +732,131 @@ def test_review_dip_keeps_incoming_video_playing(tmp_path):
     # 主段 0.9s（应已切到蓝）：冻结首帧会仍是绿。
     r, g, b = center_rgb_at(1.90)
     assert b > 140 and r < 80 and g < 80, f"main should have advanced to blue: {(r, g, b)}"
+
+
+@pytest.mark.skipif(_ffmpeg_path() is None, reason="本机无 ffmpeg")
+def test_roll_non_video_background_mixed_transitions_exports(tmp_path):
+    """非视频背景 + 前黑黑场 + 后黑交叉溶解：mix 时间基后必须能完整导出。
+
+    回归：concat（黑/白场）输出直接喂 xfade（交叉溶解）时 timebase 不匹配，
+    ffmpeg 在滤镜配置阶段就以 Invalid argument 退出，成片一帧都没有。
+    """
+
+    ffmpeg = _ffmpeg_path()
+    background = tmp_path / "bg.png"
+    subprocess.run(
+        [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=0x00CC00:s=320x180",
+            "-frames:v", "1", str(background),
+        ],
+        check=True,
+    )
+    job = RenderJob(
+        track=_track(end_ms=3000),
+        style=None,
+        background_video_path=background,
+        background_source=BackgroundSource(kind="image", path=str(background)),
+        output_path=tmp_path / "out.mp4",
+        width=320,
+        height=180,
+        fps=30,
+        include_audio=False,
+        output_format=OUTPUT_FORMAT_MP4,
+        pre_roll=RollSegmentConfig(
+            enabled=True,
+            source=BackgroundSource(kind="solid", color="#AA0000"),
+            duration_ms=1000,
+            main_transition_ms=500,
+            main_transition_style="black",
+        ),
+        post_roll=RollSegmentConfig(
+            enabled=True,
+            source=BackgroundSource(kind="solid", color="#0000AA"),
+            duration_ms=1000,
+            main_transition_ms=500,
+            main_transition_style="crossfade",
+        ),
+        main_background_has_audio=False,
+    )
+    command = build_render_command(ffmpeg, job)
+    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    try:
+        for _ in range(30 * 6):
+            process.stdin.write(bytes(320 * 180 * 4))
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+    assert process.wait(timeout=60) == 0
+    probe = subprocess.run(
+        [ffmpeg, "-i", str(job.output_path)],
+        capture_output=True,
+        text=True,
+    ).stderr
+    duration_line = next(row for row in probe.splitlines() if "Duration:" in row)
+    token = duration_line.split("Duration:")[1].split(",")[0].strip()
+    hours, minutes, seconds = token.split(":")
+    total = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    # pre 1000 + 主段 3000 + post 1000 = 5s。
+    assert abs(total - 5.0) < 0.05
+
+
+@pytest.mark.skipif(_ffmpeg_path() is None, reason="本机无 ffmpeg")
+def test_roll_concat_output_pads_to_full_duration(tmp_path):
+    """concat 之后仍要能按总时长补黑：字幕长于主视频时不能停在中途。
+
+    回归护栏：concat 输出帧率元数据不可靠时，末尾 tpad 补帧的 PTS 可能不前进，
+    trim 永远裁不到目标时长（无限补帧）。归一帧率后补帧必须正常收尾。
+    """
+
+    ffmpeg = _ffmpeg_path()
+    main_video = tmp_path / "main.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=0x00CC00:s=64x36:r=30:d=2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(main_video),
+        ],
+        check=True,
+    )
+    job = RenderJob(
+        track=_track(end_ms=6000),
+        style=None,
+        background_video_path=main_video,
+        background_source=BackgroundSource(kind="video", path=str(main_video)),
+        output_path=tmp_path / "out.mp4",
+        width=64,
+        height=36,
+        fps=30,
+        include_audio=False,
+        output_format=OUTPUT_FORMAT_MP4,
+        pre_roll=RollSegmentConfig(
+            enabled=True,
+            source=BackgroundSource(kind="solid", color="#AA0000"),
+            duration_ms=1000,
+            main_transition_ms=500,
+            main_transition_style="black",
+        ),
+        main_media_end_ms=2000,
+        main_background_has_audio=False,
+    )
+    command = build_render_command(ffmpeg, job)
+    # 总时长 = max(前黑 1s + 字幕 6s, 前黑 1s + 视频 2s) = 7s。
+    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    try:
+        for _ in range(30 * 8):
+            process.stdin.write(bytes(64 * 36 * 4))
+        process.stdin.close()
+    except BrokenPipeError:
+        pass
+    assert process.wait(timeout=60) == 0
+    probe = subprocess.run(
+        [ffmpeg, "-i", str(job.output_path)],
+        capture_output=True,
+        text=True,
+    ).stderr
+    duration_line = next(row for row in probe.splitlines() if "Duration:" in row)
+    token = duration_line.split("Duration:")[1].split(",")[0].strip()
+    hours, minutes, seconds = token.split(":")
+    total = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    assert abs(total - 7.0) < 0.05
