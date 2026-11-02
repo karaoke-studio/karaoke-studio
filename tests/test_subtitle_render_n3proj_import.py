@@ -1673,6 +1673,34 @@ def test_sequence_and_solid_background_are_imported(tmp_path):
     assert solid_result.project_data["background"]["color"] == "#123456"
 
 
+def test_sequence_background_keeps_fractional_fps(tmp_path):
+    payload = _project_payload(tmp_path)
+    sequence = tmp_path / "frame_%04d.png"
+    sequence.write_bytes(b"fake")
+    payload["SourceInfo"].update(
+        {"SourceKind": 2, "ImagePath": str(sequence), "ImageRelativePath": sequence.name}
+    )
+    payload["SourceInfo"]["Fps"] = 29.97
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert result.project_data["background"]["source_fps"] == 29.97
+
+
+def test_sequence_background_falls_back_for_invalid_fps(tmp_path):
+    payload = _project_payload(tmp_path)
+    sequence = tmp_path / "frame_%04d.png"
+    sequence.write_bytes(b"fake")
+    payload["SourceInfo"].update(
+        {"SourceKind": 2, "ImagePath": str(sequence), "ImageRelativePath": sequence.name}
+    )
+    payload["SourceInfo"]["Fps"] = "not-a-number"
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert result.project_data["background"]["source_fps"] == 60
+
+
 # ---------------------------------------------------------------------------
 # 本机真实样例（可选回归）
 #

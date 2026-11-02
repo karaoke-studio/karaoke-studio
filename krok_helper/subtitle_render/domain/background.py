@@ -3,9 +3,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 import re
 from typing import Literal, Optional
+
+from krok_helper.subtitle_render.domain.frame_rate import frame_rate
+
+# 图片序列「源帧率」预设档位：主流整数/NTSC 系 + 慢速档（0.5 = 每张 2 秒）。
+IMAGE_SEQUENCE_FPS_PRESETS: tuple[int | float, ...] = (
+    0.25,
+    0.5,
+    1,
+    2,
+    3,
+    5,
+    8,
+    10,
+    12,
+    15,
+    23.976,
+    24,
+    25,
+    29.97,
+    30,
+    50,
+    59.94,
+    60,
+    120,
+)
 
 
 @dataclass
@@ -22,10 +48,35 @@ class BackgroundSource:
     kind: Literal["video", "image", "image_sequence", "solid"] = "solid"
     path: Optional[str] = None
     color: str = "#000000"
-    source_fps: Optional[int] = None
+    source_fps: Optional[int | float] = None
     sequence_start_number: int = 0
     video_offset_ms: int = 0
     image_fit: Literal["cover", "contain"] = "cover"
+
+
+def normalize_sequence_fps(value: object, fallback: int | float = 60) -> int | float:
+    """Coerce an image-sequence source fps to a positive finite ``int | float``.
+
+    整数值返回 ``int``（旧工程的 24 序列化回仍是 24）；解析失败、非有限或
+    不大于零时返回 ``fallback``。小数与 NTSC 系原样保留（0.5、23.976）。
+    """
+    try:
+        fps = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    if not isfinite(fps) or fps <= 0:
+        return fallback
+    return int(fps) if fps.is_integer() else fps
+
+
+def background_sequence_frame_index(source: BackgroundSource, t_ms: int) -> int:
+    """Zero-based sequence frame index at ``t_ms``（不含起始编号）。
+
+    用有理帧率做整数运算，浮点小数（0.5）与 1/30 这类经 ``float`` 存储的
+    分数值都不会在切换边界上漂移。
+    """
+    rate = frame_rate(normalize_sequence_fps(source.source_fps, 60))
+    return max(int(t_ms), 0) * rate.numerator // (1000 * rate.denominator)
 
 
 def background_sequence_frame_path(
@@ -35,9 +86,8 @@ def background_sequence_frame_path(
     """Resolve the current image-sequence frame from an ffmpeg number pattern."""
     if source.kind != "image_sequence" or not source.path:
         return None
-    index = (
-        max(int(t_ms), 0) * max(int(source.source_fps or 60), 1) // 1000
-        + max(int(source.sequence_start_number), 0)
+    index = background_sequence_frame_index(source, t_ms) + max(
+        int(source.sequence_start_number), 0
     )
     raw = str(source.path)
     match = re.search(r"%0?(\d*)d", raw)

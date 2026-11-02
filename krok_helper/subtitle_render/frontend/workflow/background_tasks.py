@@ -18,7 +18,9 @@ from krok_helper.subtitle_render.domain.background import (
     background_sequence_frame_path,
     count_image_sequence_frames,
     infer_image_sequence_pattern,
+    normalize_sequence_fps,
 )
+from krok_helper.subtitle_render.domain.frame_rate import frame_rate
 from krok_helper.subtitle_render.frontend.preview.preview_media import (
     qt_playback_source,
 )
@@ -287,7 +289,9 @@ class _RollMediaLoadWorker(QObject):
         self._kind = kind
         self._path = Path(path)
         self._ffprobe_path = ffprobe_path
-        self._preview_fps = max(float(preview_fps), 1.0)
+        # 慢速序列（0.5 = 每张 2 秒）合法；非法值在 _load_image_sequence
+        # 经 normalize_sequence_fps 兜底，这里不再钳到 >= 1。
+        self._preview_fps = float(preview_fps)
         self._preview_quality = str(preview_quality)
 
     def run(self) -> None:
@@ -344,7 +348,7 @@ class _RollMediaLoadWorker(QObject):
         if pattern == self._path:
             result.error = "首帧文件名需要以连续编号结尾，例如 frame_0001.png。"
             return
-        fps = max(int(round(self._preview_fps)), 1)
+        fps = normalize_sequence_fps(self._preview_fps)
         frames = count_image_sequence_frames(pattern, start_number)
         result.source = BackgroundSource(
             kind="image_sequence",
@@ -352,7 +356,11 @@ class _RollMediaLoadWorker(QObject):
             source_fps=fps,
             sequence_start_number=start_number,
         )
-        result.source_duration_ms = max(frames * 1000 // max(fps, 1), 0)
+        # 有理帧率整数运算：frames/张 ÷ fps，29.97、0.5 这类值不漂移。
+        rate = frame_rate(fps)
+        result.source_duration_ms = max(
+            frames * 1000 * rate.denominator // rate.numerator, 0
+        )
         result.source_width = image.width()
         result.source_height = image.height()
         if frames > 0:

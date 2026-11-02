@@ -9,6 +9,7 @@ import logging
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from fractions import Fraction
 
 import pytest
 
@@ -1123,6 +1124,29 @@ def test_background_payload_round_trip(tmp_path):
         "video_offset_ms": 125,
         "image_fit": "cover",
     }
+
+
+@pytest.mark.parametrize("source_fps", [0.5, 23.976, float(Fraction(1, 30))])
+def test_background_payload_round_trip_keeps_fractional_fps(tmp_path, source_fps):
+    image = tmp_path / "frames" / "frame_%04d.png"
+    payload = background_payload(kind="image_sequence", path=image, source_fps=source_fps)
+    path = tmp_path / "background.yurika"
+    save_render_project(path, {"background": payload})
+
+    assert load_render_project(path)["background"]["source_fps"] == source_fps
+
+
+def test_background_payload_falls_back_for_invalid_fps():
+    payload = background_payload(kind="image_sequence", source_fps="not-a-number")
+
+    assert payload["source_fps"] == 60
+
+
+def test_background_payload_falls_back_for_zero_fps():
+    # 旧 payload 里 0 是 falsy「未设置」，保存时回退默认而不是写出 0。
+    payload = background_payload(kind="image_sequence", source_fps=0)
+
+    assert payload["source_fps"] == 60
 
 
 def test_load_render_project_rejects_bad_json(tmp_path):

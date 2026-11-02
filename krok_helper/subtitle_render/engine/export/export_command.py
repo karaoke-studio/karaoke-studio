@@ -8,7 +8,10 @@ from pathlib import Path
 from PyQt6.QtGui import QColor
 
 from krok_helper.errors import ProcessingError
-from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import (
+    BackgroundSource,
+    normalize_sequence_fps,
+)
 from krok_helper.subtitle_render.domain.frame_rate import frame_rate_text
 from krok_helper.subtitle_render.domain.roll import (
     ROLL_FILL_ORIGINAL,
@@ -194,12 +197,12 @@ def roll_segment_input_args(
             return ["-ignore_loop", "0", "-i", str(source.path)]
         return ["-loop", "1", "-framerate", frame_rate_text(job.fps), "-i", str(source.path)]
     if source.kind == "image_sequence":
-        fps = max(int(source.source_fps or job.fps), 1)
+        fps = normalize_sequence_fps(source.source_fps, job.fps)
         return [
             "-stream_loop",
             "-1",
             "-framerate",
-            str(fps),
+            frame_rate_text(fps),
             "-start_number",
             str(max(int(source.sequence_start_number), 0)),
             "-i",
@@ -737,12 +740,12 @@ def background_input_args(
     if source.kind == "image":
         return ["-loop", "1", "-framerate", frame_rate_text(job.fps), "-i", str(source.path)]
     if source.kind == "image_sequence":
-        fps = max(int(source.source_fps or job.fps), 1)
+        fps = normalize_sequence_fps(source.source_fps, job.fps)
         return [
             "-stream_loop",
             "-1",
             "-framerate",
-            str(fps),
+            frame_rate_text(fps),
             "-start_number",
             str(max(int(source.sequence_start_number), 0)),
             "-i",

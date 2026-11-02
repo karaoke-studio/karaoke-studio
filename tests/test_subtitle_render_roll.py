@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -95,6 +96,28 @@ def test_segment_round_trip_keeps_all_parameters():
     )
     restored = roll_segment_from_dict(roll_segment_to_dict(config))
     assert restored == config.normalized()
+
+
+@pytest.mark.parametrize("source_fps", [0.5, 29.97, float(Fraction(1, 30))])
+def test_segment_round_trip_keeps_fractional_source_fps(source_fps):
+    config = RollSegmentConfig(
+        enabled=True,
+        source=BackgroundSource(
+            kind="image_sequence", path="D:/seq/frame_%04d.png", source_fps=source_fps
+        ),
+    )
+
+    restored = roll_segment_from_dict(roll_segment_to_dict(config))
+
+    assert restored.source.source_fps == source_fps
+
+
+def test_segment_from_dict_falls_back_for_invalid_source_fps():
+    restored = roll_segment_from_dict(
+        {"source": {"kind": "image_sequence", "source_fps": "bad", "path": "f_%04d.png"}}
+    )
+
+    assert restored.source.source_fps == 60
 
 
 def test_segment_from_dict_defaults_for_legacy_payload():
@@ -2054,6 +2077,45 @@ def test_roll_media_load_worker_reads_sequence_and_static_image(qapp, tmp_path):
     assert static_result.source_duration_ms == 0
     assert static_result.preview_frame is not None
     assert static_result.preview_frame_path == tmp_path / "frame_0001.png"
+
+
+@pytest.mark.parametrize(
+    ("preview_fps", "expected_duration_ms"),
+    [
+        (0.5, 6000),  # 3 帧 / 0.5fps = 6s，一张图 2 秒
+        (29.97, 100),  # 3 帧 / 29.97fps，有理精确向下取整
+    ],
+)
+def test_roll_media_load_worker_duration_is_exact_for_fractional_fps(
+    qapp, tmp_path, preview_fps, expected_duration_ms
+):
+    from PyQt6.QtGui import QColor, QImage
+
+    from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
+        RollMediaLoadResult,
+        _RollMediaLoadWorker,
+    )
+
+    for index in range(1, 4):
+        image = QImage(32, 24, QImage.Format.Format_RGB32)
+        image.fill(QColor("#305070"))
+        assert image.save(str(tmp_path / f"frame_{index:04d}.png"))
+    worker = _RollMediaLoadWorker(
+        7,
+        "pre",
+        "image_sequence",
+        tmp_path / "frame_0001.png",
+        ffprobe_path="ffprobe",
+        preview_fps=preview_fps,
+        preview_quality="high",
+    )
+    result = RollMediaLoadResult(7, "pre", "image_sequence")
+
+    worker._load_image_sequence(result)
+
+    assert result.error == ""
+    assert result.source.source_fps == preview_fps
+    assert result.source_duration_ms == expected_duration_ms
 
 
 def test_open_roll_defaults_applies_and_persists(qapp, monkeypatch):

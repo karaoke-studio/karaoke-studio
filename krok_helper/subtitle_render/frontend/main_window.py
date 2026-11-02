@@ -92,6 +92,7 @@ from krok_helper.settings import get_settings_path, load_app_settings, save_app_
 from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
     infer_image_sequence_pattern,
+    normalize_sequence_fps,
 )
 from krok_helper.subtitle_render.domain.roll import (
     RollSegmentConfig,
@@ -187,7 +188,7 @@ from krok_helper.subtitle_render.frontend.workflow.export_runtime import (
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_choice,
     fluent_error,
-    fluent_get_int,
+    fluent_get_fps,
     fluent_info,
     fluent_question,
     fluent_warning,
@@ -4127,17 +4128,18 @@ class SubtitleRenderWindow(QWidget):
         start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
         path_str, _ = QFileDialog.getOpenFileName(self, "选择图片序列首帧", start_dir, IMAGE_FILTER)
         if path_str:
-            fps, ok = fluent_get_int(
+            fps, ok = fluent_get_fps(
                 self,
                 "图片序列帧率",
-                "源帧率（每秒图片数）",
+                "源帧率（每秒图片数），可输小数或分数：0.5 = 每张 2 秒，1/30 = 每张 30 秒",
                 value=(
-                    int(self._background_source.source_fps or self._screen_settings.fps)
+                    normalize_sequence_fps(
+                        self._background_source.source_fps
+                        or self._screen_settings.fps
+                    )
                     if self._background_source is not None
                     else self._screen_settings.fps
                 ),
-                minimum=1,
-                maximum=240,
             )
             if ok:
                 self.load_background_sequence(Path(path_str), fps)
@@ -5243,7 +5245,9 @@ class SubtitleRenderWindow(QWidget):
         self._set_non_video_background(BackgroundSource(kind="image", path=str(path)))
         return True
 
-    def load_background_sequence(self, first_frame: Path, source_fps: int = 60) -> bool:
+    def load_background_sequence(
+        self, first_frame: Path, source_fps: int | float = 60
+    ) -> bool:
         image = QImage(str(first_frame))
         if image.isNull():
             fluent_warning(self, "图片序列不可用", f"无法读取首帧：\n{first_frame}")
@@ -5258,7 +5262,9 @@ class SubtitleRenderWindow(QWidget):
             return False
         self._set_non_video_background(
             BackgroundSource(
-                kind="image_sequence", path=str(pattern), source_fps=max(int(source_fps), 1),
+                kind="image_sequence",
+                path=str(pattern),
+                source_fps=normalize_sequence_fps(source_fps),
                 sequence_start_number=start_number,
             )
         )
@@ -5301,7 +5307,11 @@ class SubtitleRenderWindow(QWidget):
             kind=kind if kind in {"video", "image", "image_sequence", "solid"} else "solid",
             path=str(path) if path is not None else None,
             color=str(payload.get("color") or "#000000"),
-            source_fps=(int(payload["source_fps"]) if payload.get("source_fps") else None),
+            source_fps=(
+                normalize_sequence_fps(payload["source_fps"])
+                if payload.get("source_fps")
+                else None
+            ),
             sequence_start_number=max(int(payload.get("sequence_start_number") or 0), 0),
             video_offset_ms=int(payload.get("video_offset_ms") or 0),
             image_fit=raw_fit if raw_fit in {"cover", "contain"} else "cover",

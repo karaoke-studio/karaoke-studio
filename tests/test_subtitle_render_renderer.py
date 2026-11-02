@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import replace
+from fractions import Fraction
 import json
 import math
 import os
@@ -426,6 +427,60 @@ def test_build_render_command_supports_image_sequence(tmp_path):
 
     assert command[command.index(str(first)) - 7 : command.index(str(first)) + 1] == [
         "-stream_loop", "-1", "-framerate", "24", "-start_number", "0", "-i", str(first)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("source_fps", "framerate_text"),
+    [
+        (0.5, "1/2"),
+        (23.976, "2997/125"),
+        (29.97, "2997/100"),
+        (float(Fraction(1, 30)), "1/30"),
+    ],
+)
+def test_build_render_command_keeps_fractional_sequence_fps(
+    tmp_path, source_fps, framerate_text
+):
+    """小数/分数源帧率以精确有理数传给 image2，不被截断成整数。"""
+
+    first = tmp_path / "frame_%04d.png"
+    job = replace(
+        _job(tmp_path),
+        background_video_path=None,
+        background_source=BackgroundSource(
+            kind="image_sequence", path=str(first), source_fps=source_fps
+        ),
+        include_audio=False,
+    )
+
+    command = build_render_command("ffmpeg", job)
+
+    assert command[command.index(str(first)) - 7 : command.index(str(first)) + 1] == [
+        "-stream_loop", "-1", "-framerate", framerate_text,
+        "-start_number", "0", "-i", str(first),
+    ]
+
+
+def test_roll_segment_input_args_keeps_fractional_sequence_fps(tmp_path):
+    from krok_helper.subtitle_render.domain.roll import RollSegmentConfig
+    from krok_helper.subtitle_render.engine.export.export_command import (
+        roll_segment_input_args,
+    )
+
+    pattern = tmp_path / "frame_%04d.png"
+    job = _job(tmp_path)
+    config = RollSegmentConfig(
+        source=BackgroundSource(
+            kind="image_sequence", path=str(pattern), source_fps=0.5
+        )
+    )
+
+    args = roll_segment_input_args(config, job, 4.0)
+
+    anchor = args.index(str(pattern))
+    assert args[anchor - 7 : anchor + 1] == [
+        "-stream_loop", "-1", "-framerate", "1/2", "-start_number", "0", "-i", str(pattern)
     ]
 
 

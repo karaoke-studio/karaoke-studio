@@ -57,7 +57,10 @@ from krok_helper.subtitle_render.n3.font_scheme import (
     convert_n3_font_scheme as _scheme_changes,
     hex_from_colorbind as _hex_from_colorbind,
 )
-from krok_helper.subtitle_render.domain.background import infer_image_sequence_pattern
+from krok_helper.subtitle_render.domain.background import (
+    infer_image_sequence_pattern,
+    normalize_sequence_fps,
+)
 from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
     LineAnimationOverride,
@@ -246,7 +249,11 @@ def load_n3proj(
             "kind": "image_sequence" if source_kind == 2 else "image",
             "path": str(sequence_path) if sequence_path else None,
             "color": "#000000",
-            "source_fps": _int(source.get("Fps"), 60) if source_kind == 2 else None,
+            "source_fps": (
+                normalize_sequence_fps(source.get("Fps"), 60)
+                if source_kind == 2
+                else None
+            ),
             "sequence_start_number": sequence_start,
             "video_offset_ms": 0,
         }

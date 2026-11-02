@@ -27,7 +27,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
-from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import (
+    BackgroundSource,
+    normalize_sequence_fps,
+)
 
 
 # --------------------------------------------------------------------------- 填充风格
@@ -307,7 +310,7 @@ def roll_segment_from_dict(payload: object) -> RollSegmentConfig:
             ),
             color=str(source_payload.get("color") or "#000000"),
             source_fps=(
-                int(source_payload["source_fps"])
+                normalize_sequence_fps(source_payload["source_fps"])
                 if source_payload.get("source_fps")
                 else None
             ),

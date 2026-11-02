@@ -6,13 +6,16 @@ standalone and embedded modes both keep correct focus, modality, and theme.
 
 from __future__ import annotations
 
+from fractions import Fraction
+from math import isfinite
 from typing import Callable, Mapping, Optional, Sequence
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal as Signal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCompleter,
     QDialog,
     QHBoxLayout,
     QListWidgetItem,
@@ -23,6 +26,7 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CheckBox,
+    ComboBox,
     Dialog,
     EditableComboBox,
     LineEdit,
@@ -32,6 +36,10 @@ from qfluentwidgets import (
     SpinBox,
 )
 from krok_helper.qfluent_compat import ModelessDialog, exec_modeless_dialog, show_modeless_dialog
+from krok_helper.subtitle_render.domain.background import (
+    IMAGE_SEQUENCE_FPS_PRESETS,
+    normalize_sequence_fps,
+)
 
 
 def _resolve_window(parent: Optional[QWidget]) -> Optional[QWidget]:
@@ -358,6 +366,203 @@ class FluentIntInputDialog(ModelessDialog):
         return int(self.control.value())
 
 
+def format_sequence_fps_text(value: int | float) -> str:
+    """回显文本：小数表示紧凑时按小数（60、0.5、0.25），冗长时按分数（1/30）。"""
+    if isinstance(value, int):
+        return str(value)
+    decimal_text = repr(float(value))
+    if len(decimal_text) <= 6:
+        return decimal_text
+    fraction_text = str(Fraction(decimal_text).limit_denominator(1_000_000))
+    if len(fraction_text) < len(decimal_text):
+        return fraction_text
+    return decimal_text
+
+
+def parse_sequence_fps_text(
+    text: str,
+    *,
+    minimum: float = 0.001,
+    maximum: float = 240.0,
+) -> Optional[int | float]:
+    """解析帧率文本：小数（0.5）或分数（1/30）；非法/超范围返回 ``None``。"""
+    raw = text.strip()
+    if not raw:
+        return None
+    try:
+        # ``Fraction`` 原生接受 "24"、"0.5"、"1/30" 三类写法且全程精确。
+        value = Fraction(raw)
+        fps = float(value)
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    if not isfinite(fps) or fps <= 0:
+        return None
+    # 边界经 repr 转 Fraction：二进制浮点 0.001 略大于 1/1000，直接
+    # Fraction(0.001) 会把合法的下限值 "0.001" 误判为超范围。
+    if not (Fraction(repr(float(minimum))) <= value <= Fraction(repr(float(maximum)))):
+        return None
+    return int(fps) if fps.is_integer() else fps
+
+
+class FilterableFpsCombo(EditableComboBox):
+    """可输入并即时筛选预设的图片序列源帧率选择框。
+
+    三种输入等效：点预设项、直接输小数（0.5）、输分数（1/30）。输入内容
+    即时过滤预设下拉（包含匹配）；非法或超范围的文本在回车/失焦时回退到
+    上一个合法值，自定义值不会被加入预设列表。
+    """
+
+    fpsValidated = Signal(object)
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        presets: Sequence[int | float] = IMAGE_SEQUENCE_FPS_PRESETS,
+        value: int | float = 60,
+        minimum: float = 0.001,
+        maximum: float = 240.0,
+        commit_delay_ms: int = 200,
+    ) -> None:
+        super().__init__(parent)
+        self._minimum = float(minimum)
+        self._maximum = float(maximum)
+        self._value = self._bounded(value)
+        self._syncing = False
+
+        self.setClearButtonEnabled(True)
+        self.setPlaceholderText("预设或直接输入，如 60 / 0.5 / 1/30")
+        for preset in presets:
+            fps = normalize_sequence_fps(preset)
+            if self.findText(format_sequence_fps_text(fps)) < 0:
+                self.addItem(format_sequence_fps_text(fps))
+
+        completer = QCompleter([self.itemText(i) for i in range(self.count())], self)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setMaxVisibleItems(10)
+        self.setCompleter(completer)
+
+        self._commit_timer = QTimer(self)
+        self._commit_timer.setSingleShot(True)
+        self._commit_timer.setInterval(int(commit_delay_ms))
+        self._commit_timer.timeout.connect(self._commit_typing)
+        # currentTextChanged 覆盖三条路径：键盘输入、下拉/补全选预设、
+        # 程序设值（后者由 _syncing 挡掉）。
+        self.currentTextChanged.connect(
+            lambda _text: self._commit_timer.start() if not self._syncing else None
+        )
+        self.editingFinished.connect(self._flush_edit)
+        self._apply_value(self._value)
+
+    def value(self) -> int | float:
+        return self._value
+
+    def _bounded(self, value: int | float) -> int | float:
+        """程序设值统一夹到 [minimum, maximum]（工程/N3 里带来的越界值）。"""
+        fps = min(max(float(normalize_sequence_fps(value)), self._minimum), self._maximum)
+        return int(fps) if fps.is_integer() else fps
+
+    def setValue(self, value: int | float) -> None:  # noqa: N802 - Qt API
+        # 程序设值不发射，供宿主同步回显使用（仿 TimecodeEdit 的宿主 _syncing 约定）。
+        bounded = self._bounded(value)
+        was = self._syncing
+        self._syncing = True
+        try:
+            self._value = bounded
+            self._apply_text(bounded)
+        finally:
+            self._syncing = was
+
+    def submit_text(self, text: str) -> bool:
+        """直接提交一段文本；合法返回 True 并生效，非法回退返回 False。"""
+        self.setText(text)
+        return self._flush_edit()
+
+    def _commit_typing(self) -> None:
+        if self._syncing:
+            return
+        parsed = parse_sequence_fps_text(
+            self.text(), minimum=self._minimum, maximum=self._maximum
+        )
+        if parsed is not None and parsed != self._value:
+            self._value = parsed
+            self.fpsValidated.emit(parsed)
+
+    def _flush_edit(self) -> bool:
+        self._commit_timer.stop()
+        if self._syncing:
+            return False
+        parsed = parse_sequence_fps_text(
+            self.text(), minimum=self._minimum, maximum=self._maximum
+        )
+        if parsed is None:
+            self._apply_text(self._value)
+            return False
+        self._apply_value(parsed)
+        return True
+
+    def _apply_value(self, value: int | float) -> None:
+        changed = value != self._value
+        self._value = value
+        self._apply_text(value)
+        if changed and not self._syncing:
+            self.fpsValidated.emit(value)
+
+    def _apply_text(self, value: int | float) -> None:
+        was = self._syncing
+        self._syncing = True
+        try:
+            self.setText(format_sequence_fps_text(value))
+        finally:
+            self._syncing = was
+
+    def _onReturnPressed(self) -> None:
+        # 覆写基类：不把自定义文本 addItem 进预设列表，改为校验提交。
+        self._flush_edit()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        # 非法文本上按回车：吞掉按键，避免冒泡触发对话框的默认「确定」
+        # 按钮带着旧值静默关窗（此时 _flush_edit 已把文本回退）。
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if not self._flush_edit():
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+
+class FluentFpsInputDialog(ModelessDialog):
+    """Small Fluent fps input dialog with a filterable preset combo."""
+
+    def __init__(
+        self,
+        title: str,
+        label: str,
+        *,
+        value: int | float = 60,
+        presets: Sequence[int | float] = IMAGE_SEQUENCE_FPS_PRESETS,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(_resolve_window(parent))
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setMinimumWidth(400)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        label_widget = BodyLabel(label, self)
+        label_widget.setWordWrap(True)
+        layout.addWidget(label_widget)
+        self.control = FilterableFpsCombo(self, presets=presets, value=value)
+        self.control.selectAll()
+        layout.addWidget(self.control)
+        button_row, self.ok_button, _cancel_button = fluent_button_row(self)
+        layout.addLayout(button_row)
+
+    def value(self) -> int | float:
+        return self.control.value()
+
+
 class _RowToggleListWidget(FluentListWidget):
     """整行可点的勾选列表：点名称等任意位置都能切换勾选状态。
 
@@ -550,6 +755,22 @@ def fluent_get_int(
         maximum=maximum,
         step=step,
         parent=parent,
+    )
+    accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
+    return dialog.value(), accepted
+
+
+def fluent_get_fps(
+    parent: Optional[QWidget],
+    title: str,
+    label: str,
+    *,
+    value: int | float = 60,
+    presets: Sequence[int | float] = IMAGE_SEQUENCE_FPS_PRESETS,
+) -> tuple[int | float, bool]:
+    """Ask for an image-sequence source fps via the filterable preset combo."""
+    dialog = FluentFpsInputDialog(
+        title, label, value=value, presets=presets, parent=parent
     )
     accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
     return dialog.value(), accepted

@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from krok_helper.qt_audio import follow_default_audio_output
 from krok_helper.subtitle_render.domain.background import (
+    background_sequence_frame_index,
     background_sequence_frame_path,
 )
 from krok_helper.subtitle_render.domain.roll import (
@@ -627,11 +628,10 @@ class RollSegmentFrameSource(QObject):
         if segment.movie_pixmap is not None:
             return ("movie", segment.movie_pixmap.cacheKey()), segment.movie_pixmap
         if source.kind == "image_sequence":
-            path = background_sequence_frame_path(
-                source, max(self._t_ms - segment.start_ms, 0)
-            )
+            elapsed_ms = max(self._t_ms - segment.start_ms, 0)
+            path = background_sequence_frame_path(source, elapsed_ms)
             if segment.sequence_frames:
-                index = max(self._t_ms - segment.start_ms, 0) * max(int(source.source_fps or 60), 1) // 1000
+                index = background_sequence_frame_index(source, elapsed_ms)
                 path = segment.sequence_frames[index % len(segment.sequence_frames)]
             if path is None:
                 return None, QPixmap()

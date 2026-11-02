@@ -28,6 +28,7 @@ from uuid import uuid4
 from krok_helper.subtitle_render.engine.export.encoder_select import (
     DEFAULT_VIDEO_BITRATE_MBPS,
 )
+from krok_helper.subtitle_render.domain.background import normalize_sequence_fps
 from krok_helper.subtitle_render.domain.models import PROJECT_FILE_SUFFIX
 
 PROJECT_SCHEMA_VERSION = 4
@@ -492,7 +493,7 @@ def background_payload(
     kind: str,
     path: Optional[Path] = None,
     color: str = "#000000",
-    source_fps: Optional[int] = None,
+    source_fps: Optional[int | float] = None,
     sequence_start_number: int = 0,
     video_offset_ms: int = 0,
     image_fit: str = "cover",
@@ -502,7 +503,9 @@ def background_payload(
         "kind": kind if kind in {"video", "image", "image_sequence", "solid"} else "solid",
         "path": str(path) if path else None,
         "color": str(color or "#000000"),
-        "source_fps": int(source_fps) if source_fps is not None else None,
+        "source_fps": (
+            normalize_sequence_fps(source_fps) if source_fps is not None else None
+        ),
         "sequence_start_number": int(sequence_start_number),
         "video_offset_ms": int(video_offset_ms),
         "image_fit": image_fit if image_fit in {"cover", "contain"} else "cover",

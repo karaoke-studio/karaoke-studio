@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import os
+from fractions import Fraction
 from pathlib import Path
 import sys
 import threading
@@ -2019,6 +2020,23 @@ def test_static_sequence_and_solid_backgrounds_populate_preview(qapp, monkeypatc
     assert win._background_source.color == "#654321"
 
 
+def test_load_background_sequence_keeps_fractional_fps(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    image = tmp_path / "frame_0000.png"
+    frame = QImage(64, 36, QImage.Format.Format_RGB32)
+    frame.fill(QColor("#123456"))
+    assert frame.save(str(image))
+
+    assert win.load_background_sequence(image, 0.5) is True
+    assert win._background_source.source_fps == 0.5
+
+    assert win.load_background_sequence(image, float(Fraction(1, 30))) is True
+    assert win._background_source.source_fps == float(Fraction(1, 30))
+
+    assert win.load_background_sequence(image, -3) is True
+    assert win._background_source.source_fps == 60  # 非法值回退默认
+
+
 def test_browse_background_sequence_uses_fluent_fps_input(
     qapp, monkeypatch, tmp_path
 ):
@@ -2034,26 +2052,48 @@ def test_browse_background_sequence_uses_fluent_fps_input(
     )
     captured: dict[str, object] = {}
 
-    def get_int(parent, title, label, **kwargs):
+    def get_fps(parent, title, label, **kwargs):
         captured.update(parent=parent, title=title, label=label, kwargs=kwargs)
-        return 24, True
+        return 0.5, True
 
-    monkeypatch.setattr(mw, "fluent_get_int", get_int)
+    monkeypatch.setattr(mw, "fluent_get_fps", get_fps)
     expected_default_fps = win._screen_settings.fps
     win._browse_background_sequence()
 
     assert captured == {
         "parent": win,
         "title": "图片序列帧率",
-        "label": "源帧率（每秒图片数）",
-        "kwargs": {
-            "value": expected_default_fps,
-            "minimum": 1,
-            "maximum": 240,
-        },
+        "label": "源帧率（每秒图片数），可输小数或分数：0.5 = 每张 2 秒，1/30 = 每张 30 秒",
+        "kwargs": {"value": expected_default_fps},
     }
     assert win._background_source.kind == "image_sequence"
-    assert win._background_source.source_fps == 24
+    assert win._background_source.source_fps == 0.5
+
+
+def test_browse_background_sequence_defaults_to_previous_source_fps(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    image = tmp_path / "frame_0000.png"
+    frame = QImage(64, 36, QImage.Format.Format_RGB32)
+    frame.fill(QColor("#123456"))
+    assert frame.save(str(image))
+    assert win.load_background_sequence(image, 23.976) is True
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(image), ""),
+    )
+    captured: dict[str, object] = {}
+
+    def get_fps(parent, title, label, **kwargs):
+        captured.update(kwargs=kwargs)
+        return 23.976, True
+
+    monkeypatch.setattr(mw, "fluent_get_fps", get_fps)
+    win._browse_background_sequence()
+
+    assert captured["kwargs"] == {"value": 23.976}
 
 
 def test_build_render_job_uses_independent_audio_with_static_background(
