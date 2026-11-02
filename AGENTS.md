@@ -80,7 +80,29 @@ CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-aud
 C:\Python314\python.exe -m pytest tests\
 ```
 
-**开发时不要每次都跑全量**：整套 2900+ 个测试要 15 分钟以上，会拖慢迭代。日常开发只跑与改动相关的测试文件/用例（如 `pytest tests\test_subtitle_render_property_panel.py` 或单个 `::test_name`），全量回归留给发版前或跨模块大改动合并前。注意多个 pytest 进程并发跑会互相拖慢并诱发 flaky 失败，计时与排查请独占时段。GUI 测试结束后的顶层窗口由根 conftest 的 `_reap_stray_toplevel_widgets` 按测试回收，不要再引入跨测试存活的无父窗口。
+**开发时不要每次都跑全量**：整套约 6000 个测试串行要 40~60 分钟，其中
+`tests\test_subtitle_render_gpu_backend.py` 一个文件就占 ~28 分钟（每个用例都新起
+sidecar + configure），`tests\test_subtitle_render_property_panel.py` 次之。日常开发
+只跑与改动相关的测试文件/用例（如 `pytest tests\test_subtitle_render_property_panel.py`
+或单个 `::test_name`），全量回归留给发版前或跨模块大改动合并前。
+
+**优先并行跑**（`pytest-xdist`，已列入 `requirements-dev.txt`）：
+
+```powershell
+# 日常快循环：跳过最慢的 GPU 对照文件，约 7 分钟
+C:\Python314\python.exe -m pytest tests -q -n 8 --ignore=tests/test_subtitle_render_gpu_backend.py
+# 只验证 GPU/Painter 对照：约 4.5 分钟
+C:\Python314\python.exe -m pytest tests\test_subtitle_render_gpu_backend.py -q -n 6
+# 全量：约 12 分钟
+C:\Python314\python.exe -m pytest tests -q -n 8
+```
+
+实测：全量串行 40~60 分钟 → `-n 8` 约 12 分钟；GPU 文件 28 分钟 → `-n 6` 约 4.5 分钟。
+代价是少数 GPU 用例（`test_gpu_inline_volume_uses_registered_geometry_transition`
+的个别参数、`test_gpu_band_presets_advance_frames`）在并行负载下会偶发失败，排查这类
+用例时串行单跑确认。普通 `python -m pytest` 现在可直接用：Qt/qfluentwidgets 预热已放进
+`tests/conftest.py`，不再需要临时启动脚本。GUI 测试结束后的顶层窗口由根 conftest 的
+`_reap_stray_toplevel_widgets` 按测试回收，不要再引入跨测试存活的无父窗口。
 
 Qt 嵌入冒烟（无显示器环境）：
 
@@ -195,13 +217,12 @@ git submodule status
 10. **沙箱下工作台自身 pytest 也有两个独立坑（SUG 坑之外的）**——
     ① 收集期 `PyQt6.QtSvg` 报「DLL load failed: 找不到指定的程序」：
     同一解释器直接 `python -c "import krok_helper..."` 正常，仅 pytest
-    的导入环境触发；规避 = 先在进程内预导入
-    `krok_helper.audio_processing.separation.ai_timing_host`（Qt/
-    qfluentwidgets 链预热）再进 pytest。② `tmp_path` fixture 报
-    `PermissionError: pytest-of-<user>`（同 §8.9 条 9 的 basetemp 问题）。
-    两个一起规避：`%TEMP%\run_ks_pytest.py`（预热导入 + 注入
-    `--basetemp=%TEMP%/ks_pytest_basetemp`），在仓库根目录运行。
-    正常终端 / CI 不受影响。
+    的导入环境触发。**已修**：`tests/conftest.py` 顶部会先预导入
+    `krok_helper.audio_processing.separation.ai_timing_host` 完成 Qt/
+    qfluentwidgets 链预热，`python -m pytest` 与 xdist worker 都可直接用，
+    不再需要临时启动脚本。② `tmp_path` fixture 报
+    `PermissionError: pytest-of-<user>`（同 §8.9 条 9 的 basetemp 问题）；
+    受限环境下加 `--basetemp=%TEMP%/xxx` 即可，正常终端 / CI 不受影响。
 
 11. **改 sidecar 共享头文件后增量构建不可信，必须 `--clean-first`**——本机
     中文 VS 工具链下 MSVC 的 `/showIncludes` 输出是本地化的「注意: 包含文件:」，

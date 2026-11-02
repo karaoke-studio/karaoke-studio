@@ -1,6 +1,7 @@
 pytest
 pytest-mock
 pytest-timeout
+pytest-xdist
 psutil
 jieba==0.42.1
 pypinyin==0.55.0

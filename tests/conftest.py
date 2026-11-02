@@ -19,6 +19,15 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+# 先把 Qt/qfluentwidgets 的导入链预热好，再让 pytest 去导入测试模块。
+# 直接在 pytest 的导入环境里首次加载 PyQt6.QtSvg 会报
+# ``DLL load failed: 找不到指定的程序``（同一个解释器 ``python -c`` 正常），
+# 预热后普通 ``python -m pytest`` 与 xdist worker 都不再需要额外的启动脚本。
+try:
+    import krok_helper.audio_processing.separation.ai_timing_host  # noqa: F401
+except Exception:  # pragma: no cover - 预热失败不应连带测试收集失败
+    pass
+
 import pytest
 
 _PINNED_QAPP = None
