@@ -11124,6 +11124,8 @@ class SubtitleRenderWindow(QWidget):
         pre_ms, post_ms = self.subtitle_export_timing()
 
         def _source(config) -> str | None:
+            if not roll_segment_has_audio(config):
+                return None
             path = roll_audio_source_path(config)
             if path is None:
                 return None

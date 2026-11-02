@@ -81,7 +81,10 @@ class TestBuildAlignAudioCommand:
         )
         graph = command[command.index("-filter_complex") + 1]
         assert "[0:a:0]atrim=duration=2.000000" in graph
-        assert "[0:a:0]atrim=duration=3.000000" in graph
+        assert (
+            "[0:a:0]apad=whole_dur=10.000000,"
+            "atrim=start=7.000000:end=10.000000" in graph
+        )
         assert "[1:a:0]atrim=duration=5.000000" in graph
         assert "adelay" not in graph
         assert "concat=n=3:v=0:a=1" in graph

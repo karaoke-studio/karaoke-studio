@@ -299,7 +299,11 @@ def build_align_audio_command(
         "channel_layouts=stereo"
     )
     def _segment_source(
-        index: int | None, duration_s: float, *, main_stem: bool = False
+        index: int | None,
+        duration_s: float,
+        *,
+        main_stem: bool = False,
+        start_s: float | None = None,
     ) -> str:
         if main_stem:
             source = "[1:a:0]"
@@ -309,9 +313,21 @@ def build_align_audio_command(
             source = "[0:a:0]"
         else:
             source = f"anullsrc=r={sample_rate}:cl=stereo,"
+        if start_s is not None:
+            # 无显式音频路径时，后黑必须从成片音轨尾部取；先补到成片
+            # 全长再按起止裁，避免把片头音频当成片尾。
+            source = (
+                f"{source}apad=whole_dur={video_s:.6f},"
+                f"atrim=start={start_s:.6f}:end={start_s + duration_s:.6f},"
+                "asetpts=PTS-STARTPTS"
+            )
+        else:
+            source = (
+                f"{source}atrim=duration={duration_s:.6f},"
+                "asetpts=PTS-STARTPTS"
+            )
         return (
-            f"{source}atrim=duration={duration_s:.6f},"
-            f"apad=whole_dur={duration_s:.6f},"
+            f"{source},apad=whole_dur={duration_s:.6f},"
             f"atrim=start=0:end={duration_s:.6f},"
             f"{normalize},asetpts=PTS-STARTPTS"
         )
@@ -329,7 +345,18 @@ def build_align_audio_command(
         )
         labels.append("[main_song]")
         if post_s > 0.001:
-            filters.append(_segment_source(post_audio_index, post_s) + "[roll_post]")
+            filters.append(
+                _segment_source(
+                    post_audio_index,
+                    post_s,
+                    start_s=(
+                        video_s - post_s
+                        if post_audio_index is None and video_has_audio
+                        else None
+                    ),
+                )
+                + "[roll_post]"
+            )
             labels.append("[roll_post]")
         if len(labels) > 1:
             filters.append(
@@ -747,22 +774,26 @@ def run_pipeline(
         nonlocal roll_sample_rate_floor
         if path is None:
             return None
+        if not Path(path).is_file():
+            raise ProcessingError(f"{label}原始音频文件不存在：{path}")
         try:
             info = probe_media(ffprobe_path, path)
-        except Exception as exc:  # noqa: BLE001 - 回退成片音轨优先
-            logger(f"{label}原始音频读取失败，回退成片音轨：{exc}")
-            return None
+        except Exception as exc:  # noqa: BLE001 - 显式路径必须可用
+            raise ProcessingError(f"{label}原始音频读取失败：{path}\n{exc}") from exc
         if info.audio_streams == 0:
-            logger(f"{label}原始音频没有音频流，回退成片音轨。")
-            return None
+            raise ProcessingError(f"{label}原始音频没有音频流：{path}")
         roll_sample_rate_floor = max(
             roll_sample_rate_floor, int(info.sample_rate or 0)
         )
         logger(f"{label}原始音频: {path.name} / {info.sample_rate or '未知'}Hz")
         return path
 
-    pre_audio_path = _validate_roll_audio(pre_audio_path, "前黑")
-    post_audio_path = _validate_roll_audio(post_audio_path, "后黑")
+    pre_audio_path = (
+        _validate_roll_audio(pre_audio_path, "前黑") if pre_roll_ms > 0 else None
+    )
+    post_audio_path = (
+        _validate_roll_audio(post_audio_path, "后黑") if post_roll_ms > 0 else None
+    )
 
     log_media_summary(logger, "字幕视频", video_info)
     if pre_roll_ms > 0 or post_roll_ms > 0:

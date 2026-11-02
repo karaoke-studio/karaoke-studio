@@ -1161,6 +1161,22 @@ def test_subtitle_export_roll_handoff_passes_original_audio_sources(
         assert handoff["post_roll_ms"] == 800
         assert handoff["pre_roll_audio_path"] == str(pre_audio)
         assert handoff["post_roll_audio_path"] == str(post_video)
+        # 视频源缓存标记为无音轨时不能把它当成显式音频路径。
+        muted_post = RollSegmentConfig(
+            enabled=True,
+            duration_ms=800,
+            source=BackgroundSource(kind="video", path=str(post_video)),
+            source_has_audio=False,
+        )
+        muted_plan = build_roll_timeline(
+            pre,
+            muted_post,
+            track_end_ms=5000,
+            main_media_end_ms=5000,
+            background_kind="video",
+        )
+        win._current_roll_plan = lambda: muted_plan
+        assert win.subtitle_export_roll_handoff()["post_roll_audio_path"] is None
     finally:
         win.deleteLater()
         qapp.processEvents()
