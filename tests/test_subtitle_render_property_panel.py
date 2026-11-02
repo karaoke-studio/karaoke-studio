@@ -5387,42 +5387,56 @@ def test_select_color_records_recent_picks_into_custom_slots(qapp, monkeypatch):
         assert slots_on_open[1][0] == "#112233"
         # 第三次打开：最新的在前，没选过的槽位仍是白。
         assert slots_on_open[2][:3] == ["#445566", "#112233", "#FFFFFF"]
-        # 重复选择只提到最前，不重复占格。槽位只记 RGB：点击色块不会改
-        # 对话框的 alpha（alpha 一律取自滑条），所以半透明色按不透明记。
+        # 重复选择只提到最前，不重复占格；alpha 一并记住。
         recent = [
             c.name(QColor.NameFormat.HexArgb).upper()
             for c in color_controls_module.recent_colors()
         ]
-        assert recent == ["#FF112233", "#FF445566"]
+        assert recent == ["#FF112233", "#80445566"]
     finally:
         color_controls_module.clear_recent_colors()
         host.close()
 
 
-def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(
-    qapp, monkeypatch
-):
-    """对话框里手动「添加到自定义颜色」的色也要留下来；总数不超过 16 格。"""
+def _click_custom_cell(well: QWidget, row: int, col: int) -> None:
+    # QWellArray 按固定格子尺寸算 rowAt/columnAt；sizeHint = 8 列×格宽、
+    # 2 行×格高，不受布局拉伸影响，用它定位格子中心。
+    cell_w = well.sizeHint().width() // 8
+    cell_h = well.sizeHint().height() // 2
+    QTest.mouseClick(
+        well,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(col * cell_w + cell_w // 2, row * cell_h + cell_h // 2),
+    )
+
+
+def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(qapp):
+    """对话框里手动「添加到自定义颜色」或拖入的色也要留下来（含纯白、含
+    alpha，且不依赖最后是确定还是取消）；总数不超过 16 格。"""
     QColorDialog = color_controls_module.QColorDialog
     color_controls_module.clear_recent_colors()
-    host = QWidget()
-    host.show()
-    qapp.processEvents()
-
-    def fake_exec(self):
-        # Qt 的「添加」按钮直接写进程级槽位；用户随后取消也不该丢。
-        QColorDialog.setCustomColor(3, QColor("#ABCDEF"))
-        return int(QDialog.DialogCode.Rejected)
-
-    monkeypatch.setattr(_ColorDialog, "exec", fake_exec)
+    dialog = _ColorDialog(QColor("#000000"))
     try:
-        result = color_controls_module._select_color(
-            QColor("#000000"), host, "选择颜色"
-        )
-        assert not result.isValid()
-        assert [c.name().upper() for c in color_controls_module.recent_colors()] == [
-            "#ABCDEF"
+        color_controls_module._seed_custom_color_slots(dialog)
+        dialog.show()
+        qapp.processEvents()
+        button = dialog._add_custom_button()
+        well = dialog._custom_color_well()
+        assert button is not None and well is not None
+
+        # 「添加」按钮点击时直接读当前色：alpha 保留，纯白不会与空槽的白混淆。
+        dialog.setCurrentColor(QColor("#80ABCDEF"))
+        button.click()
+        dialog.setCurrentColor(QColor("#FFFFFF"))
+        button.click()
+        # 拖入色块：Qt 以 colorChanged(index, rgb) 通知，按不透明记。
+        well.colorChanged.emit(5, QColor("#123456").rgb())
+        recent = [
+            c.name(QColor.NameFormat.HexArgb).upper()
+            for c in color_controls_module.recent_colors()
         ]
+        assert recent == ["#FF123456", "#FFFFFFFF", "#80ABCDEF"]
 
         for value in range(20):
             color_controls_module.record_recent_color(QColor(value, value, value))
@@ -5435,7 +5449,44 @@ def test_recent_colors_keep_manual_additions_and_cap_at_slot_count(
         assert len(color_controls_module.recent_colors()) == 16
     finally:
         color_controls_module.clear_recent_colors()
-        host.close()
+        dialog.close()
+
+
+def test_custom_swatch_click_restores_remembered_alpha(qapp):
+    """点「最近颜色」色块要连 alpha 一起还原；Qt 自己只套 RGB、alpha 沿用滑条。"""
+    hex_argb = QColor.NameFormat.HexArgb
+    color_controls_module.clear_recent_colors()
+    color_controls_module.record_recent_color(QColor("#80445566"))
+    dialog = _ColorDialog(QColor("#FF000000"))
+    try:
+        color_controls_module._seed_custom_color_slots(dialog)
+        dialog.show()
+        qapp.processEvents()
+        well = dialog._custom_color_well()
+        assert well is not None
+
+        _click_custom_cell(well, 0, 0)
+        qapp.processEvents()
+        assert dialog.currentColor().name(hex_argb).upper() == "#80445566"
+        assert dialog._alpha_slider.alpha == 0x80
+
+        # 空槽不是「最近颜色」：点它只套白，不动滑条上的 alpha。
+        dialog.setCurrentColor(QColor("#40112233"))
+        _click_custom_cell(well, 0, 1)
+        qapp.processEvents()
+        assert dialog.currentColor().name(hex_argb).upper() == "#40FFFFFF"
+
+        # 同一次打开里刚「添加」的色也能还原：Qt 把它写进最后点过的格子
+        # （0,1 → 槽 2），镜像的游标必须跟上。
+        dialog.setCurrentColor(QColor("#60ABCDEF"))
+        dialog._add_custom_button().click()
+        dialog.setCurrentColor(QColor("#FF000000"))
+        _click_custom_cell(well, 0, 1)
+        qapp.processEvents()
+        assert dialog.currentColor().name(hex_argb).upper() == "#60ABCDEF"
+    finally:
+        color_controls_module.clear_recent_colors()
+        dialog.close()
 
 
 def test_color_dialog_brings_itself_to_front_each_time_it_is_shown(qapp):
