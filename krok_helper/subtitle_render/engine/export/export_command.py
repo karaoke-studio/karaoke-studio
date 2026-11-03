@@ -19,6 +19,7 @@ from krok_helper.subtitle_render.domain.roll import (
     ROLL_FILL_TILE,
     ROLL_MAIN_TRANSITION_CROSSFADE,
     ROLL_MAIN_TRANSITION_WHITE,
+    ROLL_SELF_TRANSITION_NONE,
     ROLL_TILE_MAX_CELLS,
     RollSegmentConfig,
     RollTimelinePlan,
@@ -339,7 +340,7 @@ def _roll_segment_chain(
     chain += f",trim=duration={_seconds(segment_ms + prepend_clone_ms)},setpts=PTS-STARTPTS"
     chain += _fade("in", head_fade_color, 0, head_fade_ms)
     self_ms = min(normalized.self_transition_ms, segment_ms)
-    if self_ms > 0:
+    if self_ms > 0 and normalized.self_transition_style != ROLL_SELF_TRANSITION_NONE:
         color = "white" if normalized.self_transition_style == "white" else "black"
         if self_fade_in:
             chain += _fade("in", color, 0, self_ms)

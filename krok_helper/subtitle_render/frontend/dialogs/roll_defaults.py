@@ -22,8 +22,10 @@ from krok_helper.subtitle_render.domain.roll import (
     ROLL_FILL_LABELS,
     ROLL_FILL_MODES,
     ROLL_MAIN_TRANSITION_LABELS,
+    ROLL_MAIN_TRANSITION_NONE,
     ROLL_MAIN_TRANSITION_STYLES,
     ROLL_SELF_TRANSITION_LABELS,
+    ROLL_SELF_TRANSITION_NONE,
     ROLL_SELF_TRANSITION_STYLES,
     roll_defaults_from_dict,
 )
@@ -100,6 +102,14 @@ class RollDefaultsDialog(ModelessDialog):
         main_ms_row.addWidget(self.main_ms_spin)
         main_ms_row.addStretch(1)
         layout.addLayout(main_ms_row)
+        self.main_style_combo.currentIndexChanged.connect(
+            lambda: self.main_ms_spin.setEnabled(
+                self.main_style_combo.currentData() != ROLL_MAIN_TRANSITION_NONE
+            )
+        )
+        self.main_ms_spin.setEnabled(
+            self.main_style_combo.currentData() != ROLL_MAIN_TRANSITION_NONE
+        )
 
         self_ms_row = QHBoxLayout()
         self_ms_row.addWidget(CaptionLabel("自我过渡风格", self))
@@ -124,6 +134,14 @@ class RollDefaultsDialog(ModelessDialog):
         self_ms_spin_row.addWidget(self.self_ms_spin)
         self_ms_spin_row.addStretch(1)
         layout.addLayout(self_ms_spin_row)
+        self.self_style_combo.currentIndexChanged.connect(
+            lambda: self.self_ms_spin.setEnabled(
+                self.self_style_combo.currentData() != ROLL_SELF_TRANSITION_NONE
+            )
+        )
+        self.self_ms_spin.setEnabled(
+            self.self_style_combo.currentData() != ROLL_SELF_TRANSITION_NONE
+        )
 
         self.auto_offset_check = CheckBox("自动偏移非标题时间戳（仅前黑）", self)
         self.auto_offset_check.setChecked(bool(normalized["auto_offset_subtitles"]))

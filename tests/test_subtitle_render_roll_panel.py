@@ -141,6 +141,23 @@ def test_rolls_page_registered_in_navigation(qapp):
     assert ("rolls", "前黑/后黑") in panel._PAGE_SPECS
 
 
+def test_roll_transition_none_option_disables_duration(qapp):
+    panel = _panel(qapp)
+    main_combo = panel._roll_main_transition_combos["pre"]
+    main_index = main_combo.findData("none")
+    assert main_index >= 0
+    assert main_combo.itemText(main_index) == "无"
+    main_combo.setCurrentIndex(main_index)
+    assert not panel._roll_main_transition_spins["pre"].isEnabled()
+
+    self_combo = panel._roll_self_transition_combos["pre"]
+    self_index = self_combo.findData("none")
+    assert self_index >= 0
+    assert self_combo.itemText(self_index) == "无"
+    self_combo.setCurrentIndex(self_index)
+    assert not panel._roll_self_transition_spins["pre"].isEnabled()
+
+
 def test_roll_config_change_signals(qapp):
     panel = _panel(qapp)
     emitted: list[tuple[str, dict]] = []
@@ -203,3 +220,20 @@ def test_set_rolls_state_round_trip(qapp):
     assert panel._roll_main_transition_combos["pre"].currentData() == "crossfade"
     assert panel._roll_audio_edits["pre"].text() == "D:/intro.wav"
     assert panel._roll_auto_offset_switch.isChecked()
+
+
+def test_set_rolls_state_none_disables_transition_durations(qapp):
+    panel = _panel(qapp)
+    pre = RollSegmentConfig(
+        enabled=True,
+        source=BackgroundSource(kind="solid", color="#112233"),
+        main_transition_ms=500,
+        main_transition_style="none",
+        self_transition_ms=200,
+        self_transition_style="none",
+    )
+    panel.set_rolls_state(pre, None)
+    assert panel._roll_main_transition_combos["pre"].currentData() == "none"
+    assert panel._roll_self_transition_combos["pre"].currentData() == "none"
+    assert not panel._roll_main_transition_spins["pre"].isEnabled()
+    assert not panel._roll_self_transition_spins["pre"].isEnabled()

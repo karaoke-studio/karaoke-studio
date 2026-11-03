@@ -25,7 +25,9 @@ from krok_helper.subtitle_render.domain.roll import (
     ROLL_FILL_MODES,
     ROLL_MAIN_TRANSITION_CROSSFADE,
     ROLL_MAIN_TRANSITION_LABELS,
+    ROLL_MAIN_TRANSITION_NONE,
     ROLL_SELF_TRANSITION_LABELS,
+    ROLL_SELF_TRANSITION_NONE,
 )
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_field,
@@ -241,6 +243,11 @@ class RollsPropertyPageBuilder:
             )
         )
         host._roll_main_transition_combos[segment] = main_style
+        main_style.currentIndexChanged.connect(
+            lambda _index, combo=main_style, spin=main_ms: spin.setEnabled(
+                combo.currentData() != ROLL_MAIN_TRANSITION_NONE
+            )
+        )
         grid.addWidget(property_field("与主视频过渡风格", main_style), 1, 1)
 
         # 8 自我过渡时长（默认 300ms 动画）。
@@ -273,6 +280,11 @@ class RollsPropertyPageBuilder:
             )
         )
         host._roll_self_transition_combos[segment] = self_style
+        self_style.currentIndexChanged.connect(
+            lambda _index, combo=self_style, spin=self_ms: spin.setEnabled(
+                combo.currentData() != ROLL_SELF_TRANSITION_NONE
+            )
+        )
         grid.addWidget(property_field("自我过渡风格", self_style), 2, 1)
         seg_layout.addLayout(grid)
 

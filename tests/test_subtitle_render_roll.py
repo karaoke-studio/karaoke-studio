@@ -15,10 +15,13 @@ from krok_helper.subtitle_render.domain.roll import (
     ROLL_FILL_STRETCH,
     ROLL_MAIN_TRANSITION_BLACK,
     ROLL_MAIN_TRANSITION_CROSSFADE,
+    ROLL_MAIN_TRANSITION_NONE,
     ROLL_MAIN_TRANSITION_WHITE,
+    ROLL_SELF_TRANSITION_NONE,
     RollSegmentConfig,
     build_roll_timeline,
     effective_roll_ms,
+    roll_dip_half_ms,
     roll_fill_dest_rect,
     roll_layer_alphas,
     roll_segment_active,
@@ -275,6 +278,32 @@ def test_layer_alphas_without_rolls():
     assert alphas.main_alpha == 1.0
     assert alphas.pre_alpha == 0.0
     assert alphas.post_alpha == 0.0
+
+
+def test_none_transition_is_direct_cut_without_self_fade():
+    plan = build_roll_timeline(
+        _video_config(
+            4000,
+            main_transition_ms=1000,
+            main_transition_style=ROLL_MAIN_TRANSITION_NONE,
+            self_transition_ms=200,
+            self_transition_style=ROLL_SELF_TRANSITION_NONE,
+        ),
+        None,
+        track_end_ms=10_000,
+        background_kind="solid",
+    )
+    assert roll_dip_half_ms(ROLL_MAIN_TRANSITION_NONE, 1000, 4000, 6000) == 0.0
+    # 无自我过渡：段起点直接满 alpha。
+    assert roll_layer_alphas(plan, 0).pre_alpha == 1.0
+    # 无主转场：过渡窗口内仍完整显示前黑，不提前混入主段。
+    window = roll_layer_alphas(plan, 3500)
+    assert window.pre_alpha == 1.0
+    assert window.main_alpha == 0.0
+    # 剪切点直接切换。
+    cut = roll_layer_alphas(plan, 4000)
+    assert cut.pre_alpha == 0.0
+    assert cut.main_alpha == 1.0
 
 
 def test_layer_alphas_pre_black_transition_curve():

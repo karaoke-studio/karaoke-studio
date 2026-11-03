@@ -116,6 +116,8 @@ from krok_helper.subtitle_render.frontend.properties.pages.rolls import (
     RollsPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.domain.roll import (
+    ROLL_MAIN_TRANSITION_NONE,
+    ROLL_SELF_TRANSITION_NONE,
     RollSegmentConfig,
     format_roll_source_duration,
     roll_config_with_defaults,
@@ -3092,6 +3094,16 @@ class PropertyPanel(QWidget):
                     self._roll_self_transition_combos.get(segment),
                     normalized.self_transition_style,
                 )
+                main_combo = self._roll_main_transition_combos.get(segment)
+                if main_ms is not None and main_combo is not None:
+                    main_ms.setEnabled(
+                        main_combo.currentData() != ROLL_MAIN_TRANSITION_NONE
+                    )
+                self_combo = self._roll_self_transition_combos.get(segment)
+                if self_ms is not None and self_combo is not None:
+                    self_ms.setEnabled(
+                        self_combo.currentData() != ROLL_SELF_TRANSITION_NONE
+                    )
                 if segment == "pre":
                     auto = getattr(self, "_roll_auto_offset_switch", None)
                     if auto is not None:

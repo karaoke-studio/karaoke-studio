@@ -128,6 +128,44 @@ def test_roll_graph_uses_xfade_and_segment_inputs(tmp_path):
     assert len(inputs) == 3
 
 
+def test_roll_graph_none_transitions_concat_without_animation(tmp_path):
+    job = _job(
+        tmp_path,
+        pre=_pre(
+            tmp_path,
+            4000,
+            main_transition_ms=800,
+            main_transition_style="none",
+            self_transition_ms=300,
+            self_transition_style="none",
+        ),
+        post=_post(
+            tmp_path,
+            2000,
+            main_transition_ms=500,
+            main_transition_style="none",
+            self_transition_ms=400,
+            self_transition_style="none",
+        ),
+    )
+    graph, _inputs = roll_background_graph(job, resolve_roll_timeline(job), 12.0)
+
+    assert "xfade" not in graph
+    assert "fade=" not in graph
+    assert "[rollpre][rollmain]concat=n=2:v=1:a=0,fps=30[rollpm]" in graph
+    assert "[rollpmt][rollpost]concat=n=2:v=1:a=0,fps=30[rollall]" in graph
+
+    # 直接拼接仍必须把工程帧率交给 ffmpeg（滤镜链和输出参数都不能丢）。
+    command = build_render_command("ffmpeg", job)
+    assert "fps=30" in _filter_graph(command)
+    rates = [
+        command[index + 1]
+        for index, token in enumerate(command)
+        if token == "-r"
+    ]
+    assert rates and all(rate == "30" for rate in rates)
+
+
 def test_roll_graph_sequence_segment_resamples_with_round_up(tmp_path):
     """前黑图片序列段的重采样必须 round=up 对齐预览边界；其他素材维持原样。"""
     sequence = tmp_path / "frames"

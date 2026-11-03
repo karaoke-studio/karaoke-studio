@@ -65,27 +65,36 @@ ROLL_FILL_LABELS = {
 ROLL_MAIN_TRANSITION_BLACK = "black"
 ROLL_MAIN_TRANSITION_WHITE = "white"
 ROLL_MAIN_TRANSITION_CROSSFADE = "crossfade"
+ROLL_MAIN_TRANSITION_NONE = "none"
 
 ROLL_MAIN_TRANSITION_STYLES = (
     ROLL_MAIN_TRANSITION_BLACK,
     ROLL_MAIN_TRANSITION_WHITE,
     ROLL_MAIN_TRANSITION_CROSSFADE,
+    ROLL_MAIN_TRANSITION_NONE,
 )
 
 ROLL_MAIN_TRANSITION_LABELS = {
     ROLL_MAIN_TRANSITION_BLACK: "黑场过渡",
     ROLL_MAIN_TRANSITION_WHITE: "白场过渡",
     ROLL_MAIN_TRANSITION_CROSSFADE: "交叉溶解",
+    ROLL_MAIN_TRANSITION_NONE: "无",
 }
 
 ROLL_SELF_TRANSITION_BLACK = "black"
 ROLL_SELF_TRANSITION_WHITE = "white"
+ROLL_SELF_TRANSITION_NONE = "none"
 
-ROLL_SELF_TRANSITION_STYLES = (ROLL_SELF_TRANSITION_BLACK, ROLL_SELF_TRANSITION_WHITE)
+ROLL_SELF_TRANSITION_STYLES = (
+    ROLL_SELF_TRANSITION_BLACK,
+    ROLL_SELF_TRANSITION_WHITE,
+    ROLL_SELF_TRANSITION_NONE,
+)
 
 ROLL_SELF_TRANSITION_LABELS = {
     ROLL_SELF_TRANSITION_BLACK: "黑场过渡",
     ROLL_SELF_TRANSITION_WHITE: "白场过渡",
+    ROLL_SELF_TRANSITION_NONE: "无",
 }
 
 
@@ -495,7 +504,7 @@ def roll_dip_half_ms(
     后黑淡出在主段里重叠。交叉溶解不走这个口径，返回 0。
     """
 
-    if style == ROLL_MAIN_TRANSITION_CROSSFADE:
+    if style in (ROLL_MAIN_TRANSITION_CROSSFADE, ROLL_MAIN_TRANSITION_NONE):
         return 0.0
     total = min(
         max(int(transition_ms), 0),
@@ -533,7 +542,7 @@ def roll_layer_alphas(plan: RollTimelinePlan, display_ms: int) -> RollLayerAlpha
         duration = plan.pre_ms if index == 0 else plan.post_ms
         if index != 1:
             self_ms = min(config.self_transition_ms, duration)
-            if self_ms > 0:
+            if self_ms > 0 and config.self_transition_style != ROLL_SELF_TRANSITION_NONE:
                 fade = _ramp(local_ms / self_ms) if index == 0 else _ramp((duration-local_ms) / self_ms)
             if config.self_transition_style == ROLL_SELF_TRANSITION_WHITE:
                 white += weight * (1.0-fade)
