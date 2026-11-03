@@ -73,6 +73,9 @@ def test_first_auto_update_release_keeps_full_feed_without_preparing_deltas(tmp_
 
 
 def test_container_ranges_preserve_each_independent_signature(tmp_path):
+    # cryptography 只是 macOS 增量签名的构建期依赖；缺失时与
+    # tests/test_macos_update_signing.py 同口径跳过，而不是把环境缺包当成回归。
+    pytest.importorskip("cryptography")
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     key = Ed25519PrivateKey.generate()
     patches = []
