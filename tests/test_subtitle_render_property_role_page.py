@@ -11,9 +11,14 @@ class _Container(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.parts = None
+        self.spacing = None
 
     def set_widgets(self, *widgets) -> None:
         self.parts = widgets
+
+    def set_spacing(self, spacing: int) -> None:
+        # 真实宿主给的是 ResponsivePropertyPair（有 set_spacing）；桩只需记账。
+        self.spacing = spacing
 
 
 class _Host:
@@ -72,6 +77,7 @@ def test_role_builder_preserves_composition_order_and_contracts(qapp) -> None:
     assert host._role_header.parts[1] is host._font_preview_widget
     assert host._font_color_row.parts[0] is host._color_section
     assert host._font_color_row.parts[2] is host._font_section
+    assert host._font_color_row.spacing == 6
     divider = host._font_color_row.parts[1]
     assert divider.objectName() == "SubtitlePropertyInnerDivider"
     assert divider.width() == 1

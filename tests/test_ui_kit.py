@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QChar
@@ -73,11 +74,22 @@ def test_missing_korean_font_keeps_existing_fallback_policy(monkeypatch) -> None
 
 
 def test_preview_bold_keeps_primary_and_default_fallback(qapp):
-    from PyQt6.QtGui import QFont
+    from PyQt6.QtGui import QFont, QFontDatabase
+    from strange_uta_game.frontend import font_cache
     from strange_uta_game.frontend.font_utils import DEFAULT_FONT_FAMILY
     from strange_uta_game.frontend.editor.timing.karaoke_preview import KaraokePreview
 
     from krok_helper.sug_compat import _patch_preview_font_families
+
+    # 离屏平台不枚举系统字体（QFontDatabase.families() 为空），而 SUG 现在会按
+    # 「字体是否已安装」解析主字体。这里显式注册 Arial 再断言回退链，测试就不
+    # 依赖运行机器的字体可见性。
+    arial_path = Path(r"C:\Windows\Fonts\arial.ttf")
+    if not arial_path.is_file():
+        pytest.skip("Arial font file required")
+    font_id = QFontDatabase.addApplicationFont(str(arial_path))
+    assert font_id >= 0
+    font_cache.invalidate()
     _patch_preview_font_families()
     _patch_preview_font_families()
     preview = KaraokePreview()
@@ -93,6 +105,8 @@ def test_preview_bold_keeps_primary_and_default_fallback(qapp):
         assert preview._font_current.families() == [DEFAULT_FONT_FAMILY]
     finally:
         preview.close()
+        QFontDatabase.removeApplicationFont(font_id)
+        font_cache.invalidate()
 
 
 @pytest.mark.parametrize("family", ["Microsoft YaHei", "Arial", "NanumBarunGothic"])

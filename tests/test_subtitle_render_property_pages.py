@@ -18,6 +18,7 @@ def test_property_page_registry_preserves_navigation_order_and_labels() -> None:
         ("effects", "特效"),
         ("title", "标题"),
         ("background", "背景/音频"),
+        ("rolls", "前黑/后黑"),
     )
     assert len({item.route_key for item in PROPERTY_PAGE_DEFINITIONS}) == len(
         PROPERTY_PAGE_DEFINITIONS
@@ -67,8 +68,8 @@ def test_property_page_registry_builds_each_host_page_once_in_order() -> None:
         section_pair_factory=section_pair,
     )
 
-    assert pages == tuple(f"page:{index}" for index in range(1, 7))
-    assert calls.count("stretch:1") == 6
+    assert pages == tuple(f"page:{index}" for index in range(1, 8))
+    assert calls.count("stretch:1") == 7
     assert calls.index("_make_animation_section") < calls.index("_make_lit_section")
     # 标题页自多标题列表改造后由单一入口 _make_title_page 构建。
     assert calls.index("_make_title_page") < calls.index(
@@ -85,4 +86,5 @@ def test_property_page_registry_builds_each_host_page_once_in_order() -> None:
 def test_property_page_registry_resolves_routes_without_leaking_traversal() -> None:
     assert property_page_index("font") == 0
     assert property_page_index("background") == 5
+    assert property_page_index("rolls") == 6
     assert property_page_index("missing") is None
