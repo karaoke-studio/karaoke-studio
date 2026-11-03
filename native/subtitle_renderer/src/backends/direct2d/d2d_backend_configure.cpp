@@ -1668,17 +1668,19 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ? scene.charStyles[static_cast<std::size_t>(sourceChar.styleIndex)]
                 : style;
             // 层序（由上至下）：文字本体 > 描边1 > 描边2 > 装饰。
-            // 只要这三层里**任意一层**带 alpha，下方描边就必须真实镂空
-            // （描边1 减去字形本体；描边2 只保留描边1 之外的外环），否则
-            // 半透明上层会透出下层的叠涂。整条栈全不透明时镂空没有观感收益，
-            // 跳过构建可省几何缓存与 realization 预热任务（2026-11 用户口径）。
-            const bool stackHasAlpha =
+            // 每层只被**它上方带 alpha 的层**联合镂空（2026-11 用户口径）：
+            //   本体 alpha        → 描边1、描边2、装饰 全部镂空
+            //   仅描边1 alpha     → 描边2、装饰 镂空
+            //   仅描边2 alpha     → 仅装饰 镂空
+            //   装饰自身 alpha    → 不触发任何镂空
+            // 因此：描边1 减体只看本体；描边2 外环看本体+描边1。
+            // 整条栈全不透明时镂空无观感收益，跳过构建可省几何缓存与预热任务。
+            const bool fillHasAlpha =
                 paintNeedsBodyProtection(charStyle.beforeFillPaint)
-                || paintNeedsBodyProtection(charStyle.afterFillPaint)
-                || paintNeedsBodyProtection(charStyle.beforeStrokePaint)
-                || paintNeedsBodyProtection(charStyle.afterStrokePaint)
-                || paintNeedsBodyProtection(charStyle.beforeStroke2Paint)
-                || paintNeedsBodyProtection(charStyle.afterStroke2Paint);
+                || paintNeedsBodyProtection(charStyle.afterFillPaint);
+            const bool strokeHasAlpha =
+                paintNeedsBodyProtection(charStyle.beforeStrokePaint)
+                || paintNeedsBodyProtection(charStyle.afterStrokePaint);
             cached.hasInlineStyles = cached.hasInlineStyles || hasCharStyle;
             cached.hasInlineLaneGeometryOverride =
                 cached.hasInlineLaneGeometryOverride
@@ -2202,7 +2204,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             "ID2D1Factory::CreateTransformedGeometry(position vector stroke2)"
                         );
                     }
-                    if (charStyle.strokeWidth > 0.0f && stackHasAlpha) {
+                    if (charStyle.strokeWidth > 0.0f && fillHasAlpha) {
                         Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStroke;
                         auto &cache = glyphResource->protectedGeometries;
                         const float width = charStyle.strokeWidth;
@@ -2255,7 +2257,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             device_
                         );
                     }
-                    if (charStyle.strokeWidth > 0.0f && stackHasAlpha) {
+                    if (charStyle.strokeWidth > 0.0f && fillHasAlpha) {
                         cached.chars.back().protectedStrokeGeometry = outsideStrokeGeometry(
                             device_.d2dFactory(),
                             cached.chars.back().geometry.Get(),
@@ -2266,7 +2268,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
             }
             if (path && glyphResource && charStyle.stroke2Width > 0.0f
-                && stackHasAlpha) {
+                && (fillHasAlpha || strokeHasAlpha)) {
                 const float inner = std::max(charStyle.strokeWidth, 0.0f);
                 const float outer = inner + charStyle.stroke2Width;
                 auto &ring = glyphResource->outerStrokeRings[{inner, outer}];
@@ -2593,15 +2595,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             const float rubyStroke2WidthFx = rubyIsLatin
                 ? rubyStyle.rubyLatinStroke2Width
                 : rubyStyle.rubyStroke2Width;
-            // 与正文同一条层级不变量：注音的填充/描边1/描边2 任一层带 alpha，
-            // 下方描边就必须真实镂空（描边1 减本体、描边2 只留外环）。
-            const bool rubyStackHasAlpha =
+            // 与正文同一张表：注音描边1 只被本体 alpha 镂空，描边2 被本体/
+            // 描边1 alpha 镂空（装饰自身 alpha 不触发）。
+            const bool rubyFillHasAlpha =
                 paintNeedsBodyProtection(rubyStyle.rubyBeforeFillPaint)
-                || paintNeedsBodyProtection(rubyStyle.rubyAfterFillPaint)
-                || paintNeedsBodyProtection(rubyStyle.rubyBeforeStrokePaint)
-                || paintNeedsBodyProtection(rubyStyle.rubyAfterStrokePaint)
-                || paintNeedsBodyProtection(rubyStyle.rubyBeforeStroke2Paint)
-                || paintNeedsBodyProtection(rubyStyle.rubyAfterStroke2Paint);
+                || paintNeedsBodyProtection(rubyStyle.rubyAfterFillPaint);
+            const bool rubyStrokeHasAlpha =
+                paintNeedsBodyProtection(rubyStyle.rubyBeforeStrokePaint)
+                || paintNeedsBodyProtection(rubyStyle.rubyAfterStrokePaint);
             const auto selectedRubyFace = hasRubyStyle
                 ? resolveFace(
                     rubyStyle.rubyFontFamily.empty()
@@ -3046,7 +3047,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             )
                             : nullptr
                     );
-                    if (rubyStrokeWidthFx > 0.0f && rubyStackHasAlpha) {
+                    if (rubyStrokeWidthFx > 0.0f && rubyFillHasAlpha) {
                         auto &cache = glyph.resource->protectedGeometries;
                         const float width = rubyStrokeWidthFx;
                         auto entry = cache.find(width);
@@ -3105,7 +3106,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     }
                 }
                 if (glyph.geometry && glyph.resource && rubyStroke2WidthFx > 0.0f
-                    && rubyStackHasAlpha) {
+                    && (rubyFillHasAlpha || rubyStrokeHasAlpha)) {
                     const float inner = std::max(rubyStrokeWidthFx, 0.0f);
                     const float outer = inner + rubyStroke2WidthFx;
                     auto &ring = glyph.resource->outerStrokeRings[{inner, outer}];
