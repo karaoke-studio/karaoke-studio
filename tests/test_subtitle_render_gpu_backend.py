@@ -749,21 +749,33 @@ def _render_g1_frames(
     )
     reader: SharedFrameRingReader | None = None
     frames: list[bytes] = []
+
+    def render_frame(t_ms: int, frame_index: int) -> dict:
+        """渲染一帧；``gpu_frame_dropped`` 是协议里的正常信号（槽位仍被上一帧
+        占着），有界重发同一帧，不当致命错误——否则高负载下会随机红一条用例。
+        """
+
+        deadline = time.monotonic() + 10.0
+        event = renderer.render_gpu_frame(
+            t_ms, force_warp=force_warp, frame_index=frame_index,
+        )
+        while event.get("event") == "gpu_frame_dropped":
+            assert time.monotonic() < deadline, event
+            time.sleep(0.01)
+            event = renderer.render_gpu_frame(
+                t_ms, force_warp=force_warp, frame_index=frame_index,
+            )
+        return event
+
     try:
         for frame_index, t_ms in enumerate(timestamps_ms):
-            event = renderer.render_gpu_frame(
-                t_ms,
-                force_warp=force_warp,
-                frame_index=frame_index,
-            )
+            event = render_frame(t_ms, frame_index)
             if wait_realizations:
                 deadline = time.monotonic() + 10.0
                 while not event.get("realization_path_ready", False):
                     assert time.monotonic() < deadline, event
                     time.sleep(0.01)
-                    event = renderer.render_gpu_frame(
-                        t_ms, force_warp=force_warp, frame_index=frame_index,
-                    )
+                    event = render_frame(t_ms, frame_index)
             if reader is None:
                 reader = SharedFrameRingReader.from_event(event)
                 reader.attach()

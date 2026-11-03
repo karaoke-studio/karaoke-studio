@@ -614,8 +614,12 @@ class SharedFrameRingReader:
             "probe_ready",
             "gpu_frame_ready",
         }:
+            # 带上实际事件名：``gpu_frame_dropped`` 是正常信号（调用方应重发），
+            # 其它事件才是协议错误，排查时不必再复现一次才知道收到了什么。
             raise NativeRendererError(
-                "shared frame reader expects a frame_ready, probe_ready, or gpu_frame_ready event"
+                "shared frame reader expects a frame_ready, probe_ready, or "
+                "gpu_frame_ready event"
+                f" (got {frame_ready_event.get('event')!r})"
             )
         if frame_ready_event.get("payload") != "shared_memory":
             raise NativeRendererError("frame_ready event does not describe a shared memory payload")
