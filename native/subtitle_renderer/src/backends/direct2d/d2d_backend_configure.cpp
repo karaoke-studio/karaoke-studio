@@ -1668,13 +1668,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ? scene.charStyles[static_cast<std::size_t>(sourceChar.styleIndex)]
                 : style;
             // 层序（由上至下）：文字本体 > 描边1 > 描边2 > 装饰。
-            // 每层只被**它上方带 alpha 的层**联合镂空（2026-11 用户口径）：
-            //   本体 alpha        → 描边1、描边2、装饰 全部镂空
-            //   仅描边1 alpha     → 描边2、装饰 镂空
-            //   仅描边2 alpha     → 仅装饰 镂空
-            //   装饰自身 alpha    → 不触发任何镂空
+            // 镂空只作用于描边层，装饰层不镂空（2026-11 用户口径：装饰保持
+            // 整块剪影，从半透明上层透出属预期观感）。触发关系：
+            //   本体 alpha    → 描边1、描边2 镂空
+            //   仅描边1 alpha → 描边2 镂空
+            //   仅描边2 alpha → 不触发（上方没有带 alpha 的层）
             // 因此：描边1 减体只看本体；描边2 外环看本体+描边1。
-            // 整条栈全不透明时镂空无观感收益，跳过构建可省几何缓存与预热任务。
+            // 全不透明时镂空无观感收益，跳过构建可省几何缓存与预热任务。
             const bool fillHasAlpha =
                 paintNeedsBodyProtection(charStyle.beforeFillPaint)
                 || paintNeedsBodyProtection(charStyle.afterFillPaint);
@@ -2596,7 +2596,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ? rubyStyle.rubyLatinStroke2Width
                 : rubyStyle.rubyStroke2Width;
             // 与正文同一张表：注音描边1 只被本体 alpha 镂空，描边2 被本体/
-            // 描边1 alpha 镂空（装饰自身 alpha 不触发）。
+            // 描边1 alpha 镂空；装饰层不镂空，自身 alpha 也不触发。
             const bool rubyFillHasAlpha =
                 paintNeedsBodyProtection(rubyStyle.rubyBeforeFillPaint)
                 || paintNeedsBodyProtection(rubyStyle.rubyAfterFillPaint);
