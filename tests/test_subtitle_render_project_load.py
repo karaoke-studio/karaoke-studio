@@ -866,3 +866,66 @@ def test_role_replay_length_mismatch_without_nfd_fingerprint_keeps_zip() -> None
 
     # 3 条标签对 2 格：多余标签静默丢弃（历史行为）
     assert [ch.role_label for ch in track.lines[0].chars] == ["主唱", "副唱"]
+
+
+def test_title_scheme_reference_is_repaired_to_the_effective_scheme() -> None:
+    """标题卡片只能指向真正决定外观的那个方案。
+
+    存量工程里常见两种「卡片撒谎」状态：引用已被删除的角色（渲染回落到
+    内置「标题」，卡片却按悬空名字显示/跳转），以及整条标题被同一个逐字
+    角色覆盖（基础引用对颜色完全不生效）。两种都会让用户在卡片指向的方案
+    上改配色/装饰却看不到任何变化。
+    """
+    from krok_helper.subtitle_render.domain.models import TitleOverlay
+
+    payload = {
+        "style": {
+            "custom_style_schemes": {
+                "标题": {"fill_color": "#EBEBEB"},
+                "小标题": {"fill_color": "#FFFFFF"},
+            },
+            "title_overlays": [
+                {
+                    "name": "悬空引用",
+                    "text_template": "KING / 秋奈",
+                    "scheme_name": "小标题 2",
+                    "char_role_labels": [
+                        ["小标题"] * len("KING / 秋奈"),
+                    ],
+                },
+                {
+                    "name": "混排保持原引用",
+                    "text_template": "ABC",
+                    "scheme_name": "标题",
+                    "char_role_labels": [["小标题", None, "小标题"]],
+                },
+                {
+                    "name": "悬空且无角色",
+                    "text_template": "XYZ",
+                    "scheme_name": "小标题 2",
+                },
+            ],
+        }
+    }
+
+    titles = ProjectLoadPlan.from_data(payload).style.title_overlays
+
+    # 悬空引用被逐字覆盖的角色接管：卡片、编辑跳转、渲染指向同一个方案。
+    assert titles[0].scheme_name == "小标题"
+    # 逐字混排时基础引用仍然决定未被覆盖的字符，不能改写。
+    assert titles[1].scheme_name == "标题"
+    # 纯悬空引用归零，卡片回落内置「标题」，与渲染一致。
+    assert titles[2].scheme_name is None
+
+
+def test_title_scheme_repair_keeps_a_valid_reference_untouched() -> None:
+    payload = {
+        "style": {
+            "custom_style_schemes": {"标题": {}, "角色A": {}},
+            "title_overlays": [
+                {"text_template": "ABC", "scheme_name": "角色A"},
+            ],
+        }
+    }
+
+    assert ProjectLoadPlan.from_data(payload).style.title_overlays[0].scheme_name == "角色A"

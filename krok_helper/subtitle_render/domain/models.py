@@ -4302,6 +4302,27 @@ def normalize_title_char_role_labels(
     return normalized
 
 
+def title_uniform_role_label(
+    text: str, char_role_labels: object
+) -> Optional[str]:
+    """整条标题（所有行、所有渲染单元格）共用同一个角色时返回该角色名。
+
+    标题的 ``scheme_name`` 只在「没有逐字角色标签」的单元格上决定外观：逐字
+    角色一旦把每个单元格都换成同一个角色，基础配色引用对颜色就完全不生效
+    了。卡片这时还显示旧引用，用户会在那个（实际不起作用的）方案上改半天
+    看不到变化。调用方用本函数把引用同步成实际生效的角色。
+
+    空文字、任一行混排、存在没有角色的单元格、或整条都没有角色 → ``None``
+    （都不足以代表整条标题）。
+    """
+
+    rows = normalize_title_char_role_labels(text, char_role_labels)
+    labels = {label for row in rows for label in row}
+    if len(labels) != 1:
+        return None
+    return next(iter(labels)) or None
+
+
 def remap_scanline_role_reference(
     style: "Style", mapping: dict[str, Optional[str]]
 ) -> Optional["Style"]:

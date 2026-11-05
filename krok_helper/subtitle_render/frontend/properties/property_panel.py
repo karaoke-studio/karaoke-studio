@@ -2670,11 +2670,103 @@ class PropertyPanel(QWidget):
                 routed[field] = value
         return routed
 
+    def _seed_visible_decoration(
+        self, routed: dict, source: dict
+    ) -> dict:
+        """切到发光/阴影时补上能画出东西的最小参数。
+
+        N3 导入 / 手工改到 0 的方案里常常是「装饰类型 = 阴影，位移 0/0」或
+        「发光宽 = 0」——等于没有装饰。用户在装饰类型里 无 → 阴影 → 发光
+        来回切，画面一动不动，看起来像控件坏了。这里只在收到装饰类型变更、
+        且该侧参数**全为 0**（本来就画不出任何东西）时补出厂默认值；任何
+        非 0 的既有值一律不动，用户手动把参数调回 0 也不受影响。
+        """
+        seed: dict[str, object] = {}
+        ruby_subject = self._current_color_subject_key() == "ruby"
+
+        def current(field: str) -> int:
+            """该编辑主体当前的生效值（注音独立槽位与主文字分开读）。"""
+            if ruby_subject:
+                field = _RUBY_DECORATION_SLOTS.get(field, field)
+            return int(self._scheme_value(field) or 0)
+
+        for kind_field, state in (
+            ("decoration_kind", "after"),
+            ("decoration_kind_before", "before"),
+        ):
+            if routed.get(kind_field) not in {"glow", "shadow"}:
+                continue
+            if routed[kind_field] == "glow":
+                radius_field = (
+                    "glow_before_radius_px"
+                    if state == "before"
+                    else "glow_after_radius_px"
+                )
+                if radius_field in routed or radius_field in source:
+                    continue
+                if max(current(radius_field), 0) > 0:
+                    continue
+                seed[radius_field] = 2
+            else:
+                x_field, y_field = (
+                    ("shadow_before_offset_x", "shadow_before_offset_y")
+                    if state == "before"
+                    else ("shadow_offset_x", "shadow_offset_y")
+                )
+                if x_field in routed or y_field in routed:
+                    continue
+                if abs(current(x_field)) or abs(current(y_field)):
+                    continue
+                seed.setdefault(x_field, 5)
+                seed.setdefault(y_field, 5)
+        if not seed:
+            return routed
+        merged = dict(routed)
+        merged.update(seed)
+        return merged
+
+    def _implied_decoration_kind(self, routed: dict) -> dict:
+        """调大某一侧的发光/阴影参数时，把该侧的装饰类型一并切过去。
+
+        「装饰类型」和「走字前/走字后发光」「阴影 X/Y」并排在同一张卡里：
+        用户把发光从 0 调大、或把阴影位移拨开，就是在要这个装饰。可类型还
+        停在「无」或另一档时，这些参数一个像素都不会画——预览「保持原来的
+        样子」，看起来像控件坏了（存量方案里「类型=阴影、位移 0/0」很常见）。
+
+        只在参数被改成非 0 时补类型：调回 0 是关闭，不做任何切换。
+        已经显式改类型的调用不会被覆盖。
+        """
+        implied = dict(routed)
+        for radius_field, kind_field in (
+            ("glow_before_radius_px", "decoration_kind_before"),
+            ("glow_after_radius_px", "decoration_kind"),
+        ):
+            if kind_field in routed:
+                continue
+            if int(routed.get(radius_field) or 0) > 0:
+                implied[kind_field] = "glow"
+        for offset_fields, kind_field in (
+            (
+                ("shadow_before_offset_x", "shadow_before_offset_y"),
+                "decoration_kind_before",
+            ),
+            (("shadow_offset_x", "shadow_offset_y"), "decoration_kind"),
+        ):
+            if kind_field in routed:
+                continue
+            if any(
+                abs(int(routed.get(field) or 0)) > 0 for field in offset_fields
+            ):
+                implied[kind_field] = "shadow"
+        return implied
+
     def _update_shared_decoration(self, **changes) -> None:
         """装饰编辑按配色主体路由：主文字槽位是权威存储；注音在独立模式
         下写自己的覆盖槽，跟随中编辑则先整卡快照退出跟随（与编辑注音填充
         颜色的行为一致）。"""
         routed = self._route_decoration_changes(changes)
+        routed = self._implied_decoration_kind(routed)
+        routed = self._seed_visible_decoration(routed, changes)
         if self._current_color_subject_key() == "ruby":
             self._update_ruby_decoration(**routed)
             return
@@ -3506,7 +3598,12 @@ class PropertyPanel(QWidget):
         self._update_title(index, scheme_name=card.scheme_combo.currentData())
 
     def _open_title_scheme(self, index: int) -> None:
-        """跳到字体页并选中该标题引用的配色方案。"""
+        """跳到字体页并选中该标题引用的配色方案。
+
+        标题永远按配色方案的「走字前」渲染（永不走进度），所以从标题卡片
+        进来时直接把颜色页停在走字前——否则用户在走字后页调配色/装饰，
+        预览里的标题一动不动，看起来像坏掉了。
+        """
         card = self._title_card(index)
         scheme = TITLE_SCHEME_NAME
         if card is not None:
@@ -3514,7 +3611,11 @@ class PropertyPanel(QWidget):
             if data:
                 scheme = str(data)
         self.setCurrentIndex(0)
-        self.set_current_scheme_key(f"{_CUSTOM_SCHEME_PREFIX}{scheme}", announce=True)
+        self.set_current_scheme_key(
+            f"{_CUSTOM_SCHEME_PREFIX}{scheme}",
+            announce=True,
+            prefer_before_state=True,
+        )
 
     def _on_title_card_renamed(self, index: int, name: str) -> None:
         if self._syncing:
@@ -5769,11 +5870,22 @@ class PropertyPanel(QWidget):
     def current_scheme_key(self) -> str:
         return self._current_scheme_key() or _GLOBAL_SCHEME_KEY
 
-    def set_current_scheme_key(self, key: str, *, announce: bool = False) -> None:
+    def set_current_scheme_key(
+        self,
+        key: str,
+        *,
+        announce: bool = False,
+        prefer_before_state: bool = False,
+    ) -> None:
         """回填角色导航的选中目标。
 
         默认是宿主推状态（工程装载、恢复默认等），不播报切换；标题页
         「编辑配色」跳转这类要替用户按下开关的场景用 ``announce=True``。
+
+        ``prefer_before_state`` 只给「从标题卡片进来看这个方案的配色」这类
+        明确入口用：标题永远按「走字前」渲染，落在走字后页会改了没反应。
+        从角色导航下拉切方案不走这条（同一方案可能同时给歌词上色，强行切页
+        会打乱歌词配色编辑）。
         """
         if not hasattr(self, "_singer_combo"):
             return
@@ -5790,9 +5902,10 @@ class PropertyPanel(QWidget):
         # 标题不走字，渲染固定取走字前配色与装饰；打开标题方案时切到
         # 「走字前」页，避免用户在走字后页改了半天却看不到标题变化。
         if (
-            key == f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}"
-            and self._singer_combo.itemData(index) == key
-            and hasattr(self, "_color_state_combo")
+            prefer_before_state
+            or key == f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}"
+        ) and self._singer_combo.itemData(index) == key and hasattr(
+            self, "_color_state_combo"
         ):
             before_index = self._color_state_combo.findData("before")
             if before_index >= 0:

@@ -42,6 +42,7 @@ from krok_helper.subtitle_render.domain.models import (
     TITLE_SCHEME_NAME,
     TimingTrackMeta,
     TitleOverlay,
+    TitleTimeWindow,
     TrackPage,
     TrackPagePlan,
     TrackSection,
@@ -16414,3 +16415,95 @@ def test_gpu_animated_ruby_preserves_translucent_outer_ring(animation, monkeypat
         visible = (a[:, 3] > 2) | (b[:, 3] > 2)
         assert np.mean(np.abs(a[visible] - b[visible])) <= 1.0
         assert np.percentile(np.abs(a[visible] - b[visible]), 99) <= 16
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_title_before_decoration_ignores_global_before_sync_flag() -> None:
+    """标题的「走字前」装饰必须来自标题自己的解析结果。
+
+    Python 把标题的走字前配色/装饰解析成一份单态快照下发（decoration_kind /
+    glow_radius_px / shadow_offset 已经是走字前的值）。sidecar 若按
+    ``decoration_before_sync`` 再分前后态，关闭「同步」的方案（旧工程默认）
+    会读回**全局样式**的 decorationKindBefore：标题发光被换成别的档、位移
+    取到 0，于是「调大走字前发光」在预览里毫无变化。
+    """
+    title = TitleOverlay(
+        enabled=True,
+        text_template="ABC",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        stroke_width_px=2,
+        stroke2_width_px=0,
+        layout_index=None,
+        show_mode="custom",
+        custom_windows=[TitleTimeWindow(begin_ms=0, end_ms=10_000)],
+    )
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("尾", 9_000)], end_ms=9_500)]
+    )
+
+    def style_with(glow_radius: int) -> Style:
+        scheme = SubtitleStyleScheme(
+            font_family="Arial",
+            font_family_latin="Arial",
+            font_size_px=64,
+            stroke_width_px=2,
+            stroke2_enabled=False,
+            decoration_kind="none",
+            decoration_kind_before="glow" if glow_radius else "none",
+            glow_radius_px=glow_radius,
+            glow_before_radius_px=glow_radius,
+            glow_after_radius_px=glow_radius,
+        )
+        style = _g1_style(
+            title_overlays=[title],
+            custom_style_schemes={TITLE_SCHEME_NAME: scheme},
+        )
+        # 旧工程常见组合：全局关了装饰同步、走字前是另一档装饰。
+        return replace(
+            style,
+            decoration_before_sync=False,
+            decoration_kind_before="shadow",
+            decoration_kind="shadow",
+        )
+
+    def render(renderer: NativeRendererProcess, glow_radius: int) -> tuple[bytes, dict]:
+        configured = renderer.configure_gpu(
+            track,
+            style_with(glow_radius),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+            duration_ms=10_000,
+            worker_count=1,
+            realization_enabled=False,
+        )
+        assert configured.get("ok")
+        reader = None
+        try:
+            event = renderer.render_gpu_frame(
+                1_000, force_warp=True, frame_index=0
+            )
+            reader = SharedFrameRingReader.from_event(event)
+            reader.attach()
+            image = reader.read_qimage(event).convertToFormat(
+                QImage.Format.Format_RGBA8888
+            )
+            bits = image.constBits()
+            bits.setsize(image.sizeInBytes())
+            return bytes(bits), event
+        finally:
+            if reader is not None:
+                reader.close()
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        plain, _plain_event = render(renderer, 0)
+        glowing, _glow_event = render(renderer, 14)
+
+    plain_alpha = sum(plain[3::4])
+    glow_alpha = sum(glowing[3::4])
+    # 走字前发光必须比无装饰多出一圈半透明像素：修复前两者逐字节相同。
+    assert glow_alpha > plain_alpha * 1.5, (plain_alpha, glow_alpha)
+    assert plain != glowing

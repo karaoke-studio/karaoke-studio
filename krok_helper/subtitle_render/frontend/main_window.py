@@ -368,6 +368,7 @@ from krok_helper.subtitle_render.domain.models import (
     style_from_dict,
     style_to_dict,
     title_line_units,
+    title_uniform_role_label,
     TRACK_TIMING_FIELDS,
 )
 from krok_helper.subtitle_render.n3.font_catalog import (
@@ -6112,12 +6113,32 @@ class SubtitleRenderWindow(QWidget):
         preferred = self._preferred_title_for_preferences(self._app_default_style)
         return int(preferred.fade_in_ms), int(preferred.fade_out_ms)
 
+    def _sync_title_scheme_reference(self, title: TitleOverlay) -> TitleOverlay:
+        """整条标题被同一个逐字角色覆盖时，把配色引用同步成那个角色。
+
+        标题的基础配色引用只对「没有逐字角色」的单元格生效。逐字角色把每个
+        单元格都占满之后，旧引用对颜色已经完全不起作用——卡片还显示它，
+        用户就会在那个方案上改配色/装饰却看不到任何变化（卡片状态与渲染
+        结果脱节）。这里按实际生效的名字回写，卡片、`编辑配色` 跳转和渲染
+        结果重新指向同一个方案。
+        """
+        label = title_uniform_role_label(
+            title.text_template, title.char_role_labels
+        )
+        if not label or label == TITLE_SCHEME_NAME:
+            return title
+        if label not in self._style.custom_style_schemes:
+            return title
+        if title.scheme_name == label:
+            return title
+        return replace(title, scheme_name=label)
+
     def _replace_active_title_overlay(self, title: TitleOverlay) -> None:
         index = self._active_title_index
         if index is None or not 0 <= index < len(self._style.title_overlays):
             return
         overlays = list(self._style.title_overlays)
-        overlays[index] = title
+        overlays[index] = self._sync_title_scheme_reference(title)
         self._property_panel.set_style(
             replace(self._style, title_overlays=overlays),
             emit=True,
