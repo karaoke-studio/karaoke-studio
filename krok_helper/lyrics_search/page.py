@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
@@ -31,6 +32,8 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     CheckBox as QCheckBox,
     FluentIcon as FIF,
+    InfoBar,
+    InfoBarPosition,
     LineEdit as QLineEdit,
     PlainTextEdit as QPlainTextEdit,
     PrimaryPushButton,
@@ -40,7 +43,6 @@ from qfluentwidgets import (
 from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
 from krok_helper.background import BackgroundTask
-from krok_helper.config import APP_TITLE
 from krok_helper.lyrics import (
     DEFAULT_LYRICS_PROVIDER_IDS,
     DEFAULT_LYRICS_SEARCH_LIMIT,
@@ -57,11 +59,7 @@ from krok_helper.lyrics import (
     extract_lyrics_query_from_file,
 )
 from krok_helper.media_formats import format_media_duration
-from krok_helper.qfluent_compat import (
-    show_fluent_error,
-    show_fluent_info,
-    show_fluent_tooltip,
-)
+from krok_helper.qfluent_compat import show_fluent_tooltip
 from krok_helper.settings import save_app_settings
 from krok_helper.ui_kit import CardWidget, ElidedLabel, StyledComboBox, build_lyrics_ui_font
 
@@ -77,6 +75,8 @@ __all__ = [
     "LyricsSearchHost",
     "LyricsSearchPage",
 ]
+
+log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -292,12 +292,12 @@ class LyricsSearchPage(QWidget):
         """
         candidate = self.lyrics_selected_candidate
         if candidate is None or candidate.load_error or not candidate.lyrics_loaded:
-            show_fluent_info(self, "请先选择并加载一条歌词。")
+            self._show_search_info_bar("info", "请先选择并加载一条歌词。", title="歌词检索")
             return None
         preview = self._build_current_lyrics_preview(candidate)
         text = preview.text.strip()
         if not text:
-            show_fluent_info(self, "当前筛选结果没有可导入的歌词。")
+            self._show_search_info_bar("info", "当前筛选结果没有可导入的歌词。", title="歌词检索")
             self._refresh_lyrics_import_button(preview)
             return None
         return text
@@ -336,6 +336,31 @@ class LyricsSearchPage(QWidget):
         setattr(self, slot, task)
         task.finished.connect(lambda slot=slot: setattr(self, slot, None))
         return self._host.track_background_task(task)
+
+    def _show_search_info_bar(self, level: str, content: str, *, title: str = "歌词检索") -> None:
+        """搜索反馈统一走非阻塞 InfoBar，不再弹模态错误框。
+
+        只要本次搜索拿到了结果，失败来源就不打扰用户；只有完全没结果（或
+        意外异常且连旧结果都没有）时才弹提示，避免弹窗与列表/状态各说各话。
+        """
+        text = (content or "").strip()
+        if not text:
+            return
+        try:
+            method = getattr(InfoBar, level, InfoBar.warning)
+            bar = method(
+                title=title,
+                content=text,
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=6000,
+            )
+            # 工作台里 InfoBar 的滑入动画偶尔不推进，直接摆到动画终点。
+            ani = bar.property("slideAni")
+            if ani is not None and ani.endValue() is not None:
+                bar.move(ani.endValue())
+        except Exception:  # noqa: BLE001
+            log.debug("歌词检索 InfoBar 弹出失败", exc_info=True)
 
     def _refresh_lyrics_layout_direction(self) -> None:
         layout = getattr(self, "lyrics_content_layout", None)
@@ -565,7 +590,8 @@ class LyricsSearchPage(QWidget):
             return
         keyword = self.lyrics_search_keyword if load_more else self.lyrics_keyword_edit.text().strip()
         if not keyword:
-            show_fluent_info(self, "请输入搜索关键词。")
+            self.lyrics_status_label.setText("请输入搜索关键词。")
+            self._show_search_info_bar("info", "请输入搜索关键词。", title="歌词检索")
             return
 
         self.lyrics_search_button.setEnabled(False)
@@ -627,8 +653,15 @@ class LyricsSearchPage(QWidget):
             self.lyrics_search_results = batch_results
 
         if not self.lyrics_search_results:
-            self.lyrics_status_label.setText("没有找到匹配的歌词结果。")
             self._clear_lyrics_results()
+            self.lyrics_status_label.setText("没有找到匹配的歌词结果。")
+            self.lyrics_results_summary_label.setText("没有找到匹配的歌词结果。")
+            if batch is not None and batch.errors:
+                self._show_search_info_bar(
+                    "warning",
+                    "部分来源搜索失败：" + "；".join(batch.errors),
+                    title="歌词搜索未找到结果",
+                )
             return
 
         selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
@@ -640,10 +673,8 @@ class LyricsSearchPage(QWidget):
             )
         else:
             self.lyrics_status_label.setText(f"已加载 {len(self.lyrics_search_results)} 条候选结果，当前来源：{selected_source}。")
-        if batch is not None and batch.errors:
-            self.lyrics_status_label.setText(
-                self.lyrics_status_label.text() + " 部分来源搜索失败：" + "；".join(batch.errors)
-            )
+        # 只要这次搜索拿到了结果，就不弹错误提示：失败的来源已经不影响用户
+        # 继续选歌，错误细节留在日志里即可。
         self.lyrics_results_summary_label.setText(
             ("UtaTen：第一条人气最高，第二条为其余歌曲中发行日期最新的一首，第三条起按相关性排序。"
              if selected_source == "UtaTen" else
@@ -654,15 +685,26 @@ class LyricsSearchPage(QWidget):
         self._render_lyrics_results_table(selected_key=selected_key if load_more else "")
 
     def _finish_lyrics_search_failure(self, message: str) -> None:
+        """后台任务异常时的兜底反馈。
+
+        正常的分源失败已经收敛进 :class:`LyricsSearchBatch.errors`，不会走到
+        这里；这里只处理意外异常。仍然不弹模态框：结果表保持原样，状态栏和
+        InfoBar 说同一件事。
+        """
         self.lyrics_search_button.setEnabled(True)
         self._lyrics_loading_more = False
-        if not self.lyrics_search_results:
-            self._clear_lyrics_results()
-        else:
+        text = message or "歌词搜索失败。"
+        if self.lyrics_search_results:
             selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
             self._render_lyrics_results_table(selected_key=selected_key)
+            self.lyrics_status_label.setText(
+                f"歌词搜索失败，已保留 {len(self.lyrics_search_results)} 条已有结果。"
+            )
+            return
+        self._clear_lyrics_results()
         self.lyrics_status_label.setText("歌词搜索失败。")
-        show_fluent_error(self, message or "歌词搜索失败。")
+        self.lyrics_results_summary_label.setText("歌词搜索失败。")
+        self._show_search_info_bar("warning", text, title="歌词搜索失败")
 
     def _resize_lyrics_results_columns(self) -> None:
         viewport_width = self.lyrics_results_table.viewport().width()
