@@ -105,3 +105,16 @@ def test_search_batch_preserves_partial_errors():
     batch = lyrics.LyricsSearchService([Good(), Bad()]).search_batch("test")
     assert len(batch.results) == 1
     assert batch.errors == ("网易云音乐：HTTP 503",)
+
+
+def test_search_batch_all_fail_returns_empty_batch_with_errors():
+    """所有来源失败也要返回 batch，让页面用 InfoBar 反馈而不是抛异常弹窗。"""
+    import krok_helper.lyrics as lyrics
+    class Bad:
+        provider_id = "ne"
+        provider_name = "网易云音乐"
+        def search(self, *args, **kwargs):
+            raise lyrics.LyricsSearchError("网易云音乐：HTTP 503")
+    batch = lyrics.LyricsSearchService([Bad()]).search_batch("test")
+    assert batch.results == []
+    assert batch.errors == ("网易云音乐：HTTP 503",)

@@ -3405,3 +3405,56 @@ def test_sequence_cleanup_retries_transient_file_locks(tmp_path, monkeypatch):
 
     assert calls["n"] == 1  # 第一次被锁、重试成功
     assert not seq.exists()
+
+
+def test_title_ir_carries_the_before_state_snapshot_as_one_state() -> None:
+    """GPU 侧拿到的标题装饰必须是「单一状态快照」。
+
+    Python 会先把标题的走字前配色/装饰解析进 payload（decoration_kind /
+    glow_radius_px / shadow_offset_*），sidecar 直接照单渲染。这条契约一旦
+    被改回「按 decoration_before_sync 再分前后态」，关闭同步的旧工程会读回
+    全局样式的 decorationKindBefore——标题发光被换成别档、位移取到 0，
+    表现为「调大走字前发光，预览毫无变化」。
+    """
+    from krok_helper.subtitle_render.domain.models import (
+        SubtitleStyleScheme,
+        TITLE_SCHEME_NAME,
+        TITLE_SCHEME_NAME as _TITLE,
+        Style,
+        TimingTrack,
+        TitleOverlay,
+        TitleTimeWindow,
+    )
+    from krok_helper.subtitle_render.engine.render.render_ir import title_to_ir
+
+    scheme = SubtitleStyleScheme(
+        decoration_kind="shadow",
+        decoration_kind_before="glow",
+        glow_before_radius_px=12,
+        glow_after_radius_px=4,
+        glow_radius_px=2,
+        shadow_before_offset_x=7,
+        shadow_before_offset_y=8,
+        shadow_offset_x=1,
+        shadow_offset_y=2,
+    )
+    style = replace(
+        Style(custom_style_schemes={TITLE_SCHEME_NAME: scheme}),
+        decoration_kind="glow",
+        decoration_kind_before="shadow",
+        decoration_before_sync=False,
+    )
+    title = TitleOverlay(
+        enabled=True,
+        text_template="ABC",
+        show_mode="custom",
+        custom_windows=[TitleTimeWindow(begin_ms=0, end_ms=5_000)],
+    )
+
+    payload = title_to_ir(TimingTrack(), style, overlay=title)
+
+    assert payload is not None
+    assert payload["decoration_kind"] == "glow"
+    assert payload["glow_radius_px"] == 12
+    assert payload["shadow_offset_x"] == 7
+    assert payload["shadow_offset_y"] == 8

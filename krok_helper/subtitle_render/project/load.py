@@ -10,8 +10,11 @@ from typing import Any, Callable, Optional
 
 from krok_helper.subtitle_render.domain.models import (
     Style,
+    TITLE_SCHEME_NAME,
+    TitleOverlay,
     TRACK_TIMING_FIELDS,
     style_from_dict,
+    title_uniform_role_label,
 )
 from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
@@ -523,6 +526,43 @@ def _schema_version(value: object) -> int:
         return 0
 
 
+def _repair_title_scheme_references(style: Style) -> Style:
+    """标题的配色引用只留「实际生效」的那一个名字。
+
+    存量工程里有两种卡片会撒谎的状态：
+
+    * 引用悬空（角色被删 / 旧版本工程）：渲染本来就回落内置「标题」，卡片
+      却按引用显示，`编辑配色` 跳到查不到的方案；
+    * 整条标题被同一个逐字角色覆盖：基础引用对颜色完全不生效。
+
+    两种都让用户在卡片指向的方案上改配色/装饰却看不到变化。这里把悬空引用
+    归零、逐字角色全覆盖的引用改成那个角色，与渲染结果和卡片回显同口径。
+    """
+    overlays: list[TitleOverlay] = []
+    changed = False
+    for title in style.title_overlays:
+        target = title.scheme_name
+        if target is not None and target not in style.custom_style_schemes:
+            target = None
+        label = title_uniform_role_label(
+            title.text_template, title.char_role_labels
+        )
+        if (
+            label
+            and label != TITLE_SCHEME_NAME
+            and label in style.custom_style_schemes
+        ):
+            target = label
+        if target == title.scheme_name:
+            overlays.append(title)
+            continue
+        overlays.append(replace(title, scheme_name=target))
+        changed = True
+    if not changed:
+        return style
+    return replace(style, title_overlays=overlays)
+
+
 def _sug_axis_singer_ids(value: object) -> Optional[frozenset[str]]:
     """主字幕槽位的 SUG 轴过滤（快照字段）；非列表或缺省 = 未分轴。
 
@@ -600,6 +640,7 @@ class ProjectLoadPlan:
         source = data if isinstance(data, dict) else {}
         style_payload = source.get("style")
         style = style_from_dict(style_payload, legacy_project=True)
+        style = _repair_title_scheme_references(style)
         screen = screen_settings_from_dict(source.get("screen"))
         # Older projects stored resolved pixel sizes without a reference height.
         # Bind those values to the saved canvas before any later screen resize.

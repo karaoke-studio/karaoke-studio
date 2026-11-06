@@ -100,23 +100,23 @@ def test_aggregate_default_excludes_utaten() -> None:
     assert "utaten" not in DEFAULT_LYRICS_PROVIDER_IDS
 
 
-def test_utaten_search_splits_title_and_artist_keyword(monkeypatch) -> None:
+def test_utaten_search_treats_whole_keyword_as_title(monkeypatch) -> None:
     provider = UtatenLyricsProvider()
-    calls: list[tuple[str, str]] = []
+    calls: list[str] = []
 
-    def fake_search_once(*, title: str, artist: str, sort="popular_sort_asc") -> list[dict[str, str]]:
-        calls.append((title, artist))
-        if title == "Ruby" and artist == "GREAT3":
-            return [{"title": "Ruby", "artist": "GREAT3", "snippet": "", "url": "https://utaten.com/lyric/1/"}]
+    def fake_search_once(*, title: str, sort="popular_sort_asc") -> list[dict[str, str]]:
+        calls.append(title)
+        if title == "Ruby GREAT3":
+            return [{"title": "Ruby GREAT3", "artist": "GREAT3", "snippet": "",
+                     "url": "https://utaten.com/lyric/1/"}]
         return []
 
     monkeypatch.setattr(provider, "_search_once", fake_search_once)
 
     results = provider.search("Ruby GREAT3", limit=10)
 
-    assert [(item.title, item.artist) for item in results] == [("Ruby", "GREAT3")]
-    assert ("Ruby GREAT3", "") in calls
-    assert ("Ruby", "GREAT3") in calls
+    assert [(item.title, item.artist) for item in results] == [("Ruby GREAT3", "GREAT3")]
+    assert calls == ["Ruby GREAT3"]
 
 
 def test_sug_distributes_utaten_ruby_per_kanji_via_dict() -> None:
@@ -288,27 +288,26 @@ def test_embedded_sug_utaten_import_preserves_katakana_ruby() -> None:
     assert imported_reading == "\u30eb\u30af\u30a4\u30a8\u30e0"
 
 
-def test_utaten_empty_advanced_search_uses_quick_search(monkeypatch) -> None:
-    from urllib.parse import parse_qs, urlsplit
+def test_utaten_sends_one_title_request_with_whole_title(monkeypatch) -> None:
+    from urllib.parse import urlencode
     import krok_helper.lyrics as lyrics
 
-    calls = []
+    calls: list[str] = []
     def load(request):
-        params = parse_qs(urlsplit(request.full_url).query)
-        calls.append(params)
-        if "layout_search_text" not in params:
-            return "  "
+        calls.append(request.full_url)
         return """<table class="searchResult"><tr>
-          <td><p class="searchResult__title"><a href="/lyric/sz26100501/">結び</a></p></td>
-          <td class="searchResult__artist"><p><a href="/artist/41747/">Ayumu Imazu</a></p></td>
+          <td><p class="searchResult__title"><a href="/lyric/1/">君の名は 主題歌</a></p></td>
+          <td class="searchResult__artist"><p><a href="/artist/1/">RADWIMPS</a></p></td>
         </tr></table>"""
 
     monkeypatch.setattr(lyrics, "_load_text_from_request", load)
-    results = UtatenLyricsProvider()._search_once(title="結び", artist="Ayumu Imazu")
-    assert results[0]["url"] == "https://utaten.com/lyric/sz26100501/"
-    assert results[0]["artist"] == "Ayumu Imazu"
-    assert calls[1] == {"layout_search_text": ["結び"], "layout_search_type": ["title"],
-                        "artist_name": ["Ayumu Imazu"], "sort": ["popular_sort_asc"]}
+    results = UtatenLyricsProvider()._search_once(title="君の名は 主題歌")
+    assert results[0]["url"] == "https://utaten.com/lyric/1/"
+    assert len(calls) == 1
+    assert urlencode({"title": "君の名は 主題歌"}) in calls[0]
+    assert "artist_name=&" in calls[0]
+    assert "page=1" in calls[0]
+    assert "layout_search_text" not in calls[0]
 
 
 def test_utaten_empty_response_is_not_no_results(monkeypatch) -> None:
@@ -330,6 +329,30 @@ def test_utaten_valid_no_results_does_not_retry(monkeypatch) -> None:
     assert len(calls) == 1
 
 
+def test_utaten_falls_back_to_legacy_when_primary_is_empty(monkeypatch) -> None:
+    import krok_helper.lyrics as lyrics
+
+    calls: list[str] = []
+    def load(request):
+        calls.append(request.full_url)
+        if "page=1" in request.full_url:
+            return ""
+        return (
+            '<table class="searchResult"><tr><th>header</th></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/1/">NEON</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">A2O LITE</a></p></td></tr></table>'
+        )
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+
+    results = UtatenLyricsProvider()._search_once(title="NEON")
+
+    assert [item["title"] for item in results] == ["NEON"]
+    assert len(calls) == 2
+    assert "page=1" in calls[0]
+    assert "show_artists=1" in calls[1]
+
+
 def test_utaten_popular_then_latest_order_survives_service_ranking(monkeypatch):
     from krok_helper.lyrics import LyricsSearchService
     provider = UtatenLyricsProvider()
@@ -343,24 +366,71 @@ def test_utaten_popular_then_latest_order_survives_service_ranking(monkeypatch):
     assert [x.track_id for x in provider.search("test", limit=2, page=2)] == ["4", "2"]
 
 
-def test_utaten_accepts_both_field_orders_and_misspelled_artist(monkeypatch):
+def test_utaten_does_not_split_spaces_into_title_and_artist(monkeypatch):
     provider = UtatenLyricsProvider()
-    def search_once(*, title, artist, **kwargs):
-        if title == "群青" and artist in ("", "YOASOBI"):
-            return [{"title": "群青", "artist": "YOASOBI", "snippet": "",
+    seen: list[str] = []
+
+    def search_once(*, title, **kwargs):
+        seen.append(title)
+        if title == "君の名は 主題歌":
+            return [{"title": "君の名は 主題歌", "artist": "RADWIMPS", "snippet": "",
                      "url": "https://utaten.com/lyric/example/"}]
         return []
+
     monkeypatch.setattr(provider, "_search_once", search_once)
-    for query in ("群青 yosabi", "yosabi 群青", "群青 YOASOBI", "YOASOBI 群青"):
-        results = provider.search(query)
-        assert [(x.title, x.artist) for x in results] == [("群青", "YOASOBI")]
+    results = provider.search("君の名は 主題歌")
+
+    assert [(x.title, x.artist) for x in results] == [("君の名は 主題歌", "RADWIMPS")]
+    assert seen == ["君の名は 主題歌"]
 
 
-def test_utaten_quick_search_filters_misspelled_artist_locally(monkeypatch):
+def test_utaten_filters_title_locally_with_exact_match(monkeypatch):
     import krok_helper.lyrics as lyrics
     page = '<table class="searchResult">'
-    for i, artist in enumerate(("YOASOBI", "合唱曲")):
-        page += f'<tr><td><p class="searchResult__title"><a href="/lyric/{i}/">群青</a></p></td><td class="searchResult__artist"><p><a href="/artist/{i}/">{artist}</a></p></td></tr>'
+    for i, title in enumerate(("君の名は 主題歌", "別の曲")):
+        page += f'<tr><td><p class="searchResult__title"><a href="/lyric/{i}/">{title}</a></p></td><td class="searchResult__artist"><p><a href="/artist/{i}/">RADWIMPS</a></p></td></tr>'
     page += '</table>'
     monkeypatch.setattr(lyrics, "_load_text_from_request", lambda request: page)
-    assert [x["artist"] for x in UtatenLyricsProvider()._search_once(title="群青", artist="yosabi")] == ["YOASOBI"]
+    assert [x["title"] for x in UtatenLyricsProvider()._search_once(title="君の名は 主題歌")] == ["君の名は 主題歌"]
+
+
+def test_utaten_sends_whole_title_with_spaces(monkeypatch):
+    """标题里的空格不能被当成歌手分隔符，整串都原样作为歌名参数。"""
+    from urllib.parse import urlencode
+    import krok_helper.lyrics as lyrics
+
+    calls: list[str] = []
+    def load(request):
+        calls.append(request.full_url)
+        return (
+            '<table class="searchResult"><tr><th>header</th></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/1/">君の名は 主題歌</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">RADWIMPS</a></p></td></tr></table>'
+        )
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+
+    results = UtatenLyricsProvider()._search_once(title="君の名は 主題歌")
+
+    assert [item["title"] for item in results] == ["君の名は 主題歌"]
+    assert len(calls) == 1
+    assert urlencode({"title": "君の名は 主題歌"}) in calls[0]
+    assert "artist_name=&" in calls[0]
+
+
+def test_utaten_popular_failure_still_tries_latest_sort(monkeypatch):
+    """人气排序整条失败时，不能直接报错，发行日期排序仍要走完。"""
+    import krok_helper.lyrics as lyrics
+
+    provider = UtatenLyricsProvider()
+
+    def fake_variants(keyword, *, sort="popular_sort_asc"):
+        if sort == "popular_sort_asc":
+            raise lyrics.LyricsSearchError("popular failed")
+        return [{"url": "https://utaten.com/lyric/2/", "title": "新曲", "artist": "a", "snippet": ""}]
+
+    monkeypatch.setattr(provider, "_search_all_variants", fake_variants)
+
+    results = provider.search("新曲")
+
+    assert [item.track_id for item in results] == ["2"]

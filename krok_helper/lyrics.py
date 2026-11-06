@@ -347,16 +347,36 @@ class UtatenLyricsProvider:
     base_url = "https://utaten.com"
 
     def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT, page: int = 1) -> list[LyricsSearchCandidate]:
+        errors: list[str] = []
+        popular: list[dict[str, str]] = []
+        latest: list[dict[str, str]] = []
+        responded = False
         try:
-            all_items = self._search_all_variants(keyword)
-            if all_items:
-                latest = self._search_all_variants(keyword, sort="release_date_desc")
-                newest = next((item for item in latest if item["url"] != all_items[0]["url"]), None)
-                if newest is not None:
-                    all_items = [item for item in all_items if item["url"] != newest["url"]]
-                    all_items.insert(1, newest)
+            popular = self._search_all_variants(keyword)
+            responded = True
         except LyricsSearchError as exc:
-            raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
+            errors.append(str(exc))
+        # 人气排序整条失败（不是“确实无结果”）时仍要走发行日期排序；只有
+        # 至少两条结果时才值得再查一次最新（用于把“其余歌曲中最新的一首”
+        # 插到第二位），一条结果时省掉这次请求。
+        if len(popular) >= 2 or not responded:
+            try:
+                latest = self._search_all_variants(keyword, sort="release_date_desc")
+                responded = True
+            except LyricsSearchError as exc:
+                errors.append(str(exc))
+
+        if not popular and not latest:
+            if not responded and errors:
+                raise LyricsSearchError(f"{self.provider_name} 搜索失败: {errors[-1]}")
+            return []
+
+        all_items = list(popular or latest)
+        if popular and latest:
+            newest = next((item for item in latest if item["url"] != all_items[0]["url"]), None)
+            if newest is not None:
+                all_items = [item for item in all_items if item["url"] != newest["url"]]
+                all_items.insert(1, newest)
         page_size = max(1, limit)
         start_index = max(0, (page - 1) * page_size)
         items: list[LyricsSearchCandidate] = []
@@ -385,65 +405,79 @@ class UtatenLyricsProvider:
         return items[start_index : start_index + page_size]
 
     def _search_all_variants(self, keyword: str, *, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
-        variants: list[tuple[str, str]] = [(keyword, "")]
-        tokens = [token for token in keyword.split() if token]
-        if len(tokens) >= 2:
-            for split in range(1, len(tokens)):
-                left, right = " ".join(tokens[:split]), " ".join(tokens[split:])
-                variants.extend(((left, right), (right, left)))
+        """整个关键词都当歌名，不拆歌手、不枚举切分组合。
 
-        seen_variants: set[tuple[str, str]] = set()
-        seen_urls: set[str] = set()
-        merged: list[dict[str, str]] = []
-        last_error: LyricsSearchError | None = None
-        for title, artist in variants:
-            key = (title, artist)
-            if key in seen_variants:
-                continue
-            seen_variants.add(key)
-            try:
-                entries = (self._search_once(title=title, artist=artist) if sort == "popular_sort_asc"
-                           else self._search_once(title=title, artist=artist, sort=sort))
-                for entry in entries:
-                    if entry["url"] in seen_urls:
-                        continue
-                    seen_urls.add(entry["url"])
-                    merged.append(entry)
-            except LyricsSearchError as exc:
-                last_error = exc
-        if not merged and len(tokens) >= 2:
-            # A misspelled artist must not suppress an otherwise valid title.
-            # Retry both field orders without the server's exact artist filter.
-            seen_titles: set[str] = set()
-            for title, artist in variants[1:]:
-                if title in seen_titles:
-                    continue
-                seen_titles.add(title)
-                try:
-                    entries = (self._search_once(title=title, artist="") if sort == "popular_sort_asc"
-                               else self._search_once(title=title, artist="", sort=sort))
-                    artist_key = _normalize_text(artist)
-                    close_matches = [entry for entry in entries if artist_key and
-                                     SequenceMatcher(None, artist_key, _normalize_text(entry["artist"])).ratio() >= 0.75]
-                    if close_matches:
-                        corrected_artist = close_matches[0]["artist"]
-                        corrected = self._search_once(title=title, artist=corrected_artist, sort=sort)
-                        entries = corrected or close_matches
-                    for entry in entries:
-                        if entry["url"] not in seen_urls:
-                            seen_urls.add(entry["url"])
-                            merged.append(entry)
-                except LyricsSearchError as exc:
-                    last_error = exc
-        if not merged and last_error is not None:
-            raise last_error
-        return merged
+        歌曲标题本身可以带空格，按空格拆“歌名 + 歌手”会把标题拆坏；这里
+        只保留一条路径，由 :meth:`_search_once` 用完整标题去查，再本地收窄。
+        """
+        title = " ".join(keyword.split())
+        if not title:
+            return []
+        return self._search_once(title=title, sort=sort)
 
-    def _search_once(self, *, title: str, artist: str, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
-        params = {
+    #: 新搜索接口对非浏览器请求会返回空 body，所以这里带齐浏览器常规头。
+    _SEARCH_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+        "Referer": "https://utaten.com/search",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+    }
+    #: 旧接口（固定 HTTP 200 空 body 的那套）保持原样，只在 primary 不通时兜底。
+    _LEGACY_HEADERS = {
+        "Accept-Language": "ja,en;q=0.8",
+        "User-Agent": f"{APP_NAME}/{APP_VERSION} (lyrics search)",
+    }
+
+    def _search_once(self, *, title: str, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
+        """整个关键词只当歌名搜索，完全不参与歌手过滤。
+
+        优先走当前可用的 ``/search?title=...&...&sort=...&page=1`` 查询串接口；
+        只有它返回空 body / 无可解析结果页时才回退到旧的 ``show_artists=1``
+        接口。新接口一旦正常应答（包括“确实无结果”），不再打旧接口。
+        """
+        title = " ".join(title.split())
+        if not title:
+            return []
+        primary_params = {
+            "title": title,
+            "artist_name": "",
+            "sub_title": "",
+            "lyricist": "",
+            "composer": "",
+            "beginning": "",
+            "body": "",
+            "tag": "",
+            "sort": sort,
+            "page": "1",
+        }
+        primary_error: LyricsSearchError | None = None
+        try:
+            primary_text = _load_text_from_request(
+                Request(
+                    f"{self.base_url}/search?{urlencode(primary_params)}",
+                    headers=dict(self._SEARCH_HEADERS),
+                )
+            )
+            entries = self._parse_search_page(primary_text)
+            if entries is not None:
+                return self._filter_title_entries(entries, title)
+        except LyricsSearchError as exc:
+            primary_error = exc
+
+        legacy_params = {
             "sort": sort,
             "title": title,
-            "artist_name": artist,
+            "artist_name": "",
             "beginning": "",
             "body": "",
             "lyricist": "",
@@ -452,37 +486,34 @@ class UtatenLyricsProvider:
             "tag": "",
             "show_artists": "1",
         }
-        request = Request(
-            f"{self.base_url}/search?{urlencode(params)}",
-            headers={
-                "Accept-Language": "ja,en;q=0.8",
-                "User-Agent": f"{APP_NAME}/{APP_VERSION} (lyrics search)",
-            },
-        )
-        html_text = _load_text_from_request(request)
-        if not html_text.strip():
-            # The advanced endpoint can return HTTP 200 with an empty body.
-            # Use the site's quick-search form while retaining the artist filter.
-            fallback_params = {
-                "layout_search_text": title,
-                "layout_search_type": "title",
-                "sort": sort,
-                "artist_name": artist,
-            }
-            request = Request(
-                f"{self.base_url}/search?{urlencode(fallback_params)}",
-                headers=dict(request.header_items()),
+        try:
+            legacy_text = _load_text_from_request(
+                Request(
+                    f"{self.base_url}/search?{urlencode(legacy_params)}",
+                    headers=dict(self._LEGACY_HEADERS),
+                )
             )
-            html_text = _load_text_from_request(request)
-            if not html_text.strip():
-                raise LyricsSearchError("UtaTen 返回空白搜索页面，请稍后重试。")
-        entries = _parse_utaten_search_results(html_text, base_url=self.base_url)
-        if artist:
-            artist_key = _normalize_text(artist)
-            entries = [entry for entry in entries if
-                       artist_key in _normalize_text(entry["artist"]) or
-                       SequenceMatcher(None, artist_key, _normalize_text(entry["artist"])).ratio() >= 0.75]
-        return entries
+            entries = self._parse_search_page(legacy_text)
+            if entries is not None:
+                return self._filter_title_entries(entries, title)
+        except LyricsSearchError as exc:
+            if primary_error is not None:
+                raise LyricsSearchError(f"新接口：{primary_error}；回退接口：{exc}") from exc
+            raise LyricsSearchError(f"回退接口：{exc}") from exc
+
+        if primary_error is not None:
+            raise primary_error
+        raise LyricsSearchError("UtaTen 返回空白搜索页面，请稍后重试。")
+
+    def _parse_search_page(self, html_text: str) -> list[dict[str, str]] | None:
+        """解析搜索结果页；空 body / 不是结果页返回 ``None`` 以触发回退。"""
+        if not html_text.strip() or not _has_utaten_search_table(html_text):
+            return None
+        return _parse_utaten_search_results(html_text, base_url=self.base_url)
+
+    @staticmethod
+    def _filter_title_entries(entries: list[dict[str, str]], title: str) -> list[dict[str, str]]:
+        return [entry for entry in entries if _utaten_title_matches(entry["title"], title)]
 
     def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
         url = ""
@@ -961,8 +992,10 @@ class LyricsSearchService:
                     if existing is None or _sort_key(candidate) > _sort_key(existing):
                         ranked[candidate.key] = candidate
 
+        # 单个/全部来源失败不再向上抛异常：检索页统一用空结果 + InfoBar
+        # 反馈，结果表、状态栏和错误提示始终来自同一份 batch。
         if not ranked and errors:
-            raise LyricsSearchError("\n".join(list(dict.fromkeys(errors))))
+            log.warning("歌词检索没有可用结果：%s", "；".join(dict.fromkeys(errors)))
 
         ordered = sorted(ranked.values(), key=_sort_key, reverse=True)
         visible_results = ordered[:limit]
@@ -998,6 +1031,19 @@ def _strip_html_tags(text: str) -> str:
     text = re.sub(r"(?is)<br\s*/?>", "\n", text)
     text = re.sub(r"(?is)<[^>]+>", "", text)
     return " ".join(html.unescape(text).split())
+
+
+def _has_utaten_search_table(html_text: str) -> bool:
+    return bool(re.search(r'<table[^>]*class="[^"]*\bsearchResult\b', html_text or "", re.IGNORECASE))
+
+
+def _utaten_title_matches(candidate_title: str, query_title: str) -> bool:
+    """本地歌名过滤：只做归一化后的包含判断，不做相似度模糊匹配。"""
+    query = _normalize_text(query_title)
+    candidate = _normalize_text(candidate_title)
+    if not query or not candidate:
+        return False
+    return query in candidate
 
 
 def _parse_utaten_search_results(html_text: str, *, base_url: str) -> list[dict[str, str]]:

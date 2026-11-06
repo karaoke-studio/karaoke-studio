@@ -1040,6 +1040,14 @@ ResolvedStyle resolvedStyleFromTitle(
     cfg.decorationKind = stringValue(
         title, QStringLiteral("decoration_kind"), cfg.decorationKind
     );
+    // 标题永不走字：Python 侧已经把「走字前」的配色/装饰解析成一份单态快照
+    // 下发（fill/stroke/decoration_kind/glow_radius/shadow_offset 都是走字前
+    // 的值）。这里必须把前后两态钉成同一份，否则 decorationBeforeSync=false
+    // 的方案（旧工程 / 关掉「同步」的方案）会让 decorationKindForState(false)
+    // 读回**全局样式**的 decorationKindBefore：标题的发光被换成别档、位移取到
+    // 0，表现为「改了走字前发光明暗/颜色，预览一动不动」。
+    cfg.decorationKindBefore = cfg.decorationKind;
+    cfg.decorationBeforeSync = true;
     const int glowRadius = std::max(
         0, intValue(title, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx)
     );
@@ -1055,12 +1063,15 @@ ResolvedStyle resolvedStyleFromTitle(
         0,
         2
     );
+    cfg.glowBeforeConcentrationLevel = cfg.glowConcentrationLevel;
     cfg.shadowOffsetX = intValue(
         title, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX
     );
     cfg.shadowOffsetY = intValue(
         title, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY
     );
+    cfg.shadowBeforeOffsetX = cfg.shadowOffsetX;
+    cfg.shadowBeforeOffsetY = cfg.shadowOffsetY;
     cfg.hasMainKaraokeColors = true;
     return cfg;
 }

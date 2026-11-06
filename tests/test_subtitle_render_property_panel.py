@@ -13101,3 +13101,267 @@ def test_line_band_image_size_follows_static_variant(qapp, tmp_path, monkeypatch
     assert panel._line_band_image_size() == (320, 48)
     assert calls == [("preset:staff_scroll", False, True)]
     panel.deleteLater()
+
+
+def test_opening_title_scheme_from_the_card_lands_on_before_state(qapp):
+    """标题恒按「走字前」渲染：从标题卡片进「编辑配色」必须停在走字前。
+
+    停在走字后页时，用户改配色/装饰都写不进标题实际读取的槽位，预览一动不动。
+    角色导航下拉则是另一回事：同一个方案可能同时在给歌词上色，从下拉切过去
+    不能强行改页。
+    """
+    panel = PropertyPanel()
+    panel.set_style(
+        replace(
+            Style(),
+            custom_style_schemes={"角色A": SubtitleStyleScheme()},
+            title_overlays=[
+                TitleOverlay(name="标题 1", text_template="ABC", scheme_name="角色A")
+            ],
+        )
+    )
+    panel.merge_roles(["角色A"])
+
+    panel._open_title_scheme(0)
+
+    assert panel.currentIndex() == 0
+    assert panel._current_custom_scheme_name() == "角色A"
+    assert panel._color_state_combo.currentData() == "before"
+
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("after")
+    )
+    panel.set_current_scheme_key("custom:角色A")
+    assert panel._color_state_combo.currentData() == "after"
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_assigning_one_role_to_the_whole_title_syncs_the_card_scheme(qapp):
+    """整条标题被同一个逐字角色覆盖后，卡片配色要指向那个角色。
+
+    逐字角色把每个单元格都占满时，标题原来的基础配色引用对颜色已经完全
+    不起作用；卡片继续显示旧引用，用户就会在那个方案上改配色/装饰却看不到
+    变化（卡片状态与渲染结果脱节）。
+    """
+    provider = _CountingSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    try:
+        win._property_panel.set_style(
+            replace(
+                win._style,
+                title_overlays=[
+                    TitleOverlay(
+                        name="标题 1",
+                        enabled=True,
+                        text_template="ABC",
+                        scheme_name=TITLE_SCHEME_NAME,
+                    )
+                ],
+            ),
+            emit=True,
+        )
+        win._active_title_index = 0
+
+        win._set_title_role_labels(0, ["角色A", "角色A", "角色A"])
+
+        title = win._style.title_overlays[0]
+        assert title.char_role_labels == [["角色A", "角色A", "角色A"]]
+        assert title.scheme_name == "角色A"
+        card = win._property_panel._title_cards[0]
+        assert card.scheme_combo.currentData() == "角色A"
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_switching_decoration_type_seeds_visible_parameters(qapp):
+    """装饰参数全 0 时切类型要真的能看见（N3 导入常见的「阴影 0/0」）。
+
+    方案里装饰类型是阴影、位移却是 0/0（等于关闭）时，用户在装饰类型里
+    无 → 阴影 → 发光 来回切，画面一动不动，看起来像控件坏了。只在参数全 0
+    （本来就画不出任何东西）时补出厂默认值。
+    """
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_kind="none",
+            glow_radius_px=10,
+            glow_before_radius_px=0,
+            glow_after_radius_px=0,
+            shadow_offset_x=0,
+            shadow_offset_y=0,
+            shadow_before_offset_x=0,
+            shadow_before_offset_y=0,
+        )
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("glow")
+    )
+
+    assert emitted[-1].glow_before_radius_px == 2
+    assert emitted[-1].glow_after_radius_px == 2
+
+    # 非 0 的既有值不动：用户自己调过的发光宽度必须原样保留。
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("none")
+    )
+    panel._glow_radius_spin.setValue(7)
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("glow")
+    )
+    assert emitted[-1].glow_before_radius_px == 7
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_switching_to_shadow_with_zero_offsets_seeds_defaults(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_kind="none",
+            shadow_offset_x=0,
+            shadow_offset_y=0,
+            shadow_before_offset_x=0,
+            shadow_before_offset_y=0,
+        )
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("shadow")
+    )
+
+    assert emitted[-1].shadow_offset_x == 5
+    assert emitted[-1].shadow_offset_y == 5
+    assert emitted[-1].shadow_before_offset_x == 5
+    assert emitted[-1].shadow_before_offset_y == 5
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_raising_glow_width_switches_that_side_to_glow(qapp):
+    """调大发光的宽度就是「我要这个装饰」：类型还停在阴影/无时必须一并切过去。
+
+    存量方案里「装饰类型=阴影、位移 0/0」很常见，等于没有装饰。用户把
+    走字前发光从 0 调大，类型不动的话一个像素都不会画，预览就「保持原来
+    的样子」。调回 0 是关闭，不切类型。
+    """
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_kind="none",
+            decoration_kind_before="shadow",
+            glow_before_radius_px=0,
+            glow_after_radius_px=0,
+            shadow_offset_x=0,
+            shadow_offset_y=0,
+            shadow_before_offset_x=0,
+            shadow_before_offset_y=0,
+        )
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("before")
+    )
+
+    panel._glow_radius_spin.setValue(12)
+
+    assert emitted[-1].glow_before_radius_px == 12
+    assert emitted[-1].decoration_kind_before == "glow"
+
+    # 调回 0 只是关闭这一侧，不把类型改回去。
+    panel._glow_radius_spin.setValue(0)
+    assert emitted[-1].decoration_kind_before == "glow"
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_shadow_offset_edit_switches_that_side_to_shadow(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_kind="glow",
+            decoration_kind_before="glow",
+            glow_before_radius_px=4,
+            glow_after_radius_px=4,
+            shadow_offset_x=0,
+            shadow_offset_y=0,
+            shadow_before_offset_x=0,
+            shadow_before_offset_y=0,
+        )
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._shadow_x_spin.setValue(5)
+
+    assert emitted[-1].shadow_offset_x == 5
+    assert emitted[-1].decoration_kind == "shadow"
+    assert emitted[-1].decoration_kind_before == "shadow"
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_title_glow_width_edit_reaches_the_rendered_title(qapp):
+    """复现「改了标题的走字前发光，预览没变化」。
+
+    方案里装饰类型停在阴影、位移 0/0（等于关闭）时，从标题卡片进「编辑
+    配色」把走字前发光调大，必须立刻变成标题真正解析到的发光装饰，否则
+    预览一动不动。
+    """
+    from krok_helper.subtitle_render.engine.style.title_semantics import (
+        resolve_title_overlay,
+        resolve_title_role_overlay,
+    )
+
+    role = "小标题"
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(),
+                role: SubtitleStyleScheme(
+                    decoration_kind="shadow",
+                    decoration_kind_before="shadow",
+                    glow_before_radius_px=0,
+                    glow_after_radius_px=0,
+                    shadow_offset_x=0,
+                    shadow_offset_y=0,
+                    shadow_before_offset_x=0,
+                    shadow_before_offset_y=0,
+                ),
+            },
+            title_overlays=[
+                TitleOverlay(
+                    name="标题 1",
+                    enabled=True,
+                    text_template="KING / 秋奈",
+                    scheme_name=role,
+                    char_role_labels=[[role] * len("KING / 秋奈")],
+                )
+            ],
+        )
+    )
+    panel.merge_roles([role])
+
+    panel._open_title_scheme(0)
+    assert panel._current_custom_scheme_name() == role
+    assert panel._color_state_combo.currentData() == "before"
+
+    panel._glow_radius_spin.setValue(12)
+
+    style = panel.subtitle_style
+    resolved = resolve_title_role_overlay(
+        style, resolve_title_overlay(style), role
+    )
+    assert resolved.decoration_kind == "glow"
+    assert resolved.glow_radius_px == 12
+    panel.deleteLater()
+    qapp.processEvents()

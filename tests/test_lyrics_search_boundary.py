@@ -14,6 +14,8 @@ from types import SimpleNamespace
 import pytest
 from PyQt6.QtWidgets import QApplication
 
+from krok_helper.lyrics import LyricsSearchBatch, LyricsSearchCandidate
+from krok_helper.lyrics_search import page as lyrics_page
 from krok_helper.lyrics_search.page import LyricsSearchHost, LyricsSearchPage
 from krok_helper.settings import AppSettings
 
@@ -108,3 +110,84 @@ def test_the_page_does_not_import_the_shell() -> None:
             imported |= {a.name for a in node.names}
 
     assert not any(m == "krok_helper.gui_qt" or m.startswith("krok_helper.gui_qt.") for m in imported)
+
+
+def _loaded_candidate() -> LyricsSearchCandidate:
+    return LyricsSearchCandidate(
+        provider_id="utaten",
+        provider_name="UtaTen",
+        track_id="1",
+        title="結び",
+        artist="Ayumu Imazu",
+        album="",
+        duration_seconds=None,
+        plain_lyrics="[tool:utaten-ruby]\n{結び||むすび}",
+        lyrics_loaded=True,
+    )
+
+
+def test_search_failure_reports_through_info_bar(page, monkeypatch) -> None:
+    widget, _ = page
+    bars: list[dict] = []
+    monkeypatch.setattr(lyrics_page.InfoBar, "warning", lambda **kwargs: bars.append(kwargs))
+
+    widget._finish_lyrics_search_failure("网络错误：请求超时")
+
+    assert bars, "失败反馈应当走 InfoBar"
+    assert "网络错误：请求超时" in bars[0]["content"]
+    assert "失败" in widget.lyrics_status_label.text()
+
+
+def test_partial_search_errors_keep_results_without_info_bar(page, monkeypatch) -> None:
+    widget, _ = page
+    bars: list[dict] = []
+    monkeypatch.setattr(lyrics_page.InfoBar, "warning", lambda **kwargs: bars.append(kwargs))
+    candidate = _loaded_candidate()
+    batch = LyricsSearchBatch(
+        results=[candidate],
+        overflow_results=[],
+        next_provider_pages={},
+        has_more=False,
+        errors=("网易云音乐：HTTP 503",),
+    )
+
+    widget._finish_lyrics_search_success((False, batch))
+
+    assert widget.lyrics_search_results == [candidate], "部分来源失败不能清空其它来源的结果"
+    assert "已加载 1 条候选结果" in widget.lyrics_status_label.text()
+    assert not bars, "已有结果时不该再弹来源错误"
+
+
+def test_failure_with_existing_results_does_not_report_bar(page, monkeypatch) -> None:
+    widget, _ = page
+    bars: list[dict] = []
+    monkeypatch.setattr(lyrics_page.InfoBar, "warning", lambda **kwargs: bars.append(kwargs))
+    candidate = _loaded_candidate()
+    widget.lyrics_search_results = [candidate]
+    widget.lyrics_selected_candidate = candidate
+
+    widget._finish_lyrics_search_failure("网络错误：请求超时")
+
+    assert widget.lyrics_search_results == [candidate]
+    assert "已保留 1 条已有结果" in widget.lyrics_status_label.text()
+    assert not bars, "已有结果时不该再弹错误"
+
+
+def test_search_with_no_results_and_errors_is_consistent(page, monkeypatch) -> None:
+    widget, _ = page
+    bars: list[dict] = []
+    monkeypatch.setattr(lyrics_page.InfoBar, "warning", lambda **kwargs: bars.append(kwargs))
+    batch = LyricsSearchBatch(
+        results=[],
+        overflow_results=[],
+        next_provider_pages={},
+        has_more=False,
+        errors=("UtaTen 搜索失败：UtaTen 返回空白搜索页面，请稍后重试。",),
+    )
+
+    widget._finish_lyrics_search_success((False, batch))
+
+    assert widget.lyrics_search_results == []
+    assert widget.lyrics_status_label.text() == "没有找到匹配的歌词结果。"
+    assert widget.lyrics_results_table.rowCount() == 0
+    assert bars and "UtaTen 返回空白搜索页面" in bars[0]["content"]
