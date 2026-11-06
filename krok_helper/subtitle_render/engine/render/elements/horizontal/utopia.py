@@ -35,18 +35,22 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
     LayerContext,
     SCOPE_GROUP,
 )
+from krok_helper.subtitle_render.engine.render.core.raster_blur import blur_image
 from krok_helper.subtitle_render.engine.render.effects import (
     brush_for_fill,
     decoration_kind_for_state,
     fill_brush_rect,
     fill_signature,
+    glow_blur_radii,
     glow_concentration_level,
     glow_extent,
+    glow_pen_width,
     glow_radius,
     main_stroke2_width,
     paint_glow_path,
     paint_shadow_silhouette,
     paint_split_glow_path,
+    paint_stroke_path,
     paint_text_layer_stack,
     ruby_visual_padding,
     style_for_state,
@@ -1262,6 +1266,165 @@ def paint_glyph_run_after_glow_wipe(
         painter.restore()
 
 
+def paint_glyph_run_grouped_glow(
+    painter: QPainter,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    fill_segments: list[FillSegment],
+    t_ms: int,
+    rtl: bool,
+    glyph_opacities: list[float],
+    *,
+    fill_rect: QRectF | None,
+) -> None:
+    """逐字转场的整 run 编组光晕（GPU charUsesGroupedGlowAt / N3
+    DrawOneLineDecorBlurMulti 口径）。
+
+    所有编组字的加宽轮廓按各自的扫光侧裁剪、以各自的字符透明度画进
+    同一张（分色时两张）源位图——源空间合成即「先合成后淡出」，随后
+    单次高斯模糊、整层垫底绘制。相邻字的光晕不再逐层叠合，后字光晕
+    也不会盖住前字主体。等态（前后光同色同半径）时两侧独占裁剪的并集
+    即整字，直接以 before 配色整字画一次（GPU 合并单源同口径）。"""
+
+    style = glyphs[0].style
+    colors = effective_karaoke_colors(style)
+    split = karaoke_glow_states_differ(style, colors)
+    before_kind = decoration_kind_for_state(style, after=False)
+    after_kind = decoration_kind_for_state(style, after=True)
+    before_radius = glow_radius(style, after=False)
+    after_radius = glow_radius(style, after=True)
+    if before_kind != "glow" and after_kind != "glow":
+        return
+    stroke2_width = main_stroke2_width(style)
+    max_radius = max(before_radius, after_radius)
+    run_rect = glyph_run_rect(glyphs, baseline_y)
+    extent = glow_extent(style.stroke_width_px, stroke2_width, max_radius) + 2
+    layer_rect = run_rect.adjusted(-extent, -extent, extent, extent)
+    image_w = max(1, math.ceil(layer_rect.width()))
+    image_h = max(1, math.ceil(layer_rect.height()))
+
+    sources: dict[bool, QImage] = {}
+    radii: dict[bool, int] = {}
+    concentrations: dict[bool, int] = {}
+    fills: dict[bool, PaintFill] = {}
+    pen_widths: dict[bool, int] = {}
+    for state_after in ((False,) if not split else (False, True)):
+        kind = after_kind if state_after else before_kind
+        radius = after_radius if state_after else before_radius
+        concentration = glow_concentration_level(style, after=state_after)
+        if kind != "glow" or radius <= 0 or concentration < 0:
+            continue
+        image = QImage(
+            image_w, image_h, QImage.Format.Format_ARGB32_Premultiplied
+        )
+        image.fill(0)
+        sources[state_after] = image
+        radii[state_after] = radius
+        concentrations[state_after] = concentration
+        state = colors.after if state_after else colors.before
+        fills[state_after] = state.shadow
+        pen_widths[state_after] = glow_pen_width(
+            style.stroke_width_px, stroke2_width, radius
+        )
+    if not sources:
+        return
+
+    brush_rect = fill_rect if fill_rect is not None else run_rect
+    source_painters = {
+        state_after: QPainter(image)
+        for state_after, image in sources.items()
+    }
+    try:
+        for source_painter in source_painters.values():
+            source_painter.setRenderHints(
+                QPainter.RenderHint.Antialiasing
+                | QPainter.RenderHint.TextAntialiasing
+                | QPainter.RenderHint.SmoothPixmapTransform
+            )
+            source_painter.translate(-layer_rect.left(), -layer_rect.top())
+        for glyph, opacity in zip(glyphs, glyph_opacities):
+            char_opacity = max(0.0, min(float(opacity), 1.0))
+            if char_opacity <= 0.0:
+                continue
+            glyph_run = [glyph]
+            band = fill_clip_band_for_glyphs(
+                fill_segments, glyph_run, t_ms, rtl
+            )
+            following = n3_following_wipe_band(
+                fill_segments, {glyph.index}, t_ms, rtl
+            )
+            if following is not None:
+                band = following
+            rect = glyph_run_rect(glyph_run, baseline_y)
+            path = glyph_run_path(glyph_run, baseline_y)
+            if band is None:
+                # 未唱到：整字都在 before 侧。
+                clips: dict[bool, QRectF | None] = {False: None}
+            elif (
+                run_fill_complete(fill_segments, {glyph.index}, t_ms)
+                and following is None
+            ):
+                # 已唱完且无交接：整字 after 侧，halo 不再被锋面截断。
+                clips = {True: None}
+            else:
+                pad = glow_extent(
+                    style.stroke_width_px, stroke2_width, max_radius
+                )
+                clips = {
+                    False: before_glow_source_clip_rect(band, rect, pad, rtl),
+                    True: after_glow_source_clip_rect(
+                        band, rect, pad, rtl, False
+                    ),
+                }
+            if not split:
+                source_painter = source_painters[False]
+                source_painter.save()
+                try:
+                    source_painter.setOpacity(char_opacity)
+                    paint_stroke_path(
+                        source_painter,
+                        path,
+                        fills[False],
+                        brush_rect,
+                        pen_widths[False],
+                    )
+                finally:
+                    source_painter.restore()
+                continue
+            for state_after, clip in clips.items():
+                source_painter = source_painters.get(state_after)
+                if source_painter is None:
+                    continue
+                source_painter.save()
+                try:
+                    source_painter.setOpacity(char_opacity)
+                    if clip is not None:
+                        source_painter.setClipRect(
+                            clip.translated(
+                                -layer_rect.left(), -layer_rect.top()
+                            )
+                        )
+                    paint_stroke_path(
+                        source_painter,
+                        path,
+                        fills[state_after],
+                        brush_rect,
+                        pen_widths[state_after],
+                    )
+                finally:
+                    source_painter.restore()
+    finally:
+        for source_painter in source_painters.values():
+            source_painter.end()
+
+    target = QPointF(layer_rect.left(), layer_rect.top())
+    for state_after, image in sources.items():
+        for blur_radius in glow_blur_radii(
+            radii[state_after], concentrations[state_after]
+        ):
+            painter.drawImage(target, blur_image(image, blur_radius))
+
+
 HORIZONTAL_GLYPH_LAYER_PORTS = GlyphLayerPorts(
     fill_clip_band=lambda *args, **kwargs: fill_clip_band(*args, **kwargs),
     fill_clip_band_for_glyphs=lambda *args, **kwargs: (
@@ -1272,6 +1435,9 @@ HORIZONTAL_GLYPH_LAYER_PORTS = GlyphLayerPorts(
     ),
     paint_glyph_run_after_glow_wipe=lambda *args, **kwargs: (
         paint_glyph_run_after_glow_wipe(*args, **kwargs)
+    ),
+    paint_glyph_run_grouped_glow=lambda *args, **kwargs: (
+        paint_glyph_run_grouped_glow(*args, **kwargs)
     ),
     paint_glyph_run_before_glow_direct=lambda *args, **kwargs: (
         paint_glyph_run_before_glow_direct(*args, **kwargs)
@@ -1301,10 +1467,16 @@ def paint_char_karaoke_stack(
     glow_transform: QTransform | None = None,
     geometry_transform: QTransform | None = None,
     fill_rect: QRectF | None = None,
+    phase: str = "all",
 ) -> None:
     # A3（§9.7）：``glow_run`` 给定（utopia 路径）时，glow 走上正烘焙缓存 + 变换 blit，
     # 不再每帧 _paint_glow_path 重算高斯；body 仍逐帧矢量（锐利）。``glow_run`` 为 None
     # 时退回原逐帧 glow 路径（保留旧行为，可回退）。
+    #
+    # ``phase`` 支持两遍绘制（GPU inlineGlowLayers 在主文字之前合成的镜像）：
+    # ``"glow"`` 只画装饰（光晕 + utopia 阴影分割剪影），``"body"`` 只画主体
+    # （描边/填充，光晕恒不随主体），``"all"`` 保持既有单遍整栈行为。调用方
+    # 先对整行逐字 ``"glow"`` 再逐字 ``"body"``，后字光晕不再盖住前字主体。
     def _use_cached_glow(after: bool) -> bool:
         # N3 transforms the glyph geometry before drawing the shared
         # decoration source and applying Gaussian blur.  Reusing an already
@@ -1332,25 +1504,53 @@ def paint_char_karaoke_stack(
             after=after, transform=glow_transform, fill_rect=fill_rect,
         )
 
-    if ratio <= 0.0:
-        use_cached_glow = _use_cached_glow(after=False)
-        if use_cached_glow:
-            _blit_glow(after=False)
-        paint_text_layer_stack(
+    def _standalone_glow(after: bool) -> None:
+        # 单遍路径里这部分光晕由主体栈内部携带；两遍路径在 glow 遍以同一
+        # paint_glow_path 原语与参数整幅直画，主体遍恒不烘光。
+        state_style = after_style if after else before_style
+        if state_style.decoration_kind != "glow":
+            return
+        state = colors.after if after else colors.before
+        paint_glow_path(
             painter,
             path,
-            rect,
-            colors.before,
-            before_style,
-            stroke_width=before_style.stroke_width_px,
-            stroke2_width=stroke2_width,
-            shadow_dx=before_style.shadow_offset_x,
-            shadow_dy=before_style.shadow_offset_y,
-            glow_radius=glow_radius(before_style, after=False),
-            draw_glow=not use_cached_glow,
-            fill_rect=fill_rect,
-            after=False,
+            state.shadow,
+            fill_brush_rect(
+                state.shadow,
+                fill_rect if fill_rect is not None else rect,
+                None,
+            ),
+            glow_radius(state_style, after=after),
+            state_style.stroke_width_px,
+            stroke2_width,
+            concentration_level=glow_concentration_level(
+                state_style, after=after
+            ),
         )
+
+    if ratio <= 0.0:
+        use_cached_glow = _use_cached_glow(after=False)
+        if phase != "body":
+            if use_cached_glow:
+                _blit_glow(after=False)
+            elif phase == "glow":
+                _standalone_glow(after=False)
+        if phase != "glow":
+            paint_text_layer_stack(
+                painter,
+                path,
+                rect,
+                colors.before,
+                before_style,
+                stroke_width=before_style.stroke_width_px,
+                stroke2_width=stroke2_width,
+                shadow_dx=before_style.shadow_offset_x,
+                shadow_dy=before_style.shadow_offset_y,
+                glow_radius=glow_radius(before_style, after=False),
+                draw_glow=not use_cached_glow if phase == "all" else False,
+                fill_rect=fill_rect,
+                after=False,
+            )
         return
 
     if ratio < 1.0:
@@ -1365,7 +1565,26 @@ def paint_char_karaoke_stack(
             _use_cached_glow(after=False) and not glow_states_differ
         )
         front = char_x + char_width * (1.0 - ratio if rtl else ratio)
-        if glow_states_differ:
+        utopia_shadow_split = (
+            geometry_transform is not None
+            and (
+                (
+                    before_style.decoration_kind == "shadow"
+                    and bool(
+                        before_style.shadow_offset_x
+                        or before_style.shadow_offset_y
+                    )
+                )
+                or (
+                    after_style.decoration_kind == "shadow"
+                    and bool(
+                        after_style.shadow_offset_x
+                        or after_style.shadow_offset_y
+                    )
+                )
+            )
+        )
+        if phase != "body" and glow_states_differ:
             transformed_geometry = (
                 geometry_transform is not None
                 and not geometry_transform.isIdentity()
@@ -1422,10 +1641,11 @@ def paint_char_karaoke_stack(
                     rtl=rtl,
                     fill_rect=fill_rect,
                 )
-        elif use_cached_before_glow:
+        elif phase != "body" and use_cached_before_glow:
             _blit_glow(after=False)
         elif (
-            glow_radius(before_style, after=False) > 0
+            phase != "body"
+            and glow_radius(before_style, after=False) > 0
             and before_style.decoration_kind == "glow"
         ):
             # 等态发光、缓存路径不可用：光晕整幅画一次（GPU 逐侧独占裁剪
@@ -1447,26 +1667,7 @@ def paint_char_karaoke_stack(
                     before_style, after=False
                 ),
             )
-        utopia_shadow_split = (
-            geometry_transform is not None
-            and (
-                (
-                    before_style.decoration_kind == "shadow"
-                    and bool(
-                        before_style.shadow_offset_x
-                        or before_style.shadow_offset_y
-                    )
-                )
-                or (
-                    after_style.decoration_kind == "shadow"
-                    and bool(
-                        after_style.shadow_offset_x
-                        or after_style.shadow_offset_y
-                    )
-                )
-            )
-        )
-        if utopia_shadow_split:
+        if phase != "body" and utopia_shadow_split:
             shadow_states_differ = (
                 fill_signature(colors.before.shadow)
                 != fill_signature(colors.after.shadow)
@@ -1526,6 +1727,8 @@ def paint_char_karaoke_stack(
                         )
                     finally:
                         painter.restore()
+        if phase == "glow":
+            return
         # before 栈只画未唱侧（锋面右/左半），已唱半边由下方 after 栈独占
         # ——与上方 shadow 分割和 GPU 的双侧互斥裁剪同口径。此前 before 全
         # 量垫底，半透明配色在已唱半边呈 α² 双层（2026-10 用户实测唱字
@@ -1602,20 +1805,24 @@ def paint_char_karaoke_stack(
         return
 
     use_cached_glow = _use_cached_glow(after=True)
-    if use_cached_glow:
-        _blit_glow(after=True)
-    paint_text_layer_stack(
-        painter,
-        path,
-        rect,
-        colors.after,
-        after_style,
-        stroke_width=after_style.stroke_width_px,
-        stroke2_width=stroke2_width,
-        shadow_dx=after_style.shadow_offset_x,
-        shadow_dy=after_style.shadow_offset_y,
-        glow_radius=glow_radius(after_style, after=True),
-        draw_glow=not use_cached_glow,
-        fill_rect=fill_rect,
-        after=True,
-    )
+    if phase != "body":
+        if use_cached_glow:
+            _blit_glow(after=True)
+        elif phase == "glow":
+            _standalone_glow(after=True)
+    if phase != "glow":
+        paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.after,
+            after_style,
+            stroke_width=after_style.stroke_width_px,
+            stroke2_width=stroke2_width,
+            shadow_dx=after_style.shadow_offset_x,
+            shadow_dy=after_style.shadow_offset_y,
+            glow_radius=glow_radius(after_style, after=True),
+            draw_glow=not use_cached_glow if phase == "all" else False,
+            fill_rect=fill_rect,
+            after=True,
+        )

@@ -2424,6 +2424,7 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
         "paint_glyph_run_after_glow_wipe",
         "paint_glyph_run_before_glow_direct",
         "paint_glyph_run_combined_glow",
+        "paint_glyph_run_grouped_glow",
         "run_fill_complete",
     }
     imported_ports = {
@@ -2670,6 +2671,7 @@ def test_character_transition_layer_stack_has_explicit_factory_ports() -> None:
         "fill_clip_band_for_glyphs",
         "glyph_run_after_glow_layer",
         "glyph_run_before_glow_layer",
+        "glyph_run_grouped_glow_layer",
         "glyph_run_layer",
     }
 

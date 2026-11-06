@@ -106,6 +106,7 @@ class GlyphLayerPorts:
     paint_glyph_run_after_glow_wipe: Callable[..., None]
     paint_glyph_run_before_glow_direct: Callable[..., None]
     paint_glyph_run_combined_glow: Callable[..., None]
+    paint_glyph_run_grouped_glow: Callable[..., None]
     run_fill_complete: Callable[..., bool]
 
 
@@ -129,6 +130,7 @@ class TransitionLayerStackPorts:
     fill_clip_band_for_glyphs: Callable[..., tuple[int, int] | None]
     glyph_run_after_glow_layer: Callable[..., object]
     glyph_run_before_glow_layer: Callable[..., object]
+    glyph_run_grouped_glow_layer: Callable[..., object]
     glyph_run_layer: Callable[..., object]
 
 
@@ -544,42 +546,43 @@ def paint_line_direct(
         )
 
     for run in runs:
-        if id(run) in combined_run_ids:
+        # after-glow 整 run 一次直绘（GPU mainGlowLayers / line_layer_stack 同
+        # 口径）：run 级 band 前沿 == 各 glyph band 前沿（fill_clip_band 连续
+        # 单调推进 + n3_following_wipe_band 对 run 索引的交接覆盖），整 run
+        # 源按前沿裁剪后单次模糊，相邻字光晕不再逐层叠合。
+        if id(run) in combined_run_ids or not glyph_run_needs_after_glow(run):
             continue
-        for glyph in run:
-            glyph_run = [glyph]
-            glyph_band = glyph_ports.fill_clip_band_for_glyphs(
-                layout.fill_segments,
-                glyph_run,
-                t_ms,
-                layout.rtl,
-            )
-            if glyph_band is None or glyph.text.isspace():
-                continue
-            glyph_complete = glyph_ports.run_fill_complete(
-                layout.fill_segments,
-                {glyph.index},
-                t_ms,
-            )
-            following_band = glyph_ports.n3_following_wipe_band(
-                layout.fill_segments,
-                {glyph.index},
-                t_ms,
-                layout.rtl,
-            )
-            if following_band is not None:
-                glyph_band = following_band
-            glyph_released = glyph_complete and following_band is None
-            if glyph_run_needs_after_glow(glyph_run):
-                paint_glyph_run_after_glow_direct(
-                    painter,
-                    glyph_run,
-                    baseline_y,
-                    glyph_band,
-                    rtl=layout.rtl,
-                    complete=glyph_released,
-                    fill_rect=fill_rect_for(glyph_run),
-                )
+        run_indices = {glyph.index for glyph in run}
+        run_band = glyph_ports.fill_clip_band_for_glyphs(
+            layout.fill_segments,
+            run,
+            t_ms,
+            layout.rtl,
+        )
+        if run_band is None:
+            continue
+        following_band = glyph_ports.n3_following_wipe_band(
+            layout.fill_segments,
+            run_indices,
+            t_ms,
+            layout.rtl,
+        )
+        if following_band is not None:
+            run_band = following_band
+        run_complete = glyph_ports.run_fill_complete(
+            layout.fill_segments,
+            run_indices,
+            t_ms,
+        )
+        paint_glyph_run_after_glow_direct(
+            painter,
+            run,
+            baseline_y,
+            run_band,
+            rtl=layout.rtl,
+            complete=run_complete and following_band is None,
+            fill_rect=fill_rect_for(run),
+        )
 
     for run in runs:
         split_glow = glyph_run_needs_before_glow_split(run)
@@ -1047,6 +1050,36 @@ def line_layer_stack(
     z_index = len(runs) * 2 + len(bitmap_before_layers)
     for run in runs:
         combined_glow = id(run) in combined_run_ids
+        # after-glow 整 run 单层（GPU mainGlowLayers 口径）：fill_clip_band 把
+        # 扫光建模为连续单调推进（fill_extent_end 贯穿 following 段的移动
+        # 边界），run 级 band 前沿 == 各 glyph band 前沿（含 N3 following-wipe
+        # 交接，层内 animate 会再对 run 索引取 n3_following_wipe_band 覆盖），
+        # 因此「整 run 源按前沿裁剪后单次模糊」与逐 glyph 各自模糊等价，
+        # 且相邻字光晕不再逐层叠合（大半径下后字光团盖前字光晕区）。
+        run_after_band = ports.fill_clip_band_for_glyphs(
+            layout.fill_segments,
+            run,
+            t_ms,
+            layout.rtl,
+        )
+        if (
+            run_after_band is not None
+            and not combined_glow
+            and glyph_run_needs_after_glow(run)
+        ):
+            after_glow_layers.append(
+                ports.glyph_run_after_glow_layer(
+                    run,
+                    y,
+                    layout.fill_segments,
+                    t_ms,
+                    layout.rtl,
+                    clip_band=run_after_band,
+                    z_index=z_index,
+                    fill_rect=fill_rect_for(run),
+                )
+            )
+            z_index += 1
         for glyph in run:
             glyph_run = [glyph]
             after_band = ports.fill_clip_band_for_glyphs(
@@ -1057,20 +1090,6 @@ def line_layer_stack(
             )
             if after_band is None or glyph.text.isspace():
                 continue
-            if not combined_glow and glyph_run_needs_after_glow(glyph_run):
-                after_glow_layers.append(
-                    ports.glyph_run_after_glow_layer(
-                        glyph_run,
-                        y,
-                        layout.fill_segments,
-                        t_ms,
-                        layout.rtl,
-                        clip_band=after_band,
-                        z_index=z_index,
-                        fill_rect=fill_rect_for(glyph_run),
-                    )
-                )
-                z_index += 1
             after_body_layers.append(
                 ports.glyph_run_layer(
                     glyph_run,
@@ -1133,9 +1152,27 @@ def char_transition_layer_stack(
         )
     is_spin = transition.effect == "spin_flip"
     is_drip = transition.effect == "char_drip"
+    # 已落定的字（不透明 p=1 且无几何变换）编组进 run 级光晕层：整 run 单源
+    # 单次模糊、垫在全部主体层之下（GPU charUsesGroupedGlowAt），后字光晕
+    # 不再盖住前字主体。p=1 时主体不透明，「编组光晕垫底」与「整栈先合成
+    # 后淡出」逐像素等价。
+    # 仍在淡变/几何动画中的字保留 2026-10 的逐字载体（等态光烘进主体层、
+    # 分态逐侧光层）：分离光层与主体各乘 p 会在字心留下 p·(1−p) 的光色
+    # 渗色（2026-11 A/B 实测：同场景 GPU 字心 red-green≈52，烘焙≈0；N3/GPU
+    # 不防护，本端刻意防护）。这些过渡字的主体层排在已落定主体之前，
+    # 它们的光晕同样盖不到已落定字。
+    runs = text_glyph_runs(layout.text_layout, layout.has_inline_styles)
+    run_by_index = {
+        glyph.index: run for run in runs for glyph in run
+    }
+    grouped_glyphs: dict[int, list] = {}
+    grouped_opacities: dict[int, list[float]] = {}
+    grouped_fill_rects: dict[int, QRectF] = {}
+    grouped_glow_layers: list = []
     before_glow_layers: list = []
     after_glow_layers: list = []
-    body_layers: list = []
+    transient_body_layers: list = []
+    settled_body_layers: list = []
     z = 0
     for glyph in layout.text_layout.glyphs:
         progress = char_fade_opacity(
@@ -1151,10 +1188,15 @@ def char_transition_layer_stack(
         if glyph_is_bitmap_guide(glyph):
             # Direct2D drawBitmapGuidePart uses character alpha and the line
             # matrix, never the text character's spin/drip geometry matrix.
+            guide_layers = (
+                settled_body_layers
+                if opacity >= 1.0
+                else transient_body_layers
+            )
             for after in (False, True):
                 if after and not glyph.vector_glyph.bitmap_after_path:
                     continue
-                body_layers.append(
+                guide_layers.append(
                     ports.bitmap_guide_layer(
                         glyph, y, layout.fill_segments, t_ms, rtl,
                         after=after, z_index=z,
@@ -1210,17 +1252,33 @@ def char_transition_layer_stack(
                     )
         run = [glyph]
         split_glow = glyph_run_needs_before_glow_split(run)
-        # 等态（前后光同色同半径）光晕在逐字转场下必须烘进 before 主体
-        # 层（carries_shared_glow）：转场按字符透明度整栈淡出，分离光层
-        # 各自乘 p 会在字心留下 p·(1−p) 的光色渗色；烘进位图即恢复
-        # 「先合成后淡出」的 N3 语义（2026-10 GPU/painter 奇偶校验与
-        # CPU 渗色回归共同钉住的口径）。分态仍走逐侧光层。
-        carries_glow = (
-            not split_glow
-            and run[0].style.decoration_kind == "glow"
-            and glow_radius(run[0].style, after=False) > 0
+        role_style = run[0].style
+        # 本字是否参与发光装饰（任一侧 glow 且半径 > 0）。
+        run_uses_glow = (
+            decoration_kind_for_state(role_style, after=False) == "glow"
+            and glow_radius(role_style, after=False) > 0
+        ) or (
+            decoration_kind_for_state(role_style, after=True) == "glow"
+            and glow_radius(role_style, after=True) > 0
         )
-        if split_glow:
+        settled = opacity >= 1.0 and transform is None
+        grouped = run_uses_glow and settled
+        body_layers = settled_body_layers if settled else transient_body_layers
+        # 过渡字沿用 2026-10 逐字载体：等态光烘进 before 主体层
+        # （carries_shared_glow，「先合成后淡出」防字心渗色），分态走逐侧光层。
+        carries_glow = (
+            not grouped
+            and not split_glow
+            and role_style.decoration_kind == "glow"
+            and glow_radius(role_style, after=False) > 0
+        )
+        if grouped:
+            owner = run_by_index.get(glyph.index)
+            run_id = id(owner) if owner is not None else id(role_style)
+            grouped_glyphs.setdefault(run_id, []).append(glyph)
+            grouped_opacities.setdefault(run_id, []).append(opacity)
+            grouped_fill_rects.setdefault(run_id, glyph_fill_rect)
+        elif split_glow:
             before_glow_layers.append(
                 ports.glyph_run_before_glow_layer(
                     run,
@@ -1258,7 +1316,7 @@ def char_transition_layer_stack(
         )
         if after_band is None:
             continue
-        if glyph_run_needs_after_glow(run):
+        if glyph_run_needs_after_glow(run) and not grouped:
             after_glow_layers.append(
                 ports.glyph_run_after_glow_layer(
                     run,
@@ -1290,7 +1348,26 @@ def char_transition_layer_stack(
             )
         )
         z += 1
-    return before_glow_layers + after_glow_layers + body_layers
+    for run_id, glyphs in grouped_glyphs.items():
+        grouped_glow_layers.append(
+            ports.glyph_run_grouped_glow_layer(
+                glyphs,
+                y,
+                layout.fill_segments,
+                t_ms,
+                rtl,
+                tuple(grouped_opacities[run_id]),
+                z_index=0,
+                fill_rect=grouped_fill_rects[run_id],
+            )
+        )
+    return (
+        grouped_glow_layers
+        + before_glow_layers
+        + after_glow_layers
+        + transient_body_layers
+        + settled_body_layers
+    )
 
 
 def bitmap_guide_target_rect(
@@ -1906,6 +1983,10 @@ class GlyphRunLayer:
                 self.fill_rect,
                 global_anchor=karaoke_state_uses_image(state),
             ),
+            # bake() 依此决定是否烘入等态光：同一字在过渡（烘光）与落定
+            # （不烘光）之间切换时必须分键，否则拖动预览（乱序）会命中另一
+            # 形态的位图，与顺序导出不一致。
+            self.carries_shared_glow,
         )
 
     def bake(
@@ -2441,6 +2522,95 @@ class GlyphRunAfterGlowLayer:
             state_style.stroke_width_px,
             state_style.stroke2_width_px,
             glow_radius(state_style, after=True),
+        )
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class GlyphRunGroupedGlowLayer:
+    """逐字转场的整 run 编组光晕层（GPU charUsesGroupedGlowAt 语义）。
+
+    编组字（纯透明度转场的全部字 / 几何转场中变换已落定的字）的光晕源
+    在一张位图内按字符透明度合成后单次模糊，垫在全部主体层之下——后字
+    光晕不再盖住前字主体，相邻光晕也不再逐层叠合。仍在几何动画中的字
+    不进本层，保留逐字 blur-then-transform 光晕层（同样垫底）。"""
+
+    glyphs: list[GlyphLayout]
+    baseline_y: int
+    fill_segments: list[FillSegment]
+    t_ms: int
+    rtl: bool
+    glyph_opacities: tuple[float, ...]
+    ports: GlyphLayerPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+    fill_rect: QRectF | None = None
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "GlyphRunGroupedGlowLayer":
+        return self
+
+    def static_key(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        # 转场期间逐字透明度与扫光前沿逐帧变化，源位图必须逐帧重建。
+        return None
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        raise AssertionError("grouped transition glow is painted dynamically")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        self.ports.paint_glyph_run_grouped_glow(
+            painter,
+            self.glyphs,
+            self.baseline_y,
+            self.fill_segments,
+            self.t_ms,
+            self.rtl,
+            list(self.glyph_opacities),
+            fill_rect=self.fill_rect,
+        )
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = glyph_run_rect(self.glyphs, self.baseline_y)
+        role_style = self.glyphs[0].style
+        before_style = style_for_state(role_style, after=False)
+        after_style = style_for_state(role_style, after=True)
+        pad = max(
+            glow_extent(
+                before_style.stroke_width_px,
+                before_style.stroke2_width_px,
+                glow_radius(before_style, after=False),
+            ),
+            glow_extent(
+                after_style.stroke_width_px,
+                after_style.stroke2_width_px,
+                glow_radius(after_style, after=True),
+            ),
         )
         return (
             int(math.floor(rect.top() - pad)),

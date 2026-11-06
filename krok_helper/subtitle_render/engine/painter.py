@@ -471,6 +471,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     TransitionLayerStackPorts,
     GlyphRunAfterGlowLayer as _HorizontalGlyphRunAfterGlowLayer,
     GlyphRunBeforeGlowLayer as _HorizontalGlyphRunBeforeGlowLayer,
+    GlyphRunGroupedGlowLayer as _HorizontalGlyphRunGroupedGlowLayer,
     GlyphRunLayer as _HorizontalGlyphRunLayer,
     GlyphRunSplitGlowLayer as _HorizontalGlyphRunSplitGlowLayer,
     ScopeBoundsLayer as _ScopeBoundsLayer,
@@ -5692,6 +5693,35 @@ class _GlyphRunAfterGlowLayer(_HorizontalGlyphRunAfterGlowLayer):
         )
 
 
+class _GlyphRunGroupedGlowLayer(_HorizontalGlyphRunGroupedGlowLayer):
+    """Compatibility adapter that injects Painter raster ports."""
+
+    def __init__(
+        self,
+        glyphs: list[_GlyphLayout],
+        baseline_y: int,
+        fill_segments: list[_FillSegment],
+        t_ms: int,
+        rtl: bool,
+        glyph_opacities: tuple[float, ...],
+        z_index: int = 0,
+        scope: str = SCOPE_LINE,
+        fill_rect: QRectF | None = None,
+    ) -> None:
+        super().__init__(
+            glyphs=glyphs,
+            baseline_y=baseline_y,
+            fill_segments=fill_segments,
+            t_ms=t_ms,
+            rtl=rtl,
+            glyph_opacities=glyph_opacities,
+            ports=_GLYPH_LAYER_PORTS,
+            z_index=z_index,
+            scope=scope,
+            fill_rect=fill_rect,
+        )
+
+
 def _utopia_transition_scope_layers(
     layout: _LineLayout,
     line: TimingLine,
@@ -5713,6 +5743,31 @@ def _utopia_transition_scope_layers(
 
 
 
+
+
+@dataclass
+class _RoleCharTransitionPaintState:
+    """分色行逐字转场两遍绘制的单 run 渲染状态（收集遍产物）。
+
+    与 :class:`_CharTransitionPaintState` 同语义，但单位是「字 × 内联
+    run」——每个 run 携带自己的角色样式/配色/度量。"""
+
+    opacity: float
+    paint_path: QPainterPath
+    paint_rect: QRectF
+    paint_left: float
+    paint_width: float
+    ratio: float
+    role_style: Style
+    colors: "KaraokeColors"
+    run_metrics: QFontMetrics
+    apply_transform: QTransform | None = None
+    geometry_transform: QTransform | None = None
+    glow_run: list | None = None
+    glow_transform: QTransform | None = None
+    glow_state: tuple | None = None
+    clip_rect: QRectF | None = None
+    guide: tuple[int, object] | None = None
 
 
 def _paint_role_line_with_character_transition(
@@ -5746,6 +5801,9 @@ def _paint_role_line_with_character_transition(
     count = max(len(line.chars), 1)
     ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
     scanline_context = _scanline_context(style, fill_segments, t_ms, rtl)
+    # 两遍绘制（与 _paint_line_with_character_transition 同口径）：glow 遍
+    # 画全部装饰、body 遍画全部主体与扫字线，后字光晕不再盖住前字主体。
+    paint_states: list[_RoleCharTransitionPaintState] = []
     for index in range(len(line.chars)):
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
@@ -5753,19 +5811,19 @@ def _paint_role_line_with_character_transition(
         if layout_glyph is None:
             continue
         if _glyph_is_bitmap_guide(layout_glyph):
-            _paint_bitmap_guide_transition_glyph(
-                painter,
-                layout_glyph,
-                fill_segments or [],
-                baseline_y,
-                line,
-                intervals,
-                index,
-                t_ms,
-                transition,
-                style,
-                rtl=rtl,
-                anim_ms=t_ms - guide_anim_anchor_ms,
+            paint_states.append(
+                _RoleCharTransitionPaintState(
+                    opacity=1.0,
+                    paint_path=QPainterPath(),
+                    paint_rect=QRectF(),
+                    paint_left=float(char_x_ranges[index][0]),
+                    paint_width=float(max(char_x_ranges[index][1] - char_x_ranges[index][0], 1)),
+                    ratio=0.0,
+                    role_style=style,
+                    colors=_effective_karaoke_colors(style),
+                    run_metrics=layout_glyph.metrics,
+                    guide=(index, layout_glyph),
+                )
             )
             continue
 
@@ -5833,6 +5891,7 @@ def _paint_role_line_with_character_transition(
         group_clip_rect: QRectF | None = None
         paint_left = left
         paint_width = width
+        apply_transform: QTransform | None = None
         if transition.effect == "utopia":
             scale_origin_x, scale_origin_y = _character_scale_origin(
                 style, left, baseline_y
@@ -5855,6 +5914,17 @@ def _paint_role_line_with_character_transition(
             paint_left, paint_width = _n3_transformed_wipe_span(
                 transformed_group_path,
                 group_glyphs[0].style.stroke_width_px,
+            )
+        else:
+            apply_transform = _character_transform(
+                center_x=group_center_x,
+                center_y=group_center_y,
+                dx=dx,
+                dy=dy,
+                rotation=rotation,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                skew_y=skew_y,
             )
 
         # utopia 退场阶段整词早已唱完：强制 ratio=1.0，避免对已旋转/翻转的字形再按设备空间
@@ -5895,78 +5965,146 @@ def _paint_role_line_with_character_transition(
             run_path = _glyph_run_path(run, baseline_y)
             run_rect = _glyph_run_rect(run, baseline_y)
             run_metrics = max(run, key=lambda glyph: glyph.metrics.ascent() + glyph.metrics.descent()).metrics
-            painter.save()
-            try:
-                painter.setOpacity(painter.opacity() * opacity)
-                paint_path = run_path
-                paint_rect = run_rect
-                clip_rect = group_clip_rect
-                if transition.effect == "utopia":
-                    paint_path = group_transform.map(run_path)
-                    paint_rect = paint_path.boundingRect()
-                else:
-                    _apply_character_transform(
-                        painter,
-                        center_x=group_center_x,
-                        center_y=group_center_y,
-                        dx=dx,
-                        dy=dy,
-                        rotation=rotation,
-                        scale_x=scale_x,
-                        scale_y=scale_y,
-                        skew_y=skew_y,
-                    )
-                    clip_rect = None
-                use_glow_cache = transition.effect == "utopia" and _glow_cache_enabled()
-                if glow_state is not None:
-                    _paint_transition_glow_halo(
-                        painter,
-                        paint_path,
-                        float(role_style.font_size_px),
-                        glow_state[0],
-                        glow_state[1],
-                        bright=glow_state[2],
-                    )
-                _paint_char_karaoke_stack(
-                    painter,
-                    paint_path,
-                    paint_rect,
-                    char_x=paint_left,
-                    char_width=paint_width,
-                    baseline_y=baseline_y,
-                    metrics=run_metrics,
-                    colors=colors,
-                    style=role_style,
+            paint_path = run_path
+            paint_rect = run_rect
+            clip_rect = group_clip_rect
+            if transition.effect == "utopia":
+                paint_path = group_transform.map(run_path)
+                paint_rect = paint_path.boundingRect()
+            else:
+                clip_rect = None
+            use_glow_cache = transition.effect == "utopia" and _glow_cache_enabled()
+            paint_states.append(
+                _RoleCharTransitionPaintState(
+                    opacity=opacity,
+                    paint_path=paint_path,
+                    paint_rect=paint_rect,
+                    paint_left=float(paint_left),
+                    paint_width=float(paint_width),
                     ratio=ratio,
-                    rtl=rtl,
-                    clip_rect=clip_rect,
-                    glow_run=run if use_glow_cache else None,
-                    glow_transform=group_transform if use_glow_cache else None,
+                    role_style=role_style,
+                    colors=colors,
+                    run_metrics=run_metrics,
+                    apply_transform=apply_transform,
                     geometry_transform=(
                         group_transform if transition.effect == "utopia" else None
                     ),
-                    fill_rect=fill_rect,
+                    glow_run=run if use_glow_cache else None,
+                    glow_transform=group_transform if use_glow_cache else None,
+                    glow_state=glow_state,
+                    clip_rect=clip_rect,
                 )
-                if scanline_context is not None:
-                    params, scanline_front = scanline_context
-                    front = scanline_front
-                    if transition.effect == "utopia":
-                        front = _map_scanline_front(
-                            front, float(baseline_y), group_transform
-                        )
-                    _paint_scanline_strip(
-                        painter,
-                        paint_path,
-                        paint_rect,
-                        front=front,
-                        params=params,
-                        style=role_style,
-                        rtl=rtl,
-                        colors=colors,
-                        opacity=opacity,
+            )
+
+    def _enter_state_painter(state: _RoleCharTransitionPaintState) -> None:
+        painter.save()
+        painter.setOpacity(painter.opacity() * state.opacity)
+        if (
+            state.apply_transform is not None
+            and not state.apply_transform.isIdentity()
+        ):
+            painter.setTransform(state.apply_transform, combine=True)
+
+    # glow 遍：全部装饰（弥散辉光 + 光晕）垫在所有主体之下。
+    for state in paint_states:
+        if state.guide is not None:
+            continue
+        _enter_state_painter(state)
+        try:
+            if state.glow_state is not None:
+                _paint_transition_glow_halo(
+                    painter,
+                    state.paint_path,
+                    float(state.role_style.font_size_px),
+                    state.glow_state[0],
+                    state.glow_state[1],
+                    bright=state.glow_state[2],
+                )
+            _paint_char_karaoke_stack(
+                painter,
+                state.paint_path,
+                state.paint_rect,
+                char_x=state.paint_left,
+                char_width=state.paint_width,
+                baseline_y=baseline_y,
+                metrics=state.run_metrics,
+                colors=state.colors,
+                style=state.role_style,
+                ratio=state.ratio,
+                rtl=rtl,
+                clip_rect=state.clip_rect,
+                glow_run=state.glow_run,
+                glow_transform=state.glow_transform,
+                geometry_transform=state.geometry_transform,
+                fill_rect=fill_rect,
+                phase="glow",
+            )
+        finally:
+            painter.restore()
+
+    # body 遍：全部主体（描边/填充）+ 导唱符 + 扫字线。
+    for state in paint_states:
+        _enter_state_painter(state)
+        try:
+            if state.guide is not None:
+                guide_index, guide_glyph = state.guide
+                _paint_bitmap_guide_transition_glyph(
+                    painter,
+                    guide_glyph,
+                    fill_segments or [],
+                    baseline_y,
+                    line,
+                    intervals,
+                    guide_index,
+                    t_ms,
+                    transition,
+                    style,
+                    rtl=rtl,
+                    anim_ms=t_ms - guide_anim_anchor_ms,
+                )
+                continue
+            _paint_char_karaoke_stack(
+                painter,
+                state.paint_path,
+                state.paint_rect,
+                char_x=state.paint_left,
+                char_width=state.paint_width,
+                baseline_y=baseline_y,
+                metrics=state.run_metrics,
+                colors=state.colors,
+                style=state.role_style,
+                ratio=state.ratio,
+                rtl=rtl,
+                clip_rect=state.clip_rect,
+                glow_run=state.glow_run,
+                glow_transform=state.glow_transform,
+                geometry_transform=state.geometry_transform,
+                fill_rect=fill_rect,
+                phase="body",
+            )
+            if scanline_context is not None:
+                params, scanline_front = scanline_context
+                front = scanline_front
+                if (
+                    transition.effect == "utopia"
+                    and state.geometry_transform is not None
+                ):
+                    front = _map_scanline_front(
+                        front, float(baseline_y), state.geometry_transform
                     )
-            finally:
-                painter.restore()
+                _paint_scanline_strip(
+                    painter,
+                    state.paint_path,
+                    state.paint_rect,
+                    front=front,
+                    params=params,
+                    style=state.role_style,
+                    rtl=rtl,
+                    colors=state.colors,
+                    opacity=state.opacity,
+                )
+        finally:
+            painter.restore()
 
 
 def _line_text_path(
@@ -5994,6 +6132,30 @@ def _line_text_path(
         glyph_path.addText(float(left + path_offset_x), float(y), glyph_font, ch.text)
         path.addPath(_embolden_glyph_path(glyph_path, glyph_font))
     return path
+
+
+@dataclass
+class _CharTransitionPaintState:
+    """逐字转场两遍绘制的单字渲染状态（收集遍产物）。
+
+    GPU inlineGlowLayers 在主文字之前合成；CPU 侧镜像为「先全部装饰、
+    再全部主体」两遍（glow 遍 / body 遍），本结构承载两遍共用的每字
+    几何、透明度与扫光状态。"""
+
+    index: int
+    opacity: float
+    paint_path: QPainterPath
+    paint_rect: QRectF
+    paint_left: float
+    paint_width: float
+    fill_ratio: float
+    apply_transform: QTransform | None = None
+    geometry_transform: QTransform | None = None
+    glow_run: list | None = None
+    glow_transform: QTransform | None = None
+    glow_state: tuple | None = None
+    paint_clip_rect: QRectF | None = None
+    guide_glyph: object | None = None
 
 
 def _paint_line_with_character_transition(
@@ -6027,6 +6189,10 @@ def _paint_line_with_character_transition(
     scanline_context = _scanline_context(style, fill_segments, t_ms, rtl)
     if glyphs_by_index is None:
         glyphs_by_index = [None for _ in line.chars]
+    # 两遍绘制（GPU inlineGlowLayers 先于主文字合成的镜像）：收集遍记录
+    # 每字渲染状态，glow 遍画全部装饰（光晕/弥散辉光），body 遍画全部
+    # 主体与扫字线——后字光晕不再盖住前字主体（大光晕下逐字遮盖的根因）。
+    char_states: list[_CharTransitionPaintState] = []
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
@@ -6034,19 +6200,17 @@ def _paint_line_with_character_transition(
             glyphs_by_index[index] if index < len(glyphs_by_index) else None
         )
         if layout_glyph is not None and _glyph_is_bitmap_guide(layout_glyph):
-            _paint_bitmap_guide_transition_glyph(
-                painter,
-                layout_glyph,
-                fill_segments or [],
-                baseline_y,
-                line,
-                intervals,
-                index,
-                t_ms,
-                transition,
-                style,
-                rtl=rtl,
-                anim_ms=t_ms - guide_anim_anchor_ms,
+            char_states.append(
+                _CharTransitionPaintState(
+                    index=index,
+                    opacity=1.0,
+                    paint_path=QPainterPath(),
+                    paint_rect=line_rect,
+                    paint_left=float(char_x_ranges[index][0]),
+                    paint_width=float(width),
+                    fill_ratio=0.0,
+                    guide_glyph=layout_glyph,
+                )
             )
             continue
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
@@ -6167,117 +6331,192 @@ def _paint_line_with_character_transition(
                     glyph_font, glyph.text,
                 )
                 path.addPath(_embolden_glyph_path(glyph_path, glyph_font))
-        painter.save()
-        try:
-            painter.setOpacity(painter.opacity() * opacity)
-            paint_path = path
-            paint_rect = line_rect
-            paint_left = left
-            paint_width = width
-            paint_clip_rect: QRectF | None = None
-            glow_run: list[_GlyphLayout] | None = None
-            glow_transform: QTransform | None = None
-            geometry_transform: QTransform | None = None
-            if transition.effect == "utopia":
-                scale_origin_x, scale_origin_y = _character_scale_origin(
-                    style, left, baseline_y
-                )
-                transform = _character_transform(
-                    center_x=left + width / 2,
-                    center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
-                    dx=dx,
-                    dy=dy,
-                    rotation=rotation,
-                    scale_x=scale_x,
-                    scale_y=scale_y,
-                    skew_y=skew_y,
-                    scale_origin_x=scale_origin_x,
-                    scale_origin_y=scale_origin_y,
-                )
-                paint_path = transform.map(path)
-                paint_rect = paint_path.boundingRect()
-                paint_left, paint_width = _n3_transformed_wipe_span(
-                    paint_path, style.stroke_width_px
-                )
-                paint_clip_rect = paint_rect
-                geometry_transform = transform
-                # 上正 glyph 列表：bake 路径与 A3 glow 缓存共用。
-                group_glyphs = []
-                for ci in indices:
-                    layout_glyph = glyphs_by_index[ci] if ci < len(glyphs_by_index) else None
-                    if layout_glyph is not None:
-                        group_glyphs.append(layout_glyph)
-                        continue
-                    group_glyphs.append(
-                        _GlyphLayout(
-                            index=ci,
-                            text=line.chars[ci].text,
-                            role_label=None,
-                            style=style,
-                            font=(font_for(line.chars[ci].text) if font_for is not None else font),
-                            metrics=metrics,
-                            left=char_x_ranges[ci][0],
-                            width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
-                            vector_glyph=line.chars[ci].vector_glyph,
-                        )
+        paint_path = path
+        paint_rect = line_rect
+        paint_left = float(left)
+        paint_width = float(width)
+        paint_clip_rect: QRectF | None = None
+        glow_run: list[_GlyphLayout] | None = None
+        glow_transform: QTransform | None = None
+        geometry_transform: QTransform | None = None
+        apply_transform: QTransform | None = None
+        if transition.effect == "utopia":
+            scale_origin_x, scale_origin_y = _character_scale_origin(
+                style, left, baseline_y
+            )
+            transform = _character_transform(
+                center_x=left + width / 2,
+                center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
+                dx=dx,
+                dy=dy,
+                rotation=rotation,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                skew_y=skew_y,
+                scale_origin_x=scale_origin_x,
+                scale_origin_y=scale_origin_y,
+            )
+            paint_path = transform.map(path)
+            paint_rect = paint_path.boundingRect()
+            paint_left, paint_width = _n3_transformed_wipe_span(
+                paint_path, style.stroke_width_px
+            )
+            paint_clip_rect = paint_rect
+            geometry_transform = transform
+            # 上正 glyph 列表：bake 路径与 A3 glow 缓存共用。
+            group_glyphs = []
+            for ci in indices:
+                layout_glyph = glyphs_by_index[ci] if ci < len(glyphs_by_index) else None
+                if layout_glyph is not None:
+                    group_glyphs.append(layout_glyph)
+                    continue
+                group_glyphs.append(
+                    _GlyphLayout(
+                        index=ci,
+                        text=line.chars[ci].text,
+                        role_label=None,
+                        style=style,
+                        font=(font_for(line.chars[ci].text) if font_for is not None else font),
+                        metrics=metrics,
+                        left=char_x_ranges[ci][0],
+                        width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
+                        vector_glyph=line.chars[ci].vector_glyph,
                     )
-                if _glow_cache_enabled():
-                    glow_run = group_glyphs
-                    glow_transform = transform
-            else:
-                _apply_character_transform(
-                    painter,
-                    center_x=left + width / 2,
-                    center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
-                    dx=dx,
-                    dy=dy,
-                    rotation=rotation,
-                    scale_x=scale_x,
-                    scale_y=scale_y,
-                    skew_y=skew_y,
                 )
-            if glow_state is not None:
+            if _glow_cache_enabled():
+                glow_run = group_glyphs
+                glow_transform = transform
+        else:
+            apply_transform = _character_transform(
+                center_x=left + width / 2,
+                center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
+                dx=dx,
+                dy=dy,
+                rotation=rotation,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                skew_y=skew_y,
+            )
+        char_states.append(
+            _CharTransitionPaintState(
+                index=index,
+                opacity=opacity,
+                paint_path=paint_path,
+                paint_rect=paint_rect,
+                paint_left=float(paint_left),
+                paint_width=float(paint_width),
+                fill_ratio=fill_ratio,
+                apply_transform=apply_transform,
+                geometry_transform=geometry_transform,
+                glow_run=glow_run,
+                glow_transform=glow_transform,
+                glow_state=glow_state,
+                paint_clip_rect=paint_clip_rect,
+            )
+        )
+
+    def _enter_state_painter(state: _CharTransitionPaintState) -> None:
+        painter.save()
+        painter.setOpacity(painter.opacity() * state.opacity)
+        if (
+            state.apply_transform is not None
+            and not state.apply_transform.isIdentity()
+        ):
+            painter.setTransform(state.apply_transform, combine=True)
+
+    # glow 遍：全部装饰（弥散辉光 + 光晕）垫在所有主体之下。
+    for state in char_states:
+        if state.guide_glyph is not None:
+            continue
+        _enter_state_painter(state)
+        try:
+            if state.glow_state is not None:
                 _paint_transition_glow_halo(
                     painter,
-                    paint_path,
+                    state.paint_path,
                     float(style.font_size_px),
-                    glow_state[0],
-                    glow_state[1],
-                    bright=glow_state[2],
+                    state.glow_state[0],
+                    state.glow_state[1],
+                    bright=state.glow_state[2],
                 )
             _paint_char_karaoke_stack(
                 painter,
-                paint_path,
-                paint_rect,
-                char_x=paint_left,
-                char_width=paint_width,
+                state.paint_path,
+                state.paint_rect,
+                char_x=state.paint_left,
+                char_width=state.paint_width,
                 baseline_y=baseline_y,
                 metrics=metrics,
                 colors=colors,
                 style=style,
-                ratio=fill_ratio,
+                ratio=state.fill_ratio,
                 rtl=rtl,
-                clip_rect=paint_clip_rect,
-                glow_run=glow_run,
-                glow_transform=glow_transform,
-                geometry_transform=geometry_transform,
+                clip_rect=state.paint_clip_rect,
+                glow_run=state.glow_run,
+                glow_transform=state.glow_transform,
+                geometry_transform=state.geometry_transform,
                 fill_rect=fill_rect,
+                phase="glow",
+            )
+        finally:
+            painter.restore()
+
+    # body 遍：全部主体（描边/填充）+ 导唱符 + 扫字线。
+    for state in char_states:
+        _enter_state_painter(state)
+        try:
+            if state.guide_glyph is not None:
+                _paint_bitmap_guide_transition_glyph(
+                    painter,
+                    state.guide_glyph,
+                    fill_segments or [],
+                    baseline_y,
+                    line,
+                    intervals,
+                    state.index,
+                    t_ms,
+                    transition,
+                    style,
+                    rtl=rtl,
+                    anim_ms=t_ms - guide_anim_anchor_ms,
+                )
+                continue
+            _paint_char_karaoke_stack(
+                painter,
+                state.paint_path,
+                state.paint_rect,
+                char_x=state.paint_left,
+                char_width=state.paint_width,
+                baseline_y=baseline_y,
+                metrics=metrics,
+                colors=colors,
+                style=style,
+                ratio=state.fill_ratio,
+                rtl=rtl,
+                clip_rect=state.paint_clip_rect,
+                glow_run=state.glow_run,
+                glow_transform=state.glow_transform,
+                geometry_transform=state.geometry_transform,
+                fill_rect=fill_rect,
+                phase="body",
             )
             if scanline_context is not None:
                 params, scanline_front = scanline_context
                 front = scanline_front
-                if transition.effect == "utopia":
-                    front = _map_scanline_front(front, float(baseline_y), transform)
+                if transition.effect == "utopia" and state.geometry_transform is not None:
+                    front = _map_scanline_front(
+                        front, float(baseline_y), state.geometry_transform
+                    )
                 _paint_scanline_strip(
                     painter,
-                    paint_path,
-                    paint_rect,
+                    state.paint_path,
+                    state.paint_rect,
                     front=front,
                     params=params,
                     style=style,
                     rtl=rtl,
                     colors=_effective_karaoke_colors(style),
-                    opacity=opacity,
+                    opacity=state.opacity,
                 )
         finally:
             painter.restore()
@@ -6536,6 +6775,9 @@ _CHAR_TRANSITION_LAYER_STACK_PORTS = TransitionLayerStackPorts(
     glyph_run_before_glow_layer=lambda *args, **kwargs: (
         _GlyphRunBeforeGlowLayer(*args, **kwargs)
     ),
+        glyph_run_grouped_glow_layer=lambda *args, **kwargs: (
+            _GlyphRunGroupedGlowLayer(*args, **kwargs)
+        ),
     glyph_run_layer=lambda *args, **kwargs: _GlyphRunLayer(*args, **kwargs),
 )
 

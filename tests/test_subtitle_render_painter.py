@@ -4523,6 +4523,64 @@ def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch)
     assert seen[0] is not None
 
 
+def test_after_glow_layer_covers_whole_run_not_per_glyph(qapp):
+    # GPU mainGlowLayers 口径：分色已唱光晕整 run 单层（单源单次模糊），
+    # 不再逐 glyph 一层（相邻光晕位图叠合会在大半径下互相盖住）。
+    track = _track()
+    line = track.lines[0]
+    style = replace(
+        _glow_after_style(), glow_before_radius_px=10, glow_after_radius_px=12
+    )
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+
+    for t_ms in (1700, 2200):
+        layers = [
+            item
+            for item in _line_layer_stack(layout, t_ms)
+            if isinstance(item, _GlyphRunAfterGlowLayer)
+        ]
+        assert len(layers) == 1
+        assert [glyph.index for glyph in layers[0].glyphs] == [
+            glyph.index for glyph in layout.text_layout.glyphs
+        ]
+
+
+def test_after_glow_direct_paints_one_run_source(qapp, monkeypatch):
+    # 直绘路径（无缓存层）同口径：整 run 一次 after-glow 直绘。
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import (
+        layers as horizontal_layers,
+    )
+
+    track = _track()
+    line = track.lines[0]
+    style = replace(
+        _glow_after_style(), glow_before_radius_px=10, glow_after_radius_px=12
+    )
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+
+    calls: list[list[int]] = []
+    real_direct = horizontal_layers.paint_glyph_run_after_glow_direct
+
+    def _record(painter, glyphs, *args, **kwargs):
+        calls.append([glyph.index for glyph in glyphs])
+        return real_direct(painter, glyphs, *args, **kwargs)
+
+    monkeypatch.setattr(
+        horizontal_layers, "paint_glyph_run_after_glow_direct", _record
+    )
+    image = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    try:
+        subtitle_painter._paint_line_direct(painter, layout, 1700)
+    finally:
+        painter.end()
+
+    assert calls == [[glyph.index for glyph in layout.text_layout.glyphs]]
+
+
 def test_equal_radius_glow_combines_dynamic_front_and_reuses_full_cache(
     qapp, monkeypatch
 ):
@@ -9780,6 +9838,272 @@ def test_char_fade_layer_stack_applies_staggered_per_char_opacity(qapp):
     # 末字 opacity<=0 → 整字（含 before/after/glow 层）跳过。
     assert _char_fade_opacity(transition, count - 1, count, t_ms=t_ms) <= 0.0
     assert (count - 1) not in before_by_index
+
+
+def _equal_glow_style(**kwargs) -> Style:
+    # 前后光同色同半径（等态）：光晕由编组层整幅供给的唯一档位。
+    return Style(
+        decoration_kind="glow",
+        glow_radius_px=18,
+        glow_before_radius_px=18,
+        glow_after_radius_px=18,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(shadow=PaintFill(color="#3366FF")),
+            after=KaraokeColorState(shadow=PaintFill(color="#3366FF")),
+        ),
+        **kwargs,
+    )
+
+
+def _glyph_body_positions(layers: list, index: int) -> list[int]:
+    return [
+        position
+        for position, layer in enumerate(layers)
+        if isinstance(layer, _GlyphRunLayer) and layer.glyphs[0].index == index
+    ]
+
+
+def test_char_fade_settled_glyphs_group_glow_under_all_bodies(qapp):
+    # 已落定（p=1、无变换）的字编组进整 run 光晕层（GPU charUsesGroupedGlowAt），
+    # 垫在全部主体之下；淡入中的字保留 2026-10 等态光烘焙载体（防字心
+    # 渗色），且其主体层排在已落定主体之前——它的光晕盖不到已落定字。
+    track = _track()
+    line = track.lines[0]
+    style = _equal_glow_style(
+        line_y_position="center", entry_anim="char_fade", entry_lead_ms=1000
+    )
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+    count = len(line.chars)
+    transition = _LineCharTransition(
+        phase="entry", effect="char_fade", progress=1.0, start_ms=1000, end_ms=1600,
+    )
+    t_ms = 1250  # char0 全淡入、char1 半透明、char2 尚不可见
+
+    layers = _char_transition_layer_stack(layout, t_ms, transition, count)
+    grouped = [
+        layer
+        for layer in layers
+        if isinstance(layer, subtitle_painter._GlyphRunGroupedGlowLayer)
+    ]
+    assert len(grouped) == 1
+    assert [glyph.index for glyph in grouped[0].glyphs] == [0]
+    before_by_index = {
+        layer.glyphs[0].index: layer
+        for layer in layers
+        if isinstance(layer, _GlyphRunLayer) and not layer.after
+    }
+    assert before_by_index[0].carries_shared_glow is False
+    assert before_by_index[1].carries_shared_glow is True
+    body_positions = [
+        position
+        for position, layer in enumerate(layers)
+        if isinstance(layer, _GlyphRunLayer)
+    ]
+    assert layers.index(grouped[0]) < min(body_positions)
+    assert max(_glyph_body_positions(layers, 1)) < min(
+        _glyph_body_positions(layers, 0)
+    )
+
+
+def test_char_fade_split_glow_groups_settled_glyphs_only(qapp):
+    # 分色（前后光参数不同）同口径：已落定字进编组层（单层内部按扫光侧
+    # 拆双源），淡入中的字保留逐侧光层。
+    track = _track()
+    line = track.lines[0]
+    style = replace(
+        _glow_after_style(),
+        line_y_position="center",
+        entry_anim="char_fade",
+        entry_lead_ms=1000,
+    )
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+    count = len(line.chars)
+    transition = _LineCharTransition(
+        phase="entry", effect="char_fade", progress=1.0, start_ms=1000, end_ms=1600,
+    )
+    t_ms = 1250
+
+    layers = _char_transition_layer_stack(layout, t_ms, transition, count)
+    grouped = [
+        layer
+        for layer in layers
+        if isinstance(layer, subtitle_painter._GlyphRunGroupedGlowLayer)
+    ]
+    assert len(grouped) == 1
+    assert [glyph.index for glyph in grouped[0].glyphs] == [0]
+    per_glyph_glow = [
+        layer
+        for layer in layers
+        if isinstance(
+            layer,
+            (
+                subtitle_painter._GlyphRunBeforeGlowLayer,
+                subtitle_painter._GlyphRunAfterGlowLayer,
+            ),
+        )
+    ]
+    assert per_glyph_glow
+    assert {layer.glyphs[0].index for layer in per_glyph_glow} == {1}
+
+
+def test_char_drip_settled_glyph_groups_animated_keeps_baked_glow(qapp):
+    # 几何动画中的字（transform 非恒等）保留烘焙载体并带变换；已落定的字
+    # 进编组层。过渡字主体排在已落定主体之前。
+    track = _track()
+    line = track.lines[0]
+    style = _equal_glow_style(
+        line_y_position="center", entry_anim="char_drip"
+    )
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+    count = len(line.chars)
+    transition = _LineCharTransition(
+        phase="entry", effect="char_drip", progress=1.0, start_ms=1000, end_ms=1600,
+    )
+
+    t_ms = next(
+        t
+        for t in range(1000, 1600, 25)
+        if _char_fade_opacity(transition, 0, count, t_ms=t) == 1.0
+        and 0.0
+        < _char_fade_opacity(transition, 1, count, t_ms=t)
+        < 1.0
+    )
+    layers = _char_transition_layer_stack(layout, t_ms, transition, count)
+    grouped = [
+        layer
+        for layer in layers
+        if isinstance(layer, subtitle_painter._GlyphRunGroupedGlowLayer)
+    ]
+    # 首字已落定 → 编组；次字动画中 → 烘焙载体（带变换）。
+    assert len(grouped) == 1
+    assert [glyph.index for glyph in grouped[0].glyphs] == [0]
+    before_by_index = {
+        layer.glyphs[0].index: layer
+        for layer in layers
+        if isinstance(layer, _GlyphRunLayer) and not layer.after
+    }
+    assert before_by_index[1].carries_shared_glow is True
+    assert before_by_index[1].transform is not None
+    assert before_by_index[0].carries_shared_glow is False
+    body_positions = [
+        position
+        for position, layer in enumerate(layers)
+        if isinstance(layer, _GlyphRunLayer)
+    ]
+    assert layers.index(grouped[0]) < min(body_positions)
+    assert max(_glyph_body_positions(layers, 1)) < min(
+        _glyph_body_positions(layers, 0)
+    )
+
+
+def test_char_fade_frames_are_cache_order_independent(qapp):
+    # 同一字在过渡（主体烘光）与落定（主体不烘光）之间切换时缓存必须分键：
+    # 先渲染退场帧再渲染入场帧，结果须与冷缓存逐像素一致——拖动预览
+    # （乱序）与顺序导出才不会分叉。
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text, start)
+                    for text, start in zip("あいうえ", (1000, 1400, 1800, 2200))
+                ],
+                end_ms=2600,
+                display_start_override_ms=0,
+                display_end_override_ms=3600,
+            )
+        ]
+    )
+    style = _equal_glow_style(
+        font_size_px=72,
+        line_y_position="center",
+        entry_anim="char_fade",
+        entry_lead_ms=1000,
+        exit_anim="char_fade",
+        exit_fade_ms=1000,
+    )
+
+    clear_before_layer_cache()
+    cold = _blank(640, 360)
+    paint_frame(cold, track, 600, style)
+
+    clear_before_layer_cache()
+    paint_frame(_blank(640, 360), track, 3400, style)
+    warm = _blank(640, 360)
+    paint_frame(warm, track, 600, style)
+
+    assert warm == cold
+
+
+def test_utopia_transition_paints_all_glow_phases_before_bodies(
+    qapp, monkeypatch
+):
+    # GPU inlineGlowLayers 先于主文字合成：utopia 路径两遍绘制，全部
+    # glow 相位先于全部 body 相位（后字光晕不盖前字主体）。
+    order: list[str] = []
+    real = subtitle_painter._paint_char_karaoke_stack
+
+    def _record(*args, **kwargs):
+        order.append(str(kwargs.get("phase", "all")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_paint_char_karaoke_stack", _record)
+    clear_before_layer_cache()
+    paint_frame(
+        _blank(),
+        _track(),
+        2200,
+        Style(
+            line_y_position="center",
+            decoration_kind="glow",
+            glow_before_radius_px=12,
+            glow_after_radius_px=12,
+            entry_anim="utopia",
+            exit_anim="utopia",
+        ),
+    )
+
+    assert order
+    assert "all" not in order
+    first_body = order.index("body")
+    assert first_body > 0
+    assert all(phase == "glow" for phase in order[:first_body])
+    assert all(phase == "body" for phase in order[first_body:])
+
+
+def test_scatter_exit_paints_all_glow_phases_before_bodies(qapp, monkeypatch):
+    # 几何退场（scatter_out）同口径：全部 glow 相位先于全部 body 相位。
+    order: list[str] = []
+    real = subtitle_painter._paint_char_karaoke_stack
+
+    def _record(*args, **kwargs):
+        order.append(str(kwargs.get("phase", "all")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_paint_char_karaoke_stack", _record)
+    clear_before_layer_cache()
+    paint_frame(
+        _blank(),
+        _track(),
+        3000,
+        Style(
+            line_y_position="center",
+            decoration_kind="glow",
+            glow_before_radius_px=12,
+            glow_after_radius_px=12,
+            exit_anim="scatter_out",
+            exit_fade_ms=800,
+        ),
+    )
+
+    assert order
+    assert "all" not in order
+    first_body = order.index("body")
+    assert first_body > 0
+    assert all(phase == "glow" for phase in order[:first_body])
+    assert all(phase == "body" for phase in order[first_body:])
 
 
 def test_char_transition_layer_stack_spin_flip_carries_scale_skew_transform(qapp):
