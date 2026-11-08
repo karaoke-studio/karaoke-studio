@@ -313,6 +313,7 @@ class PreviewGraphicsView(QGraphicsView):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("PreviewGraphicsView")
+        self._font_preparation_timer = None
         self.destroyed.connect(lambda: self._stop_async_renderer())
         self.setMinimumHeight(240)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -756,7 +757,7 @@ class PreviewGraphicsView(QGraphicsView):
             self._refresh_background_image()
         if self._async_renderer is not None:
             self._note_render_requested()
-            self._async_renderer.request(t_ms)
+            self._request_prepared_frame(t_ms)
         else:
             self._subtitle_item.set_time(t_ms)
         self._sync_video_position(force=not self._video_playing)
@@ -764,7 +765,54 @@ class PreviewGraphicsView(QGraphicsView):
             self._roll_preview.set_time(t_ms, self._video_playing)
             self._apply_roll_layer_alphas()
 
+    def _request_prepared_frame(self, t_ms: int) -> None:
+        if getattr(self, "_font_preparation_timer", None) is None and self._async_renderer is not None:
+            self._async_renderer.request(t_ms)
+
+    def _cancel_font_preparation(self) -> None:
+        timer = getattr(self, "_font_preparation_timer", None)
+        if timer is not None:
+            self._font_preparation_timer = None
+            from PyQt6 import sip
+            if not sip.isdeleted(timer):
+                timer.stop()
+                timer.deleteLater()
+
     def _refresh_async_state(self) -> None:
+        self._cancel_font_preparation()
+        renderer = self._async_renderer
+        if renderer is None:
+            return
+        if not getattr(renderer, "supports_font_preparation_steps", False):
+            self._commit_async_state()
+            return
+        from krok_helper.subtitle_render.engine.text.font_preparation import iter_prepare_fonts
+        steps = iter_prepare_fonts(self._track, self._style, self._subtitle_item._extra_tracks)
+        timer = QTimer(self)
+        timer.setInterval(1)
+        self._font_preparation_timer = timer
+        self._note_render_requested()
+
+        def advance() -> None:
+            if self._async_renderer is not renderer or self._font_preparation_timer is not timer:
+                timer.stop()
+                return
+            try:
+                next(steps)
+            except StopIteration:
+                self._cancel_font_preparation()
+                self._commit_async_state()
+
+        timer.timeout.connect(advance)
+        # Warm-cache edits stay immediate. Cold work yields after a small
+        # budget, without pumping nested events or reentering state changes.
+        deadline = time.monotonic() + 0.008
+        while self._font_preparation_timer is timer and time.monotonic() < deadline:
+            advance()
+        if self._font_preparation_timer is timer:
+            timer.start()
+
+    def _commit_async_state(self) -> None:
         if self._async_renderer is None:
             return
         roll_shift = (
@@ -786,7 +834,7 @@ class PreviewGraphicsView(QGraphicsView):
             # implement the original two-argument embedding contract.
             self._async_renderer.set_state(self._track, self._style)
         self._note_render_requested()
-        self._async_renderer.request(self._t_ms)
+        self._request_prepared_frame(self._t_ms)
 
     def _note_render_requested(self) -> None:
         """记一次请求派发：无帧区间的第一格（连续派发不重置区间起点）。"""
@@ -918,6 +966,8 @@ class PreviewGraphicsView(QGraphicsView):
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
+        if getattr(self, "_font_preparation_timer", None) is not None:
+            return
         if (getattr(self._async_renderer, "uses_native_preview", False)
                 and image.text("preview_backend") != "cpu"):
             return
@@ -1049,7 +1099,7 @@ class PreviewGraphicsView(QGraphicsView):
         if native_mode:
             self._sync_native_child_window(render_dpr)
         self._note_render_requested()
-        self._async_renderer.request(self._t_ms)
+        self._request_prepared_frame(self._t_ms)
 
     def _sync_native_child_window(self, render_dpr: float) -> None:
         """按屏幕上的可见视频矩形更新 DComp 子窗口几何。
@@ -1124,6 +1174,7 @@ class PreviewGraphicsView(QGraphicsView):
             )
 
     def _stop_async_renderer(self) -> None:
+        self._cancel_font_preparation()
         renderer = self._async_renderer
         if renderer is None:
             return
@@ -1239,7 +1290,7 @@ class PreviewGraphicsView(QGraphicsView):
             # 缓存直接回帧，否则现渲染），让「字幕渲染中」徽标的无帧区间能
             # 正常闭合，而不是无限计时。
             self._note_render_requested()
-            self._async_renderer.request(self._t_ms)
+            self._request_prepared_frame(self._t_ms)
         if self._external_player is not None:
             # 播放由 TransportBar 驱动共享 controller；本视图不操作播放器。
             return

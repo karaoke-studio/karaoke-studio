@@ -243,3 +243,81 @@ def test_application_only_font_is_transferred_to_gpu(qapp, tmp_path):
     finally:
         QFontDatabase.removeApplicationFont(font_id)
         clear_font_weight_cache()
+
+
+@pytest.mark.parametrize("tag,minimum", [("head", 54), ("cmap", 4), ("maxp", 6), ("hhea", 36)])
+def test_snapshot_rejects_truncated_required_tables(tag, minimum):
+    class Raw:
+        def isValid(self):
+            return True
+
+        def fontTable(self, name):
+            sizes = {"head": 54, "cmap": 4, "maxp": 6, "hhea": 36}
+            size = minimum - 1 if name == tag else sizes.get(name, 0)
+            return b"x" * size
+
+    with pytest.raises(ValueError, match=tag):
+        snapshot_raw_font(Raw(), ("truncated", tag))
+
+
+def test_registry_change_invalidates_capabilities_and_resource_mappings(qapp):
+    from krok_helper.subtitle_render.engine.text import font_capabilities as caps
+    from krok_helper.subtitle_render.engine.text import font_resource as resources
+    generation = caps.capabilities_generation()
+    caps._CACHE["removed-font-probe"] = None
+    resources._CACHE[("removed-font-probe",)] = "unused.otf"
+    resources._PHYSICAL_CACHE[b"removed-font-probe"] = "unused.otf"
+    qapp.fontDatabaseChanged.emit()
+    assert caps.capabilities_generation() > generation
+    assert "removed-font-probe" not in caps._CACHE
+    assert not resources._CACHE
+    assert not resources._PHYSICAL_CACHE
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows font resources")
+def test_failed_font_resource_is_not_retried_until_registry_changes(qapp, monkeypatch, request):
+    from krok_helper.subtitle_render.engine.text import font_weight as weights
+    from krok_helper.subtitle_render.engine.text import font_resource as resources
+    font_id = QFontDatabase.addApplicationFont(str(Path(os.environ["WINDIR"]) / "Fonts" / "arial.ttf"))
+    assert font_id >= 0
+    request.addfinalizer(lambda: QFontDatabase.removeApplicationFont(font_id))
+    weights.clear_font_weight_cache()
+    calls = []
+    original_snapshot = resources.snapshot_raw_font
+
+    def fail(raw, key):
+        calls.append(key)
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(resources, "snapshot_raw_font", fail)
+    for _ in range(3):
+        with pytest.raises(ValueError, match="Arial.*资源加载失败"):
+            weights.resolve_font_instance("Arial", 400)
+    assert len(calls) == 1
+    qapp.fontDatabaseChanged.emit()
+    with pytest.raises(ValueError, match="Arial.*资源加载失败"):
+        weights.resolve_font_instance("Arial", 400)
+    assert len(calls) == 2
+    weights.clear_font_weight_cache()
+    monkeypatch.setattr(resources, "snapshot_raw_font", original_snapshot)
+    recovered = weights.resolve_font_instance("Arial", 400)
+    assert Path(recovered.resource_path).is_file()
+
+
+def test_snapshot_identity_includes_outlines_not_only_metadata():
+    from krok_helper.subtitle_render.engine.text import font_resource as resources
+    resources.clear_resource_cache()
+    class Raw:
+        def __init__(self, outline):
+            self.outline = outline
+        def isValid(self):
+            return True
+        def fontTable(self, tag):
+            sizes = {"head": 54, "cmap": 4, "maxp": 6, "hhea": 36}
+            return self.outline if tag == "glyf" else b"x" * sizes.get(tag, 0)
+    first = snapshot_raw_font(Raw(b"first outline"), ("identity", 1))
+    second = snapshot_raw_font(Raw(b"other outline"), ("identity", 2))
+    same = snapshot_raw_font(Raw(b"first outline"), ("identity", 3))
+    assert first != second
+    assert same == first
+    resources.clear_resource_cache()

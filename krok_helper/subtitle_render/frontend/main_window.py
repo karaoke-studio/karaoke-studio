@@ -1330,6 +1330,7 @@ class SubtitleRenderWindow(QWidget):
         self._roll_defaults: dict = roll_defaults_from_dict(None)
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
+        self._render_runtime: Optional[ExportRuntimeHandles] = None
         self._render_worker: Optional[Any] = None
         self._export_start_pending = False
         self._watch_primary_subtitle_source = False
@@ -1484,6 +1485,13 @@ class SubtitleRenderWindow(QWidget):
             return
         self._host_exit_shutdown = True
         self._closing_window = True
+        runtime = self._current_export_runtime()
+        if runtime is not None and runtime.preparing:
+            self._export_runtime_controller.cancel(runtime)
+            # The cancelled worker does no rendering. Explicit quit avoids
+            # waiting for its queued GUI-thread quit connection during close.
+            runtime.thread.quit()
+            runtime.thread.wait()
         self._roll_refresh_generation += 1
         for thread, worker in self._roll_refresh_tasks:
             thread.quit()
@@ -10959,6 +10967,7 @@ class SubtitleRenderWindow(QWidget):
         )
         self._render_thread = runtime.thread
         self._render_worker = runtime.worker
+        self._render_runtime = runtime
         self._sync_preview_window_visibility()
         self._export_runtime_controller.start(runtime)
         # 线程真正起来后才允许「停止导出」：准备阶段泵事件时按钮若已启用，
@@ -10995,6 +11004,9 @@ class SubtitleRenderWindow(QWidget):
     def _current_export_runtime(self) -> Optional[ExportRuntimeHandles]:
         if self._render_thread is None or self._render_worker is None:
             return None
+        runtime = getattr(self, "_render_runtime", None)
+        if runtime is not None and runtime.thread is self._render_thread:
+            return runtime
         return ExportRuntimeHandles(
             thread=self._render_thread,
             worker=self._render_worker,
@@ -11292,6 +11304,7 @@ class SubtitleRenderWindow(QWidget):
         fluent_error(self, "导出失败", message)
 
     def _clear_render_thread(self) -> None:
+        self._render_runtime = None
         self._render_thread = None
         self._render_worker = None
         self._cleanup_export_preview_dir()

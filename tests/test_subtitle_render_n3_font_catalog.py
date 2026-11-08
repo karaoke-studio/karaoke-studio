@@ -520,3 +520,26 @@ def test_n3_default_family_falls_back_to_simsun_for_chinese_systems():
     )
     assert changed is True
     assert normalized.font_family == "宋体"
+
+
+def test_font_database_change_invalidates_cached_catalog(qapp, monkeypatch):
+    monkeypatch.setattr(font_catalog.sys, "platform", "linux")
+    families = ["Before"]
+    monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: list(families))
+    font_catalog.invalidate_n3_font_caches()
+    assert get_n3_font_catalog().families == ("Before",)
+    families[:] = ["After"]
+    qapp.fontDatabaseChanged.emit()
+    assert get_n3_font_catalog().families == ("After",)
+
+
+def test_registry_change_invalidates_disk_aliases_without_scanning(qapp, monkeypatch):
+    from strange_uta_game.frontend import font_cache
+    font_catalog._qt_application_cache_key()
+    invalidations = []
+    monkeypatch.setattr(font_cache, "invalidate", lambda clear_alias_map=True: invalidations.append(clear_alias_map))
+    def forbidden():
+        raise AssertionError("Registry notification must not scan files")
+    monkeypatch.setattr(font_catalog, "_sug_alias_records", forbidden)
+    qapp.fontDatabaseChanged.emit()
+    assert True in invalidations

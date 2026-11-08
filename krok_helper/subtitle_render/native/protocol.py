@@ -251,7 +251,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         ruby_italic if ruby_latin_italic is None else ruby_latin_italic
     )
 
-    def slot(family: Any, weight: Any, italic: bool) -> tuple[bool, dict[str, Any] | None]:
+    def resolve_slot(family: Any, weight: Any, italic: bool) -> tuple[bool, dict[str, Any] | None]:
         """槽位 → (是否真可变, 决策载荷 | None)。空族按静态默认处理。"""
         if weight is None:
             weight = main_weight
@@ -303,7 +303,25 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
             }
         return instance.is_variable, resolved
 
+    errors: list[Exception] = []
+
+    def slot(family: Any, weight: Any, italic: bool) -> tuple[bool, dict[str, Any] | None]:
+        try:
+            return resolve_slot(family, weight, italic)
+        except (OSError, ValueError, RuntimeError) as exc:
+            # Prepare independent slots even when one resource is unusable.
+            # Still reject the whole payload below: never send partial font
+            # decisions and silently let DirectWrite substitute another face.
+            errors.append(exc)
+            return False, None
+
     main_family = payload.get("font_family")
+    # This payload may already contain a previous resolution (style patches
+    # and repeated serialization). Missing/default slots must not retain the
+    # previous physical resource or variable axes when no new hint is emitted.
+    for field in ("font_resolved", "latin_font_resolved", "ruby_font_resolved",
+                  "ruby_latin_font_resolved"):
+        payload.pop(field, None)
     payload["font_axis"], resolved = slot(main_family, main_weight, base_italic)
     if resolved is not None:
         payload["font_resolved"] = resolved
@@ -331,6 +349,8 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     )
     if resolved is not None:
         payload["ruby_latin_font_resolved"] = resolved
+    if errors:
+        raise errors[0]
 
 
 def apply_resolved_font_faces(node: Any) -> None:

@@ -1170,7 +1170,11 @@ class NativeRendererProcess:
         ir = build_render_ir(track, style, **ir_kwargs)
         # 统一字重解析的生效结果（face 字重 + 模拟标志）随 IR 下发，
         # GPU 端按显式决策建 face，不再独立匹配（见 protocol.py 注释）。
-        apply_resolved_font_faces(ir)
+        from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
+        try:
+            apply_resolved_font_faces(ir)
+        except FontResourceError as exc:
+            raise NativeRendererError(str(exc)) from exc
         if progress is not None:
             # IR（Python 侧整轨重排）完成、即将进入 sidecar 场景构建等待。
             progress()
@@ -1295,7 +1299,11 @@ class NativeRendererProcess:
         """
         # Differential updates must resolve the same physical faces as a full
         # configure, including title and per-line style overrides.
-        apply_resolved_font_faces(style_ir)
+        from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
+        try:
+            apply_resolved_font_faces(style_ir)
+        except FontResourceError as exc:
+            raise NativeRendererError(str(exc)) from exc
         payload: dict[str, Any] = {
             # Forward the complete generated snapshot. A second hand-maintained
             # section whitelist silently dropped line_layout_table in P6.

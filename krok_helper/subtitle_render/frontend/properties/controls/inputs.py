@@ -906,6 +906,8 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
     ) -> None:
         super().__init__(parent)
         self._canonicalize_family = canonicalize_family
+        self._font_families_provider = font_families_provider
+        self._font_catalog_dirty = False
         self._inheritance_label: Optional[str] = None
         # 菜单因「点击组合框」而关闭时置位：同一次点击的 release 会再走
         # _showComboMenu，置位时吞掉这一次，避免菜单被立刻重新弹开。
@@ -914,12 +916,46 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
         # 是打开瞬间卡顿的主因）；短目录仍走上游的一次性菜单。
         self._cached_font_menu: Optional[_FilterableFontMenu] = None
         self.addItems(tuple(font_families_provider()))
+        from PyQt6.QtGui import QGuiApplication
+        application = QGuiApplication.instance()
+        if application is not None:
+            application.fontDatabaseChanged.connect(self._mark_font_catalog_dirty)
         self.currentIndexChanged.connect(
             lambda _index: self.currentFontChanged.emit(self.currentFont())
         )
         if self.count() >= self.filter_min_items:
             self.setToolTip("展开后可在顶部输入框输入关键字筛选字体")
             self._schedule_font_menu_warmup()
+
+    def _mark_font_catalog_dirty(self) -> None:
+        self._font_catalog_dirty = True
+
+    def _refresh_font_catalog(self) -> None:
+        if not self._font_catalog_dirty:
+            return
+        families = tuple(self._font_families_provider())
+        selected = self.currentText()
+        inherited = self.is_inherited()
+        previous = self.blockSignals(True)
+        try:
+            if self._cached_font_menu is not None:
+                self._cached_font_menu.close()
+                self._cached_font_menu.deleteLater()
+                self._cached_font_menu = None
+            self.clear()
+            if self._inheritance_label is not None:
+                self.addItem(self._inheritance_label, userData=0)
+            self.addItems(families)
+            if not inherited:
+                index = self.findText(selected)
+                if index < 0 and selected:
+                    # Preserve the document's selection even after uninstall.
+                    self.addItem(selected)
+                    index = self.findText(selected)
+                self.setCurrentIndex(index)
+            self._font_catalog_dirty = False
+        finally:
+            self.blockSignals(previous)
 
     def enable_inheritance(self, label: str) -> None:
         """Add an explicit N3-style zero slot before installed families."""
@@ -939,6 +975,7 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
         return QFont(self.currentText())
 
     def setCurrentFont(self, font: QFont) -> None:  # noqa: N802
+        self._refresh_font_catalog()
         family = self._canonicalize_family(font.family())
         index = self.findText(family) if family is not None else -1
         if index < 0:
@@ -952,6 +989,7 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
         self.setCurrentIndex(index)
 
     def _createComboMenu(self):  # noqa: N802 - qfluentwidgets hook
+        self._refresh_font_catalog()
         if self.count() < self.filter_min_items:
             return super()._createComboMenu()
         cached = self._cached_font_menu

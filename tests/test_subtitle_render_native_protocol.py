@@ -5371,3 +5371,34 @@ def test_font_face_slot_overrides_resolve_per_slot_italic(monkeypatch):
         ("F Ruby", 400, True),
         ("F RubyLatin", 400, True),
     ]
+
+
+@pytest.mark.parametrize("prefix", ["", "latin_", "ruby_", "ruby_latin_"])
+def test_font_slot_reset_removes_previous_gpu_resource(prefix):
+    from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+    payload = {
+        "font_family": "", "font_weight": 400,
+        prefix + "font_resolved": {"resource_path": "previous.otf", "axes": {"wght": 900}},
+        prefix + "font_axis": True,
+    }
+    apply_resolved_font_faces(payload)
+    assert prefix + "font_resolved" not in payload
+    assert payload[prefix + "font_axis"] is False
+
+
+def test_font_preparation_resolves_other_slots_before_reporting_failure(monkeypatch):
+    from krok_helper.subtitle_render.native.protocol import _font_face_slot_overrides
+    from krok_helper.subtitle_render.engine.text import font_weight
+    calls = []
+
+    def resolve(family, weight, italic=False):
+        calls.append(family)
+        raise ValueError("unavailable: " + family)
+
+    monkeypatch.setattr(font_weight, "resolve_font_instance", resolve)
+    payload = {"font_family": "Main", "font_weight": 400,
+        "font_family_latin": "Latin", "ruby_font_family": "Ruby",
+        "ruby_font_family_latin": "Ruby Latin"}
+    with pytest.raises(ValueError, match="unavailable: Main"):
+        _font_face_slot_overrides(payload)
+    assert calls == ["Main", "Latin", "Ruby", "Ruby Latin"]

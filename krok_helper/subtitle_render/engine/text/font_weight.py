@@ -30,6 +30,7 @@ import os
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QPainterPath, QRawFont
+from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
 
 from krok_helper.subtitle_render.engine.text.font_capabilities import (
     FontCapabilities,
@@ -50,6 +51,7 @@ from krok_helper.subtitle_render.engine.text.weight_resolver import (
 
 _AXIS_TAG_WEIGHT = b"wght"
 _RESOURCE_INSTANCES: dict[tuple, ResolvedFontInstance] = {}
+_RESOURCE_ERRORS: dict[tuple, str] = {}
 _RESOURCE_GENERATION = -1
 
 
@@ -64,10 +66,13 @@ def resolve_font_instance(
     generation = capabilities_generation()
     if generation != _RESOURCE_GENERATION:
         _RESOURCE_INSTANCES.clear()
+        _RESOURCE_ERRORS.clear()
         _RESOURCE_GENERATION = generation
     resource_key = (generation, family, weight, italic, stretch_pct)
     if resource_key in _RESOURCE_INSTANCES:
         return _RESOURCE_INSTANCES[resource_key]
+    if resource_key in _RESOURCE_ERRORS:
+        raise FontResourceError(_RESOURCE_ERRORS[resource_key])
     capabilities = get_capabilities(family)
     request = FontRequest(
         family=str(family),
@@ -87,7 +92,15 @@ def resolve_font_instance(
         apply_font_instance(font, instance)
         if italic and instance.italic_axis_tag is None:
             font.setItalic(True)
-        instance = replace(instance, resource_path=snapshot_raw_font(QRawFont.fromFont(font), resource_key))
+        try:
+            resource_path = snapshot_raw_font(QRawFont.fromFont(font), resource_key)
+        except (OSError, ValueError, RuntimeError) as exc:
+            # Keep failures as pure data: render workers must not retry Qt
+            # face creation after GUI prewarming found a broken resource.
+            message = f"字体“{family}”资源加载失败（字重 {weight}）：{exc}"
+            _RESOURCE_ERRORS[resource_key] = message
+            raise FontResourceError(message) from exc
+        instance = replace(instance, resource_path=resource_path)
     _RESOURCE_INSTANCES[resource_key] = instance
     return instance
 
@@ -139,7 +152,8 @@ def winding_glyph_path(path: QPainterPath, _font: QFont | None = None) -> QPaint
 
     OpenType 轮廓规范要求 NonZero 填充；Qt ``addText()`` 默认
     OddEvenFill，可变字体 gvar 插值导致轮廓重叠时 OddEven 会在笔画
-    交叉处产生空洞。静态字体两种规则结果相同，统一设 Winding 无副作用。
+    交叉处产生空洞。静态字体也可能保留重叠轮廓，因此同样使用 Winding；
+    真实字腔依靠反向轮廓保留，不能把各轮廓无条件做并集。
     第二参仅为兼容旧「我们膨胀」调用点，顺应引擎后忽略。
     """
     path.setFillRule(Qt.FillRule.WindingFill)

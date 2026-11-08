@@ -677,6 +677,8 @@ class AsyncSubtitleRenderer(QObject):
     _target_changed = Signal(int, int, float)
     _frame_requested = Signal(int)
 
+    supports_font_preparation_steps = True
+
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._logical_w = max(int(width), 1)
@@ -786,6 +788,8 @@ class GpuAsyncSubtitleRenderer(QObject):
 
     _STALE_TOLERANCE_MS = 120
     _SEEK_DISCONTINUITY_MS = 250
+
+    supports_font_preparation_steps = True
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -3243,6 +3247,8 @@ class NativeAsyncSubtitleRenderer(QObject):
     renderProgress = Signal(int, str)
     fallback_occurred = Signal(str)
     backendModeChanged = Signal(str)
+
+    supports_font_preparation_steps = True
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)

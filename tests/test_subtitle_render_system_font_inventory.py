@@ -497,3 +497,26 @@ def test_cjk_family_registers_on_windows_platform(
     assert family in report.registered
     assert family in QFontDatabase.families()
     assert QFontInfo(QFont(family)).family() == family
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_parse_font_faces_closes_all_lazy_files(monkeypatch, tmp_path, failure):
+    class Font:
+        closed = False
+
+        def __getitem__(self, key):
+            if failure:
+                raise ValueError("broken name table")
+            raise KeyError(key)
+
+        def close(self):
+            self.closed = True
+
+    fonts = [Font(), Font()]
+    monkeypatch.setattr(inventory, "_open_fonts", lambda path: fonts)
+    if failure:
+        with pytest.raises(ValueError, match="broken name table"):
+            inventory.parse_font_faces(tmp_path / "probe.ttc")
+    else:
+        assert inventory.parse_font_faces(tmp_path / "probe.ttc") == ()
+    assert all(font.closed for font in fonts)

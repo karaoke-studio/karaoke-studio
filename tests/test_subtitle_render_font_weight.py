@@ -226,6 +226,39 @@ def test_winding_fill_rule_for_glyph_path(qapp):
     assert result.fillRule() == Qt.FillRule.WindingFill
 
 
+@pytest.mark.parametrize("reflected", [False, True])
+def test_glyph_overlap_is_solid_but_counter_stays_transparent(qapp, reflected):
+    """Verify actual pixels, including reversed winding after a reflection."""
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QTransform
+
+    path = QPainterPath()
+    path.addRect(QRectF(5, 5, 50, 50))
+    counter = QPainterPath()
+    counter.addRect(QRectF(15, 15, 20, 20))
+    path.addPath(counter.toReversed())
+    # Same-direction stroke overlaps the outer contour, outside the counter.
+    path.addRect(QRectF(40, 25, 30, 15))
+    if reflected:
+        path = QTransform(-1, 0, 0, 1, 80, 0).map(path)
+
+    def alpha_at(rule, x, y):
+        path.setFillRule(rule)
+        image = QImage(80, 65, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.fillPath(path, QColor("white"))
+        painter.end()
+        return image.pixelColor(80 - x if reflected else x, y).alpha()
+
+    # Control: this fixture reproduces the historical overlap hole.
+    assert alpha_at(Qt.FillRule.OddEvenFill, 45, 30) == 0
+    rule = embolden_glyph_path(path).fillRule()
+    assert alpha_at(rule, 45, 30) == 255
+    assert alpha_at(rule, 25, 25) == 0
+    assert alpha_at(rule, 60, 30) == 255
+
+
 def test_get_capabilities_cache_hit_is_qt_free_from_worker_thread(qapp, monkeypatch):
     """缓存命中路径必须零 Qt 调用（渲染线程只允许走这条路）。
 
@@ -273,3 +306,87 @@ def test_get_capabilities_cache_hit_is_qt_free_from_worker_thread(qapp, monkeypa
         font_capabilities._CACHE.pop("CacheHit", None)
 
     assert results == [sentinel]
+
+
+@pytest.mark.parametrize("defect", ["truncated", "duplicate", "tag", "range"])
+def test_fvar_rejects_incomplete_or_inconsistent_axis_sets(defect):
+    import struct
+    from krok_helper.subtitle_render.engine.text.font_capabilities import _parse_fvar_axes
+    first = struct.pack(">4s3l2H", b"wght", 100 * 65536, 400 * 65536, 900 * 65536, 0, 256)
+    tag = b"wght" if defect == "duplicate" else b"\0bad" if defect == "tag" else b"wdth"
+    default = 300 if defect == "range" else 100
+    second = struct.pack(">4s3l2H", tag, 50 * 65536, default * 65536, 200 * 65536, 0, 257)
+    header = struct.pack(">8H", 1, 0, 16, 2, 2, 20, 0, 12)
+    raw = header + first + (second[:10] if defect == "truncated" else second)
+    assert _parse_fvar_axes(raw) == {}
+
+
+def test_fvar_preserves_complete_custom_axis_ranges():
+    import struct
+    from krok_helper.subtitle_render.engine.text.font_capabilities import _parse_fvar_axes
+    raw = struct.pack(">8H", 1, 0, 16, 2, 1, 20, 0, 8)
+    raw += struct.pack(">4s3l2H", b"CSTM", -65536, 0, 65536, 0, 256)
+    assert _parse_fvar_axes(raw) == {b"CSTM": (-1.0, 0.0, 1.0)}
+
+
+def test_font_preparation_continues_after_one_failed_family(qapp, monkeypatch):
+    from krok_helper.subtitle_render.engine.text import font_preparation as preparation
+    from krok_helper.subtitle_render.engine.text import font_capabilities as capabilities
+    monkeypatch.setattr(preparation, "collect_referenced_font_families", lambda *args: ["Broken", "Healthy"])
+    visited = []
+
+    def load(family):
+        visited.append(family)
+        if family == "Broken":
+            raise ValueError("damaged font")
+
+    monkeypatch.setattr(capabilities, "get_capabilities", load)
+    monkeypatch.setattr(preparation, "_iter_prewarm_font_fallback", lambda *args: (visited.append("fallback"),))
+    preparation.prepare_fonts(None, None, None)
+    assert visited == ["Broken", "Healthy", "fallback"]
+
+
+def test_incremental_capabilities_restart_after_font_registry_change(monkeypatch):
+    from krok_helper.subtitle_render.engine.text import font_capabilities as caps
+    caps.clear_capabilities_cache()
+    styles = ["Old"]
+    monkeypatch.setattr(caps, "canonical_family", lambda family: family)
+    monkeypatch.setattr(caps.QFontDatabase, "styles", lambda family: list(styles))
+    monkeypatch.setattr(caps.QFontDatabase, "weight", lambda *args: 400)
+    monkeypatch.setattr(caps.QFontDatabase, "italic", lambda *args: False)
+    monkeypatch.setattr(caps, "_face_axes", lambda *args: None)
+    steps = caps.iter_capabilities("Generation Probe")
+    next(steps)
+    styles[:] = ["New"]
+    caps.clear_capabilities_cache()
+    while True:
+        try:
+            next(steps)
+        except StopIteration as finished:
+            result = finished.value
+            break
+    assert [face.style_name for face in result.faces] == ["New"]
+    assert caps.get_capabilities("Generation Probe") is result
+    caps.clear_capabilities_cache()
+
+
+@pytest.mark.parametrize("raster_changes", [False, True])
+def test_incremental_axis_probe_preserves_pixel_only_changes(monkeypatch, raster_changes):
+    from krok_helper.subtitle_render.engine.text import font_capabilities as caps
+    calls = []
+    def cheap(family, style, value, size):
+        calls.append(("cheap", value))
+        return (10, 10)
+    def raster(family, style, value, size):
+        calls.append(("raster", value))
+        return bytes([int(value) if raster_changes else 1])
+    monkeypatch.setattr(caps, "_axis_cheap_signature", cheap)
+    monkeypatch.setattr(caps, "_axis_raster_signature", raster)
+    steps = caps._iter_axis_is_effective("Probe", 1, 3)
+    for count in range(1, 7):
+        next(steps)
+        assert len(calls) == count
+    with pytest.raises(StopIteration) as finished:
+        next(steps)
+    assert finished.value.value is raster_changes
+    assert caps._axis_is_effective("Probe", 1, 3) is raster_changes

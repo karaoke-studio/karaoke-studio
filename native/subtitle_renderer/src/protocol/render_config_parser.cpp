@@ -69,27 +69,31 @@ FontInstanceHint parseFontInstanceHint(
 }
 
 // 四个槽位的实例决策一起读；缺 key 的槽位保持既有值（差分重放语义与
-// font_axis 一致：不发该键 = 沿用上次全量 configure 的决策）。
+// 完整槽位带 font_axis：未带 resolved 表示清除旧提示；两者均缺失才沿用）。
 void applyFontInstanceHints(
     ResolvedStyle &style,
     const QJsonObject &object
 ) {
-    if (object.value(QStringLiteral("font_resolved")).isObject()) {
+    if (object.contains(QStringLiteral("font_resolved"))
+        || object.contains(QStringLiteral("font_axis"))) {
         style.fontHint = parseFontInstanceHint(
             object, QStringLiteral("font_resolved")
         );
     }
-    if (object.value(QStringLiteral("latin_font_resolved")).isObject()) {
+    if (object.contains(QStringLiteral("latin_font_resolved"))
+        || object.contains(QStringLiteral("latin_font_axis"))) {
         style.latinFontHint = parseFontInstanceHint(
             object, QStringLiteral("latin_font_resolved")
         );
     }
-    if (object.value(QStringLiteral("ruby_font_resolved")).isObject()) {
+    if (object.contains(QStringLiteral("ruby_font_resolved"))
+        || object.contains(QStringLiteral("ruby_font_axis"))) {
         style.rubyFontHint = parseFontInstanceHint(
             object, QStringLiteral("ruby_font_resolved")
         );
     }
-    if (object.value(QStringLiteral("ruby_latin_font_resolved")).isObject()) {
+    if (object.contains(QStringLiteral("ruby_latin_font_resolved"))
+        || object.contains(QStringLiteral("ruby_latin_font_axis"))) {
         style.rubyLatinFontHint = parseFontInstanceHint(
             object, QStringLiteral("ruby_latin_font_resolved")
         );

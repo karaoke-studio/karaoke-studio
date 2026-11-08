@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QObject, QThread, QTimer
 
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.frontend.workflow.background_tasks import _RenderWorker
@@ -24,12 +24,14 @@ class ExportRuntimeCallbacks:
     thread_finished: Any
 
 
-@dataclass(frozen=True)
+@dataclass
 class ExportRuntimeHandles:
     """Thread and worker handles retained by the host for lifecycle checks."""
 
     thread: Any
     worker: Any
+    preparation_timer: Any = None
+    preparing: bool = False
 
 
 class ExportRuntimeController:
@@ -49,8 +51,7 @@ class ExportRuntimeController:
         preview_width: int,
         callbacks: ExportRuntimeCallbacks,
     ) -> ExportRuntimeHandles:
-        from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
-        prepare_fonts(job.track, job.style, list(job.extra_tracks))
+        from krok_helper.subtitle_render.engine.text.font_preparation import iter_prepare_fonts
         thread = self._thread_factory(parent)
         worker = self._worker_factory(
             job,
@@ -70,16 +71,49 @@ class ExportRuntimeController:
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(callbacks.thread_finished)
         thread.started.connect(worker.run)
-        return ExportRuntimeHandles(thread=thread, worker=worker)
+        handles = ExportRuntimeHandles(thread=thread, worker=worker)
+        if isinstance(parent, QObject):
+            steps = iter_prepare_fonts(job.track, job.style, list(job.extra_tracks))
+            timer = QTimer(parent)
+            timer.setInterval(1)
+            handles.preparation_timer = timer
+
+            def advance() -> None:
+                try:
+                    next(steps)
+                except StopIteration:
+                    timer.stop()
+                    timer.deleteLater()
+                    handles.preparation_timer = None
+                    handles.preparing = False
+                    thread.start()
+
+            timer.timeout.connect(advance)
+        else:
+            for _ in iter_prepare_fonts(job.track, job.style, list(job.extra_tracks)):
+                pass
+        return handles
 
     @staticmethod
     def is_active(handles: ExportRuntimeHandles | None) -> bool:
-        return bool(handles is not None and handles.thread.isRunning())
+        return bool(handles is not None and (handles.preparing or handles.thread.isRunning()))
 
     @staticmethod
     def start(handles: ExportRuntimeHandles) -> None:
-        handles.thread.start()
+        if handles.preparation_timer is not None:
+            handles.preparing = True
+            handles.preparation_timer.start()
+        else:
+            handles.thread.start()
 
     @staticmethod
     def cancel(handles: ExportRuntimeHandles) -> None:
         handles.worker.cancel()
+        if handles.preparing and handles.preparation_timer is not None:
+            handles.preparation_timer.stop()
+            handles.preparation_timer.deleteLater()
+            handles.preparation_timer = None
+            handles.preparing = False
+            # Run the already-cancelled worker to keep the established
+            # cancelled -> thread.quit -> cleanup signal lifecycle intact.
+            handles.thread.start()

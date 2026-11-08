@@ -134,6 +134,11 @@ _WGHT = b"wght"
 
 def capabilities_generation() -> int:
     """当前字体库代际（缓存键的一部分）。"""
+    from PyQt6.QtGui import QGuiApplication
+    app = QGuiApplication.instance()
+    if isinstance(app, QGuiApplication) and not getattr(app, "_font_capabilities_watch", False):
+        app.fontDatabaseChanged.connect(clear_capabilities_cache)
+        app._font_capabilities_watch = True
     with _LOCK:
         return _GENERATION
 
@@ -144,6 +149,8 @@ def clear_capabilities_cache() -> None:
     with _LOCK:
         _CACHE.clear()
         _GENERATION += 1
+    from krok_helper.subtitle_render.engine.text.font_resource import clear_resource_cache
+    clear_resource_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +207,10 @@ def _parse_fvar_axes(raw: bytes) -> dict[bytes, tuple[float, float, float]]:
     major, _minor, axes_offset, _reserved, axis_count, axis_size = struct.unpack_from(">6H", raw, 0)
     if major != 1 or axis_size < 20 or axes_offset < 16:
         return {}
+    # A partial axis list must not masquerade as the complete instance sent
+    # to DirectWrite: omitted axes would silently use different defaults.
+    if axes_offset + axis_count * axis_size > len(raw):
+        return {}
     axes: dict[bytes, tuple[float, float, float]] = {}
     for index in range(axis_count):
         offset = axes_offset + index * axis_size
@@ -207,6 +218,10 @@ def _parse_fvar_axes(raw: bytes) -> dict[bytes, tuple[float, float, float]]:
             break
         tag = bytes(raw[offset : offset + 4])
         mn, df, mx = struct.unpack_from(">3l", raw, offset + 4)
+        if tag in axes or any(value < 0x20 or value > 0x7e for value in tag):
+            return {}
+        if not mn <= df <= mx:
+            return {}
         axes[tag] = (mn / 65536.0, df / 65536.0, mx / 65536.0)
     return axes
 
@@ -265,6 +280,7 @@ def _axis_cheap_signature(
     判「相同」还要像素指纹定谳。
     """
     font = QFont(family)
+    font.setStyleStrategy(QFont.StyleStrategy.NoFontMerging)
     if style_name:
         font.setStyleName(style_name)
     font.setVariableAxis(QFont.Tag(_WGHT), float(value))
@@ -315,6 +331,8 @@ def _raster_probe(font: QFont) -> bytes | None:
     from PyQt6.QtGui import QImage, QPainter
 
     try:
+        font = QFont(font)
+        font.setStyleStrategy(QFont.StyleStrategy.NoFontMerging)
         image = QImage(260, 96, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(0)
         painter = QPainter(image)
@@ -332,6 +350,17 @@ def _raster_probe(font: QFont) -> bytes | None:
 def _axis_is_effective(
     family: str, mn: float, mx: float, style_name: str | None = None
 ) -> bool:
+    steps = _iter_axis_is_effective(family, mn, mx, style_name)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
+def _iter_axis_is_effective(
+    family: str, mn: float, mx: float, style_name: str | None = None
+):
     """wght 轴两端是否产生可观测差异（辅助确认，不作为唯一判据）。
 
     表里声明了轴但两端渲染完全相同（伪可变、或 Qt 把轴静默忽略）时，
@@ -348,17 +377,19 @@ def _axis_is_effective(
     # 快速路径：advance/bbox 在 min/中/max 任一档不同即生效——可变字体的轴
     # 实例创建是百毫秒级成本（Segoe UI Variable 实测 3 档光栅 ~736ms），
     # 能短路就不付光栅。
-    cheap = [
-        _axis_cheap_signature(family, style_name, value, 40) for value in values
-    ]
+    cheap = []
+    for value in values:
+        cheap.append(_axis_cheap_signature(family, style_name, value, 40))
+        yield
     if any(signature is None for signature in cheap):
         return False
     if len(set(cheap)) > 1:
         return True
     # 廉价指纹三档全同：像素指纹逐字节定谳（治「轴只改内部笔画」的漏判）。
-    rasters = [
-        _axis_raster_signature(family, style_name, value, 40) for value in values
-    ]
+    rasters = []
+    for value in values:
+        rasters.append(_axis_raster_signature(family, style_name, value, 40))
+        yield
     if any(raster is None for raster in rasters):
         return False
     return len(set(rasters)) > 1
@@ -370,7 +401,17 @@ def _axis_is_effective(
 
 
 def get_capabilities(family: str) -> FontCapabilities | None:
+    steps = iter_capabilities(family)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
+def iter_capabilities(family: str):
     """获取一个族的完整能力描述；字体不存在返回 None。"""
+    generation = capabilities_generation()
     raw = str(family)
     with _LOCK:
         cached = _CACHE.get(raw, _MISSING)
@@ -386,6 +427,9 @@ def get_capabilities(family: str) -> FontCapabilities | None:
     except (RuntimeError, TypeError, ValueError):
         styles = []
     for style in styles:
+        yield
+        if generation != capabilities_generation():
+            return (yield from iter_capabilities(family))
         try:
             weight = int(QFontDatabase.weight(canonical, style))
             italic = bool(QFontDatabase.italic(canonical, style))
@@ -458,7 +502,7 @@ def get_capabilities(family: str) -> FontCapabilities | None:
         else:
             family_axis_inventory = ()
     if axis_present and axis_min is not None and axis_max is not None:
-        axis_effective = _axis_is_effective(
+        axis_effective = yield from _iter_axis_is_effective(
             canonical, axis_min, axis_max, variable_style
         )
 
@@ -482,6 +526,8 @@ def get_capabilities(family: str) -> FontCapabilities | None:
             ),
         )
 
+    if generation != capabilities_generation():
+        return (yield from iter_capabilities(family))
     with _LOCK:
         _CACHE[raw] = result
         if result is not None and canonical != raw:

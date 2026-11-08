@@ -4219,8 +4219,10 @@ def test_gpu_realization_prewarm_keeps_positioned_instances_below_capacity(
         frame = renderer.render_gpu_frame(750, force_warp=False)
 
     # Below capacity, positioned realizations remain the faster hot path.
-    assert diagnostics["realization_prewarm_tasks"] == 18
-    assert diagnostics["realization_count"] == 18
+    # Two successive identical lines reuse the same three positioned glyphs,
+    # each with fill, stroke and stroke2; all six instances remain assigned.
+    assert diagnostics["realization_prewarm_tasks"] == 9
+    assert diagnostics["realization_count"] == 9
     assert diagnostics["realization_prewarm_skipped"] == 0
     assert frame["realization_hit"] > 0
     assert frame["realization_miss"] == 0

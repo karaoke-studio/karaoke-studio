@@ -154,6 +154,9 @@ class _RenderWorker(QObject):
 
     def run(self) -> None:
         worker_log = logging.getLogger("krok_helper.subtitle_render.export")
+        if self._cancel_requested:
+            self.cancelled.emit("导出已取消")
+            return
         worker_log.info(
             "字幕视频导出开始 output=%s size=%sx%s fps=%s",
             self._job.output_path,

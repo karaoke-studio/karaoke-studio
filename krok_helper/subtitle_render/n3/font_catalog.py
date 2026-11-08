@@ -327,6 +327,11 @@ def _directwrite_records() -> list[_FamilyRecord]:
                         styles.append(_com_method(font, 6, ctypes.c_int)(font))
                     finally:
                         _release(font)
+                    # The catalog only needs to know whether a normal face
+                    # exists. Do not open every remaining weight/variable
+                    # instance in a large CJK family on the cold path.
+                    if styles[-1] == _DWRITE_FONT_STYLE_NORMAL:
+                        break
                 records.append(_FamilyRecord(names=names, styles=tuple(styles)))
             finally:
                 _release(family)
@@ -480,6 +485,11 @@ def _qt_application_cache_key() -> int:
     application = QGuiApplication.instance()
     if application is None or not isinstance(application, QGuiApplication):
         return 0
+    # Connect once per application lifetime; never enumerate fonts from this
+    # signal, which can fire while Qt is still updating its font registry.
+    if not getattr(application, "_n3_font_cache_watch", False):
+        application.fontDatabaseChanged.connect(_font_database_changed)
+        application._n3_font_cache_watch = True
     return id(application)
 
 
@@ -616,6 +626,16 @@ def resolve_qt_font_family(name: str) -> str:
 # QApplication identity in the actual cache key.
 resolve_qt_font_family.cache_clear = _resolve_qt_font_family_cached.cache_clear  # type: ignore[attr-defined]
 resolve_qt_font_family.cache_info = _resolve_qt_font_family_cached.cache_info  # type: ignore[attr-defined]
+
+
+def _font_database_changed() -> None:
+    """System installs can also change localized names on disk."""
+    invalidate_n3_font_caches()
+    try:
+        from strange_uta_game.frontend import font_cache
+        font_cache.invalidate(clear_alias_map=True)
+    except Exception:
+        log.debug("字体名称缓存失效失败", exc_info=True)
 
 
 def invalidate_n3_font_caches() -> None:

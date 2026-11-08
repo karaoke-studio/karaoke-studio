@@ -349,47 +349,51 @@ def parse_font_faces(path: Path) -> tuple[FontFaceNames, ...]:
     faces: list[FontFaceNames] = []
     with _quiet_fonttools():
         fonts = _open_fonts(path)
-    for index, font in enumerate(fonts):
-        try:
-            name_table = font["name"]  # type: ignore[index]
-        except (KeyError, RuntimeError, TypeError):
-            continue
-        families: list[tuple[int, str]] = []
-        seen_texts: set[str] = set()
-        style_text: str | None = None
-        full_text: str | None = None
-        postscript_text: str | None = None
-        for record in name_table.names:
-            text = decode_name_text(
-                record.platformID, record.platEncID, record.langID, record.string
-            )
-            if text is None:
+    try:
+        for index, font in enumerate(fonts):
+            try:
+                name_table = font["name"]  # type: ignore[index]
+            except (KeyError, RuntimeError, TypeError):
                 continue
-            name_id = int(record.nameID)
-            if name_id in _FAMILY_NAME_IDS:
-                if text not in seen_texts:
-                    seen_texts.add(text)
-                    families.append((name_id, text))
-            elif name_id == 17:
-                style_text = text
-            elif name_id == 2 and style_text is None:
-                style_text = text
-            elif name_id == 4 and full_text is None:
-                full_text = text
-            elif name_id == 6 and postscript_text is None:
-                postscript_text = text
-        if not families:
-            continue
-        faces.append(
-            FontFaceNames(
-                path=path,
-                face_index=index,
-                family_ids=tuple(families),
-                style_text=style_text,
-                full_text=full_text,
-                postscript_text=postscript_text,
+            families: list[tuple[int, str]] = []
+            seen_texts: set[str] = set()
+            style_text: str | None = None
+            full_text: str | None = None
+            postscript_text: str | None = None
+            for record in name_table.names:
+                text = decode_name_text(
+                    record.platformID, record.platEncID, record.langID, record.string
+                )
+                if text is None:
+                    continue
+                name_id = int(record.nameID)
+                if name_id in _FAMILY_NAME_IDS:
+                    if text not in seen_texts:
+                        seen_texts.add(text)
+                        families.append((name_id, text))
+                elif name_id == 17:
+                    style_text = text
+                elif name_id == 2 and style_text is None:
+                    style_text = text
+                elif name_id == 4 and full_text is None:
+                    full_text = text
+                elif name_id == 6 and postscript_text is None:
+                    postscript_text = text
+            if not families:
+                continue
+            faces.append(
+                FontFaceNames(
+                    path=path,
+                    face_index=index,
+                    family_ids=tuple(families),
+                    style_text=style_text,
+                    full_text=full_text,
+                    postscript_text=postscript_text,
+                )
             )
-        )
+    finally:
+        for font in fonts:
+            font.close()
     return tuple(faces)
 
 

@@ -15,9 +15,21 @@ from PyQt6.QtGui import QRawFont
 _LOCK = threading.RLock()
 _CACHE: dict[tuple, str] = {}
 _PHYSICAL_CACHE: dict[bytes, str] = {}
+
+
+class FontResourceError(ValueError):
+    """A selected Qt face cannot be transferred to the native renderer."""
+
 # OpenType and AAT tables relevant to outlines, variation, metrics and shaping.
 _TAGS = "head hhea maxp OS/2 hmtx cmap loca glyf name post cvt fpgm prep gasp CFF CFF2 VORG vhea vmtx BASE GDEF GPOS GSUB JSTF MATH fvar gvar avar cvar HVAR VVAR MVAR STAT COLR CPAL CBDT CBLC EBDT EBLC EBSC sbix SVG kern kerx morx mort ankr bsln feat lcar opbd prop trak acnt fdsc fmtx just Zapf hdmx LTSH VDMX PCLT Glat Gloc Silf Sill Feat".split()
 _TAGS = [tag.ljust(4) for tag in _TAGS]
+
+
+def clear_resource_cache() -> None:
+    """Forget face mappings after registry changes; active sidecars keep files."""
+    with _LOCK:
+        _CACHE.clear()
+        _PHYSICAL_CACHE.clear()
 
 
 def snapshot_raw_font(raw: QRawFont, key: tuple) -> str:
@@ -32,20 +44,29 @@ def snapshot_raw_font(raw: QRawFont, key: tuple) -> str:
             return cached
     if not raw.isValid():
         raise ValueError("Cannot snapshot an invalid Qt font face")
-    # The original head includes the whole-font checksum adjustment. Named
-    # instances share the same tables, so changing axes must not recopy a
-    # multi-megabyte CJK font on every slider step.
-    identity = hashlib.sha256(b"".join(bytes(raw.fontTable(tag))
-                                     for tag in ("head", "name", "maxp", "cmap"))).digest()
+    # Metadata/checkSumAdjustment is not a content identity: patched fonts
+    # can retain it while changing outlines, metrics or variation tables.
+    tables = {tag: bytes(raw.fontTable(tag)) for tag in _TAGS}
+    tables = {tag: data for tag, data in tables.items() if data}
+    fingerprint = hashlib.sha256()
+    for tag, data in sorted(tables.items()):
+        fingerprint.update(tag.encode("ascii"))
+        fingerprint.update(struct.pack(">I", len(data)))
+        fingerprint.update(data)
+    identity = fingerprint.digest()
     with _LOCK:
         existing = _PHYSICAL_CACHE.get(identity)
         if existing and Path(existing).is_file():
             _CACHE[key] = existing
             return existing
-    tables = {tag: bytes(raw.fontTable(tag)) for tag in _TAGS}
-    tables = {tag: data for tag, data in tables.items() if data}
     if "head" not in tables or "cmap" not in tables:
         raise ValueError("Qt font face has no usable OpenType tables")
+    # Do not manufacture a seemingly valid SFNT from truncated Qt tables:
+    # writing checkSumAdjustment into a short head can overwrite the next
+    # table, handing a corrupt resource to DirectWrite in the sidecar.
+    for tag, minimum in (("head", 54), ("cmap", 4), ("maxp", 6), ("hhea", 36)):
+        if len(tables.get(tag, b"")) < minimum:
+            raise ValueError(f"Qt font face has a truncated or missing {tag} table")
     head = bytearray(tables["head"])
     head[8:12] = b"\0" * 4
     tables["head"] = bytes(head)

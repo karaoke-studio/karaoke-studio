@@ -757,3 +757,67 @@ def test_layout_patch_carries_placement_and_layout_table(qapp):
         track, resized, [], width=_WIDTH, height=_HEIGHT, fps=_FPS, dpr=1.0,
     )
     assert base_strict != resized_strict
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native GPU renderer is Windows-only")
+def test_gpu_style_patch_clears_previous_font_hint(qapp, monkeypatch):
+    from krok_helper.subtitle_render.native import backend
+    if backend.resolve_native_renderer_path(root=Path.cwd()) is None:
+        pytest.skip("native renderer not built")
+    inject = [True]
+
+    def resolve_slots(node):
+        if isinstance(node, dict):
+            if "font_family" in node and "font_weight" in node:
+                for prefix in ("", "latin_", "ruby_", "ruby_latin_"):
+                    node[prefix + "font_axis"] = False
+                    node.pop(prefix + "font_resolved", None)
+                    if inject[0]:
+                        node[prefix + "font_resolved"] = {
+                            "weight": 400, "sim_bold": False, "sim_italic": True,
+                        }
+            for value in list(node.values()):
+                resolve_slots(value)
+        elif isinstance(node, list):
+            for value in node:
+                resolve_slots(value)
+
+    monkeypatch.setattr(backend, "apply_resolved_font_faces", resolve_slots)
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("WWWWW", 0)], end_ms=2000)])
+    style = _patch_style(font_family="Arial", font_family_latin="Arial")
+    key = "font-hint-reset-" + uuid.uuid4().hex
+    with backend.NativeRendererProcess(response_timeout_s=30) as renderer:
+        def configure():
+            renderer.configure_gpu(track, style, width=_WIDTH, height=_HEIGHT,
+                fps=_FPS, duration_ms=2500, prewarm_t_ms=500,
+                worker_count=1, defer_followers=True)
+            _wait_for_realization_prewarm(renderer)
+
+        def checksum(index):
+            return renderer.render_gpu_frame(500, generation=0, frame_index=index,
+                shm_key=key, include_checksum=True)["checksum"]
+
+        configure()
+        before = checksum(0)
+        inject[0] = False
+        renderer.configure_style_gpu(build_style_patch_ir(track, style,
+            width=_WIDTH, height=_HEIGHT, fps=_FPS, duration_ms=2500),
+            prewarm_t_ms=500, worker_count=1)
+        _wait_for_realization_prewarm(renderer)
+        patched = checksum(1)
+        configure()
+        fresh = checksum(2)
+        assert before != fresh, "The injected font hint must visibly affect rendering"
+        assert patched == fresh
+
+
+def test_font_resource_failure_uses_native_fallback_error(monkeypatch):
+    from krok_helper.subtitle_render.native import backend
+    from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
+    def fail(payload):
+        raise FontResourceError("字体资源不可传递")
+    monkeypatch.setattr(backend, "apply_resolved_font_faces", fail)
+    renderer = backend.NativeRendererProcess()
+    with pytest.raises(backend.NativeRendererError, match="字体资源不可传递") as error:
+        renderer.configure_style_gpu({"style": {"font_family": "Fixedsys", "font_weight": 400}})
+    assert isinstance(error.value.__cause__, FontResourceError)

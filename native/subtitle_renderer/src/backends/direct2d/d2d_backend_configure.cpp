@@ -4034,6 +4034,7 @@ void Direct2DGpuBackend::startRealizationPrewarm(bool deferUntilFirstFrame) {
         // The original positioned realization is faster at draw time: no
         // per-instance world transform is needed. Keep that path whenever
         // every requested resource fits in the configured budget.
+        std::map<Impl::RealizationCacheKey, std::size_t> taskByPosition;
         for (const RealizationCandidate &candidate : candidates) {
             Impl::RealizationTask task;
             task.targets.push_back(candidate.target);
@@ -4043,6 +4044,14 @@ void Direct2DGpuBackend::startRealizationPrewarm(bool deferUntilFirstFrame) {
                 candidate.sharedGeometry.Get(), candidate.stroked,
                 candidate.strokeWidth, false, candidate.instanceTransform
             );
+            // Repeated lines can place the same glyph at exactly the same
+            // transform. Bake that resource once, retaining positioned drawing.
+            const auto existing = taskByPosition.find(task.cacheKey);
+            if (existing != taskByPosition.end()) {
+                tasks[existing->second].targets.push_back(candidate.target);
+                continue;
+            }
+            taskByPosition.emplace(task.cacheKey, tasks.size());
             task.strokeWidth = candidate.strokeWidth;
             task.fillOutline = candidate.fillOutline;
             task.estCostMs = candidate.estCostMs;

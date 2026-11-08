@@ -385,3 +385,49 @@ def test_prewarm_font_axis_capabilities_warms_on_app_thread(qapp, monkeypatch):
     thread.join(timeout=5)
 
     assert other_thread_result == [[]]
+
+
+def test_preview_font_preparation_discards_superseded_state(qapp, qtbot, monkeypatch):
+    from PyQt6.QtCore import QObject
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as graphics
+    from krok_helper.subtitle_render.engine.text import font_preparation
+    class Renderer:
+        supports_font_preparation_steps = True
+        def request(self, t):
+            requests.append(t)
+    monkeypatch.setattr(graphics, "AsyncSubtitleRenderer", Renderer)
+    def prepare(track, style, extra):
+        for _ in range(3):
+            import time
+            time.sleep(0.01)
+            yield
+    monkeypatch.setattr(font_preparation, "iter_prepare_fonts", prepare)
+    commits, requests = [], []
+    class Host(QObject):
+        _refresh_async_state = graphics.PreviewGraphicsView._refresh_async_state
+        _cancel_font_preparation = graphics.PreviewGraphicsView._cancel_font_preparation
+        _request_prepared_frame = graphics.PreviewGraphicsView._request_prepared_frame
+        def _note_render_requested(self):
+            pass
+        def _commit_async_state(self):
+            commits.append(self._style)
+            self._request_prepared_frame(self._t_ms)
+    host = Host()
+    host._async_renderer = Renderer()
+    host._track = None
+    host._subtitle_item = SimpleNamespace(_extra_tracks=[])
+    host._style = "old"
+    host._t_ms = 0
+    host._refresh_async_state()
+    host._request_prepared_frame(0)
+    assert requests == []
+    host._style = "new"
+    host._t_ms = 500
+    host._refresh_async_state()
+    qtbot.waitUntil(lambda: bool(commits))
+    assert commits == ["new"]
+    assert requests == [500]
+    host._refresh_async_state()
+    host._cancel_font_preparation()
+    qtbot.wait(20)
+    assert commits == ["new"]

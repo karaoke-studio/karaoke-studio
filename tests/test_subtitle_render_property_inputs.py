@@ -443,3 +443,28 @@ def test_property_font_combo_warmup_prebuilds_cached_menu(qapp) -> None:
     assert fresh.dropMenu is fresh._cached_font_menu
     assert fresh.dropMenu.isVisible()
     fresh.dropMenu.close()
+
+
+def test_font_picker_refreshes_after_registry_change_without_changing_selection(qapp):
+    from PyQt6.QtGui import QFont
+    from krok_helper.subtitle_render.frontend.properties.controls.inputs import WheelFocusedFontComboBox
+    families = ["Original", "Second"]
+    picker = WheelFocusedFontComboBox(font_families_provider=lambda: families,
+                                     canonicalize_family=lambda name: name)
+    picker.enable_inheritance("继承")
+    picker.setCurrentFont(QFont("Original"))
+    changes = []
+    picker.currentFontChanged.connect(changes.append)
+    families[:] = ["New Font", "Second"]
+    qapp.fontDatabaseChanged.emit()
+    picker._refresh_font_catalog()
+    assert picker.findText("New Font") >= 0
+    assert picker.currentText() == "Original"
+    assert changes == []
+    picker.setInherited()
+    families.append("Another")
+    qapp.fontDatabaseChanged.emit()
+    picker._refresh_font_catalog()
+    assert picker.is_inherited()
+    assert picker.findText("Another") >= 0
+    picker.deleteLater()
