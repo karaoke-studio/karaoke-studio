@@ -31,3 +31,8 @@ def ensure_sug_root_path() -> Path:
 
 
 ensure_sug_src_path()
+
+# Install before any SUG settings/logging imports can probe the executable folder.
+from .directory_probe import install_sug_directory_probe
+
+install_sug_directory_probe()
