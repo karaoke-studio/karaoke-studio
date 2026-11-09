@@ -3772,7 +3772,8 @@ def test_subtitle_source_watch_runtime_has_one_frontend_owner() -> None:
         "_set_subtitle_source_baseline": {"set_baseline"},
         "_sync_subtitle_source_watcher": {"sync"},
         "_queue_subtitle_source_reload": {"queue"},
-        "_process_subtitle_source_changes": {"take_pending"},
+        "_process_subtitle_source_changes": {"start_pending"},
+        "_consume_subtitle_source_changes": {"take_pending"},
         "_reload_external_subtitle_source": {
             "accept_prepared",
             "ignore_prepared",
@@ -4028,7 +4029,7 @@ def test_subtitle_render_window_consumes_typed_project_load_plan() -> None:
     method = next(
         node
         for node in window_class.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_apply_project_data_inner"
+        if isinstance(node, ast.FunctionDef) and node.name == "_project_data_steps"
     )
     direct_calls = {
         node.func.id

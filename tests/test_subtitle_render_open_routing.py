@@ -74,3 +74,56 @@ def test_an_n3proj_really_is_a_zip_and_not_utf8_text(tmp_path: Path) -> None:
 
     with pytest.raises((UnicodeDecodeError, ValueError, OSError)):
         load_render_project(fake)
+
+
+def test_project_io_keeps_gui_heartbeat_during_slow_read(qtbot):
+    import threading
+    import time
+    from PyQt6.QtCore import QTimer
+    from krok_helper.subtitle_render.frontend.main_window import _run_project_io
+
+    ticks = []
+    timer = QTimer()
+    timer.timeout.connect(lambda: ticks.append(time.monotonic()))
+    timer.start(40)
+    gui_thread = threading.get_ident()
+
+    def slow_read():
+        assert threading.get_ident() != gui_thread
+        time.sleep(12)
+        return 42
+
+    try:
+        assert _run_project_io(slow_read) == 42
+    finally:
+        timer.stop()
+    assert len(ticks) > 100
+    assert max(b - a for a, b in zip(ticks, ticks[1:])) < 2
+
+
+def test_project_io_preserves_read_errors(qtbot):
+    from krok_helper.subtitle_render.frontend.main_window import _run_project_io
+
+    def broken_read():
+        raise OSError("读取失败")
+
+    with pytest.raises(OSError, match="读取失败"):
+        _run_project_io(broken_read)
+
+
+def test_project_ui_stages_yield_and_preserve_errors(qtbot):
+    from PyQt6.QtCore import QTimer
+    from krok_helper.subtitle_render.frontend.main_window import _run_project_steps
+
+    events = []
+
+    def stages():
+        events.append("first")
+        QTimer.singleShot(0, lambda: events.append("paint"))
+        yield
+        events.append("second")
+        raise ValueError("装配失败")
+
+    with pytest.raises(ValueError, match="装配失败"):
+        _run_project_steps(stages())
+    assert events == ["first", "paint", "second"]

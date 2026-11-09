@@ -4407,3 +4407,77 @@ def test_edit_animation_rows_emits_switch_signals(qapp, monkeypatch):
     assert captured["volume"] == ([0], True)
     assert captured["lit"] == ([0], False)
     assert captured["wipe"] == ([0], False)
+
+
+def test_open_project_slow_watch_digest_keeps_heartbeat_and_defers_reload(
+    qapp, monkeypatch, tmp_path
+):
+    import threading
+    import time
+    from PyQt6.QtCore import QTimer
+    from krok_helper.subtitle_render.frontend.project import source_watch
+
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "slow-watch.lrc"
+    lrc.write_text("[00:01:00]a[00:02:00]\n", encoding="utf-8-sig")
+    project = tmp_path / "slow-watch.yurika"
+    save_render_project(project, {"subtitle_path": str(lrc)})
+    gui_thread = threading.get_ident()
+    ticks = []
+    slow_ticks = []
+    slow = threading.Event()
+    timer = QTimer()
+    timer.setInterval(40)
+    timer.timeout.connect(lambda: ticks.append(time.monotonic()))
+    timer.timeout.connect(lambda: slow_ticks.append(time.monotonic()) if slow.is_set() else None)
+    digest = source_watch.subtitle_source_digest
+    reads = []
+
+    def slow_digest(path):
+        reads.append(threading.get_ident())
+        if len(reads) == 1:
+            slow.set()
+            try:
+                time.sleep(12)
+            finally:
+                slow.clear()
+        return digest(path)
+
+    monkeypatch.setattr(source_watch, "subtitle_source_digest", slow_digest)
+    set_baseline = win._set_subtitle_source_baseline
+    changed = []
+
+    def baseline_then_change(path, track):
+        set_baseline(path, track)
+        if changed:
+            return
+        changed.append(True)
+
+        def external_save():
+            assert win._source_reload_suspended()
+            lrc.write_text("[00:03:00]a[00:04:00]\n", encoding="utf-8-sig")
+            win._on_subtitle_source_file_changed(str(lrc))
+            win._process_subtitle_source_changes()
+            assert win._source_watch_runtime.pending_keys
+            assert win._timing_track.lines[0].chars[0].start_ms == 1000
+
+        QTimer.singleShot(0, external_save)
+
+    monkeypatch.setattr(win, "_set_subtitle_source_baseline", baseline_then_change)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    timer.start()
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert win._project_dirty is False
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not win._project_dirty:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert win._timing_track.lines[0].chars[0].start_ms == 3000
+        assert win._project_dirty is True
+        assert reads and all(thread != gui_thread for thread in reads)
+        assert len(slow_ticks) > 100
+        assert max(b - a for a, b in zip(slow_ticks, slow_ticks[1:])) < 2
+    finally:
+        timer.stop()
+        win.close()

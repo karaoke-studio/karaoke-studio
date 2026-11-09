@@ -76,8 +76,11 @@ class SubtitleSourceWatchRuntime(QObject):
         *,
         reload_suspended: Optional[Callable[[], bool]] = None,
         debounce_ms: int = 450,
+        run_io: Optional[Callable] = None,
     ) -> None:
         super().__init__(parent)
+        self._run_io = run_io or (lambda work: work())
+        self.busy = False
         self._reload_suspended = reload_suspended or (lambda: False)
         self._states: dict[str, WatchedSubtitleState] = {}
         self._pending_keys: set[str] = set()
@@ -116,51 +119,59 @@ class SubtitleSourceWatchRuntime(QObject):
         return self._states.get(key)
 
     def set_baseline(self, path: Path, track: TimingTrack) -> None:
-        source_path = Path(path).resolve(strict=False)
+        def prepare():
+            source_path = Path(path).resolve(strict=False)
+            try:
+                digest = subtitle_source_digest(source_path)
+            except OSError:
+                digest = ""
+            return subtitle_source_key(source_path), WatchedSubtitleState(
+                path=source_path, baseline=deepcopy(track), seen_digest=digest,
+            )
+
+        was_busy = self.busy
+        self.busy = True
         try:
-            digest = subtitle_source_digest(source_path)
-        except OSError:
-            digest = ""
-        self._states[subtitle_source_key(source_path)] = WatchedSubtitleState(
-            path=source_path,
-            baseline=deepcopy(track),
-            seen_digest=digest,
-        )
+            key, state = self._run_io(prepare)
+            self._states[key] = state
+        finally:
+            self.busy = was_busy
 
     def sync(self, referenced: Mapping[str, tuple[Path, TimingTrack]]) -> None:
-        """Reconcile runtime state and Qt watches with current project sources."""
-        for key in list(self._states):
-            if key not in referenced:
-                self._states.pop(key, None)
-                self._pending_keys.discard(key)
-                self._retries.pop(key, None)
-        for key, (path, track) in referenced.items():
-            if key not in self._states:
-                self.set_baseline(path, track)
+        """Prepare disk data off-thread; only the owner thread updates Qt watches."""
+        if self.busy:
+            return
+        self.busy = True
+        try:
+            for key in list(self._states):
+                if key not in referenced:
+                    self._states.pop(key, None)
+                    self._pending_keys.discard(key)
+                    self._retries.pop(key, None)
+            for key, (path, track) in referenced.items():
+                if key not in self._states:
+                    self.set_baseline(path, track)
+            paths = tuple(state.path for state in self._states.values())
 
-        watched_files = self._watcher.files()
-        watched_directories = self._watcher.directories()
-        if watched_files:
-            self._watcher.removePaths(watched_files)
-        if watched_directories:
-            self._watcher.removePaths(watched_directories)
+            def prepare_paths():
+                files = sorted(str(path) for path in paths if path.is_file())
+                directories = sorted({str(path.parent) for path in paths
+                                      if path.parent.is_dir()})
+                return files, directories
 
-        files = sorted(
-            str(state.path)
-            for state in self._states.values()
-            if state.path.is_file()
-        )
-        directories = sorted(
-            {
-                str(state.path.parent)
-                for state in self._states.values()
-                if state.path.parent.is_dir()
-            }
-        )
-        if files:
-            self._watcher.addPaths(files)
-        if directories:
-            self._watcher.addPaths(directories)
+            files, directories = self._run_io(prepare_paths)
+            watched_files = self._watcher.files()
+            watched_directories = self._watcher.directories()
+            if watched_files:
+                self._watcher.removePaths(watched_files)
+            if watched_directories:
+                self._watcher.removePaths(watched_directories)
+            if files:
+                self._watcher.addPaths(files)
+            if directories:
+                self._watcher.addPaths(directories)
+        finally:
+            self.busy = False
 
     def queue(self, key: str) -> None:
         self._pending_keys.add(key)

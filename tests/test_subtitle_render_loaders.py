@@ -3388,3 +3388,47 @@ def test_per_slot_italic_effective_values_follow_stroke2_chain():
     # ruby_latin 跟随时吃注音日文的生效值（而非原始主文字值）。
     style = Style(italic=True, ruby_italic=False, ruby_latin_italic=None)
     assert ruby_latin_italic_value(style) is False
+
+
+def test_source_watch_prepares_paths_off_gui_and_discards_old_pending(qapp, monkeypatch, tmp_path):
+    import threading
+    path = tmp_path / "watch-thread.lrc"
+    path.write_text("[00:01:00]a[00:02:00]", encoding="utf-8")
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=2000)])
+    runtime = SubtitleSourceWatchRuntime(run_io=mw._run_project_io)
+    main_thread = threading.get_ident()
+    checks = []
+    original_file = Path.is_file
+    original_dir = Path.is_dir
+
+    def is_file(value):
+        if value == path:
+            checks.append(threading.get_ident())
+        return original_file(value)
+
+    def is_dir(value):
+        if value == path.parent:
+            checks.append(threading.get_ident())
+        return original_dir(value)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    add_paths = runtime.watcher.addPaths
+    commits = []
+
+    def add(values):
+        commits.append(threading.get_ident())
+        return add_paths(values)
+
+    monkeypatch.setattr(runtime.watcher, "addPaths", add)
+    key = subtitle_source_key(path)
+    runtime.set_baseline(path, track)
+    runtime.sync({key: (path, track)})
+    assert checks and all(thread != main_thread for thread in checks)
+    assert commits and all(thread == main_thread for thread in commits)
+    runtime.queue(key)
+    runtime.sync({})
+    assert not runtime.pending_keys
+    assert not runtime.states
+    assert not runtime.watcher.files()
+    runtime.deleteLater()
