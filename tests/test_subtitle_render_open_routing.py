@@ -127,3 +127,16 @@ def test_project_ui_stages_yield_and_preserve_errors(qtbot):
     with pytest.raises(ValueError, match="装配失败"):
         _run_project_steps(stages())
     assert events == ["first", "paint", "second"]
+
+
+def test_project_stages_report_progress_in_order(qtbot):
+    from krok_helper.subtitle_render.frontend.main_window import _run_project_steps
+    seen = []
+
+    def stages():
+        yield 10, "读取工程"
+        yield 60, "恢复字幕"
+        yield 90, "加载素材"
+
+    _run_project_steps(stages(), lambda percent, message: seen.append((percent, message)))
+    assert seen == [(10, "读取工程"), (60, "恢复字幕"), (90, "加载素材")]

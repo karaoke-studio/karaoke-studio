@@ -577,6 +577,12 @@ def _suspend_source_reload(method):
         self._source_reload_suspend_depth = depth + 1
         try:
             return method(self, *args, **kwargs)
+        except BaseException:
+            tooltip = getattr(self, "_project_load_tooltip", None)
+            if tooltip is not None:
+                tooltip.close()
+                self._project_load_tooltip = None
+            raise
         finally:
             self._source_reload_suspend_depth = depth
             runtime = getattr(self, "_source_watch_runtime", None)
@@ -596,7 +602,7 @@ class _ProjectIoDialog(QDialog):
         event.ignore()
 
 
-def _run_project_steps(steps) -> None:
+def _run_project_steps(steps, progress_cb=None) -> None:
     """Apply Qt-only stages on successive event-loop turns, under a modal guard."""
     dialog = _ProjectIoDialog(QApplication.activeWindow())
     dialog.setWindowTitle("加载工程")
@@ -612,7 +618,9 @@ def _run_project_steps(steps) -> None:
         # Stop before entering a stage: it may start its own worker event loop.
         timer.stop()
         try:
-            next(steps)
+            progress = next(steps)
+            if progress_cb is not None and progress is not None:
+                progress_cb(*progress)
         except StopIteration:
             dialog.accept()
         except BaseException as exc:
@@ -1053,6 +1061,7 @@ class SubtitleRenderWindow(QWidget):
     projectStateChanged = Signal(object)
     _tracksViewWindowsReady = Signal(int, object)
     _layoutIssuesReady = Signal(int, object)
+    _projectLoadProgress = Signal(int, str)
     _layoutCheckProgress = Signal(int, str)
     _embedded: bool = False
 
@@ -1417,6 +1426,9 @@ class SubtitleRenderWindow(QWidget):
             settings_key=_RECENT_PROJECTS_SETTINGS_KEY,
         )
         self._last_logged_project_state: Optional[tuple[object, ...]] = None
+        self._project_load_tooltip = None
+        self._project_load_progress = (0, "准备中…")
+        self._projectLoadProgress.connect(self._on_project_load_progress)
         self._loading_project = False
         self._syncing_screen_controls = False
         self._auto_save_enabled = True
@@ -2291,14 +2303,14 @@ class SubtitleRenderWindow(QWidget):
                 self._refresh_tracks_view_windows()
 
     def _apply_project_data_inner(self, data: dict) -> None:
-        _run_project_steps(self._project_data_steps(data))
+        _run_project_steps(self._project_data_steps(data), self._projectLoadProgress.emit)
 
     def _project_data_steps(self, data: dict):
         plan = _run_project_io(lambda: ProjectLoadPlan.from_data(data))
         self._project_document.remember_project_data(plan.source_data)
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
-        yield
+        yield 15, "恢复样式与字体"
         # 1) 样式 / 屏幕 / 配色方案
         self._screen_settings = plan.screen
         # 字体目录冷构建可达秒级且必须留在主线程——先给出可见占位再读取
@@ -2319,10 +2331,10 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.set_style(self._style)
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
-        yield
+        yield 30, "恢复导出设置"
         # 2) 导出参数
         self._apply_output_settings(plan.output)
-        yield
+        yield 40, "加载主字幕"
         # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
         if plan.subtitle_path is not None and _run_project_io(lambda: plan.subtitle_path.is_file()):
             self.load_subtitle_source(
@@ -2362,7 +2374,7 @@ class SubtitleRenderWindow(QWidget):
             self._lyrics_panel.set_track(self._timing_track)
             self._preview_panel.set_track(self._timing_track)
             self._refresh_tracks_view_windows()
-        yield
+        yield 65, "恢复字幕布局"
         # 旧工程（schema < v3）与 N3 导入产物：空格宽度/字间距从方案域迁移到
         # 布局域。轨道可能缺失（无字幕源），此时按空行统计退化为全局值绑定。
         if plan.schema_version < PROJECT_SCHEMA_VERSION:
@@ -2377,7 +2389,7 @@ class SubtitleRenderWindow(QWidget):
                 self._preview_panel.set_style(self._style)
                 self._lyrics_panel.set_style(self._style)
                 self._mark_project_dirty()
-        yield
+        yield 75, "安排素材加载"
         if self._defer_project_assets:
             self._queue_project_deferred_loads(plan)
         else:
@@ -2392,7 +2404,7 @@ class SubtitleRenderWindow(QWidget):
             audio = plan.audio_path
             if audio is not None and _run_project_io(lambda: audio.is_file()) and audio != self._video_path:
                 self.load_audio(audio)
-        yield
+        yield 85, "恢复前后黑与角色"
         # 前黑/后黑配置只在工程打开时整体替换（加载态不发信号/不平移标题）。
         self._pre_roll = plan.pre_roll
         self._post_roll = plan.post_roll
@@ -2460,6 +2472,7 @@ class SubtitleRenderWindow(QWidget):
             (asset.kind, asset.payload) for asset in plan.deferred_assets()
         ]
         self._project_deferred_load_generation = self._project_generation
+        self._project_deferred_load_total = len(self._project_deferred_loads)
         if self._project_deferred_loads:
             self._project_deferred_load_timer.start(500)
 
@@ -2472,6 +2485,12 @@ class SubtitleRenderWindow(QWidget):
             self._project_deferred_loads = []
             return
         kind, payload = self._project_deferred_loads.pop(0)
+        total = max(1, getattr(self, "_project_deferred_load_total", 1))
+        completed = total - len(self._project_deferred_loads) - 1
+        labels = {"background": "加载背景", "video": "加载视频",
+                  "audio": "加载音频", "extra_subtitle_sources": "加载副字幕"}
+        self._projectLoadProgress.emit(90 + int(9 * completed / total),
+                                       labels.get(kind, "加载附加素材"))
         was_loading = self._loading_project
         self._loading_project = True
         refresh_tracks = False
@@ -2497,6 +2516,8 @@ class SubtitleRenderWindow(QWidget):
             and self._project_deferred_load_generation == self._project_generation
         ):
             self._project_deferred_load_timer.start(120)
+        else:
+            self._on_project_load_progress(100, "工程加载完成")
 
     def _apply_output_settings(self, output: dict) -> None:
         directory_mode = output.get("directory_mode")
@@ -2764,6 +2785,27 @@ class SubtitleRenderWindow(QWidget):
             return
         self._open_project_path(path, confirm_discard=False)
 
+    def _on_project_load_progress(self, percent: int, message: str) -> None:
+        tooltip = self._project_load_tooltip
+        if tooltip is None:
+            return
+        previous, _ = self._project_load_progress
+        percent = max(previous, min(100, int(percent)))
+        self._project_load_progress = (percent, message)
+        tooltip.setContent(f"{message} {percent}%")
+        if percent == 100:
+            tooltip.setState(True)
+            self._project_load_tooltip = None
+
+    def _start_project_load_progress(self) -> None:
+        if self._project_load_tooltip is not None:
+            self._project_load_tooltip.close()
+        self._project_load_progress = (0, "读取工程文件")
+        tooltip = StateToolTip("正在加载工程", "读取工程文件 0%", self)
+        tooltip.move(tooltip.getSuitablePos())
+        tooltip.show()
+        self._project_load_tooltip = tooltip
+
     @_suspend_source_reload
     def _open_project_path(
         self,
@@ -2783,9 +2825,12 @@ class SubtitleRenderWindow(QWidget):
             return self._import_n3_project_path(path, confirm_discard=confirm_discard)
         if confirm_discard and not self._confirm_discard_changes():
             return False
+        self._start_project_load_progress()
         try:
             loaded = _run_project_io(lambda: self._project_controller.open(path))
         except (OSError, ValueError) as exc:
+            self._project_load_tooltip.close()
+            self._project_load_tooltip = None
             fluent_error(
                 self,
                 "打开项目失败",
@@ -2807,6 +2852,8 @@ class SubtitleRenderWindow(QWidget):
         )
         self._set_project_dirty(False)
         self._record_recent_project(path)
+        self._on_project_load_progress(90 if self._project_deferred_loads else 100,
+                                       "加载附加素材" if self._project_deferred_loads else "工程加载完成")
         if missing_resources:
             fluent_warning(
                 self,

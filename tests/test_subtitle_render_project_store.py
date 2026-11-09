@@ -4481,3 +4481,25 @@ def test_open_project_slow_watch_digest_keeps_heartbeat_and_defers_reload(
     finally:
         timer.stop()
         win.close()
+
+
+def test_project_open_progress_reaches_completion(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    project = tmp_path / "progress.yurika"
+    save_render_project(project, {})
+    seen = []
+    callback = win._on_project_load_progress
+
+    def record(percent, message):
+        seen.append(percent)
+        callback(percent, message)
+
+    win._projectLoadProgress.connect(lambda percent, message: seen.append(percent))
+    monkeypatch.setattr(win, "_on_project_load_progress", record)
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert seen == sorted(seen)
+        assert seen[-1] == 100
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
