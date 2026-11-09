@@ -16,7 +16,11 @@ from PyQt6.QtWidgets import QApplication
 
 from krok_helper.lyrics import LyricsSearchBatch, LyricsSearchCandidate
 from krok_helper.lyrics_search import page as lyrics_page
-from krok_helper.lyrics_search.page import LyricsSearchHost, LyricsSearchPage
+from krok_helper.lyrics_search.page import (
+    LYRICS_SOURCE_OPTIONS,
+    LyricsSearchHost,
+    LyricsSearchPage,
+)
 from krok_helper.settings import AppSettings
 
 PAGE = pathlib.Path(__file__).resolve().parents[1] / "krok_helper" / "lyrics_search" / "page.py"
@@ -171,6 +175,135 @@ def test_failure_with_existing_results_does_not_report_bar(page, monkeypatch) ->
     assert widget.lyrics_search_results == [candidate]
     assert "已保留 1 条已有结果" in widget.lyrics_status_label.text()
     assert not bars, "已有结果时不该再弹错误"
+
+
+def _select_lyrics_source(widget, label: str) -> None:
+    index = next(
+        i for i, (option_label, _ids) in enumerate(LYRICS_SOURCE_OPTIONS)
+        if option_label == label
+    )
+    widget.lyrics_source_combo.setCurrentIndex(index)
+
+
+def test_artist_field_is_visible_only_for_utaten(page) -> None:
+    widget, _ = page
+
+    assert widget.lyrics_artist_edit.isHidden(), "聚合模式不该出现歌手输入框"
+
+    _select_lyrics_source(widget, "UtaTen")
+    assert not widget.lyrics_artist_edit.isHidden()
+    assert "完整歌名" in widget.lyrics_keyword_edit.placeholderText()
+
+    _select_lyrics_source(widget, "聚合")
+    assert widget.lyrics_artist_edit.isHidden()
+
+
+def test_artist_field_has_same_size_as_keyword(page) -> None:
+    widget, _ = page
+    widget.resize(1200, 760)
+    widget.show()
+    QApplication.processEvents()
+    _select_lyrics_source(widget, "UtaTen")
+    QApplication.processEvents()
+
+    assert widget.lyrics_artist_edit.size() == widget.lyrics_keyword_edit.size()
+    assert {
+        widget.lyrics_source_combo.height(),
+        widget.lyrics_keyword_edit.height(),
+        widget.lyrics_artist_edit.height(),
+        widget.lyrics_search_button.height(),
+    } == {42}
+    assert widget.lyrics_artist_edit.geometry().top() == widget.lyrics_keyword_edit.geometry().top()
+    assert widget.lyrics_artist_edit.geometry().left() > widget.lyrics_keyword_edit.geometry().left()
+    # UtaTen 横向排列时来源下拉和搜索按钮仍与输入行顶对齐。
+    assert widget.lyrics_source_combo.mapTo(widget, widget.lyrics_source_combo.rect().topLeft()).y() == (
+        widget.lyrics_search_fields.mapTo(widget, widget.lyrics_search_fields.rect().topLeft()).y()
+    )
+    assert widget.lyrics_search_button.mapTo(widget, widget.lyrics_search_button.rect().topLeft()).y() == (
+        widget.lyrics_search_fields.mapTo(widget, widget.lyrics_search_fields.rect().topLeft()).y()
+    )
+    widget.close()
+
+
+def test_artist_text_is_ignored_outside_utaten(page) -> None:
+    widget, _ = page
+    widget.lyrics_artist_edit.setText("Ayumu Imazu")
+
+    _select_lyrics_source(widget, "聚合")
+    assert widget._current_lyrics_artist() == ""
+
+    _select_lyrics_source(widget, "UtaTen")
+    assert widget._current_lyrics_artist() == "Ayumu Imazu"
+
+
+def test_empty_keyword_message_stays_original_for_non_utaten(page, monkeypatch) -> None:
+    widget, _ = page
+    bars: list[dict] = []
+    monkeypatch.setattr(lyrics_page.InfoBar, "info", lambda **kwargs: bars.append(kwargs))
+
+    _select_lyrics_source(widget, "聚合")
+    widget._start_lyrics_search()
+    assert "请输入搜索关键词。" in bars[-1]["content"]
+
+    _select_lyrics_source(widget, "UtaTen")
+    widget._start_lyrics_search()
+    assert "请输入歌名或歌手。" in bars[-1]["content"]
+
+
+def test_start_search_passes_artist_only_for_utaten(page, monkeypatch) -> None:
+    widget, _ = page
+    captured: dict = {}
+
+    def fake_search_batch(keyword, **kwargs):
+        captured["keyword"] = keyword
+        captured.update(kwargs)
+        return LyricsSearchBatch(
+            results=[], overflow_results=[], next_provider_pages={}, has_more=False
+        )
+
+    monkeypatch.setattr(widget._search_service, "search_batch", fake_search_batch)
+    started: list = []
+    monkeypatch.setattr(
+        lyrics_page.BackgroundTask,
+        "start",
+        lambda self, *args, **kwargs: started.append(self),
+    )
+
+    _select_lyrics_source(widget, "UtaTen")
+    widget.lyrics_keyword_edit.clear()
+    widget.lyrics_artist_edit.setText("Ayumu Imazu")
+    widget._start_lyrics_search()
+    started[-1]._runner(lambda _message: None)
+    assert captured["keyword"] == ""
+    assert captured["artist"] == "Ayumu Imazu"
+    assert captured["provider_ids"] == ("utaten",)
+
+    # 非 UtaTen：即使歌手框里还留着文字，也不能进入请求。
+    _select_lyrics_source(widget, "聚合")
+    widget.lyrics_keyword_edit.setText("結び")
+    widget._start_lyrics_search()
+    started[-1]._runner(lambda _message: None)
+    assert captured["artist"] == ""
+    assert captured["keyword"] == "結び"
+
+
+def test_utaten_artist_only_search_does_not_require_keyword(page, monkeypatch) -> None:
+    widget, _ = page
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        lyrics_page.BackgroundTask,
+        "start",
+        lambda self, *args, **kwargs: started.append((self, args, kwargs)),
+    )
+    _select_lyrics_source(widget, "UtaTen")
+    widget.lyrics_keyword_edit.clear()
+    widget.lyrics_artist_edit.setText("Ayumu Imazu")
+
+    widget._start_lyrics_search()
+
+    assert started, "只填歌手也应该能发起搜索"
+    assert widget.lyrics_search_artist == "Ayumu Imazu"
+    assert widget.lyrics_search_keyword == ""
 
 
 def test_search_with_no_results_and_errors_is_consistent(page, monkeypatch) -> None:

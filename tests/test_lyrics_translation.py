@@ -107,6 +107,62 @@ def test_search_batch_preserves_partial_errors():
     assert batch.errors == ("网易云音乐：HTTP 503",)
 
 
+def test_search_batch_allows_artist_only_with_empty_keyword():
+    import krok_helper.lyrics as lyrics
+    seen: dict[str, str] = {}
+
+    class Utaten:
+        provider_id = "utaten"
+        provider_name = "UtaTen"
+        def search(self, keyword, *, limit=25, page=1, artist=""):
+            seen["keyword"] = keyword
+            seen["artist"] = artist
+            return [LyricsSearchCandidate("utaten", "UtaTen", "1", "結び", artist, "", None)]
+
+    batch = lyrics.LyricsSearchService([Utaten()]).search_batch(
+        "", provider_ids=("utaten",), artist="Ayumu Imazu"
+    )
+
+    assert seen == {"keyword": "", "artist": "Ayumu Imazu"}
+    assert [item.title for item in batch.results] == ["結び"]
+
+
+def test_search_batch_rejects_artist_without_utaten():
+    import pytest
+    import krok_helper.lyrics as lyrics
+
+    with pytest.raises(lyrics.LyricsSearchError, match="仅支持 UtaTen"):
+        lyrics.LyricsSearchService().search_batch(
+            "", provider_ids=("qm",), artist="Ayumu Imazu"
+        )
+
+
+def test_search_batch_passes_artist_only_to_utaten():
+    import krok_helper.lyrics as lyrics
+    seen: dict[str, str] = {}
+
+    class Utaten:
+        provider_id = "utaten"
+        provider_name = "UtaTen"
+        def search(self, keyword, *, limit=25, page=1, artist=""):
+            seen["utaten"] = artist
+            return [LyricsSearchCandidate("utaten", "UtaTen", "1", keyword, artist, "", None)]
+
+    class Other:
+        provider_id = "qm"
+        provider_name = "QQ音乐"
+        def search(self, keyword, *, limit=25, page=1):
+            seen["qm"] = "called"
+            return [LyricsSearchCandidate("qm", "QQ音乐", "2", keyword, "", "", None)]
+
+    batch = lyrics.LyricsSearchService([Utaten(), Other()]).search_batch(
+        "結び", provider_ids=("utaten", "qm"), artist="Ayumu Imazu"
+    )
+
+    assert seen == {"utaten": "Ayumu Imazu", "qm": "called"}
+    assert len(batch.results) == 2
+
+
 def test_search_batch_all_fail_returns_empty_batch_with_errors():
     """所有来源失败也要返回 batch，让页面用 InfoBar 反馈而不是抛异常弹窗。"""
     import krok_helper.lyrics as lyrics

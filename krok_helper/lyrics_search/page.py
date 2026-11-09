@@ -243,6 +243,7 @@ class LyricsSearchPage(QWidget):
         self.lyrics_pending_results: list[LyricsSearchCandidate] = []
         self.lyrics_selected_candidate: LyricsSearchCandidate | None = None
         self.lyrics_search_keyword = ""
+        self.lyrics_search_artist = ""
         self.lyrics_search_provider_ids: tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
         self.lyrics_next_provider_pages: dict[str, int] = {}
         self.lyrics_has_more_results = False
@@ -413,14 +414,37 @@ class LyricsSearchPage(QWidget):
         self.lyrics_source_combo.setFixedHeight(42)
         self._host.install_single_click_combo_behavior(self.lyrics_source_combo)
         self.lyrics_source_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
+        self.lyrics_source_combo.currentIndexChanged.connect(self._sync_lyrics_artist_visibility)
 
         self.lyrics_keyword_edit = LyricsKeywordLineEdit()
         self.lyrics_keyword_edit.setObjectName("LyricsKeywordEdit")
-        self.lyrics_keyword_edit.setPlaceholderText(
+        self._default_keyword_placeholder = (
             "例如：Recollect / Reweave / Redo / Realize（也可以把歌词文件拖到这里自动提取歌名）"
         )
-        self.lyrics_keyword_edit.setMinimumHeight(42)
+        self.lyrics_keyword_edit.setPlaceholderText(self._default_keyword_placeholder)
+        # 与来源下拉/搜索按钮保持同一个 42px 高度；QLineEdit 自身可能带
+        # 更小的 max-height，只设 minimum 会被它和布局拉扯成不同高度。
+        self.lyrics_keyword_edit.setFixedHeight(42)
         self.lyrics_keyword_edit.returnPressed.connect(self._start_lyrics_search)
+        # UtaTen 专属：歌名框保留整串标题（标题里允许空格），歌手单独输入。
+        # 其它来源完全不显示这个控件，避免改变它们原有的检索体验。
+        self.lyrics_artist_edit = QLineEdit()
+        self.lyrics_artist_edit.setObjectName("LyricsArtistEdit")
+        self.lyrics_artist_edit.setPlaceholderText("歌手（可选，仅 UtaTen）")
+        self.lyrics_artist_edit.setToolTip(
+            "仅 UtaTen：歌手名与歌名分开填写，歌名框仍输入完整标题（可含空格）。"
+        )
+        self.lyrics_artist_edit.setFixedHeight(42)
+        self.lyrics_artist_edit.returnPressed.connect(self._start_lyrics_search)
+        self.lyrics_artist_edit.setVisible(False)
+        # 歌名 / 歌手横向并排、平分可用宽度；UtaTen 时才显示歌手框，
+        # 其它来源隐藏后歌名框自动占满原来的整行。
+        self.lyrics_search_fields = QWidget(search_panel)
+        search_fields_layout = QHBoxLayout(self.lyrics_search_fields)
+        search_fields_layout.setContentsMargins(0, 0, 0, 0)
+        search_fields_layout.setSpacing(10)
+        search_fields_layout.addWidget(self.lyrics_keyword_edit, 1)
+        search_fields_layout.addWidget(self.lyrics_artist_edit, 1)
         self.lyrics_search_button = PrimaryPushButton("搜索歌曲")
         self.lyrics_search_button.setObjectName("LyricsSearchButton")
         self.lyrics_search_button.setFixedSize(128, 42)
@@ -429,9 +453,15 @@ class LyricsSearchPage(QWidget):
         self.lyrics_status_label.setObjectName("LyricsStatusText")
         self.lyrics_status_label.setWordWrap(True)
         self.lyrics_status_label.setFont(build_lyrics_ui_font(point_size=9.5))
-        search_layout.addWidget(self.lyrics_source_combo, 0, 0)
-        search_layout.addWidget(self.lyrics_keyword_edit, 0, 1)
-        search_layout.addWidget(self.lyrics_search_button, 0, 2)
+        # 来源/按钮固定 42px，UtaTen 把歌名+歌手堆成 92px 高时，默认网格
+        # 会把它们垂直居中而和歌名框错开；显式顶对齐，切换来源不跳动。
+        search_layout.addWidget(
+            self.lyrics_source_combo, 0, 0, alignment=Qt.AlignmentFlag.AlignTop
+        )
+        search_layout.addWidget(self.lyrics_search_fields, 0, 1)
+        search_layout.addWidget(
+            self.lyrics_search_button, 0, 2, alignment=Qt.AlignmentFlag.AlignTop
+        )
         search_layout.addWidget(self.lyrics_status_label, 1, 0, 1, 3)
         search_layout.setColumnStretch(1, 1)
         shell.addWidget(search_panel)
@@ -589,9 +619,11 @@ class LyricsSearchPage(QWidget):
         if load_more and not self.lyrics_has_more_results:
             return
         keyword = self.lyrics_search_keyword if load_more else self.lyrics_keyword_edit.text().strip()
-        if not keyword:
-            self.lyrics_status_label.setText("请输入搜索关键词。")
-            self._show_search_info_bar("info", "请输入搜索关键词。", title="歌词检索")
+        artist = self.lyrics_search_artist if load_more else self._current_lyrics_artist()
+        if not keyword and not artist:
+            message = "请输入歌名或歌手。" if self._is_utaten_selected() else "请输入搜索关键词。"
+            self.lyrics_status_label.setText(message)
+            self._show_search_info_bar("info", message, title="歌词检索")
             return
 
         self.lyrics_search_button.setEnabled(False)
@@ -605,6 +637,7 @@ class LyricsSearchPage(QWidget):
             self._lyrics_loading_more = False
             self.lyrics_status_label.setText("正在搜索歌词候选歌曲…")
             self.lyrics_search_keyword = keyword
+            self.lyrics_search_artist = artist
             self.lyrics_search_provider_ids = provider_ids
             self.lyrics_next_provider_pages = {}
             self.lyrics_has_more_results = False
@@ -620,6 +653,7 @@ class LyricsSearchPage(QWidget):
                     provider_ids=provider_ids,
                     limit=DEFAULT_LYRICS_SEARCH_LIMIT,
                     provider_pages=self.lyrics_next_provider_pages if load_more else None,
+                    artist=artist,
                 ),
             )
 
@@ -789,7 +823,7 @@ class LyricsSearchPage(QWidget):
             return
         if scrollbar.value() < scrollbar.maximum() - 12:
             return
-        if not self.lyrics_search_keyword:
+        if not self.lyrics_search_keyword and not self.lyrics_search_artist:
             return
         if self.lyrics_pending_results:
             self._append_pending_lyrics_results()
@@ -1034,9 +1068,28 @@ class LyricsSearchPage(QWidget):
                 self.lyrics_language_combo.setCurrentIndex(index)
                 break
         self.lyrics_strip_intro_checkbox.setChecked(bool(self._host.settings.lyrics_strip_intro_lines))
+        self._sync_lyrics_artist_visibility()
 
     def _current_lyrics_source_ids(self) -> tuple[str, ...]:
         return LYRICS_SOURCE_MAP.get(self.lyrics_source_combo.currentText(), DEFAULT_LYRICS_PROVIDER_IDS)
+
+    def _is_utaten_selected(self) -> bool:
+        return self._current_lyrics_source_ids() == ("utaten",)
+
+    def _current_lyrics_artist(self) -> str:
+        """只有 UtaTen 使用独立歌手字段；其它来源永远忽略它。"""
+        if not self._is_utaten_selected():
+            return ""
+        return self.lyrics_artist_edit.text().strip()
+
+    def _sync_lyrics_artist_visibility(self, *_args) -> None:
+        """UtaTen 才显示歌手输入框，切换来源时同步收起。"""
+        visible = self._is_utaten_selected()
+        self.lyrics_artist_edit.setVisible(visible)
+        if visible:
+            self.lyrics_keyword_edit.setPlaceholderText("输入完整歌名（可含空格）")
+        else:
+            self.lyrics_keyword_edit.setPlaceholderText(self._default_keyword_placeholder)
 
     def _current_lyrics_preview_mode(self) -> str:
         return LYRICS_PREVIEW_MODE_MAP.get(self.lyrics_preview_mode_combo.currentText(), LYRICS_PREVIEW_LINE)

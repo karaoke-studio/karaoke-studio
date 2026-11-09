@@ -104,7 +104,7 @@ def test_utaten_search_treats_whole_keyword_as_title(monkeypatch) -> None:
     provider = UtatenLyricsProvider()
     calls: list[str] = []
 
-    def fake_search_once(*, title: str, sort="popular_sort_asc") -> list[dict[str, str]]:
+    def fake_search_once(*, title: str, artist: str = "", sort="popular_sort_asc") -> list[dict[str, str]]:
         calls.append(title)
         if title == "Ruby GREAT3":
             return [{"title": "Ruby GREAT3", "artist": "GREAT3", "snippet": "",
@@ -310,11 +310,21 @@ def test_utaten_sends_one_title_request_with_whole_title(monkeypatch) -> None:
     assert "layout_search_text" not in calls[0]
 
 
-def test_utaten_empty_response_is_not_no_results(monkeypatch) -> None:
-    import pytest
+def test_utaten_empty_response_is_treated_as_no_results(monkeypatch) -> None:
     import krok_helper.lyrics as lyrics
     monkeypatch.setattr(lyrics, "_load_text_from_request", lambda request: "")
-    with pytest.raises(lyrics.LyricsSearchError, match="空白搜索页面"):
+    assert UtatenLyricsProvider().search("結び") == []
+
+
+def test_utaten_network_error_still_raises(monkeypatch) -> None:
+    import pytest
+    import krok_helper.lyrics as lyrics
+
+    def load(request):
+        raise lyrics.LyricsSearchError("HTTP 503")
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+    with pytest.raises(lyrics.LyricsSearchError, match="新接口：HTTP 503"):
         UtatenLyricsProvider().search("結び")
 
 
@@ -351,6 +361,30 @@ def test_utaten_falls_back_to_legacy_when_primary_is_empty(monkeypatch) -> None:
     assert len(calls) == 2
     assert "page=1" in calls[0]
     assert "show_artists=1" in calls[1]
+
+
+def test_utaten_fallback_carries_artist(monkeypatch) -> None:
+    from urllib.parse import urlencode
+    import krok_helper.lyrics as lyrics
+
+    calls: list[str] = []
+    def load(request):
+        calls.append(request.full_url)
+        if "page=1" in request.full_url:
+            return ""
+        return (
+            '<table class="searchResult"><tr><th>header</th></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/1/">結び</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">Ayumu Imazu</a></p></td></tr></table>'
+        )
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+
+    results = UtatenLyricsProvider()._search_once(title="結び", artist="Ayumu Imazu")
+
+    assert [item["title"] for item in results] == ["結び"]
+    assert urlencode({"title": "結び"}) in calls[1]
+    assert urlencode({"artist_name": "Ayumu Imazu"}) in calls[1]
 
 
 def test_utaten_popular_then_latest_order_survives_service_ranking(monkeypatch):
@@ -394,6 +428,72 @@ def test_utaten_filters_title_locally_with_exact_match(monkeypatch):
     assert [x["title"] for x in UtatenLyricsProvider()._search_once(title="君の名は 主題歌")] == ["君の名は 主題歌"]
 
 
+def test_utaten_separate_artist_field(monkeypatch):
+    """UtaTen 的歌手是独立字段：服务端按 artist_name 过滤，本地再收窄。"""
+    from urllib.parse import urlencode
+    import krok_helper.lyrics as lyrics
+
+    calls: list[str] = []
+    def load(request):
+        calls.append(request.full_url)
+        return (
+            '<table class="searchResult"><tr><th>header</th></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/1/">結び</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">Ayumu Imazu</a></p></td></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/2/">結び</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/2/">别的歌手</a></p></td></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/3/">HOWL</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">Ayumu Imazu</a></p></td></tr></table>'
+        )
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+
+    results = UtatenLyricsProvider()._search_once(title="結び", artist="Ayumu Imazu")
+
+    assert [(item["title"], item["artist"]) for item in results] == [("結び", "Ayumu Imazu")]
+    assert urlencode({"title": "結び"}) in calls[0]
+    assert urlencode({"artist_name": "Ayumu Imazu"}) in calls[0]
+
+
+def test_utaten_artist_only_returns_artist_songs(monkeypatch):
+    import krok_helper.lyrics as lyrics
+
+    def load(request):
+        return (
+            '<table class="searchResult"><tr><th>header</th></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/1/">結び</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">Ayumu Imazu</a></p></td></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/2/">HOWL</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">Ayumu Imazu</a></p></td></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/3/">别的歌</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/2/">别的歌手</a></p></td></tr></table>'
+        )
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+
+    results = UtatenLyricsProvider()._search_once(title="", artist="Ayumu Imazu")
+
+    assert [item["title"] for item in results] == ["結び", "HOWL"]
+
+
+def test_utaten_artist_filter_does_not_drop_server_results(monkeypatch):
+    """服务端已按 artist_name 过滤；本地写法对不上时保留服务端结果。"""
+    import krok_helper.lyrics as lyrics
+
+    def load(request):
+        return (
+            '<table class="searchResult"><tr><th>header</th></tr>'
+            '<tr><td><p class="searchResult__title"><a href="/lyric/1/">結び</a></p></td>'
+            '<td class="searchResult__artist"><p><a href="/artist/1/">Ayumu Imazu</a></p></td></tr></table>'
+        )
+
+    monkeypatch.setattr(lyrics, "_load_text_from_request", load)
+
+    results = UtatenLyricsProvider()._search_once(title="", artist="あゆむ")
+
+    assert [item["title"] for item in results] == ["結び"]
+
+
 def test_utaten_sends_whole_title_with_spaces(monkeypatch):
     """标题里的空格不能被当成歌手分隔符，整串都原样作为歌名参数。"""
     from urllib.parse import urlencode
@@ -418,13 +518,48 @@ def test_utaten_sends_whole_title_with_spaces(monkeypatch):
     assert "artist_name=&" in calls[0]
 
 
+def test_utaten_artist_only_ranks_against_artist(monkeypatch):
+    provider = UtatenLyricsProvider()
+    monkeypatch.setattr(
+        provider,
+        "_search_once",
+        lambda **kwargs: [
+            {"url": "https://utaten.com/lyric/1/", "title": "結び", "artist": "Ayumu Imazu", "snippet": ""}
+        ],
+    )
+
+    results = provider.search("", artist="Ayumu Imazu")
+
+    assert results[0].match_source == "歌手"
+    assert results[0].artist_score > 0
+
+
+def test_utaten_artist_only_uses_single_request(monkeypatch):
+    provider = UtatenLyricsProvider()
+    calls: list[str] = []
+
+    def fake_variants(keyword, *, artist="", sort="popular_sort_asc"):
+        calls.append(sort)
+        return [
+            {"url": f"https://utaten.com/lyric/{i}/", "title": f"曲{i}", "artist": "Ayumu Imazu", "snippet": ""}
+            for i in range(3)
+        ]
+
+    monkeypatch.setattr(provider, "_search_all_variants", fake_variants)
+
+    results = provider.search("", artist="Ayumu Imazu")
+
+    assert len(results) == 3
+    assert calls == ["popular_sort_asc"]
+
+
 def test_utaten_popular_failure_still_tries_latest_sort(monkeypatch):
     """人气排序整条失败时，不能直接报错，发行日期排序仍要走完。"""
     import krok_helper.lyrics as lyrics
 
     provider = UtatenLyricsProvider()
 
-    def fake_variants(keyword, *, sort="popular_sort_asc"):
+    def fake_variants(keyword, *, artist="", sort="popular_sort_asc"):
         if sort == "popular_sort_asc":
             raise lyrics.LyricsSearchError("popular failed")
         return [{"url": "https://utaten.com/lyric/2/", "title": "新曲", "artist": "a", "snippet": ""}]

@@ -346,22 +346,30 @@ class UtatenLyricsProvider:
     source_priority = _PROVIDER_PRIORITIES["utaten"]
     base_url = "https://utaten.com"
 
-    def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT, page: int = 1) -> list[LyricsSearchCandidate]:
+    def search(
+        self,
+        keyword: str,
+        *,
+        limit: int = DEFAULT_LYRICS_SEARCH_LIMIT,
+        page: int = 1,
+        artist: str = "",
+    ) -> list[LyricsSearchCandidate]:
         errors: list[str] = []
         popular: list[dict[str, str]] = []
         latest: list[dict[str, str]] = []
         responded = False
         try:
-            popular = self._search_all_variants(keyword)
+            popular = self._search_all_variants(keyword, artist=artist)
             responded = True
         except LyricsSearchError as exc:
             errors.append(str(exc))
         # 人气排序整条失败（不是“确实无结果”）时仍要走发行日期排序；只有
-        # 至少两条结果时才值得再查一次最新（用于把“其余歌曲中最新的一首”
-        # 插到第二位），一条结果时省掉这次请求。
-        if len(popular) >= 2 or not responded:
+        # 歌名搜索且至少两条结果时才值得再查一次最新（用于把“其余歌曲中最新
+        # 的一首”插到第二位）。纯歌手搜索没有“最新第二”的语义，只打一次。
+        has_title = bool(" ".join(keyword.split()))
+        if (has_title and len(popular) >= 2) or not responded:
             try:
-                latest = self._search_all_variants(keyword, sort="release_date_desc")
+                latest = self._search_all_variants(keyword, artist=artist, sort="release_date_desc")
                 responded = True
             except LyricsSearchError as exc:
                 errors.append(str(exc))
@@ -399,21 +407,32 @@ class UtatenLyricsProvider:
                     provider_position=index,
                 )
             )
+        # 纯歌手搜索没有歌名关键词，用歌手参与匹配度计算，预览里才不会是
+        # 全 0 分 / “匹配字段：歌名”。
+        rank_keyword = keyword if keyword.strip() else artist
         for candidate in items:
-            _rank_candidate(candidate, keyword)
+            _rank_candidate(candidate, rank_keyword)
         items.sort(key=_sort_key, reverse=True)
         return items[start_index : start_index + page_size]
 
-    def _search_all_variants(self, keyword: str, *, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
+    def _search_all_variants(
+        self,
+        keyword: str,
+        *,
+        artist: str = "",
+        sort: str = "popular_sort_asc",
+    ) -> list[dict[str, str]]:
         """整个关键词都当歌名，不拆歌手、不枚举切分组合。
 
         歌曲标题本身可以带空格，按空格拆“歌名 + 歌手”会把标题拆坏；这里
         只保留一条路径，由 :meth:`_search_once` 用完整标题去查，再本地收窄。
+        歌手是独立的可选字段；只填歌手、不填歌名时直接列该歌手的歌。
         """
         title = " ".join(keyword.split())
-        if not title:
+        artist = " ".join(artist.split())
+        if not title and not artist:
             return []
-        return self._search_once(title=title, sort=sort)
+        return self._search_once(title=title, artist=artist, sort=sort)
 
     #: 新搜索接口对非浏览器请求会返回空 body，所以这里带齐浏览器常规头。
     _SEARCH_HEADERS = {
@@ -438,19 +457,27 @@ class UtatenLyricsProvider:
         "User-Agent": f"{APP_NAME}/{APP_VERSION} (lyrics search)",
     }
 
-    def _search_once(self, *, title: str, sort: str = "popular_sort_asc") -> list[dict[str, str]]:
-        """整个关键词只当歌名搜索，完全不参与歌手过滤。
+    def _search_once(
+        self,
+        *,
+        title: str,
+        artist: str = "",
+        sort: str = "popular_sort_asc",
+    ) -> list[dict[str, str]]:
+        """歌名整串 + 可选独立歌手字段。
 
-        优先走当前可用的 ``/search?title=...&...&sort=...&page=1`` 查询串接口；
-        只有它返回空 body / 无可解析结果页时才回退到旧的 ``show_artists=1``
-        接口。新接口一旦正常应答（包括“确实无结果”），不再打旧接口。
+        优先走当前可用的 ``/search?title=...&artist_name=...&...&page=1``
+        查询串接口；只有它返回空 body / 无可解析结果页时才回退到旧的
+        ``show_artists=1`` 接口。新接口一旦正常应答（包括“确实无结果”），
+        不再打旧接口。
         """
         title = " ".join(title.split())
-        if not title:
+        artist = " ".join(artist.split())
+        if not title and not artist:
             return []
         primary_params = {
             "title": title,
-            "artist_name": "",
+            "artist_name": artist,
             "sub_title": "",
             "lyricist": "",
             "composer": "",
@@ -470,14 +497,14 @@ class UtatenLyricsProvider:
             )
             entries = self._parse_search_page(primary_text)
             if entries is not None:
-                return self._filter_title_entries(entries, title)
+                return self._filter_entries(entries, title=title, artist=artist)
         except LyricsSearchError as exc:
             primary_error = exc
 
         legacy_params = {
             "sort": sort,
             "title": title,
-            "artist_name": "",
+            "artist_name": artist,
             "beginning": "",
             "body": "",
             "lyricist": "",
@@ -486,6 +513,7 @@ class UtatenLyricsProvider:
             "tag": "",
             "show_artists": "1",
         }
+        legacy_error: LyricsSearchError | None = None
         try:
             legacy_text = _load_text_from_request(
                 Request(
@@ -495,15 +523,23 @@ class UtatenLyricsProvider:
             )
             entries = self._parse_search_page(legacy_text)
             if entries is not None:
-                return self._filter_title_entries(entries, title)
+                return self._filter_entries(entries, title=title, artist=artist)
         except LyricsSearchError as exc:
-            if primary_error is not None:
-                raise LyricsSearchError(f"新接口：{primary_error}；回退接口：{exc}") from exc
-            raise LyricsSearchError(f"回退接口：{exc}") from exc
+            legacy_error = exc
 
+        # 两次都是 HTTP 200 但没有可解析结果页：UtaTen 对“确实没有匹配”
+        # 和反爬拦截都可能返回空 body。这里按“没有结果”处理，避免把
+        # 空结果误报成弹窗错误；真正的网络/HTTP 异常才向上抛。
+        if primary_error is not None and legacy_error is not None:
+            raise LyricsSearchError(
+                f"新接口：{primary_error}；回退接口：{legacy_error}"
+            ) from legacy_error
         if primary_error is not None:
             raise primary_error
-        raise LyricsSearchError("UtaTen 返回空白搜索页面，请稍后重试。")
+        if legacy_error is not None:
+            raise LyricsSearchError(f"回退接口：{legacy_error}") from legacy_error
+        log.warning("UtaTen 搜索返回空页面，按无结果处理 title=%r artist=%r", title, artist)
+        return []
 
     def _parse_search_page(self, html_text: str) -> list[dict[str, str]] | None:
         """解析搜索结果页；空 body / 不是结果页返回 ``None`` 以触发回退。"""
@@ -512,8 +548,25 @@ class UtatenLyricsProvider:
         return _parse_utaten_search_results(html_text, base_url=self.base_url)
 
     @staticmethod
-    def _filter_title_entries(entries: list[dict[str, str]], title: str) -> list[dict[str, str]]:
-        return [entry for entry in entries if _utaten_title_matches(entry["title"], title)]
+    def _filter_entries(
+        entries: list[dict[str, str]],
+        *,
+        title: str,
+        artist: str,
+    ) -> list[dict[str, str]]:
+        if title:
+            entries = [entry for entry in entries if _utaten_title_matches(entry["title"], title)]
+        if artist:
+            filtered = [
+                entry for entry in entries
+                if _utaten_artist_matches(entry["artist"], artist)
+            ]
+            # 服务端 artist_name 已经是权威过滤；本地过滤只用于收窄明显
+            # 不匹配的返回。若本地规则（空格/写法差异）把所有项都删光，
+            # 宁可保留服务端结果，也不要误报“没有结果”。
+            if filtered:
+                entries = filtered
+        return entries
 
     def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
         url = ""
@@ -933,8 +986,11 @@ class LyricsSearchService:
         *,
         provider_ids: tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS,
         limit: int = DEFAULT_LYRICS_SEARCH_LIMIT,
+        artist: str = "",
     ) -> list[LyricsSearchCandidate]:
-        return self.search_batch(keyword, provider_ids=provider_ids, limit=limit).results
+        return self.search_batch(
+            keyword, provider_ids=provider_ids, limit=limit, artist=artist
+        ).results
 
     def search_batch(
         self,
@@ -943,20 +999,25 @@ class LyricsSearchService:
         provider_ids: tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS,
         limit: int = DEFAULT_LYRICS_SEARCH_LIMIT,
         provider_pages: dict[str, int] | None = None,
+        artist: str = "",
     ) -> LyricsSearchBatch:
         normalized_keyword = " ".join(keyword.split())
-        if not normalized_keyword:
+        normalized_artist = " ".join(artist.split())
+        if not normalized_keyword and not normalized_artist:
             return LyricsSearchBatch(results=[], overflow_results=[], next_provider_pages={}, has_more=False)
+        if normalized_artist and "utaten" not in provider_ids:
+            raise LyricsSearchError("歌手搜索仅支持 UtaTen。")
 
         allowed_providers = [provider for provider in self.providers if provider.provider_id in provider_ids]
         if not allowed_providers:
             raise LyricsSearchError("没有可用的歌词来源。")
 
         log.info(
-            "开始检索歌词 providers=%s page_state=%s limit=%s",
+            "开始检索歌词 providers=%s page_state=%s limit=%s artist=%s",
             ",".join(provider.provider_id for provider in allowed_providers),
             provider_pages or {},
             limit,
+            normalized_artist or "-",
         )
 
         ranked: dict[str, LyricsSearchCandidate] = {}
@@ -966,7 +1027,19 @@ class LyricsSearchService:
 
         def fetch_provider_page(provider: LyricsProvider) -> tuple[str, int, list[LyricsSearchCandidate]]:
             page = request_pages[provider.provider_id]
-            return provider.provider_id, page, provider.search(normalized_keyword, limit=PROVIDER_PAGE_SIZE, page=page)
+            if provider.provider_id == "utaten":
+                return provider.provider_id, page, provider.search(
+                    normalized_keyword,
+                    limit=PROVIDER_PAGE_SIZE,
+                    page=page,
+                    artist=normalized_artist,
+                )
+            if not normalized_keyword:
+                # 歌手字段只有 UtaTen 使用；其它来源没有关键词时不要发空查询。
+                return provider.provider_id, page, []
+            return provider.provider_id, page, provider.search(
+                normalized_keyword, limit=PROVIDER_PAGE_SIZE, page=page
+            )
 
         with ThreadPoolExecutor(max_workers=max(1, len(allowed_providers))) as executor:
             future_map = {executor.submit(fetch_provider_page, provider): provider for provider in allowed_providers}
@@ -1041,6 +1114,15 @@ def _utaten_title_matches(candidate_title: str, query_title: str) -> bool:
     """本地歌名过滤：只做归一化后的包含判断，不做相似度模糊匹配。"""
     query = _normalize_text(query_title)
     candidate = _normalize_text(candidate_title)
+    if not query or not candidate:
+        return False
+    return query in candidate
+
+
+def _utaten_artist_matches(candidate_artist: str, query_artist: str) -> bool:
+    """本地歌手过滤：忽略空格差异，仍不做别名/模糊匹配。"""
+    query = _normalize_text(query_artist).replace(" ", "")
+    candidate = _normalize_text(candidate_artist).replace(" ", "")
     if not query or not candidate:
         return False
     return query in candidate

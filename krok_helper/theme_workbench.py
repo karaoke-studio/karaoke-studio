@@ -841,7 +841,7 @@ def build_app_qss() -> str:
             border-radius: 12px;
             color: {p.text_primary};
         }}
-        QLineEdit#LyricsKeywordEdit, QComboBox#LyricsSourceCombo, QComboBox#LyricsPreviewModeCombo {{
+        QLineEdit#LyricsKeywordEdit, QLineEdit#LyricsArtistEdit, QComboBox#LyricsSourceCombo, QComboBox#LyricsPreviewModeCombo {{
             background: {p.lyrics_keyword_bg};
             border: 1px solid {p.lyrics_keyword_border};
             border-radius: 8px;
@@ -849,11 +849,11 @@ def build_app_qss() -> str:
             min-height: 24px;
             color: {p.lyrics_keyword_text};
         }}
-        QLineEdit#LyricsKeywordEdit:hover, QComboBox#LyricsSourceCombo:hover, QComboBox#LyricsPreviewModeCombo:hover {{
+        QLineEdit#LyricsKeywordEdit:hover, QLineEdit#LyricsArtistEdit:hover, QComboBox#LyricsSourceCombo:hover, QComboBox#LyricsPreviewModeCombo:hover {{
             border-color: {p.lyrics_keyword_hover_border};
             background: {p.lyrics_keyword_hover_bg};
         }}
-        QLineEdit#LyricsKeywordEdit:focus, QComboBox#LyricsSourceCombo:focus, QComboBox#LyricsPreviewModeCombo:focus {{
+        QLineEdit#LyricsKeywordEdit:focus, QLineEdit#LyricsArtistEdit:focus, QComboBox#LyricsSourceCombo:focus, QComboBox#LyricsPreviewModeCombo:focus {{
             border: 1px solid {p.input_border_focus};
             background: {p.lyrics_keyword_bg};
         }}
