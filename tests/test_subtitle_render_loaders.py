@@ -3596,3 +3596,57 @@ def test_probe_cancel_is_a_clean_none(qapp, monkeypatch, tmp_path):
         assert win._probe(tmp_path / "movie.mp4", "视频") is None
     finally:
         win.close()
+
+
+def test_shutdown_detaches_running_handoff_probe_thread(qapp, monkeypatch, tmp_path):
+    """关窗撞上正在跑的交接探测线程：线程被接管等待，绝不运行中被析构。
+
+    QThread 在运行中被销毁会触发 Qt 6.11 的 qFatal（进程 abort）——事件
+    日志里多次 python.exe→Qt6Core.dll 0xc0000409(__fastfail 7) 崩溃的已知
+    来源之一。回归钉子：``_shutdown_background_import_threads`` 对
+    ``_handoff_probe_thread`` 的有界等待 + 接管（detach）路径。
+    """
+    import krok_helper.subtitle_render.frontend.workflow.background_tasks as bt
+
+    win = _make_window(qapp, monkeypatch)
+    started = threading.Event()
+    release = threading.Event()
+    load_video_calls: list[Path] = []
+    monkeypatch.setattr(win, "load_video", lambda path, info=None: load_video_calls.append(path))
+
+    def blocking_probe(_ffprobe, _path):
+        started.set()
+        release.wait(timeout=15)
+        raise RuntimeError("probe interrupted by test")
+
+    monkeypatch.setattr(bt, "probe_media", blocking_probe)
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"placeholder")
+    thread = None
+    try:
+        win.load_media_async(media, as_video=True)
+        assert started.wait(5.0), "handoff probe worker never started"
+        thread = win._handoff_probe_thread
+        assert thread is not None and thread.isRunning()
+
+        # 探测被卡住超过关窗时限 → 有界等待后接管线程生命周期。
+        win.shutdown_for_host_exit()
+        assert win._handoff_probe_thread is None
+        assert thread.parent() is not win, "仍挂在窗口下：窗口析构会销毁运行中的线程"
+        assert thread in mw._DETACHED_THREADS
+    finally:
+        # 故障安全：任何断言失败也要先放行并等线程收尾，否则运行中的
+        # QThread 挂在窗口下被清理钩子销毁 → qFatal 干掉整个 xdist 节点。
+        release.set()
+        if thread is not None:
+            deadline = time.monotonic() + 10.0
+            while not thread.isFinished() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            qapp.processEvents()  # 送达迟到的 probed 结果与 deleteLater
+    assert thread is not None and thread.isFinished(), "probe thread did not finish"
+    # 迟到的探测结果不得再触碰已关闭的窗口。
+    assert load_video_calls == []
+    try:
+        mw._DETACHED_THREADS.remove(thread)
+    finally:
+        win.deleteLater()

@@ -5264,6 +5264,50 @@ def test_audio_clock_anchor_correction_deadband_resync_and_gain():
     assert abs((2_000 + corr) - 1_900) < abs(2_000 - 1_900)
 
 
+def test_audio_clock_holds_at_frozen_controller_then_resumes(qapp, monkeypatch):
+    """换源期间 controller.position() 冻结：时钟停在冻结点，恢复后继续跟上。
+
+    2026-11 播放中代理换源事件的行为钉子：跟随音频位置是既定同步语义
+    （媒体卡住时钟就停，不超前）；关键契约是位置恢复后时间轴必须继续
+    前进——不能被冻结点永久拽死。PlaybackController 侧保证 position()
+    在换源恢复完成前返回冻结的恢复点（见 test_subtitle_render_playback），
+    本测试钉住 TransportBar 消费端。
+    """
+    bar = _bar(qapp)
+    ctrl = _FakeController()
+    bar.attach_playback_controller(ctrl)
+    bar.set_time(5_000)
+    bar.play()
+    ctrl._pos = 5_000
+
+    # 播放 3s：墙钟外推 8000，音频位置一致 → 正常推进。
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 3_000)
+    ctrl._pos = 8_000
+    bar._on_audio_clock_tick()
+    assert bar.current_time_ms == 8_000
+
+    # 换源进行中：position() 冻结在 8000，墙钟再走 2s → 整段回拉吸附到
+    # 冻结点（跟随媒体，不超前播放）。
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 5_000)
+    bar._on_audio_clock_tick()
+    assert bar.current_time_ms == 8_000
+
+    # 换源完成：音频从恢复点续播且已到 10200，墙钟外推一致 → 时间轴恢复
+    # 前进，没有永久卡死在冻结点。
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 5_200)
+    ctrl._pos = 10_200
+    bar._on_audio_clock_tick()
+    assert bar.current_time_ms == 10_200
+
+    # 继续播放仍按音频位置收敛（deadband 内不纠、值不回退）。
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 6_000)
+    ctrl._pos = 11_000
+    bar._on_audio_clock_tick()
+    assert bar.current_time_ms == 11_000
+
+    bar.pause()
+
+
 # ------------------------------------------------------------------ background scaling preview
 
 def test_preview_graphics_video_background_is_contain_with_black_bars(qapp):

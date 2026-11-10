@@ -201,10 +201,12 @@ class _RecordingPlayer:
     """PlaybackController 各 handler 用到的 QMediaPlayer 最小面。
 
     直接替换 controller._player 驱动 handler 级单测（构造时连接的信号落在
-    真播放器上，测试里手工调用 handler 即可）。
+    真播放器上，测试里手工调用 handler 即可）。teardown 用的收尾方法委托给
+    被替换下来的真播放器，保住 make_controller 的确定性释放契约。
     """
 
-    def __init__(self):
+    def __init__(self, real_player):
+        self._real = real_player
         self._position = 0
         self._state = QMediaPlayer.PlaybackState.StoppedState
         self.seeks: list[int] = []
@@ -223,16 +225,23 @@ class _RecordingPlayer:
     def play(self) -> None:
         self.plays += 1
 
-    # teardown 兜底用的 no-op 面
-    def stop(self) -> None: ...
-    def setSource(self, _url) -> None: ...
-    def setAudioOutput(self, _output) -> None: ...
-    def deleteLater(self) -> None: ...
+    # teardown 兜底：委托真播放器
+    def stop(self) -> None:
+        self._real.stop()
+
+    def setSource(self, url) -> None:
+        self._real.setSource(url)
+
+    def setAudioOutput(self, output) -> None:
+        self._real.setAudioOutput(output)
+
+    def deleteLater(self) -> None:
+        self._real.deleteLater()
 
 
 def _armed_controller(make_controller, *, target_ms: int, resume: bool):
     ctrl = make_controller()
-    player = _RecordingPlayer()
+    player = _RecordingPlayer(ctrl._player)  # noqa: SLF001
     ctrl._player = player  # noqa: SLF001
     ctrl._source_restore = (target_ms, resume)  # noqa: SLF001
     return ctrl, player
@@ -275,7 +284,11 @@ def test_resume_restore_survives_backend_reload(make_controller):
 
 
 def test_resume_restore_gates_backward_positions_until_confirmed(make_controller):
-    """恢复武装期间，重载回 0 的迟到位置不能上抛（UI 时钟不能被拽回起点）。"""
+    """恢复武装期间，重载回 0 的迟到位置不能上抛（UI 时钟不能被拽回起点）。
+
+    前进到目标点前方的位置（播放中）必须上抛并确认完成——旧实现的对称
+    闸门（|ms-目标|>80 全吞）会把这个确认事件也吞掉，恢复永远无法完成。
+    """
     ctrl, player = _armed_controller(make_controller, target_ms=68150, resume=True)
     emitted: list[int] = []
     ctrl.positionChanged.connect(emitted.append)
@@ -284,6 +297,61 @@ def test_resume_restore_gates_backward_positions_until_confirmed(make_controller
     ctrl._on_position_changed(500)  # noqa: SLF001
     assert emitted == []
     assert ctrl._source_restore == (68150, True)  # noqa: SLF001
+
+    # 播放中前进到目标点前方（确认步）：上抛 + 恢复完成（旧代码在此仍吞）。
+    player._state = QMediaPlayer.PlaybackState.PlayingState  # noqa: SLF001
+    ctrl._on_position_changed(70000)  # noqa: SLF001
+    assert emitted == [70000]
+    assert ctrl._source_restore is None  # noqa: SLF001
+
+
+def test_resume_restore_survives_transient_error_while_playing(make_controller):
+    """播放仍在继续的瞬时错误：恢复保持武装，不能被良性信号丢弃。"""
+    ctrl, player = _armed_controller(make_controller, target_ms=68150, resume=True)
+    player._state = QMediaPlayer.PlaybackState.PlayingState  # noqa: SLF001
+    ctrl._on_player_error(QMediaPlayer.Error.FormatError)  # noqa: SLF001
+    assert ctrl._source_restore == (68150, True)  # noqa: SLF001
+
+
+def test_resume_restore_dropped_on_stop(make_controller):
+    """换源恢复进行中用户停止：恢复必须丢弃，且不得被后续 LoadedMedia 拉起。"""
+    ctrl, player = _armed_controller(make_controller, target_ms=68150, resume=True)
+    ctrl._has_media = True  # noqa: SLF001 — stop() 语义与媒体无关，但保持真实态
+    ctrl.stop()
+    assert ctrl._source_restore is None  # noqa: SLF001
+    plays_before = player.plays
+    # 迟到的 LoadedMedia 不得把刚停下的播放重新拉起，也不得再回 seek。
+    player._position = 0  # noqa: SLF001
+    ctrl._on_media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)  # noqa: SLF001
+    assert player.plays == plays_before
+    assert ctrl._source_restore is None  # noqa: SLF001
+
+
+def test_resume_restore_dropped_at_end_of_media(make_controller):
+    """恢复目标落在片尾附近、播放到 EndOfMedia：恢复必须丢弃，不得冻结。"""
+    ctrl, player = _armed_controller(make_controller, target_ms=68150, resume=True)
+    ctrl._on_media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)  # noqa: SLF001
+    assert ctrl._source_restore is None  # noqa: SLF001
+    assert ctrl.is_playing() is False
+
+
+def test_same_path_source_resets_stale_restore(make_controller):
+    """同路径重设源：旧恢复必须按新目标重写，不能把时间轴钉死在旧目标。
+
+    场景：换源恢复还挂着（目标 90s）时重选同一背景视频，set_media 走
+    同路径早退分支 seek 回 0——旧恢复若不清，position() 冻结在 90s 且
+    低于 90s 的位置事件全被吞。
+    """
+    ctrl, player = _armed_controller(make_controller, target_ms=90000, resume=True)
+    ctrl._active_playback_path = Path("C:/preview.mp4")  # noqa: SLF001
+    ctrl._set_player_source(Path("C:/preview.mp4"), position_ms=0, resume=False)  # noqa: SLF001
+    assert ctrl._source_restore == (0, False)  # noqa: SLF001 — 按新目标重写
+    assert ctrl.position() == 0
+    # 低位位置事件不被旧目标闸门吞掉。
+    emitted: list[int] = []
+    ctrl.positionChanged.connect(emitted.append)
+    ctrl._on_position_changed(1200)  # noqa: SLF001
+    assert emitted == [1200]
 
 
 def test_resume_restore_drops_on_player_error(make_controller):
@@ -320,7 +388,6 @@ def test_silent_restore_seeks_when_load_lands_before_target(make_controller):
     ctrl._on_media_status_changed(QMediaPlayer.MediaStatus.LoadedMedia)  # noqa: SLF001
     assert player.seeks == [5000]
     assert ctrl._source_restore is None  # noqa: SLF001
-
 
 
 @pytest.mark.parametrize("codec_name", ["VP9", "H264"])

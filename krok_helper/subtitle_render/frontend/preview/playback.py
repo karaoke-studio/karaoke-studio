@@ -164,6 +164,10 @@ class PlaybackController(QObject):
 
     def stop(self) -> None:
         self._player.stop()
+        # 停止是用户的明确意图：丢弃挂起的换源恢复，否则 position()/is_playing()
+        # 会冻结在旧目标上，且恢复补位还会在下一个 LoadedMedia 把刚停下的
+        # 播放重新拉起来（2026-11 代码评审发现）。
+        self._source_restore = None
 
     def is_playing(self) -> bool:
         if self._source_restore is not None and self._source_restore[1]:
@@ -213,6 +217,10 @@ class PlaybackController(QObject):
         path = Path(path)
         target_position = max(int(position_ms), 0)
         if path == self._active_playback_path:
+            # 同路径重设（重选同一背景/复用命中缓存的代理）：旧恢复若还挂着，
+            # 必须按新目标重写——否则 position() 冻结在旧目标、低于旧目标的
+            # 位置事件全部被吞，时间轴被钉死在换源点（2026-11 代码评审发现）。
+            self._source_restore = (target_position, bool(resume))
             self._player.setPosition(target_position)
             if resume:
                 self._player.play()
@@ -347,6 +355,11 @@ class PlaybackController(QObject):
         self.positionChanged.emit(int(ms))
 
     def _on_media_status_changed(self, status) -> None:
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            # 播放到末尾：挂起的换源恢复不会再有 Loaded/Buffered 确认，丢弃
+            # 以免 position()/is_playing() 冻结在旧目标（2026-11 代码评审发现）。
+            self._source_restore = None
+            return
         if status not in (
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
@@ -378,7 +391,13 @@ class PlaybackController(QObject):
             self._player.play()
 
     def _on_player_error(self, _error) -> None:
-        # 换源后加载失败时不会有 LoadedMedia，恢复目标永远无法确认；继续武装
+        if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            # 瞬时错误（坏包等）：播放仍在继续，恢复必须保持武装——后续
+            # Loaded/Buffered 仍会补位；此刻丢弃会让内部重载落回 0 后无人
+            # 纠正，等于把「从头重播」的老 bug 经由良性信号复活（2026-11
+            # 代码评审发现）。
+            return
+        # 真正的加载失败不会有 LoadedMedia，恢复目标永远无法确认；继续武装
         # 会让 position()/is_playing() 冻结在旧目标上，把跟随音频的 UI 时钟
         # 永久拽死在换源点（2026-11 复现的「播放中卡死」形态）。丢弃恢复，
         # 让播放器实际状态成为唯一事实。
