@@ -112,6 +112,7 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "scanline_effect_color_layers",
     "scanline_effect_role_name",
     "zoom_pulse_curve_level",
+    "zoom_pulse_peak_pct",
     # 2026-09 描边闪光与装饰粒子：纯绘制参数（IR 里随行 fx_bursts 下发），
     # 不影响显示窗口 / 分页 / 排版任何输入。
     "karaoke_stroke_flash",

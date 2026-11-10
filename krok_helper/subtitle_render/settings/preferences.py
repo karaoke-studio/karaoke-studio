@@ -98,6 +98,9 @@ PARTICLE_MODULE_STYLE_FIELDS: frozenset[str] = frozenset(
         "fx_particle_speed_pct",
         "anim_fx_speed_pct",
         "scanline_effect_speed_pct",
+        # 整字放大峰值倍数（2026-11 用户口径：开放 1.00~2.00 可调）与粒子
+        # 速度同款滑条口味参数，同口径记忆；集合名沿用历史「粒子模块」。
+        "zoom_pulse_peak_pct",
     }
 )
 """粒子装饰模块的「改一次一直沿用」习惯字段（2026-10 用户口径）。
@@ -109,6 +112,11 @@ PARTICLE_MODULE_STYLE_FIELDS: frozenset[str] = frozenset(
 扫字线三类目标各有独立的取色层级与速度，分别记住。其余
 ``fx_particle_*`` / ``anim_fx_*`` / ``scanline_effect_color_*``（颜色模式/
 双色槽/角色来源/尺寸/数量）仍逐工程随行样式走，不进本集合。
+
+2026-11 起本集合同时承载整字放大的「峰值倍数」（``zoom_pulse_peak_pct``，
+与粒子速度同款 slider+数值输入控件）：同为特效口味参数，跨工程沿用，
+打开旧工程不回退。注意 ``zoom_pulse_curve_level``（缓动档位）仍逐工程
+随行样式走，不在本集合。
 """
 APP_STYLE_EXPLICIT_DEFAULT_FIELDS = (
     BUILTIN_SCHEME_STYLE_FIELDS

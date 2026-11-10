@@ -66,7 +66,8 @@ void paintRubyUtopiaText(
             cfg.height,
             followingDoneMs,
             line.zoomPulseEnabled,
-            style.zoomPulseCurveLevel
+            style.zoomPulseCurveLevel,
+            style.zoomPulsePeakPct
         );
         if (state.opacity <= 0.0) {
             continue;
@@ -143,6 +144,7 @@ void paintRubyUtopiaText(
                 followingDoneMs,
                 line.zoomPulseEnabled,
                 style.zoomPulseCurveLevel,
+                style.zoomPulsePeakPct,
                 unit.interval
             );
             if (unitState.opacity <= 0.0) {
@@ -247,6 +249,7 @@ void paintUtopiaMainText(
             followingDoneMs,
             line.zoomPulseEnabled,
             style.zoomPulseCurveLevel,
+            style.zoomPulsePeakPct,
             wipeWindow
         );
         if (state.opacity <= 0.0) {

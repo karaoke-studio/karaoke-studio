@@ -1361,6 +1361,11 @@ class Style:
     """整字放大缓动档位（0~5）：0=线性；1~5 为缓出/缓入多项式阶数，越大峰值
     停留越久（1 为默认）。纯绘制参数，不参与布局推导。"""
 
+    zoom_pulse_peak_pct: int = 125
+    """整字放大峰值倍数（百分比，100~200，125 = 1.25× 为历史默认）：
+    唱字期间缓出放大到的目标倍数。纯绘制参数，不参与布局推导；跨工程
+    口味记忆（见 ``PARTICLE_MODULE_STYLE_FIELDS``）。"""
+
     karaoke_stroke_flash: bool = False
     """唱字描边闪光：每个字唱到的瞬间，描边以白色高亮短暂脉冲后回落。
     可与任意唱字动画叠加；纯绘制参数，不参与布局推导。"""
@@ -1930,6 +1935,26 @@ def clamp_particle_speed_pct(value: object) -> int:
     except (TypeError, ValueError):
         return PARTICLE_SPEED_PCT_DEFAULT
     return max(PARTICLE_SPEED_PCT_MIN, min(PARTICLE_SPEED_PCT_MAX, pct))
+
+
+ZOOM_PULSE_PEAK_PCT_MIN = 100
+ZOOM_PULSE_PEAK_PCT_MAX = 200
+ZOOM_PULSE_PEAK_PCT_DEFAULT = 125
+"""「整字放大倍数」百分比的输入范围与默认值（125 = 历史 1.25×）。
+
+倍率线性换算 ``ratio = pct / 100``；100 = 不放大，200 = 唱字峰值放大到
+2.00×。装载（``style_from_dict`` 专用分支）、控制器与引擎消费统一走
+:func:`clamp_zoom_pulse_peak_pct` 钳制。"""
+
+
+def clamp_zoom_pulse_peak_pct(value: object) -> int:
+    """把整字放大峰值百分比钳成 [100, 200] 的整数（非法值回落 125）。"""
+
+    try:
+        pct = int(round(float(value)))
+    except (TypeError, ValueError):
+        return ZOOM_PULSE_PEAK_PCT_DEFAULT
+    return max(ZOOM_PULSE_PEAK_PCT_MIN, min(ZOOM_PULSE_PEAK_PCT_MAX, pct))
 
 
 def particle_color_style(style: Style, target: str) -> Style:
@@ -2977,6 +3002,10 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         }:
             # 三类粒子速度调整：百分比统一钳到 [-1000, 1000]，0 = 原速。
             changes[key] = clamp_particle_speed_pct(value)
+        elif key == "zoom_pulse_peak_pct":
+            # 整字放大峰值倍数：与粒子速度同口径，装载即钳到 [100, 200]，
+            # 手改 settings.json / 工程文件的越界值不会原样留在存储里。
+            changes[key] = clamp_zoom_pulse_peak_pct(value)
         elif key == "fx_apply_to_entry_exit":
             changes[key] = bool(value)
         elif key == "karaoke_stroke_flash":

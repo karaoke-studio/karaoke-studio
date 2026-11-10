@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.domain.models import (
     ViewportAlign,
     builtin_preset_layout_ids,
     clamp_particle_speed_pct,
+    clamp_zoom_pulse_peak_pct,
     migrate_title_char_role_labels,
     migrate_title_guide_symbols,
     normalize_glow_concentration_level,
@@ -478,6 +479,10 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
             normalized[speed_field] = clamp_particle_speed_pct(
                 normalized[speed_field]
             )
+    if "zoom_pulse_peak_pct" in normalized:
+        normalized["zoom_pulse_peak_pct"] = clamp_zoom_pulse_peak_pct(
+            normalized["zoom_pulse_peak_pct"]
+        )
     if "scanline_effect_color_mode" in normalized:
         normalized["scanline_effect_color_mode"] = (
             normalize_scanline_particle_color_mode(

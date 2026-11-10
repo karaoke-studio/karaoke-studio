@@ -52,6 +52,7 @@ AnimationState transitionCharState(
     int followingDoneMs,
     bool zoomPulseEnabled,
     int zoomPulseCurveLevel,
+    int zoomPulsePeakPct,
     std::optional<std::pair<int, int>> overrideInterval = std::nullopt
 );
 

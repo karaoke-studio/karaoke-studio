@@ -950,6 +950,7 @@ _RENDER_ONLY_ANIM_STYLE_FIELDS: frozenset[str] = frozenset({
     "sing_fx",
     "karaoke_stroke_flash",
     "zoom_pulse_curve_level",
+    "zoom_pulse_peak_pct",
 })
 # 出入场动画「类型」字段：类型本身只在跨 ``none`` 边界时改变显示窗口（动画
 # 时间守卫按类型 != none 扩窗），其余组合（fade→slide 等）窗口不动——用逐行

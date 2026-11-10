@@ -310,8 +310,9 @@ void applyGpuResolvedStyle(
             ? source.scanlineImageRoleDecorationKind.toStdString()
             : "none";
     }
-    // 整字放大缓动档位：无量纲，不随布局缩放。
+    // 整字放大缓动档位与峰值倍数：无量纲，不随布局缩放。
     target.zoomPulseCurveLevel = std::clamp(source.zoomPulseCurveLevel, 0, 5);
+    target.zoomPulsePeakPct = std::clamp(source.zoomPulsePeakPct, 100, 200);
 
     const bool rubyUsesMainFont = source.rubyFontFollowMain
         && source.rubyFontFamily.isEmpty()

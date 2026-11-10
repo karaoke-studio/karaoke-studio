@@ -291,3 +291,44 @@ def test_merge_common_style_preferences_skips_particle_speed() -> None:
     assert merged.fx_particle_speed_pct == 300
     assert merged.fx_particle_size_em == 0.8
     assert merged.fx_particle_count == 20
+
+
+# ---------------------------------------------------------------------------
+# 整字放大峰值倍数偏好（zoom_pulse_peak_pct，2026-11 与粒子速度同口径）
+# ---------------------------------------------------------------------------
+
+
+def test_zoom_pulse_peak_is_remembered(make_window) -> None:
+    """整字放大倍数滑条改一次一直沿用（写进应用默认样式）。"""
+    window = make_window()
+
+    _edit_style(window, zoom_pulse_peak_pct=160)
+
+    assert window._app_default_style.zoom_pulse_peak_pct == 160
+
+
+def test_opening_another_project_does_not_reset_zoom_pulse_peak(
+    make_window, settings
+) -> None:
+    """打开峰值还是出厂 125% 的旧工程后落盘，习惯保持记忆。"""
+    window = make_window()
+    _edit_style(window, zoom_pulse_peak_pct=160)
+    window._save_persisted_state()
+
+    window._style = replace(window._style, zoom_pulse_peak_pct=125)
+    window._save_persisted_state()
+
+    assert settings.data["style"]["zoom_pulse_peak_pct"] == 160
+    assert window._app_default_style.zoom_pulse_peak_pct == 160
+
+
+def test_merge_common_style_preferences_skips_zoom_pulse_peak() -> None:
+    """纯函数口径：工程侧的峰值不进应用默认样式；缓动档位仍随工程走。"""
+    app_default = Style(zoom_pulse_peak_pct=160)
+    project = Style(zoom_pulse_peak_pct=125, zoom_pulse_curve_level=4)
+
+    merged = merge_common_style_preferences(app_default, project)
+
+    assert merged.zoom_pulse_peak_pct == 160
+    # 缓动档位不在习惯集合：跟随工程（merge 语义不变）。
+    assert merged.zoom_pulse_curve_level == 4

@@ -24,8 +24,8 @@ constexpr double kUtopiaWipeOverTimeRatio = 0.25;
 constexpr int kUtopiaWipeOverTimeLimitMs = 100;
 constexpr int kUtopiaFadeOutTimeMs = 750;
 // 整字放大（zoom_pulse）：与 Python transitions.zoom_pulse_wipe_scale 同曲线
-// ——唱字期间三次缓出放大到 1.25，唱字结束后 300ms 三次缓入缩回。
-constexpr double kZoomPulsePeakRatio = 1.25;
+// ——唱字期间缓出放大到峰值（调用方下发 zoomPulsePeakPct，100~200，默认
+// 125 = 1.25×），唱字结束后 300ms 缓入缩回。
 constexpr int kZoomPulseShrinkMs = 300;
 
 }  // namespace
@@ -136,7 +136,13 @@ bool isZoomPulseActive(int tMs, int charStartMs, int charEndMs) {
         && tMs < charEndMs + kZoomPulseShrinkMs;
 }
 
-double zoomPulseScale(int tMs, int charStartMs, int charEndMs, int curveLevel) {
+double zoomPulseScale(
+    int tMs,
+    int charStartMs,
+    int charEndMs,
+    int curveLevel,
+    double peakRatio
+) {
     if (!isZoomPulseActive(tMs, charStartMs, charEndMs)) {
         return 1.0;
     }
@@ -151,7 +157,7 @@ double zoomPulseScale(int tMs, int charStartMs, int charEndMs, int curveLevel) {
             powered *= one;
         }
         const double eased = level <= 0 ? 1.0 - one : 1.0 - powered;
-        return 1.0 + (kZoomPulsePeakRatio - 1.0) * eased;
+        return 1.0 + (peakRatio - 1.0) * eased;
     }
     // 缓入：刚唱完时导数≈0（继续停留在峰值附近），结尾快速落回 1.0。
     const double q = static_cast<double>(tMs - charEndMs) / kZoomPulseShrinkMs;
@@ -160,7 +166,7 @@ double zoomPulseScale(int tMs, int charStartMs, int charEndMs, int curveLevel) {
         powered *= q;
     }
     const double eased = level <= 0 ? 1.0 - q : 1.0 - powered;
-    return 1.0 + (kZoomPulsePeakRatio - 1.0) * eased;
+    return 1.0 + (peakRatio - 1.0) * eased;
 }
 
 double utopiaWipeScale(int tMs, int charStartMs, int charEndMs) {
@@ -301,6 +307,7 @@ AnimationState transitionCharState(
     int followingDoneMs,
     bool zoomPulseEnabled,
     int zoomPulseCurveLevel,
+    int zoomPulsePeakPct,
     std::optional<std::pair<int, int>> overrideInterval
 ) {
     if (transition.effect == QStringLiteral("utopia") && transition.phase == QStringLiteral("utopia")) {
@@ -323,19 +330,23 @@ AnimationState transitionCharState(
 
         // 整字放大与 utopia 退场并行：退场照原时间开始，缩回缩放继续
         // 乘在退场自身的缩放/翻转上（镜像 transitions.py 的 exit 合成）。
+        const double zoomPulsePeakRatio = (
+            std::clamp(zoomPulsePeakPct, 100, 200)
+        ) / 100.0;
         double zoomOverlay = 1.0;
         if (zoomPulseEnabled) {
             if (overrideInterval.has_value()) {
                 zoomOverlay = zoomPulseScale(
                     tMs, overrideInterval->first, overrideInterval->second,
-                    zoomPulseCurveLevel
+                    zoomPulseCurveLevel, zoomPulsePeakRatio
                 );
             } else if (index >= 0
                 && index < static_cast<int>(intervals.size())) {
                 const auto interval =
                     intervals[static_cast<std::size_t>(index)];
                 zoomOverlay = zoomPulseScale(
-                    tMs, interval.first, interval.second, zoomPulseCurveLevel
+                    tMs, interval.first, interval.second,
+                    zoomPulseCurveLevel, zoomPulsePeakRatio
                 );
             }
         }
@@ -374,7 +385,8 @@ AnimationState transitionCharState(
             if (active) {
                 const double scale = zoomPulseEnabled
                     ? zoomPulseScale(
-                        tMs, interval.first, interval.second, zoomPulseCurveLevel
+                        tMs, interval.first, interval.second,
+                        zoomPulseCurveLevel, zoomPulsePeakRatio
                     )
                     : utopiaWipeScale(tMs, interval.first, interval.second);
                 return AnimationState{1.0, 0.0, 0.0, 0.0, scale, scale, 0.0};

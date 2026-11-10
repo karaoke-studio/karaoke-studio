@@ -441,6 +441,10 @@ struct ResolvedStyle {
     // 整字放大缓动档位（0~5，0=线性）来自全局 Style；仅显式选择 zoom_pulse
     // 档位的行会置位 TimingLine::zoomPulseEnabled。
     int zoomPulseCurveLevel = 1;
+    // 整字放大峰值倍数（百分比 100~200，125 = 历史 1.25×）来自全局 Style；
+    // 解析端钳制，渲染端按 pct/100.0 折算倍率（镜像 Python
+    // transitions.zoom_pulse_peak_ratio）。
+    int zoomPulsePeakPct = 125;
     bool hasMainKaraokeColors = false;
     bool hasRubyKaraokeColors = false;
 };

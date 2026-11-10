@@ -7255,7 +7255,13 @@ def test_gpu_g5_lit_auto_decorations_follow_painter(monkeypatch) -> None:
             )
         ]
     )
-    for decoration, karaoke in (("glow", "zoom_pulse"), ("shadow", "inherit")):
+    # 三档：glow+zoom_pulse（默认 125%）、glow+zoom_pulse 峰值 200%
+    # （2026-11 开放后指示灯 auto 装饰的 pulse_peak 镜像）、shadow+inherit。
+    for decoration, karaoke, peak_pct in (
+        ("glow", "zoom_pulse", 125),
+        ("glow", "zoom_pulse", 200),
+        ("shadow", "inherit", 125),
+    ):
         style = _g1_style(
             font_family="Meiryo",
             font_family_latin="Meiryo",
@@ -7282,6 +7288,7 @@ def test_gpu_g5_lit_auto_decorations_follow_painter(monkeypatch) -> None:
             lit_time_offset_ms=0,
             lit_transition_mode="fade",
         )
+        style = replace(style, zoom_pulse_peak_pct=peak_pct)
         timestamps = (300, 600, 900)
         painter = [
             _render_painter_oracle(style, t_ms=t_ms, track=track)
@@ -7299,7 +7306,10 @@ def test_gpu_g5_lit_auto_decorations_follow_painter(monkeypatch) -> None:
             assert all(
                 abs(actual - expected) <= 14
                 for actual, expected in zip(gpu_bounds, painter_bounds)
-            ), (decoration, karaoke, t_ms, gpu_bounds, painter_bounds)
+            ), (
+                decoration, karaoke, peak_pct, t_ms,
+                gpu_bounds, painter_bounds,
+            )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -10137,6 +10147,38 @@ def test_gpu_zoom_pulse_wipe_follows_painter(monkeypatch) -> None:
         )
     assert _payload_alpha_bounds(linear_gpu[0]) != _payload_alpha_bounds(steep_gpu[0])
 
+    # 峰值倍数（zoom_pulse_peak_pct，100~200，2026-11 开放）随 style IR
+    # 下发，GPU 的峰值缩放必须与 Painter 同步参数化：2.00× 档对照 Painter
+    # oracle。时间点覆盖缓出中段（1_450）、逼近峰值帧（1_699）、缩回段
+    # （1_800/2_199）——发光 scratch 在大峰值下曾按静态包络硬裁切，峰值/
+    # 缩回帧是裁切最显形的位置。
+    peak_style = replace(style, zoom_pulse_peak_pct=200)
+    peak_timestamps = (1_450, 1_699, 1_800, 2_199)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, peak_gpu = _render_g1_frames(
+            renderer, peak_style, peak_timestamps, force_warp=True, track=track
+        )
+    for peak_t_ms, gpu_frame in zip(peak_timestamps, peak_gpu):
+        painter_frame = _render_painter_oracle(
+            peak_style, t_ms=peak_t_ms, track=track
+        )
+        assert all(
+            abs(actual - expected) <= 12
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            peak_t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+    # 峰值以字符中心生长：水平墨迹跨度（max_x - min_x）必须大于默认 1.25×
+    # 档（bounds = min_x, min_y, max_x, max_y；1_450 处线性半程 1.125× vs
+    # 1.500×，宽度差约 33%）。
+    peak_bounds = _payload_alpha_bounds(peak_gpu[0])
+    assert (peak_bounds[2] - peak_bounds[0]) > (zoom_bounds[2] - zoom_bounds[0])
+
     # 组合档「整字放大+扫字线」：IR 三标志（utopia 本体 + zoom_pulse + scanline）
     # 齐全，锋面高亮带叠加在缩放字形之上，GPU 与 Painter oracle 对照。
     combo_style = replace(style, karaoke_anim="zoom_pulse_scanline")
@@ -10155,6 +10197,49 @@ def test_gpu_zoom_pulse_wipe_follows_painter(monkeypatch) -> None:
         _payload_alpha_bounds(combo_gpu[0]),
         _payload_alpha_bounds(combo_painter),
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_zoom_pulse_peak_200_glow_not_clipped(monkeypatch) -> None:
+    """大字号 + 细描边 + 发光 + 峰值 2.00×：发光 scratch 不得裁切放大字形。
+
+    GPU 编组发光的 scratch 曾按静态墨迹包络取框，峰值开放到 2.00× 后放大
+    字形越出余量被硬裁（Painter 侧发光图跟随字符变换整体贴图、不裁），
+    大字号下顶部包络比 Painter 少 14~24px。修复后 content 按峰值外扩，
+    两侧 alpha≥16 的包络逐帧对齐（阈值 16 避开半透明 AA 边缘抖动）。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, base_style = _g4_utopia_main_scene()
+    style = replace(
+        base_style,
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="zoom_pulse",
+        font_size_px=110,
+        stroke_width_px=2,
+        stroke2_enabled=False,
+        glow_radius_px=6,
+        glow_before_radius_px=6,
+        glow_after_radius_px=6,
+        zoom_pulse_peak_pct=200,
+    )
+    # 1_699："A" 逼近峰值；2_199："夢" 尾窗缩回段（放大字形 + 发光仍大）。
+    timestamps = (1_699, 2_199)
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        gpu_bounds = _payload_alpha_bounds(gpu_frame, alpha_min=16)
+        painter_bounds = _payload_alpha_bounds(painter_frame, alpha_min=16)
+        assert all(
+            abs(actual - expected) <= 8
+            for actual, expected in zip(gpu_bounds, painter_bounds)
+        ), (t_ms, gpu_bounds, painter_bounds)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

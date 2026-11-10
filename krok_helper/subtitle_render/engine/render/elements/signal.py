@@ -51,6 +51,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions i
     transition_char_state,
     transition_char_glow,
     zoom_pulse_curve_level,
+    zoom_pulse_peak_ratio,
     zoom_pulse_wipe_scale,
 )
 from krok_helper.subtitle_render.engine.render.effects.metrics import (
@@ -1174,6 +1175,7 @@ def _draw_lit_decorated_group(
     duration = max(int(group.duration_ms), 0)
     pulse_enabled = effective_karaoke_zoom_pulse(decor_style)
     pulse_level = zoom_pulse_curve_level(decor_style)
+    pulse_peak = zoom_pulse_peak_ratio(decor_style)
     count = max(int(layer.count), 1)
 
     # 可见灯：index 0..active_index；active_index 处为正在熄灭的灯（带
@@ -1199,7 +1201,8 @@ def _draw_lit_decorated_group(
                 lamp_start = duration * (count - index - 1) // count
                 lamp_end = duration * (count - index) // count
                 pulse = zoom_pulse_wipe_scale(
-                    int(group.elapsed_ms), lamp_start, lamp_end, pulse_level
+                    int(group.elapsed_ms), lamp_start, lamp_end, pulse_level,
+                    pulse_peak,
                 )
             entries.append((rect, is_active, pulse))
     if not entries:
@@ -1580,6 +1583,7 @@ def _draw_volume_decorated_group(
 
     pulse_enabled = effective_karaoke_zoom_pulse(decor_style)
     pulse_level = zoom_pulse_curve_level(decor_style)
+    pulse_peak = zoom_pulse_peak_ratio(decor_style)
     duration = max(int(group.duration_ms), 0)
     times = max(int(style.volume_flash_times), 0)
     flash_ratio = max(float(style.volume_flash_duration_ratio), 0.0)
@@ -1605,7 +1609,8 @@ def _draw_volume_decorated_group(
             bar_start = int(fill_duration * index / geometry.count)
             bar_end = int(fill_duration * (index + 1) / geometry.count)
             pulse = zoom_pulse_wipe_scale(
-                int(fill_elapsed), bar_start, bar_end, pulse_level
+                int(fill_elapsed), bar_start, bar_end, pulse_level,
+                pulse_peak,
             )
         bars.append(
             (

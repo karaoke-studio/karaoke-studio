@@ -685,6 +685,14 @@ def test_anim_type_delta_window_check() -> None:
     assert _style_delta_only_in(
         base, scan_effect, _RENDER_ONLY_ANIM_STYLE_FIELDS
     )
+    # 整字放大的两个纯绘制参数（缓动档位 + 峰值倍数，2026-11 开放）都在
+    # 渲染专属集合里：拖倍数滑条走 paint 差分，不触发全量重排。
+    zoom_pulse = replace(
+        base, zoom_pulse_curve_level=3, zoom_pulse_peak_pct=160
+    )
+    assert _style_delta_only_in(
+        base, zoom_pulse, _RENDER_ONLY_ANIM_STYLE_FIELDS
+    )
     mixed = replace(base, karaoke_anim="scanline", font_size_px=80)
     assert not _style_delta_only_in(base, mixed, _RENDER_ONLY_ANIM_STYLE_FIELDS)
 

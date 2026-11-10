@@ -17,6 +17,9 @@ from krok_helper.subtitle_render.domain.band_presets import BAND_PRESETS
 from krok_helper.subtitle_render.domain.models import (
     PARTICLE_SPEED_PCT_MAX,
     PARTICLE_SPEED_PCT_MIN,
+    ZOOM_PULSE_PEAK_PCT_DEFAULT,
+    ZOOM_PULSE_PEAK_PCT_MAX,
+    ZOOM_PULSE_PEAK_PCT_MIN,
 )
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     CanvasSliderSpinBox,
@@ -777,6 +780,37 @@ class EffectsPropertyPageBuilder:
                 zoom_pulse_curve_level=host._zoom_pulse_curve_combo.currentData()
             )
         )
+        # 整字放大倍数：与粒子速度同款 slider + 数值输入复合控件（项目内
+        # 特效模块的惯用口径）。百分比 100~200（100 = 不放大，200 = 2.00×），
+        # 默认 125 = 历史 1.25×；滑条线性等距，与 style 字段 1:1 对应。
+        host._zoom_pulse_peak_control = CanvasSliderSpinBox(
+            self._spin_factory(
+                ZOOM_PULSE_PEAK_PCT_MIN,
+                ZOOM_PULSE_PEAK_PCT_MAX,
+                suffix=" %",
+            )
+        )
+        host._zoom_pulse_peak_control.set_slider_range(
+            ZOOM_PULSE_PEAK_PCT_MIN, ZOOM_PULSE_PEAK_PCT_MAX
+        )
+        # spin 工厂初值钳在下限（100），构造期先摆到默认 125（此刻尚未
+        # 接线，不会触发样式编辑；首次 set_style 仍会正常同步）。
+        host._zoom_pulse_peak_control.blockSignals(True)
+        try:
+            host._zoom_pulse_peak_control.setValue(ZOOM_PULSE_PEAK_PCT_DEFAULT)
+        finally:
+            host._zoom_pulse_peak_control.blockSignals(False)
+        host._zoom_pulse_peak_control.setToolTip(
+            "整字放大倍数：唱字期间缓出放大到的目标倍数（100% = 不放大，"
+            "200% = 2.00×，默认 125% = 历史固定 1.25×）。唱字结束后仍按"
+            "固定 300ms 从峰值缩回原大；「整字放大速度等级」控制逼近峰值的"
+            "快慢，本值控制峰值本身。此偏好改一次一直沿用：之后新建的工程"
+            "默认采用；已有工程保留各自保存的倍数，打开它们也不会冲掉这份"
+            "记忆"
+        )
+        host._zoom_pulse_peak_control.valueChanged.connect(
+            lambda value: host._update_style(zoom_pulse_peak_pct=value)
+        )
         host._stroke_flash_check = CheckBox("唱字闪光", section)
         host._stroke_flash_check.setToolTip(
             "每个字唱到的瞬间，描边沿字形轮廓闪白脉冲约 240ms 后回落；"
@@ -918,11 +952,10 @@ class EffectsPropertyPageBuilder:
             host._fx_color_slot,
             host._fx_particle_role_combo,
         )
-        # 网格行序：第 1 行 = 入场/退场，第 2 行 = 唱字对 + 段首尾区块，
-        # 第 3 行 = 扫字线整行（参数永久可编辑，颜色/亮度按模式互换启用态），
-        # 第 4 行 = 整字放大速度等级，第 5 行 = 装饰粒子（唱字档位 + 颜色模式
-        # + 取色层级），第 6 行 = 粒子尺寸 · 数量，第 7 行 = 粒子颜色/来源
-        # （双色槽与来源下拉按模式互换）+ 行尾「入退场同用」联动开关。
+        # 网格条目顺序：入场/退场 → 唱字对 + 段首尾区块 → 整字放大速度
+        # 等级 → 整字放大倍数（滑条 + 数值输入）→ 唱字闪光 → 唱字粒子
+        # 样式（两列网格，窄窗降一列时逐条顺延；扫字线/粒子参数行在各自
+        # 卡片，不在这张网格里）。
         # 粒子参数拆成三个字段：单行塞六控件会把网格最小宽度顶到 539px，
         # 特效页在 360px 窄窗下再也降不到 1 列（响应式失效）。
 
@@ -989,6 +1022,7 @@ class EffectsPropertyPageBuilder:
             self._make_scanline_image_group(host._scanline_section)
         )
         host._animation_grid.add_field("整字放大速度等级", host._zoom_pulse_curve_combo)
+        host._animation_grid.add_field("整字放大倍数", host._zoom_pulse_peak_control)
         host._stroke_flash_row = QWidget(section)
         stroke_flash_layout = QHBoxLayout(host._stroke_flash_row)
         stroke_flash_layout.setContentsMargins(0, 0, 0, 0)

@@ -43,6 +43,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions i
     is_zoom_pulse_active,
     transition_char_state,
     zoom_pulse_curve_level,
+    zoom_pulse_peak_ratio,
     zoom_pulse_wipe_scale,
 )
 
@@ -363,6 +364,138 @@ def test_transition_char_state_obeys_curve_level() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 峰值倍数（zoom_pulse_peak_pct，2026-11 开放 100%~200% 可调）
+# ---------------------------------------------------------------------------
+
+
+def test_zoom_pulse_peak_ratio_defaults_and_clamps() -> None:
+    # 默认仍是历史固定 1.25×。
+    assert zoom_pulse_peak_ratio(Style(karaoke_anim="zoom_pulse")) == (
+        pytest.approx(ZOOM_PULSE_PEAK_RATIO)
+    )
+    assert zoom_pulse_peak_ratio(Style(zoom_pulse_peak_pct=200)) == pytest.approx(2.0)
+    assert zoom_pulse_peak_ratio(Style(zoom_pulse_peak_pct=100)) == pytest.approx(1.0)
+    # 越界钳到 [1.00, 2.00]，非法值回落默认。
+    assert zoom_pulse_peak_ratio(Style(zoom_pulse_peak_pct=999)) == pytest.approx(2.0)
+    assert zoom_pulse_peak_ratio(Style(zoom_pulse_peak_pct=-5)) == pytest.approx(1.0)
+    assert zoom_pulse_peak_ratio(Style(zoom_pulse_peak_pct="bad")) == (
+        pytest.approx(ZOOM_PULSE_PEAK_RATIO)
+    )
+
+
+def test_zoom_pulse_peak_ratio_scales_curve() -> None:
+    start, end = 0, 1000
+    # 线性档中点恰为 1 + (peak-1) * 0.5。
+    assert zoom_pulse_wipe_scale(500, start, end, 0, 2.0) == pytest.approx(1.5)
+    # 三次缓出中点：1 + 1.0 * (1 - 0.5^3) = 1.875。
+    assert zoom_pulse_wipe_scale(500, start, end, 3, 2.0) == pytest.approx(1.875)
+    # 峰值与缩回终点不受曲线影响。
+    assert zoom_pulse_wipe_scale(end, start, end, 3, 2.0) == pytest.approx(2.0)
+    assert zoom_pulse_wipe_scale(
+        end + ZOOM_PULSE_SHRINK_MS, start, end, 3, 2.0
+    ) == pytest.approx(1.0)
+    # 100% = 不放大：全程恒等（缩回段也为 1.0）。
+    assert zoom_pulse_wipe_scale(500, start, end, 3, 1.0) == pytest.approx(1.0)
+    assert zoom_pulse_wipe_scale(end, start, end, 3, 1.0) == pytest.approx(1.0)
+
+
+def test_zoom_pulse_peak_pct_round_trip_and_ir() -> None:
+    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+
+    style = _zoom_pulse_style(zoom_pulse_peak_pct=175)
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.zoom_pulse_peak_pct == 175
+    ir = build_render_ir(
+        _single_char_track(), style, width=640, height=360, fps=60
+    )
+    # IR 全量携带 style 字段：native 侧解析 zoom_pulse_peak_pct 钳到 100~200。
+    assert ir["style"]["zoom_pulse_peak_pct"] == 175
+
+
+def test_transition_char_state_obeys_peak_pct() -> None:
+    style = _zoom_pulse_style(zoom_pulse_peak_pct=200)
+    transition = _utopia_transition()
+    _, _, _, _, scale_x, scale_y, _ = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1000,
+    )
+    assert scale_x == pytest.approx(2.0)
+    assert scale_y == pytest.approx(2.0)
+    # 缩回段按新峰值同比例回落（线性档：1 + 1.0 * (1 - 100/300)）。
+    _, _, _, _, scale_x_shrink, _, _ = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1100,
+    )
+    assert scale_x_shrink == pytest.approx(
+        1.0 + (2.0 - 1.0) * (1.0 - 100.0 / 300.0), rel=1e-6
+    )
+
+
+def test_zoom_pulse_peak_pct_load_clamps_out_of_range() -> None:
+    # 装载专用分支（与粒子速度同口径）：非法值回落默认 125，越界值装载
+    # 即钳到 [100, 200]——手改 settings.json / 工程文件的 999 不会原样
+    # 留在存储里。
+    assert style_from_dict({"zoom_pulse_peak_pct": "bad"}).zoom_pulse_peak_pct == 125
+    assert style_from_dict({"zoom_pulse_peak_pct": None}).zoom_pulse_peak_pct == 125
+    assert style_from_dict({}).zoom_pulse_peak_pct == 125
+    assert style_from_dict({"zoom_pulse_peak_pct": 999}).zoom_pulse_peak_pct == 200
+    assert style_from_dict({"zoom_pulse_peak_pct": -5}).zoom_pulse_peak_pct == 100
+
+
+def test_utopia_exit_composes_with_zoom_pulse_peak_200() -> None:
+    """峰值 2.00× 的退场叠加：交接帧连续，缩回系数乘在退场缩水上。"""
+    style = _zoom_pulse_style(exit_anim="utopia", zoom_pulse_peak_pct=200)
+    transition = _utopia_transition()
+    peak = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1000,
+        following_done_ms=1000,
+    )
+    first_exit = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1001,
+        following_done_ms=1000,
+    )
+    assert peak[4] == pytest.approx(2.0)
+    assert first_exit[3] < 0.0
+    assert abs(first_exit[4] - peak[4]) < 0.01
+    # 退场中段（t=1100）：scale_y = 退场缩水(13/15) × 缩回系数(5/3) = 13/9。
+    opacity, _, _, rotation, _, scale_y, _ = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1100,
+        following_done_ms=1000,
+    )
+    assert rotation < 0.0
+    assert opacity < 1.0
+    assert scale_y == pytest.approx(13.0 / 9.0, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
 # transition_char_state 集成
 # ---------------------------------------------------------------------------
 
@@ -622,3 +755,19 @@ def test_painter_zoom_pulse_scanline_highlights_the_moving_front(qapp) -> None:
     assert _visible_diff(_frame_bytes(track, base, 500), _frame_bytes(track, combo, 500)) > 20
     # 未开始（t=0）：无锋面无差异，两档画面一致。
     assert _visible_diff(_frame_bytes(track, base, 0), _frame_bytes(track, combo, 0)) == 0
+
+
+def test_painter_zoom_pulse_peak_100_keeps_glyph_unmagnified(qapp) -> None:
+    """peak=100（恒等缩放）唱字中画面与静止帧一致，且仍区别于 utopia 脉冲。"""
+    track = _single_char_track()
+    style = _zoom_pulse_style(zoom_pulse_peak_pct=100)
+    static = _alpha_bounds(track, style, 0)
+    mid = _alpha_bounds(track, style, 500)
+    peak = _alpha_bounds(track, style, 1000)
+    # 恒等缩放：唱字中/峰值帧包围盒与静止帧一致（仅抗锯齿容差）。
+    assert abs((mid[1] - mid[0]) - (static[1] - static[0])) <= 6.0
+    assert abs((peak[1] - peak[0]) - (static[1] - static[0])) <= 6.0
+    assert abs((mid[3] - mid[2]) - (static[3] - static[2])) <= 6.0
+    # 与 utopia 档可区分：utopia 的 1.15 走字脉冲确实更宽。
+    utopia_mid = _alpha_bounds(track, _zoom_pulse_style(karaoke_anim="utopia"), 500)
+    assert (utopia_mid[1] - utopia_mid[0]) > (mid[1] - mid[0])

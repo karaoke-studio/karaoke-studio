@@ -7,7 +7,9 @@ import math
 from PyQt6.QtGui import QTransform
 
 from krok_helper.subtitle_render.domain.models import (
+    ZOOM_PULSE_PEAK_PCT_DEFAULT,
     Style,
+    clamp_zoom_pulse_peak_pct,
     effective_karaoke_animation,
     effective_karaoke_zoom_pulse,
 )
@@ -48,8 +50,10 @@ UTOPIA_FADE_OUT_TIME_MS = 750
 # 整字放大（zoom_pulse）：整个唱字期间缓出放大到峰值，唱字结束后
 # 固定 ZOOM_PULSE_SHRINK_MS 缓入缩回。曲线用多项式近似贝塞尔
 # （缓出 1-(1-p)^n / 缓入 1-q^n），峰值两侧导数为 0，停留感最强；
-# 阶数 n 由 Style.zoom_pulse_curve_level（0~5）调节，0/1 为线性。
-ZOOM_PULSE_PEAK_RATIO = 1.25
+# 阶数 n 由 Style.zoom_pulse_curve_level（0~5）调节，0/1 为线性；
+# 峰值倍数由 Style.zoom_pulse_peak_pct（100~200，默认 125 = 1.25×）
+# 调节，历史固定 1.25 保留为默认值。
+ZOOM_PULSE_PEAK_RATIO = ZOOM_PULSE_PEAK_PCT_DEFAULT / 100.0
 ZOOM_PULSE_SHRINK_MS = 300
 ZOOM_PULSE_DEFAULT_CURVE_LEVEL = 1
 CHAR_FADE_INTRO_DELAY_MS = 350
@@ -389,7 +393,11 @@ def _transition_char_state_core(
             return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
         scale = (
             zoom_pulse_wipe_scale(
-                t_ms, char_start_ms, char_end_ms, zoom_pulse_curve_level(style)
+                t_ms,
+                char_start_ms,
+                char_end_ms,
+                zoom_pulse_curve_level(style),
+                zoom_pulse_peak_ratio(style),
             )
             if effective_karaoke_zoom_pulse(style)
             else utopia_wipe_scale(t_ms, char_start_ms, char_end_ms)
@@ -469,6 +477,7 @@ def zoom_pulse_overlay_scale(
         char_start_ms,
         char_end_ms,
         zoom_pulse_curve_level(style),
+        zoom_pulse_peak_ratio(style),
     )
 
 
@@ -833,11 +842,26 @@ def zoom_pulse_curve_level(style: Style) -> int:
     return max(0, min(5, level))
 
 
+def zoom_pulse_peak_ratio(style: Style) -> float:
+    """Resolve the zoom-pulse peak magnification from ``Style.zoom_pulse_peak_pct``.
+
+    存储为百分比整数（100~200），这里折算成倍率并钳到支持范围；缺字段/
+    非法值回落历史默认 1.25。整数输入下与 C++ 侧 TextStyle 的
+    ``zoomPulsePeakPct`` 钳制口径逐位一致（IR 经 style_from_dict 恒为
+    整数；非整数浮点/超大数的回落细节两侧不同，生产路径不可达）。
+    """
+    pct = clamp_zoom_pulse_peak_pct(
+        getattr(style, "zoom_pulse_peak_pct", ZOOM_PULSE_PEAK_PCT_DEFAULT)
+    )
+    return pct / 100.0
+
+
 def zoom_pulse_wipe_scale(
     t_ms: int,
     char_start_ms: int,
     char_end_ms: int,
     curve_level: int = ZOOM_PULSE_DEFAULT_CURVE_LEVEL,
+    peak_ratio: float = ZOOM_PULSE_PEAK_RATIO,
 ) -> float:
     if not is_zoom_pulse_active(t_ms, char_start_ms, char_end_ms):
         return 1.0
@@ -846,11 +870,11 @@ def zoom_pulse_wipe_scale(
         # 缓出：起点快速离开 1.0，逼近峰值时导数→0（峰值停留）。
         progress = (t_ms - char_start_ms) / (char_end_ms - char_start_ms)
         eased = progress if level <= 0 else 1.0 - (1.0 - progress) ** level
-        return 1.0 + (ZOOM_PULSE_PEAK_RATIO - 1.0) * eased
+        return 1.0 + (peak_ratio - 1.0) * eased
     # 缓入：刚唱完时导数≈0（继续停留在峰值附近），结尾快速落回 1.0。
     shrink = (t_ms - char_end_ms) / ZOOM_PULSE_SHRINK_MS
     eased = 1.0 - shrink if level <= 0 else 1.0 - shrink**level
-    return 1.0 + (ZOOM_PULSE_PEAK_RATIO - 1.0) * eased
+    return 1.0 + (peak_ratio - 1.0) * eased
 
 
 def utopia_following_done_time(

@@ -190,6 +190,15 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     assert host._zoom_pulse_curve_combo.itemText(1) == "1级（匀速·默认）"
     assert host._zoom_pulse_curve_combo.itemText(3) == "3级（较快）"
     assert host._zoom_pulse_curve_combo.itemText(5) == "5级（极快）"
+    # 整字放大倍数：紧随速度等级入网，与粒子速度同款 slider+输入框复合
+    # 控件，100~200%，默认 125（历史 1.25×）。
+    assert isinstance(host._zoom_pulse_peak_control, CanvasSliderSpinBox)
+    assert host._zoom_pulse_peak_control.input_range() == (100, 200)
+    assert host._zoom_pulse_peak_control.slider_range() == (100, 200)
+    assert host._zoom_pulse_peak_control.value() == 125
+    assert host._zoom_pulse_peak_control.toolTip()
+    peak_labels = [label.text() for label in section.findChildren(QLabel)]
+    assert "整字放大倍数" in peak_labels
     # 扫字线独占一整行（与出入场动画两栏同宽）；参数永久激活，亮度与角色
     # 下拉默认隐藏（默认单独颜色模式），宿主回显按模式互换第三列。
     assert host._scanline_row is not None

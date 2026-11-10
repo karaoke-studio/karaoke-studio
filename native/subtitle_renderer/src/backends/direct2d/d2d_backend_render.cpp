@@ -1853,9 +1853,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             return ch.wipePoints.empty() ? ch.endMs : ch.wipePoints.back().timeMs;
         };
         // 整字放大（zoom_pulse）：与 Python transitions.zoom_pulse_wipe_scale
-        // 同曲线——唱字期间缓出放大到 1.25，唱字结束后 300ms 缓入缩回。
-        // 缓动阶数 level（0~5，0=线性）来自 TextStyle.zoomPulseCurveLevel；
-        // 峰值两侧导数为 0（停留感），幂用循环连乘近似避免 pow。
+        // 同曲线——唱字期间缓出放大到峰值（可配置 100%~200%，默认 125% =
+        // 1.25×），唱字结束后 300ms 缓入缩回。缓动阶数 level（0~5，0=线性）
+        // 来自 TextStyle.zoomPulseCurveLevel，峰值来自
+        // TextStyle.zoomPulsePeakPct；峰值两侧导数为 0（停留感），幂用循环
+        // 连乘近似避免 pow。
         const auto zoomPulseActive = [](int tMs, int startMs, int endMs) {
             constexpr int kShrinkMs = 300;
             return startMs != endMs
@@ -1870,9 +1872,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             return result;
         };
         const auto zoomPulseScale = [&](
-            int tMs, int startMs, int endMs, int curveLevel
+            int tMs, int startMs, int endMs, int curveLevel, int peakPct
         ) {
-            constexpr double kPeak = 1.25;
+            const double peakRatio = std::clamp(peakPct, 100, 200) / 100.0;
             constexpr int kShrinkMs = 300;
             if (startMs == endMs || tMs <= startMs || tMs >= endMs + kShrinkMs) {
                 return 1.0f;
@@ -1885,11 +1887,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 const double eased = level <= 0
                     ? 1.0 - one
                     : 1.0 - zoomPulsePowi(one, level);
-                return static_cast<float>(1.0 + (kPeak - 1.0) * eased);
+                return static_cast<float>(1.0 + (peakRatio - 1.0) * eased);
             }
             const double q = static_cast<double>(tMs - endMs) / kShrinkMs;
             const double eased = level <= 0 ? 1.0 - q : 1.0 - zoomPulsePowi(q, level);
-            return static_cast<float>(1.0 + (kPeak - 1.0) * eased);
+            return static_cast<float>(1.0 + (peakRatio - 1.0) * eased);
         };
         // 整字放大与退场并行：退场照原时间开始，缩回缩放继续乘在退场的
         // 旋转/位移/缩水上（镜像 transitions.zoom_pulse_overlay_scale）。
@@ -1900,7 +1902,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return 1.0f;
             }
             return zoomPulseScale(
-                tMs, startMs, endMs, line->style.zoomPulseCurveLevel
+                tMs, startMs, endMs,
+                line->style.zoomPulseCurveLevel,
+                line->style.zoomPulsePeakPct
             );
         };
         const auto inlineGeometryAt = [&](int index, int count, float centerX) {
@@ -2047,7 +2051,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 // intro/exit 相位在链上更早命中，退场照常接管。
                 scaleX = scaleY = zoomPulseScale(
                     tMs, wipeStartMs(ch), wipeEndMs(ch),
-                    line->style.zoomPulseCurveLevel
+                    line->style.zoomPulseCurveLevel,
+                    line->style.zoomPulsePeakPct
                 );
             } else if (line->karaokeAnimation == "utopia"
                 && tMs > wipeStartMs(ch) && tMs < wipeEndMs(ch)
@@ -2228,7 +2233,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 && zoomPulseActive(tMs, unit.startMs, unit.endMs)) {
                 scaleX = scaleY = zoomPulseScale(
                     tMs, unit.startMs, unit.endMs,
-                    line->style.zoomPulseCurveLevel
+                    line->style.zoomPulseCurveLevel,
+                    line->style.zoomPulsePeakPct
                 );
             } else if (line->karaokeAnimation == "utopia"
                 && tMs > unit.startMs && tMs < unit.endMs
@@ -4753,6 +4759,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 ? clampGlowRect(expanded)
                 : expanded;
         };
+        // 整字放大（zoom_pulse）行的字形在唱字期间按峰值（可配置
+        // 100%~200%）绕自身中心放大后才画进发光源，而下面三处 content
+        // 都是静态墨迹包络；utopia 过冲（1.15/1.3×）时代的余量在峰值
+        // 开放到 2.00× 后不够，放大字形会越出 sourceRect 被发光 scratch
+        // 硬裁切（Painter 侧发光图跟随字符变换整体贴图、不裁——两后端
+        // 在大峰值下分叉）。按 (peak-1)×包络高四边外扩：垂直需求 ≈
+        // (peak-1)×半行高，水平边缘字的生长 ≤ (peak-1)×半字宽（≤ 半行
+        // 高），各留一倍余量。
+        const auto zoomPulseGlowContent = [&](D2D1_RECT_F content) {
+            if (!line->zoomPulseEnabled) {
+                return content;
+            }
+            const float peak = std::clamp(
+                line->style.zoomPulsePeakPct, 100, 200
+            ) / 100.0f;
+            const float growth = (peak - 1.0f) * (content.bottom - content.top);
+            return expandedRect(content, growth);
+        };
         const auto glowClearBounds = [&] (
             const D2D1_RECT_F &sourceRect,
             int radius
@@ -4855,9 +4879,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 // Restrict the scratch clear and, at composite time, the blur
                 // evaluation to the line's neighbourhood; Direct2D effects only
                 // process the input needed for the requested output rectangle.
-                const D2D1_RECT_F glowContent = unionRect(
+                const D2D1_RECT_F glowContent = zoomPulseGlowContent(unionRect(
                     line->bounds, line->fillBounds
-                );
+                ));
                 layer.sourceRect = glowOutputRect(
                     glowContent, sourceWidth, radius
                 );
@@ -5086,6 +5110,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             if (!hasContent) {
                 return;
             }
+            // 注音单元与主文字同乘整字放大缩放（绕单元中心），同口径外扩。
+            content = zoomPulseGlowContent(content);
             layer.sourceRect = glowOutputRect(
                 content, sourceWidth, radius
             );
@@ -5478,6 +5504,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             if (!hasContent) {
                 return;
             }
+            // 行内混合样式行的逐字编组发光：整字放大同样绕字心放大，外扩。
+            content = zoomPulseGlowContent(content);
             layer.sourceRect = glowOutputRect(
                 content, sourceWidth, radius
             );
@@ -7855,7 +7883,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const bool animated = charTransformedAt(charIndex);
             // 放大矩阵下的矢量字形描边回落原路径直描（2026-10 用户实测
             // 锯齿）：utopia 过冲（1.15/1.3×）与逐字放大 zoom_pulse
-            // （1.25×）都经逐字动画矩阵放大——此时预展开轮廓的多边形
+            // （可配置 1.00~2.00×，默认 1.25×）都经逐字动画矩阵放大——
+            // 此时预展开轮廓的多边形
             // 逼近被放大暴露，DrawGeometry 原路径直描按设备精度展开、
             // 基线已证平滑。非放大态保留轮廓填充（亚毫秒）。行列式 =
             // 面积缩放因子，统一覆盖旋转/非均匀缩放。
@@ -9720,7 +9749,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         static_cast<int>(barFillElapsed),
                         barStart,
                         barEnd,
-                        style.zoomPulseCurveLevel
+                        style.zoomPulseCurveLevel,
+                        style.zoomPulsePeakPct
                     );
                 }
                 if (pulse != 1.0f) {
@@ -9784,7 +9814,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         static_cast<int>(barFillElapsed),
                         barStart,
                         barEnd,
-                        style.zoomPulseCurveLevel
+                        style.zoomPulseCurveLevel,
+                        style.zoomPulsePeakPct
                     );
                 }
                 if (pulse != 1.0f) {
@@ -10277,7 +10308,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         lampElapsed,
                         lampStart,
                         lampEnd,
-                        style.zoomPulseCurveLevel
+                        style.zoomPulseCurveLevel,
+                        style.zoomPulsePeakPct
                     );
                 }
                 const D2D1_MATRIX_3X2_F lampMatrix =

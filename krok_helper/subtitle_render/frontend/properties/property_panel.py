@@ -227,6 +227,8 @@ from krok_helper.subtitle_render.domain.models import (
     TitleOverlay,
     TitleTimeWindow,
     TRACK_TIMING_FIELDS,
+    ZOOM_PULSE_PEAK_PCT_DEFAULT,
+    clamp_zoom_pulse_peak_pct,
     effective_karaoke_animation,
     layout_display_name,
     materialize_ruby_decoration_changes,
@@ -1576,6 +1578,15 @@ class PropertyPanel(QWidget):
                             5,
                         )
                     ),
+                )
+            )
+            self._zoom_pulse_peak_control.setValue(
+                clamp_zoom_pulse_peak_pct(
+                    getattr(
+                        self._style,
+                        "zoom_pulse_peak_pct",
+                        ZOOM_PULSE_PEAK_PCT_DEFAULT,
+                    )
                 )
             )
             self._sync_scanline_controls()

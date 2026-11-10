@@ -738,6 +738,10 @@ struct TextStyle {
     // Whole-char zoom pulse easing order (0..5; 0 = linear).  Whether the
     // effect is active is a per-line flag (TextLine::zoomPulseEnabled).
     int zoomPulseCurveLevel = 1;
+    // Whole-char zoom pulse peak magnification in percent (100..200;
+    // 125 = historical 1.25x).  Dimensionless; mirrors Python
+    // Style.zoom_pulse_peak_pct via gpu_scene_projection.
+    int zoomPulsePeakPct = 125;
     bool operator==(const TextStyle &) const = default;
 };
 

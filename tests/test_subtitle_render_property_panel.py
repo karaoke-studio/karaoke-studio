@@ -12905,6 +12905,30 @@ def test_fx_particle_target_pill_keeps_settings_separate(qapp):
     assert panel._fx_speed_control.value() == 1000
 
 
+def test_zoom_pulse_peak_control_writes_and_reflects_style(qapp):
+    """整字放大倍数滑条（2026-11）：写 style 字段，set_style 回显并钳制。"""
+
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel.set_style(Style(karaoke_anim="zoom_pulse", zoom_pulse_peak_pct=160))
+
+    assert panel._zoom_pulse_peak_control.value() == 160
+
+    panel._zoom_pulse_peak_control.setValue(200)
+    assert emitted[-1].zoom_pulse_peak_pct == 200
+    panel._zoom_pulse_peak_control.setValue(100)
+    assert emitted[-1].zoom_pulse_peak_pct == 100
+
+    # 回显越界值钳到 [100, 200]；默认 125。
+    panel.set_style(Style(karaoke_anim="zoom_pulse", zoom_pulse_peak_pct=999))
+    assert panel._zoom_pulse_peak_control.value() == 200
+    panel.set_style(Style(karaoke_anim="zoom_pulse", zoom_pulse_peak_pct=1))
+    assert panel._zoom_pulse_peak_control.value() == 100
+    panel.set_style(Style(karaoke_anim="zoom_pulse"))
+    assert panel._zoom_pulse_peak_control.value() == 125
+
+
 def test_line_band_color_rows_hide_instead_of_disable():
     """外观 · 颜色里不适用的控件要**整行隐藏**（用户口径 2026-10-24）。
 

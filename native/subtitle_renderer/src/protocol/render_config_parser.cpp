@@ -1790,6 +1790,15 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         0,
         5
     );
+    base.zoomPulsePeakPct = std::clamp(
+        intValue(
+            style,
+            QStringLiteral("zoom_pulse_peak_pct"),
+            base.zoomPulsePeakPct
+        ),
+        100,
+        200
+    );
     cfg.timingOffsetMs = intValue(style, QStringLiteral("timing_offset_ms"), cfg.timingOffsetMs);
     const bool hasMainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).isObject();
     const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
