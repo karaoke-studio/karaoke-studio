@@ -1044,6 +1044,22 @@ class KrokHelperQtApp(QMainWindow):
             KrokHelperSubtitleRenderSettingsBridge,
         )
 
+        self._report_startup(66, "正在预热字幕字体")
+        try:
+            from krok_helper.subtitle_render.engine.text.font_preparation import (
+                iter_prepare_fonts,
+            )
+            from krok_helper.subtitle_render.domain.models import Style
+            from krok_helper.subtitle_render.n3.font_catalog import n3_font_families
+
+            # Registration must finish first: fontDatabaseChanged invalidates
+            # these caches. Keep Qt font work on the GUI thread, yielding to
+            # the splash between preparation steps rather than on first open.
+            n3_font_families()
+            for _ in iter_prepare_fonts(None, Style(), []):
+                self._report_startup(66, "正在预热字幕字体")
+        except Exception:
+            logging.getLogger(__name__).warning("启动字体预热失败", exc_info=True)
         self._report_startup(70, "正在加载字幕渲染模块")
         self.subtitle_render_settings_bridge = KrokHelperSubtitleRenderSettingsBridge(
             self.settings, self._save_all_settings
