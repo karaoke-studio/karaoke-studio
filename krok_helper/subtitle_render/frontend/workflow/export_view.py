@@ -49,6 +49,8 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
     ENCODER_NVENC,
     ENCODER_QSV,
     ENCODER_VIDEOTOOLBOX,
+    ENCODER_ADRENO_TERMUXVA,
+    ENCODER_MAIL_TERMUXVA,
 )
 from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_MOV_QTRLE,
@@ -828,6 +830,8 @@ class ExportWorkspaceView(QWidget):
         encoder_combo.addItem("Intel QSV", userData=ENCODER_QSV)
         encoder_combo.addItem("AMD AMF (QVBR)", userData=ENCODER_AMF_QVBR)
         encoder_combo.addItem("AMD AMF (CQP)", userData=ENCODER_AMF_CQP)
+        encoder_combo.addItem("骁龙安卓tva-va", userData=ENCODER_ADRENO_TERMUXVA)
+        encoder_combo.addItem("其他安卓tva-va", userData=ENCODER_MAIL_TERMUXVA)
         encoder_combo.setToolTip(
             "AMD 显卡的两个档位：QVBR 把质量值换算成质量等级，体积更可控；"
             "CQP 与 NicoKaraMaker3 相同，质量值直接作为固定量化参数，"
