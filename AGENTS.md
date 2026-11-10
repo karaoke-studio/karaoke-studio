@@ -18,46 +18,41 @@
 
 **Lin-K Lyrics（凛K）**——面向卡拉 OK / B 站投稿制作的 Windows 桌面工具，Python + PyQt6 + PyInstaller，仓库主体是 `karaoke-studio/karaoke-studio`，由 [Myosotis11037](https://github.com/Myosotis11037)（原 karaoke-helper 作者）与 [Xuan-cc](https://github.com/Xuan-cc)（原 StrangeUtaGame 作者）于 2026-06 合并而成，2026-08 由 Karaoke Studio 更名为 Lin-K Lyrics（仓库名、发布资产名与环境变量前缀均保持不变）。详情见 [AUTHORS.md](AUTHORS.md) / [NOTICE](NOTICE)。
 
-UI 的核心是 [`WORKFLOW_STEPS`](krok_helper/gui_qt.py)（约第 1064 行）定义的 **6 步工作流**：
+UI 的核心是 [`WORKFLOW_STEPS`](krok_helper/workflow_bar.py) 定义的 **6 步工作流**：
 
 | 步骤 | 模块 | 实现位置 |
 |---|---|---|
-| 1 | 视频下载 | [`krok_helper/video_download/`](krok_helper/video_download/) |
-| 2 | 波形对齐 | [`krok_helper/audio_alignment.py`](krok_helper/audio_alignment.py)（999 行） |
-| 3 | 歌词检索 | [`krok_helper/lyrics.py`](krok_helper/lyrics.py)（1426 行） |
-| 4 | 歌词打轴 | [`krok_helper/lyrics_timing/`](krok_helper/lyrics_timing/) — **SUG submodule** |
-| 5 | 字幕视频生成 | [`krok_helper/subtitle_render/`](krok_helper/subtitle_render/)（已合入 `main`；详见 §9） |
-| 6 | Hi-Res 混流 | [`krok_helper/pipeline.py`](krok_helper/pipeline.py) |
+| 1 | 视频下载 | [`krok_helper/video_download/`](krok_helper/video_download/)（yt-dlp 封装） |
+| 2 | 音视频处理（波形对齐 / 音频分离 / 音频合成） | [`krok_helper/audio_processing/`](krok_helper/audio_processing/)（容器页 + `separation/` 音频分离 + `merge/` 音频合成）、[`krok_helper/alignment/`](krok_helper/alignment/)（波形对齐页）+ [`audio_alignment.py`](krok_helper/audio_alignment.py)（对齐算法） |
+| 3 | 歌词检索 | [`krok_helper/lyrics_search/`](krok_helper/lyrics_search/)（页面）+ [`lyrics.py`](krok_helper/lyrics.py)（检索与转换逻辑） |
+| 4 | 歌词打轴 | [`krok_helper/lyrics_timing/`](krok_helper/lyrics_timing/) — **SUG submodule**（见 §4） |
+| 5 | 字幕视频生成 | [`krok_helper/subtitle_render/`](krok_helper/subtitle_render/)（见 §9） |
+| 6 | Hi-Res 混流 | [`krok_helper/hires/`](krok_helper/hires/)（页面）+ [`pipeline.py`](krok_helper/pipeline.py)（混流流水线） |
 
 ---
 
 ## 2. 仓库结构
 
+六个步骤各自的子包见 §1 表格，这里只列其余主干；未列出的顶层模块多为启动、日志等支撑代码。
+
 ```
 karaoke-studio/
 ├── app.py                          # 入口 → krok_helper.cli.main
 ├── krok_helper/
-│   ├── __init__.py                 # 把 lyrics_timing/src 加到 sys.path
-│   ├── cli.py                      # argparse + 启动 GUI
-│   ├── config.py                   # APP_VERSION 等常量
-│   ├── gui_qt.py                   # 主窗口、7000+ 行，所有 UI 都在这里
-│   ├── pipeline.py                 # Hi-Res 混流流水线
-│   ├── audio_alignment.py          # 波形对齐
-│   ├── lyrics.py                   # 歌词检索 + 转换
-│   ├── settings.py                 # 用户设置序列化
-│   ├── ffmpeg.py / network.py / windows.py
-│   ├── updater/                    # 自动更新客户端（worker / installer / sources / settings）
-│   ├── updater_app/                # 独立 Updater.exe（PyInstaller 单独打包）
-│   ├── video_download/             # yt-dlp 封装
+│   ├── __init__.py                 # 把 lyrics_timing/src 加到 sys.path，并安装 SUG 目录探针
+│   ├── cli.py / config.py          # argparse + 启动 GUI / APP_VERSION 等常量
+│   ├── gui_qt.py                   # 主窗口外壳 KrokHelperQtApp；各步页面在 §1 表格列出的子包里
+│   ├── workflow.py / workflow_bar.py / workflow_host.py    # 工作流模块 ID / 顶部步条 / 宿主契约
+│   ├── ui_kit.py / theme_workbench.py / qfluent_compat.py  # 共用控件 / 主题门面 / qfluentwidgets 兼容修补
 │   ├── lyrics_timing/              # ⚠️ Git submodule（StrangeUtaGame）— 不要直接改源码
+│   ├── global_settings/            # 全局设置对话框（设置序列化在 settings.py）
+│   ├── updater/                    # 自动更新客户端（worker / installer / sources / settings，macOS 走 Sparkle）
+│   ├── updater_app/                # 独立 Updater.exe（PyInstaller 单独打包）
 │   └── assets/                     # 图标、logo、平台 SVG
-├── scripts/
-│   ├── build_windows.bat           # 本地 + CI Windows 打包
-│   └── build_macos.command         # 本地 + CI macOS 打包
+├── native/subtitle_renderer/       # 步骤 5 的 C++ Direct2D 渲染 sidecar（CMake + Ninja）
+├── scripts/                        # build_windows.bat / build_macos.command / build_parts.py / release.py，另有基准与探针脚本
 ├── tests/                          # pytest，对应主程序各模块
-├── docs/
-│   ├── release-process.md          # 发版流程（committed）
-│   └── release-runbook.local.md    # 个人 cheat sheet（gitignored）
+├── docs/                           # release-process.md、auto_update.md、README_DEV.md（CLI / 路径 / 环境变量 / 打包参考）及各专题设计文档
 ├── .github/workflows/release.yml   # tag v* 触发 → 打包 → 发布 GitHub Release
 ├── CHANGELOG.md / README.md / AUTHORS.md / LICENSE / NOTICE
 └── AGENTS.md                       # 本文件
@@ -72,39 +67,24 @@ karaoke-studio/
 C:\Python314\python.exe app.py
 ```
 
-CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-audio` / `--off-audio` / `--output-dir` / `--ffmpeg-dir` 等）。无参数则直接进 GUI。
+CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-audio` / `--off-audio` / `--output-dir` / `--ffmpeg-dir` 等）。无参数则直接进 GUI。参数表、数据路径与环境变量见 [`docs/README_DEV.md`](docs/README_DEV.md)。
 
-测试：
-
-```powershell
-C:\Python314\python.exe -m pytest tests\
-```
-
-**开发时不要每次都跑全量**：整套约 6000 个测试串行要 40~60 分钟，其中
-`tests\test_subtitle_render_gpu_backend.py` 一个文件就占 ~28 分钟（每个用例都新起
-sidecar + configure），`tests\test_subtitle_render_property_panel.py` 次之。日常开发
-只跑与改动相关的测试文件/用例（如 `pytest tests\test_subtitle_render_property_panel.py`
-或单个 `::test_name`），全量回归留给发版前或跨模块大改动合并前。
-
-**优先并行跑**（`pytest-xdist`，已列入 `requirements-dev.txt`）：
+测试优先并行跑（`pytest-xdist`，已列入 `requirements-dev.txt`）：
 
 ```powershell
 # 日常快循环：跳过最慢的 GPU 对照文件，约 9 分钟
 C:\Python314\python.exe -m pytest tests -q -n 8 --ignore=tests/test_subtitle_render_gpu_backend.py
-# 只验证 GPU/Painter 对照：约 4.5 分钟
+# 只验证 GPU/Painter 对照：约 4.5 分钟（串行约 28 分钟）
 C:\Python314\python.exe -m pytest tests\test_subtitle_render_gpu_backend.py -q -n 6
-# 全量：约 12 分钟
+# 全量：约 12 分钟（串行 40~60 分钟）
 C:\Python314\python.exe -m pytest tests -q -n 8
 ```
 
-实测：全量串行 40~60 分钟 → `-n 8` 约 12 分钟；GPU 文件 28 分钟 → `-n 6` 约 4.5 分钟；跳过 GPU 文件的快循环 `-n 8` 约 9 分钟。
-代价是少数 GPU 用例（`test_gpu_inline_volume_uses_registered_geometry_transition`
-的个别参数、`test_gpu_band_presets_advance_frames`）在并行负载下会偶发失败，排查这类
-用例时串行单跑确认。普通 `python -m pytest` 现在可直接用：Qt/qfluentwidgets 预热已放进
-`tests/conftest.py`，不再需要临时启动脚本。GUI 测试结束后的顶层窗口由根 conftest 的
-`_reap_stray_toplevel_widgets` 按测试回收，不要再引入跨测试存活的无父窗口。
+- **开发时不要每次都跑全量**：整套约 6000 个测试，`tests\test_subtitle_render_gpu_backend.py` 最慢（每个用例都新起 sidecar + configure），`tests\test_subtitle_render_property_panel.py` 次之。日常开发只跑与改动相关的测试文件/用例（如 `pytest tests\test_subtitle_render_property_panel.py` 或单个 `::test_name`），全量回归留给发版前或跨模块大改动合并前。
+- **并行的代价**：少数 GPU 用例（`test_gpu_inline_volume_uses_registered_geometry_transition` 的个别参数、`test_gpu_band_presets_advance_frames`）在并行负载下会偶发失败，排查这类用例时串行单跑确认。
+- GUI 测试结束后的顶层窗口由根 conftest 的 `_reap_stray_toplevel_widgets` 按测试回收，不要再引入跨测试存活的无父窗口。
 
-Qt 嵌入冒烟（无显示器环境）：
+Qt 嵌入冒烟（无显示器环境；进程退出码不作回归信号，见 §8.12）：
 
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
@@ -120,7 +100,7 @@ C:\Python314\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QAppli
 **规则**：
 
 - **不要直接改 `krok_helper/lyrics_timing/src/strange_uta_game/` 里的代码**。要改先去 SUG 仓库提 PR，merge 后再 bump submodule。
-- 嵌入主程序的入口是 [`krok_helper/gui_qt.py`](krok_helper/gui_qt.py) 里的 `self.lyrics_timing_page`（约第 700 行附近构造）。SUG 自己暴露 `MainWindow` class，宿主把它当一个 Qt widget 挂上去。
+- 嵌入主程序的入口是 [`krok_helper/gui_qt.py`](krok_helper/gui_qt.py) 里的 `self.lyrics_timing_page`（由 `LyricsTimingMainWindow.for_embedding(...)` 构造）。SUG 自己暴露 `MainWindow` class，宿主把它当一个 Qt widget 挂上去。
 - 嵌入契约见 SUG 仓库的 `docs/EMBEDDING.md`（在 submodule 内）。
 - [`krok_helper/__init__.py`](krok_helper/__init__.py) 会自动把 `lyrics_timing/src/` 加进 `sys.path`，所以 `import strange_uta_game` 在主程序里直接可用。
 
@@ -137,11 +117,11 @@ git submodule status
 ## 5. 自动更新机制
 
 - [`krok_helper/updater/worker.py`](krok_helper/updater/worker.py)：在主程序里跑，查询 GitHub Releases API（全 403 时用 github.com 网页 302 跳转兜底），对比 `APP_VERSION`，跨版本聚合 changelog。
-- [`krok_helper/updater_app/`](krok_helper/updater_app/)：独立 GUI `Updater.exe`（复用 SUG `updater_app` 的 PyQt6 界面与增量更新逻辑），主程序退出后由它显示进度、替换文件并重启，不弹控制台。需要 `build_updater.py` 单独打包。
+- [`krok_helper/updater_app/`](krok_helper/updater_app/)：独立 GUI `Updater.exe`（复用 SUG `updater_app` 的 PyQt6 界面与增量更新逻辑），主程序退出后由它显示进度、替换文件并重启，不弹控制台。由 [`build_updater.py`](krok_helper/updater_app/build_updater.py) 单独打包。
 - **增量更新**：[`scripts/build_parts.py`](scripts/build_parts.py) 产出 `KaraokeStudio-windows.json`（manifest）+ `-app.zip` + `-runtime.zip`；Updater 按 manifest diff 只下变化的 part，失败自动回退全量 zip。依赖未变时 CI 复用上一版 runtime zip 原文件（`--require-runtime-reuse` 安全闸）。完整机制、配置与失败矩阵见 [`docs/auto_update.md`](docs/auto_update.md)；设计取舍见 [`docs/工作台更新器完善计划.md`](docs/工作台更新器完善计划.md)。
 - 资产命名是硬编码的：`KaraokeStudio-windows.zip` / `KaraokeStudio-macos.zip`（见 `worker.current_asset_name()`）。**manifest 名 `KaraokeStudio-windows.json` 由存量客户端从 zip 名派生，全都不可改** —— 应用 2026-08 已更名为 Lin-K Lyrics，但这套 `KaraokeStudio-*` 资产名刻意保持原样。
-- **主程序 EXE 双名并存（至 4.3.x 止）**：包里主程序是 `Lin-K Lyrics.exe`，4.3.x 及更早的版本同时带一份同内容的`Karaoke Studio.exe`，并且它要在 `build_parts.APP_TARGETS` 里。执行更新的是旧版代码，它按旧文件名校验更新包并重启 —— 删掉副本会让存量用户全量路径彻底断更、增量路径「装上了却拉不起来」。**自 4.4.0 起由版本闸自动停发旧名副本**：单一事实源 `build_parts.FIRST_LEGACY_FREE_VERSION = (4,4,0)`，`SHIP_LEGACY_APP_EXE` 同时驱动 `APP_TARGETS`、`main()` 护栏与 `build_windows.bat` 的复制步骤，bump 到 4.4.0 即自动翻转；`release.py` 自 4.4.0 起在 release body 头部自动加「旧版用户手动下载完整包」提示。Updater 侧的放宽（全量校验不再要求旧名）已随 4.3.0 发出，`_cleanup_legacy_main_exe` 快捷方式迁移与旧名回收逻辑长期保留。原理与失败矩阵见 [docs/auto_update.md §8.1](docs/auto_update.md)，护栏见 `tests/test_rename_release_invariants.py`。**2026-09 迁移机制**（自 4.2.8.9 起已发布）：新版主程序 `installer.find_app_exe_name()` 固定返回新名（与启动文件名无关），Updater 在**新版本成功拉起之后**由 `_cleanup_legacy_main_exe` 迁移旧名快捷方式（`.lnk` 原地改指新名，尽力而为）并清理本地旧名副本——迁移失败不阻断清理（宁可留坏快捷方式也不留旧名副本），仅新名入口缺失时跳过清理。
-- **更新弹窗会直接展示 GitHub Release 的 body**，所以 release body 必须是中文。详见 §6。
+- **macOS 走 Sparkle**：CI 额外产出 `KaraokeStudio-macos-appcast.xml` 与 `KaraokeStudio-macos-deltas.zip`，机制见 [`docs/auto_update.md`](docs/auto_update.md) §2.1。
+- **旧名 EXE 已停发（自 4.4.0）**：包里主程序是 `Lin-K Lyrics.exe`；同内容的旧名副本 `Karaoke Studio.exe` 只随 4.3.x 及更早版本分发，自 4.4.0 起由版本闸 `build_parts.FIRST_LEGACY_FREE_VERSION = (4,4,0)` 自动停发（`SHIP_LEGACY_APP_EXE` 同时驱动 `APP_TARGETS`、`main()` 护栏与 `build_windows.bat` 的复制步骤）。以下配套**长期保留，不要当过期代码清理**：Updater 的 `_cleanup_legacy_main_exe`（新版本成功拉起后迁移旧名快捷方式、回收旧名副本）、`installer.find_app_exe_name()` 固定返回新名、`release.py` 自 4.4.0 起在 release body 头部自动加的老版本手动更新提示（`MANUAL_UPDATE_NOTICE`）、护栏 `tests/test_rename_release_invariants.py`。原理与失败矩阵见 [docs/auto_update.md §8.1](docs/auto_update.md)。
 
 ---
 
@@ -153,13 +133,12 @@ git submodule status
   - **流程 A · 工作台更新**：SemVer 3 段 bump（`3.0.2 → 3.0.3` 等）。
   - **流程 B · Submodule 更新**：第 4 段递增（`3.0.2 → 3.0.2.1`）。
 - Tag 格式 `vX.Y.Z[.N]`，push tag 触发 [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动打包+发 release。
-- CI 会从 `CHANGELOG.md` 自动提取当前 tag 对应的中文 release body；打 tag 前必须运行 notes 命令校验，避免更新弹窗展示错误内容。
+- 发版准备统一运行 `python scripts/release.py prepare X.Y.Z[.N]`：它会同步 `APP_VERSION` 与 [`README.md`](README.md) 顶部「当前版本」，并在 `CHANGELOG.md` 插入当天的占位段。补全 CHANGELOG 后运行 `python scripts/release.py notes X.Y.Z[.N]` 生成中文 release body。
+- **release body 由 CI 从 `CHANGELOG.md` 当前 tag 的版本段提取**，更新弹窗会原样展示，所以必须是中文；打 tag 前必须先跑上面的 notes 命令校验，避免更新弹窗展示错误内容。
 - **写 CHANGELOG 时必须在版本段顶部添加反馈群提示**：`<span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>`（HTML span 写法原样保留，更新弹窗按富文本渲染）。
 - **写 CHANGELOG 时必须核对实际提交作者**：用 `git log <上一个tag>..HEAD --format='%an %s'` 查看本版本各提交的作者，在对应条目后加上 `@作者名`，不要凭猜测署名。**署名映射：GitHub 用户 `Myosotis11037` 的所有提交统一标注 `@凛夜`；`Xuan-cc` 的提交标注 `@Xuan-cc`。** CHANGELOG 与 release body 均遵守此规则。
-- **发版补改不得转移贡献归属**：agent 在发版检查中补改已有贡献时，不得仅凭自动继承的本机 Git 身份重新署名；须结合原始提交、`git blame`、实际改动范围和用户确认核实归属，用户明确纠正优先。2026-10-12 用户确认：「启动进度不再倒退」「字体装卸后回退缓存正确失效」均属于 `@Xuan-cc`；发版补改提交关联 `Myosotis11037` 不能作为改署 `@凛夜` 的依据。独立的新修复也不能一律归给原代码作者。完整误署名记录见 `docs/release-process.md` §6。
+- **发版补改不得转移贡献归属**：agent 在发版检查中补改已有贡献时，不得仅凭自动继承的本机 Git 身份重新署名；须结合原始提交、`git blame`、实际改动范围和用户确认核实归属，用户明确纠正优先。独立的新修复也不能一律归给原代码作者。误署名案例（2026-10-12 · v4.3.7.5）记录在 `docs/release-process.md` §6。
 - **保留 Release Contributors 账号关联**：版本段末尾（分隔线前）添加「本版贡献者」一行，按核实后的实际贡献归属去重列出真实 GitHub 账号；两位均有贡献时写 `本版贡献者：凛夜（@Myosotis11037）、@Xuan-cc`，仅一位有贡献时只列该位。条目中的 `@凛夜` 保持不变，真实账号提及用于让 GitHub 生成 Contributors 头像列表。CHANGELOG 与 release body 均须包含此行，发布后核对头像列表。详见 `docs/release-process.md` §6。
-- 改 `APP_VERSION` 时同时改 [`README.md`](README.md) 顶部「当前版本」（容易漏）。
-- 发版准备统一运行 `python scripts/release.py prepare X.Y.Z[.N]`；补全 CHANGELOG 后运行 `python scripts/release.py notes X.Y.Z[.N]` 生成中文 release body。详见 [`docs/release-process.md`](docs/release-process.md)。
 
 ---
 
@@ -168,116 +147,100 @@ git submodule status
 - **语言**：用户可见字符串（UI / CHANGELOG / release body / 弹窗）一律**中文**；commit message / code comment / docstring 用英文或中文都可以，跟现有文件保持一致。
 - **commit 风格**：现有历史混用 `fix:` / `feat:` / `chore:` 前缀（Conventional Commits）和 `Release X.Y.Z` 形式。新功能/修复用前缀；发版 commit 用 `Release X.Y.Z`。
 - **测试**：tests 目录下；命名 `test_<module>.py`。改一个模块时优先扩对应测试。
-- **GUI 改动**：`gui_qt.py` 是 7000+ 行的单文件，定位时 grep `class XxxCard` / `class XxxPage` 比硬翻快得多。
+- **GUI 改动**：`gui_qt.py` 是主窗口外壳，各步页面在对应子包（多为 `page.py`，见 §2）；定位时 grep `class XxxCard` / `class XxxPage` 比硬翻快得多。
 
 ---
 
 ## 8. 已知坑（别再踩）
 
+条目编号被其他文档和代码注释引用（如「坑 #5」「§8.9」「§8.11」），增删时不要重新编号。
+
 1. **CI checkout 必须带 `submodules: recursive`**，否则 runner 上 `krok_helper/lyrics_timing/src/` 是空的，构建脚本会在「Checking bundled SUG source path」失败。
 2. **构建脚本和 workflow 资产名要对齐**：`scripts\build_windows.bat` 产出 `KaraokeStudio-windows.zip` + `.sha256`，workflow 直接 upload；不要在 workflow 里再加一层 `Compress-Archive`，会覆盖出错误的 zip。
 3. **macOS 构建**：build script 只输出 `.app`，workflow 用 `ditto -c -k --sequesterRsrc --keepParent` 打 zip。
-4. **macOS 构建过程会临时改 `strange_uta_game/__version__.py` 的 `VARIANT` 为 `"mac"`**，脚本有 `trap` 恢复（[`scripts/build_macos.command`](scripts/build_macos.command) 第 162-170 行）。如果中断了，手工还原 SUG。
-5. **Release body 直接来自当前 tag 的 `CHANGELOG.md` 版本段**；不得恢复 `generate_release_notes: true`，否则更新弹窗会展示英文 compare 链接。
+4. **macOS 构建过程会临时改 `strange_uta_game/__version__.py` 的 `VARIANT` 为 `"mac"`**，脚本用 `trap restore_sug_version EXIT` 恢复（见 [`scripts/build_macos.command`](scripts/build_macos.command)）。如果中断了，手工还原 SUG。
+5. **不得恢复 `generate_release_notes: true`**——release body 必须来自当前 tag 的 `CHANGELOG.md` 版本段（见 §6），否则更新弹窗会展示英文 compare 链接。
 6. **不要 `--force` push 已经发布过 release 的 tag**——已经下载过的用户的客户端不会重拉。
-7. **README 版本号容易漏改**——`APP_VERSION` 与 README 顶部「当前版本」必须同步。
-8. **Qt6\bin 自带的旧 MSVC 运行时会让打包应用无声闪退**——某些 PyQt6-Qt6 wheel 在
-   `Qt6\bin` 捆绑 VS2019 时代的 `MSVCP140*.dll`/`VCRUNTIME140*.dll`（14.26 vcwrkspc）。
-   Qt6 按同目录优先加载后全进程同名唯一，VS2022 编译的 pedalboard_native 等扩展在新代码
-   路径（如 TSM「准备变速缓存」的 MP3 编码）会在旧 MSVCP140.dll 内 0xc0000005 访问冲突。
-   首发于 v4.1.0：`build_windows.bat` 曾把 `PYQT6_QT_VERSION` pin 成 6.10.2，而该 wheel 恰好
-   带 14.26 旧运行时（v4.0.x 未 pin，装到的 6.11.0 wheel 自带 14.44 所以正常）。**根因已修**：
-   PyQt6 binding、打包用的 `PyQt6-Qt6` runtime 与 native SDK 全部固定为 6.11.0；
-   不要把 6.11.0 binding 与 6.11.1 runtime 混用，该组合虽符合 wheel 依赖范围，但实测 `PyQt6.QtSvg`
-   会因程序入口不匹配而加载失败。`KROK_EXPECTED_QT_VERSION` 会按实际 runtime 指纹严格校验
-   （6.11 编的 sidecar exe 也不能加载 6.10 的 Qt DLL）。
-   PyPI 上的 `aqtinstall` 3.3.0 无法读取 Qt 6.11 仓库结构，因此 native smoke 脚本固定安装已验证的
-   upstream commit `bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643`，不可改回无版本约束的 `aqtinstall`。
-   `scripts/build_windows.bat` 的「Refreshing bundled MSVC runtime DLLs」步骤保留作为防御纵深：
-   用构建机 System32 的新运行时覆盖 Qt6\bin 里低于 14.38 下限的副本，防止将来 PyQt6 升级再次带入
-   旧文件；改收集规则时同步 bump `scripts/build_parts.py` 的 `RUNTIME_PROFILE`，否则 CI 会复用含旧运行时的 runtime zip。
-   排查此类闪退：`Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'}` 看故障模块。
+7. **README 版本号容易漏改**——`APP_VERSION` 与 README 顶部「当前版本」必须同步；`release.py prepare` 会一并改，手改时别漏。
+8. **Qt 相关版本全部固定 6.11.0，打包必须保留 MSVC 运行时刷新步骤**——PyQt6 binding、
+   `PyQt6-Qt6` runtime 与 native SDK 必须同为 6.11.0（6.11.0 binding 配 6.11.1 runtime 虽符合
+   wheel 依赖范围，但 `PyQt6.QtSvg` 会因程序入口不匹配而加载失败；sidecar 的 CMake 用
+   `KROK_EXPECTED_QT_VERSION` 断言 native Qt 与 PyQt6 的 Qt 版本一致）。native smoke 脚本的
+   `aqtinstall` 固定为 upstream commit `bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643`（PyPI 上的
+   3.3.0 读不了 Qt 6.11 仓库结构），不可改回无版本约束。`scripts/build_windows.bat` 的
+   「Refreshing bundled MSVC runtime DLLs」步骤不能删：某些 PyQt6-Qt6 wheel 在 `Qt6\bin` 捆绑
+   VS2019 时代的旧 `MSVCP140*.dll`/`VCRUNTIME140*.dll`，被同目录优先加载后，VS2022 编译的扩展
+   （如 pedalboard_native）会在其中 0xc0000005 无声闪退（v4.1.0 事故）；该步骤用构建机
+   System32 的运行时覆盖低于 14.38 的副本。改收集规则时同步 bump `scripts/build_parts.py` 的
+   `RUNTIME_PROFILE`，否则 CI 会复用含旧运行时的 runtime zip。排查此类闪退：
+   `Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'}` 看故障模块。
 
-9. **受限/沙箱环境下全量回归会被 SUG 的配置目录写探测卡死**——SUG 的
-   `app_dirs.program_dir()` 取 `Path(sys.argv[0]).parent` 并用
-   `NamedTemporaryFile` 做可写探测；`python -m pytest` 的 argv[0] 是
-   site-packages（ProgramData）里的 pytest 包目录，沙箱对它的写探测会
-   **无限阻塞并持续烧 CPU**（无报错、无超时，进度条停住）。触发点包括
-   `tests/test_module_settings_persist.py` 的 teardown（closeEvent →
-   SUG `cleanup_temp_files → config_dir`）与 SUG 自身任何触发
-   `AppSettings` 首次构造的测试。定位：`py-spy dump` 栈顶为
-   `tempfile._mkstemp_inner ← app_dirs._is_dir_writable`。规避（不改
-   产品代码）：把仅含 `sys.exit(console_main())` 的 `run_pytest.py` 放到
-   **可写目录**（如 `%TEMP%`）后以它启动 pytest（argv[0] 解析到可写目录），
-   并加 `--basetemp=%TEMP%/xxx`（沙箱可能拒绝在旧 `pytest-of-<user>` 下建
-   目录）与 `PYTHONPATH=<仓库根>`（脚本方式不像 `python -m` 会自动加
-   CWD）。正常终端 / CI 不受影响。该卡点的完整分析也写在
-   `tests/test_module_settings_persist.py` 的 `workbench` fixture 注释里。
+9. **受限/沙箱环境下的配置目录写探测卡死：根因已消除，别改回去**——旧版 SUG 的
+   `app_dirs.program_dir()` 取 `sys.argv[0]` 所在目录做可写探测；`python -m pytest` 下它落在
+   site-packages（ProgramData），沙箱对该目录的探测会**无限阻塞并持续烧 CPU**（无报错、
+   无超时；`py-spy dump` 栈顶为 `tempfile._mkstemp_inner ← app_dirs._is_dir_writable`）。
+   现在有两层防护：SUG 的 `program_dir()` 已改为按 `__file__` 推导源码树根，不再读
+   `sys.argv[0]`；工作台在 `krok_helper/__init__.py` 里用 `directory_probe.is_dir_writable`
+   （`os.open` 单次探测，拒绝访问立即失败）替换了 SUG 的探针。所以不再需要「把
+   `run_pytest.py` 放到可写目录再启动 pytest」的旧规避办法。受限环境下若 `tmp_path` 报
+   `PermissionError: pytest-of-<user>`，加 `--basetemp=%TEMP%/xxx` 即可；正常终端 / CI
+   不受影响。
 
-10. **沙箱下工作台自身 pytest 也有两个独立坑（SUG 坑之外的）**——
-    ① 收集期 `PyQt6.QtSvg` 报「DLL load failed: 找不到指定的程序」：
-    同一解释器直接 `python -c "import krok_helper..."` 正常，仅 pytest
-    的导入环境触发。**已修**：`tests/conftest.py` 顶部会先预导入
-    `krok_helper.audio_processing.separation.ai_timing_host` 完成 Qt/
-    qfluentwidgets 链预热，`python -m pytest` 与 xdist worker 都可直接用，
-    不再需要临时启动脚本。② `tmp_path` fixture 报
-    `PermissionError: pytest-of-<user>`（同 §8.9 条 9 的 basetemp 问题）；
-    受限环境下加 `--basetemp=%TEMP%/xxx` 即可，正常终端 / CI 不受影响。
+10. **`tests/conftest.py` 顶部的预导入不能删**——它先导入
+    `krok_helper.audio_processing.separation.ai_timing_host` 把 Qt/qfluentwidgets 导入链
+    预热好（带 `# noqa: F401`，看起来像无用导入）。去掉后 pytest 收集期 `PyQt6.QtSvg` 会报
+    「DLL load failed: 找不到指定的程序」——同一解释器直接 `python -c "import krok_helper..."`
+    正常，仅 pytest 的导入环境触发。有它在，`python -m pytest` 与 xdist worker 都可直接用，
+    不需要临时启动脚本。
 
 11. **改 sidecar 共享头文件后增量构建不可信，必须 `--clean-first`**——本机
     中文 VS 工具链下 MSVC 的 `/showIncludes` 输出是本地化的「注意: 包含文件:」，
     ninja 的头文件依赖解析失效；改了 `render_types.h` 这类被大量 TU 包含的
     头（例如给结构体加字段）后，增量构建只会重编少数几个 .cpp，新旧
     sizeof 不同的对象文件混链，运行期随机 0xC0000409 / 0xC0000005 崩溃
-    （2026-09 动图导唱符改造首踩：改 `BitmapGuide` 后 configure 即崩，
-    GPU 预览拉起 sidecar 死亡连带 `preview_async` 报 `OSError 22`）。
-    预防：凡动 `native/subtitle_renderer` 的头文件，用
-    `cmake --build build\native-renderer --config Release --clean-first`
+    （表现之一：configure 即崩，GPU 预览拉起的 sidecar 死亡，连带
+    `preview_async` 报 `OSError 22`）。预防：凡动 `native/subtitle_renderer`
+    的头文件，用
+    `cmake --build build/native-renderer --config Release --clean-first`
     全量重建后再验证。
 
-12. **offscreen 平台下「整应用构造→关闭→解释器退出」脚本约半数进程收尾段错误
-    （exit 139，faulthandler 无 Python 帧）**——2026-09 音频合成页接入后首踩。
-    仅 `QT_QPA_PLATFORM=offscreen` 的冒烟脚本复现；**真实 Windows 平台同脚本
-    8/8 干净退出、pytest 全绿**，用户实际运行不受影响。已排查并排除：页面控件
-    构成（换成哑控件/空页同样崩）、构造时机（提前/延后同样崩）、SUG 补丁顺序、
-    字体预热线程、`theme.changed` 连接、纯时间偏移（基线+sleep 不崩）、提前
-    `sip.delete` 整页（收尾仍崩）——指向 offscreen 插件在解释器终结阶段的
-    环境性缺陷。**验证整应用生命周期请用真实平台跑脚本；不要把 offscreen
-    冒烟的退出码当回归信号**（构造期断言仍可信）。若未来在真实平台复现，
-    再按 §9 的销毁顺序思路深挖。
+12. **offscreen 冒烟的进程退出码不是回归信号**——`QT_QPA_PLATFORM=offscreen` 下
+    「整应用构造→关闭→解释器退出」脚本约半数在进程收尾段错误（exit 139，
+    faulthandler 无 Python 帧）；真实 Windows 平台同脚本干净退出、pytest 全绿，
+    用户实际运行不受影响。页面控件构成、构造时机、SUG 补丁顺序、字体预热线程、
+    `theme.changed` 连接等均已排除，指向 offscreen 插件在解释器终结阶段的环境性
+    缺陷。**验证整应用生命周期请用真实平台跑脚本**（offscreen 下构造期断言仍
+    可信）。若未来在真实平台复现，再按 §9 的销毁顺序思路深挖。
 
 13. **sidecar 的 d2d_fx / d2d_backend_internal / d2d_backend_render 禁止新增
     Qt 头文件**——Qt 头（未定义 `QT_NO_KEYWORDS` 时）会把 `emit` / `slots` /
     `signals` **关键字宏**带进编译单元，而这些文件里有既有的同名局部变量
-    （`const int emit = ...`、`const float slots = ...`），宏展开为空后声明
-    变成 `const int = ...`，在别人的老代码行上报 C2513，极具误导性（2026-10
-    扫字线图片形态首踩：在 d2d_fx.cpp 加 `#include <QImage>` 触发）。需要
-    图像像素时传原始预乘 BGRA 缓冲（参考 `scanlineImageCompositePixels` 的
-    裸指针 API），Qt 侧解码放在 d2d_backend_configure.cpp（它本来就含
-    `<QImage>`）。
+    （如 d2d_fx.cpp 的 `const int emit = ...`），宏展开为空后声明变成
+    `const int = ...`，在别人的老代码行上报 C2513，极具误导性（例如在
+    d2d_fx.cpp 加 `#include <QImage>` 就会触发）。需要图像像素时传原始预乘
+    BGRA 缓冲（参考 `scanlineImageCompositePixels` 的裸指针 API），Qt 侧解码
+    放在 d2d_backend_configure.cpp（它本来就含 `<QImage>`）。
 
 14. **sidecar 构建环境用错一次后，增量构建会复用坏 .obj 造成运行期崩溃**——
     本机构建树（`build/native-renderer`）配置的是 **Community 版 MSVC 14.51**
     （cl 绝对路径烙在 ninja 规则里），用 BuildTools 版 vcvars 起环境会导致
     STL 头找不到而部分 TU 编译失败；换回正确环境后**增量构建只重编失败的
     TU，之前用错误 STL 头编出的 .obj 被留用**，混链出的 exe 在
-    `gpu_configure` 100% 崩 0xC0000005（2026-10 首踩，曾被误判为源码缺陷）。
-    预防：构建 sidecar 统一用 `buildull_clean_rebuild.bat`（Community
+    `gpu_configure` 100% 崩 0xC0000005（曾被误判为源码缺陷）。
+    预防：构建 sidecar 统一用 `build/full_clean_rebuild.bat`（Community
     vcvars + `--target clean` + 全量重建）；凡怀疑构建环境出过错，先
-    `cmake --build build
-ative-renderer --target clean` 全清再编，不要相信
+    `cmake --build build/native-renderer --target clean` 全清再编，不要相信
     增量产物。定位此类崩溃可用「录制 stdin 协议直接重放到 exe」的办法
-    （绕开 pytest/Python 变量；`buildeplay_check.py` 参考实现）。
+    （绕开 pytest/Python 变量；`build/replay_check.py` 参考实现）。`build/`
+    未入库，这两个脚本只在本机存在。
 
 ---
 
 ## 9. 字幕渲染模块
 
-第 5 步「字幕视频生成」目标对标 NicoKaraMaker3，已于 2026-07-11 从
-`feat/subtitle-render` 整体合入 `main`。后续修复直接按工作台流程 A 在 `main` 开发，
-不再继续使用该长线分支。
+第 5 步「字幕视频生成」，目标对标 NicoKaraMaker3，按工作台流程 A 直接在 `main` 开发。代码在 `krok_helper/subtitle_render/`（`domain` / `engine` / `frontend` / `n3` / `native` / `project` / `serialization` / `settings` / `sources` 子包），C++ sidecar 在 `native/subtitle_renderer/`。字幕源支持 `.sug` / `.lrc` / `.n3proj`，工程文件为 `.yurika`。
 
-### 接手前必读（2026-07-19 校准）
+### 接手前必读
 
 1. [`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md)：总体状态、产品决策和剩余主线。
 2. [`docs/N3项目导入兼容性与实施计划.md`](docs/N3项目导入兼容性与实施计划.md)：N3 字段矩阵、明确不做项、下一步 TDD 顺序。
@@ -287,26 +250,7 @@ ative-renderer --target clean` 全清再编，不要相信
    [`docs/字幕渲染-GPU后端逆向与实施计划.md`](docs/字幕渲染-GPU后端逆向与实施计划.md)：
    N3 10.74.80.0 逆向证据、Windows C++ Direct2D 决策、G0-G6 实施与验收门槛。
 
-### 当前现状
-
-- P0 主路径已完成：`.sug`/`.lrc`/`.n3proj`、视频预览、QPainter 逐字渲染、MP4 导出、取消、工作流嵌入和 `.yurika`。
-- ruby、角色/多歌手、行内混合字体/字号/配色、渐变/图片填充、glow/stroke2、竖排/RTL、标题、时间轴和多字幕源均已实现。
-- N3 TACTIC 对齐已覆盖：三档发光、蓝白 after 配色、ruby 样式、7px 默认布局字间距，以及 `UseEdge2` 关闭时不强制二重描边。
-- 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已合入。
-- `BackgroundSource` 已支持视频、静态图、图片序列和纯色；独立音频已接入预览、项目保存与 MP4 导出，但仅允许用于非视频背景。视频背景只使用内嵌音轨，避免双时钟。
-- native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
-- 2026-07-19 已完成 N3 GPU 预览管线逆向、Direct2D sidecar 方案持久化与 G0 最小
-  GPU 探针（硬件/WARP、透明 texture、staging RGBA readback、shared-memory ring）；
-  若用户要求继续，默认从上述 GPU 文档的 G1 横排字幕核心开始。
-
-### 下一步顺序
-
-1. N3 提示策略清理；
-2. 无交互 CLI 与端到端 CI MP4 烟测。
-
-Windows PyInstaller onedir 已完成实际构建、包内 Multimedia 校验和 frozen
-multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
-完成真实构建验证。
+文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 
 ### 关键约束
 
@@ -323,6 +267,8 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
   `scale=decrease + pad=black`）；静态图/图片序列按 `BackgroundSource.image_fit` 选
   cover（铺满裁切，旧工程默认）或 contain，两侧同语义实现。背景选择/独立音频/画面尺寸入口
   在属性面板「背景/音频」页（`PropertyPanel._PAGE_SPECS` 第 6 页），与导出页宽高帧率双向联动。
+- **独立音频只用于非视频背景**：静态图、图片序列和纯色背景可加载独立音频（预览、项目保存与
+  导出均已接通）；视频背景只使用内嵌音轨，避免双时钟。
 - **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
 - **视频成片只输出 MP4、只支持 60/120fps**；另支持附加导出：**PNG 序列**
   （透明字幕层 / 含背景合成，输出到以导出名命名的独立子文件夹，帧名
@@ -336,10 +282,9 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
   只收 MP4）。输出格式偏好持久化在 app-local `output` 命名空间。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
 - **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
-- **所有用户面向字符串中文**。
-- 若以后再次出现 Qt pooled-thread teardown access violation，优先检查预览 worker、
-  QMediaPlayer、QApplication 与顶层对话框的销毁顺序；2026-07-13 一次前序运行在清理
-  阶段偶发复现，补齐新增顶层 Fluent 对话框显式销毁后完整测试 `916 passed, 50 skipped`。
+- 若再次出现 Qt pooled-thread teardown access violation，优先检查预览 worker、
+  QMediaPlayer、QApplication 与顶层对话框的销毁顺序；新增的顶层 Fluent 对话框要显式销毁
+  （2026-07 在测试清理阶段偶发复现过，补齐显式销毁后未再复现）。
 
 ---
 

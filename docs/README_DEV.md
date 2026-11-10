@@ -297,4 +297,8 @@ python -m pytest tests\
 | `probe_gpu_renderer.py` · `probe_multiprocess_preview.py` · `probe_native_preview_stats.py` | 现场探针 |
 | `profile_preview.py` · `stress_gpu_preview_gui.py` | 预览性能剖析与压测 |
 
-具体的门禁口径与「值键缓存」原则见 [`AGENTS.md`](../AGENTS.md)。
+具体的门禁口径写在各脚本的 docstring 与对应的执行计划文档里（如
+[`GPU预览宽描边性能优化执行计划书.md`](GPU预览宽描边性能优化执行计划书.md) §8 的全局回归门禁表）。
+「值键缓存」原则——缓存 key 只用值元组、不含对象 id，漏掉任何一个参与计算的字段都会命中过期
+缓存——见 [`krok_helper/subtitle_render/engine/ruby/layout.py`](../krok_helper/subtitle_render/engine/ruby/layout.py)
+的 `_ruby_measure_key`。
