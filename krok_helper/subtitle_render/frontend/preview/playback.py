@@ -83,6 +83,7 @@ class PlaybackController(QObject):
         self._player.durationChanged.connect(lambda ms: self.durationChanged.emit(int(ms)))
         self._player.playbackStateChanged.connect(self._on_state_changed)
         self._player.mediaStatusChanged.connect(self._on_media_status_changed)
+        self._player.errorOccurred.connect(self._on_player_error)
 
     # ------------------------------------------------------------------ media
     def set_media(self, path: Optional[Path]) -> None:
@@ -332,8 +333,17 @@ class PlaybackController(QObject):
 
     def _on_position_changed(self, ms: int) -> None:
         restore = self._source_restore
-        if restore is not None and abs(int(ms) - restore[0]) > 80:
-            return
+        if restore is not None:
+            if int(ms) < restore[0] - 80:
+                # 未恢复到目标点的迟到位置（重载回 0 等）不上抛。
+                return
+            if (
+                not restore[1]
+                or self._player.playbackState()
+                == QMediaPlayer.PlaybackState.PlayingState
+            ):
+                # 已到/过恢复点（resume 时还需真正在播）：恢复完成。
+                self._source_restore = None
         self.positionChanged.emit(int(ms))
 
     def _on_media_status_changed(self, status) -> None:
@@ -347,11 +357,32 @@ class PlaybackController(QObject):
         restore = self._source_restore
         if restore is None:
             return
-        self._source_restore = None
         position_ms, resume = restore
-        self._player.setPosition(position_ms)
-        if resume:
+        if not resume:
+            # 静默换源 / 首次加载：加载完成即恢复完成（旧语义）。位置没对齐
+            # 才补一次 seek；不在播放中，恢复不能再武装——否则 positionChanged
+            # 的首个事件可能直接越过 80ms 确认窗，恢复永远无法确认。
+            if int(self._player.position()) < position_ms - 80:
+                self._player.setPosition(position_ms)
+            self._source_restore = None
+            return
+        # 播放中换源（resume）：恢复不能在首次 LoadedMedia 就销毁（2026-11
+        # 播放中代理换源回退首撞）——Qt FFmpeg 后端在 Buffering 中再 setPosition
+        # 会触发一次内部重载，第二次 LoadingMedia 把 position 冲回 0，提前
+        # 消费恢复会让播放直接从头重播。这里每次到达 Loaded/Buffered 都幂等
+        # 补位 + 续播，恢复保持武装直到 _on_position_changed 确认「播放已到/
+        # 过恢复点」。已在目标点前方时不再回 seek，避免反复回拽。
+        if int(self._player.position()) < position_ms - 80:
+            self._player.setPosition(position_ms)
+        if self._player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
             self._player.play()
+
+    def _on_player_error(self, _error) -> None:
+        # 换源后加载失败时不会有 LoadedMedia，恢复目标永远无法确认；继续武装
+        # 会让 position()/is_playing() 冻结在旧目标上，把跟随音频的 UI 时钟
+        # 永久拽死在换源点（2026-11 复现的「播放中卡死」形态）。丢弃恢复，
+        # 让播放器实际状态成为唯一事实。
+        self._source_restore = None
 
     def _apply_vp9_decoder_workaround(self) -> bool:
         """Avoid VP9 frame-thread reference retention in bundled FFmpeg 7.1.
