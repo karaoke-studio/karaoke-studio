@@ -59,6 +59,7 @@ from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT 
 from krok_helper.subtitle_render.frontend.project.source_watch import (  # noqa: E402
     SourceReloadDisposition,
     SubtitleSourceWatchRuntime,
+    read_track_source,
     subtitle_source_key,
 )
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import (  # noqa: E402
@@ -97,6 +98,47 @@ def _make_window(qapp, monkeypatch):
         lambda self: "ffprobe",
     )
     return mw.SubtitleRenderWindow(embedded=False)
+
+
+def _settle_watch_digest(runtime: SubtitleSourceWatchRuntime) -> None:
+    """Commit pending digests the way the window's worker callback does."""
+    plan = SubtitleSourceWatchRuntime.prepare_watch_sync(runtime.watch_entries())
+    runtime.apply_watch_sync(plan)
+
+
+def _runtime_reload(runtime, key: str, load_candidate, *, force_parse: bool = False):
+    """Compose the worker read + GUI accept exactly like the window does."""
+    state = runtime.state(key)
+    assert state is not None
+    readout = read_track_source(
+        state.path,
+        state.seen_digest,
+        load_candidate,
+        force_parse=force_parse,
+    )
+    return runtime.accept_readout(key, readout)
+
+
+def _pump_until(qapp, predicate, timeout_s: float = 8.0) -> bool:
+    """Spin the event loop until ``predicate()`` is true (async paths need it)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
+
+
+def _reload_and_wait(qapp, win, key: str) -> None:
+    """Trigger an external source reload and wait for the worker callback."""
+    win._reload_external_subtitle_source(key)
+    assert _pump_until(
+        qapp,
+        lambda: not win._source_reload_inflight
+        and not win._watch_sync_inflight
+        and not win._source_watch_runtime.pending_keys,
+    ), "外部字幕源重载未在超时内完成"
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +407,7 @@ def test_external_lrc_timestamp_change_hot_reloads_without_confirmation(
         "[00:02:00]a[00:02:50]b[00:03:00]\n",
         encoding="utf-8-sig",
     )
-    win._reload_external_subtitle_source(win._subtitle_source_key(lrc))
+    _reload_and_wait(qapp, win, win._subtitle_source_key(lrc))
 
     line = win._timing_track.lines[0]
     assert [char.start_ms for char in line.chars] == [2000, 2500]
@@ -413,7 +455,7 @@ def test_external_sug_timestamp_change_uses_same_hot_reload_path(
     char.timestamps = [2300]
     char.sentence_end_ts = 3100
     SugProjectParser.save(project, str(sug))
-    win._reload_external_subtitle_source(win._subtitle_source_key(sug))
+    _reload_and_wait(qapp, win, win._subtitle_source_key(sug))
 
     line = win._timing_track.lines[0]
     assert line.chars[0].start_ms == 2300
@@ -813,7 +855,7 @@ def test_manual_refresh_then_hot_reload_uses_advanced_baseline(
         [("a", "君", 1500, 1900), ("b", "酱", 2000, 2400)],
         [("主轴", ["a"], True), ("副轴", ["b"], False)],
     )
-    win._reload_external_subtitle_source(win._subtitle_source_key(sug))
+    _reload_and_wait(qapp, win, win._subtitle_source_key(sug))
     assert win._timing_track.lines[0].chars[0].start_ms == 1500
 
 
@@ -846,7 +888,7 @@ def test_hot_reload_updates_plain_extra_on_grouped_sug(qapp, monkeypatch, tmp_pa
         [("a", "君", 1300, 1700), ("b", "酱", 2300, 2700)],
         [("主轴", ["a"], True), ("副轴", ["b"], False)],
     )
-    win._reload_external_subtitle_source(win._subtitle_source_key(sug))
+    _reload_and_wait(qapp, win, win._subtitle_source_key(sug))
 
     plain = win._extra_sources[1]
     assert plain.sug_axis_singer_ids is None
@@ -946,7 +988,7 @@ def test_hot_reload_group_membership_change_syncs_persisted_filters(
 
     # 副轴吸纳歌手 c、主分组保持不变
     _save_three_singer_sug(sug, [("主轴", ["a"], True), ("副轴", ["b", "c"], False)])
-    win._reload_external_subtitle_source(win._subtitle_source_key(sug))
+    _reload_and_wait(qapp, win, win._subtitle_source_key(sug))
 
     extra = win._extra_sources[0]
     texts = ["".join(ch.text for ch in line.chars) for line in extra.track.lines]
@@ -956,7 +998,7 @@ def test_hot_reload_group_membership_change_syncs_persisted_filters(
 
     # 主分组换人：主轴过滤同步为最新集合，主轨道内容跟随
     _save_three_singer_sug(sug, [("主轴", ["a", "b"], True), ("副轴", ["c"], False)])
-    win._reload_external_subtitle_source(win._subtitle_source_key(sug))
+    _reload_and_wait(qapp, win, win._subtitle_source_key(sug))
     main_texts = [
         "".join(ch.text for ch in line.chars) for line in win._timing_track.lines
     ]
@@ -1477,6 +1519,14 @@ def test_external_lrc_filesystem_watcher_detects_change(
         encoding="utf-8-sig",
     )
     assert win.load_from_lrc(lrc) is not None
+    # 监视路径由后台探测 + 回调提交（磁盘检查已离线程），等它们落地。
+    watch_deadline = time.monotonic() + 3.0
+    while (
+        str(lrc.resolve()) not in win._source_watcher.files()
+        and time.monotonic() < watch_deadline
+    ):
+        qapp.processEvents()
+        time.sleep(0.01)
     assert str(lrc.resolve()) in win._source_watcher.files()
 
     lrc.write_text(
@@ -1513,7 +1563,7 @@ def test_source_watch_runtime_defers_pending_reload_while_suspended(qapp):
     assert ready == [True]
     assert runtime.take_pending() == ("source-key",)
     assert runtime.pending_keys == set()
-    runtime.deleteLater()
+    runtime.shutdown()
 
 
 def test_source_watch_runtime_owns_missing_and_duplicate_file_state(qapp, tmp_path):
@@ -1523,32 +1573,20 @@ def test_source_watch_runtime_owns_missing_and_duplicate_file_state(qapp, tmp_pa
         lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500)]
     )
     runtime = SubtitleSourceWatchRuntime()
-    runtime.set_baseline(path, baseline)
-    key = subtitle_source_key(path)
+    key = runtime.register_baseline(path, baseline)
+    _settle_watch_digest(runtime)
 
-    duplicate = runtime.prepare_reload(
-        key,
-        load_candidate=lambda _path: pytest.fail("duplicate must not parse"),
-        primary_track=baseline,
-    )
+    duplicate = _runtime_reload(runtime, key, lambda _path: pytest.fail("duplicate must not parse"))
     assert duplicate is not None
     assert duplicate.disposition == SourceReloadDisposition.DUPLICATE
 
     path.unlink()
-    first_missing = runtime.prepare_reload(
-        key,
-        load_candidate=lambda _path: baseline,
-        primary_track=baseline,
-    )
-    second_missing = runtime.prepare_reload(
-        key,
-        load_candidate=lambda _path: baseline,
-        primary_track=baseline,
-    )
+    first_missing = _runtime_reload(runtime, key, lambda _path: baseline)
+    second_missing = _runtime_reload(runtime, key, lambda _path: baseline)
     assert first_missing is not None and first_missing.notify is True
     assert second_missing is not None and second_missing.notify is False
     assert first_missing.disposition == SourceReloadDisposition.MISSING
-    runtime.deleteLater()
+    runtime.shutdown()
 
 
 def test_source_watch_runtime_owns_retry_and_baseline_acceptance(qapp, tmp_path):
@@ -1561,49 +1599,37 @@ def test_source_watch_runtime_owns_retry_and_baseline_acceptance(qapp, tmp_path)
         lines=[TimingLine(chars=[TimingChar("a", 2000)], end_ms=2500)]
     )
     runtime = SubtitleSourceWatchRuntime()
-    runtime.set_baseline(path, baseline)
-    key = subtitle_source_key(path)
+    key = runtime.register_baseline(path, baseline)
+    _settle_watch_digest(runtime)
     path.write_text("after", encoding="utf-8")
 
     def fail_partial_load(_path):
         raise OSError("partial")
 
-    retrying = runtime.prepare_reload(
-        key,
-        load_candidate=fail_partial_load,
-        primary_track=baseline,
-    )
+    retrying = _runtime_reload(runtime, key, fail_partial_load)
     assert retrying is not None
     assert retrying.disposition == SourceReloadDisposition.RETRYING
     assert key in runtime.pending_keys
     runtime.pending_keys.clear()
     runtime.timer.stop()
 
-    ready = runtime.prepare_reload(
-        key,
-        load_candidate=lambda _path: candidate,
-        primary_track=baseline,
-    )
+    ready = _runtime_reload(runtime, key, lambda _path: candidate)
     assert ready is not None
     assert ready.disposition == SourceReloadDisposition.READY
     assert runtime.state(key).baseline == baseline
 
     runtime.ignore_prepared(ready)
     assert runtime.state(key).baseline == baseline
-    duplicate = runtime.prepare_reload(
+    duplicate = _runtime_reload(
+        runtime,
         key,
-        load_candidate=lambda _path: pytest.fail("ignored revision is acknowledged"),
-        primary_track=baseline,
+        lambda _path: pytest.fail("ignored revision is acknowledged"),
     )
     assert duplicate is not None
     assert duplicate.disposition == SourceReloadDisposition.DUPLICATE
 
     path.write_text("after-again", encoding="utf-8")
-    accepted = runtime.prepare_reload(
-        key,
-        load_candidate=lambda _path: candidate,
-        primary_track=baseline,
-    )
+    accepted = _runtime_reload(runtime, key, lambda _path: candidate)
     assert accepted is not None
     assert accepted.disposition == SourceReloadDisposition.READY
     runtime.accept_prepared(accepted)
@@ -1613,11 +1639,7 @@ def test_source_watch_runtime_owns_retry_and_baseline_acceptance(qapp, tmp_path)
     path.write_text("always-partial", encoding="utf-8")
     dispositions = []
     for _attempt in range(6):
-        failed = runtime.prepare_reload(
-            key,
-            load_candidate=fail_partial_load,
-            primary_track=candidate,
-        )
+        failed = _runtime_reload(runtime, key, fail_partial_load)
         assert failed is not None
         dispositions.append(failed.disposition)
         runtime.pending_keys.clear()
@@ -1630,7 +1652,7 @@ def test_source_watch_runtime_owns_retry_and_baseline_acceptance(qapp, tmp_path)
         SourceReloadDisposition.RETRYING,
         SourceReloadDisposition.FAILED,
     ]
-    runtime.deleteLater()
+    runtime.shutdown()
 
 
 def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):
@@ -3230,68 +3252,6 @@ def test_preview_workspace_background_actions_reach_coordinator(qapp, monkeypatc
         win.close()
 
 
-def test_prefetched_sug_parse_is_reused_by_loading_assembly(
-    qapp, monkeypatch, tmp_path
-):
-    """打开/恢复的预取解析结果被装载序列复用：消费点不再同步重解析。"""
-    sug = tmp_path / "song.sug"
-    _save_timing_sug(sug, [("君", 1000, 1400), ("遥", 2000, 2600)])
-    win = _make_window(qapp, monkeypatch)
-
-    win._prefetch_project_sources({"subtitle_path": str(sug)})
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and not win._source_parse_prefetch:
-        qapp.processEvents()
-        time.sleep(0.01)
-    assert win._source_parse_prefetch, "预取线程应在后台完成 .sug 解析"
-
-    # 消费点命中缓存：loader 不得再被同步调用。
-    def _unexpected_parse(*_args, **_kwargs):
-        raise AssertionError("预取命中后不应再同步解析")
-
-    monkeypatch.setattr(win._subtitle_source_loader, "load_sug", _unexpected_parse)
-    win._loading_project = True
-    try:
-        track = win.load_from_sug(sug)
-    finally:
-        win._loading_project = False
-    assert track is not None
-    assert ["".join(c.text for c in line.chars) for line in track.lines] == [
-        "君", "遥",
-    ]
-    win.close()
-    win.deleteLater()
-    qapp.processEvents()
-
-
-def test_prefetched_probe_result_short_circuits_sync_ffprobe(
-    qapp, monkeypatch, tmp_path
-):
-    """预取的 ffprobe 结果命中时 _probe 直接返回，不再起子进程。"""
-    from krok_helper.models import MediaInfo
-
-    media = tmp_path / "bg.mp4"
-    media.write_bytes(b"stub")
-    stat = media.stat()
-    win = _make_window(qapp, monkeypatch)
-    expected = MediaInfo(
-        path=media, duration=12.5, video_streams=1,
-        audio_streams=1, subtitle_streams=0,
-    )
-    win._probe_prefetch[
-        (subtitle_source_key(media), stat.st_mtime_ns, stat.st_size)
-    ] = expected
-
-    def _unexpected_probe(*_args, **_kwargs):
-        raise AssertionError("缓存命中后不应再同步探测")
-
-    monkeypatch.setattr(mw, "probe_media", _unexpected_probe)
-    assert win._probe(media, "背景视频") is expected
-    win.close()
-    win.deleteLater()
-    qapp.processEvents()
-
-
 def test_recovery_restore_defers_assembly_until_main_loop(
     qapp, monkeypatch, tmp_path
 ):
@@ -3390,12 +3350,14 @@ def test_per_slot_italic_effective_values_follow_stroke2_chain():
     assert ruby_latin_italic_value(style) is False
 
 
-def test_source_watch_prepares_paths_off_gui_and_discards_old_pending(qapp, monkeypatch, tmp_path):
+def test_source_watch_splits_disk_probe_from_qt_commit(qapp, monkeypatch, tmp_path):
+    """路径探测在工作线程；QFileSystemWatcher 的提交只在 GUI 线程发生。"""
     import threading
+
     path = tmp_path / "watch-thread.lrc"
     path.write_text("[00:01:00]a[00:02:00]", encoding="utf-8")
     track = TimingTrack(lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=2000)])
-    runtime = SubtitleSourceWatchRuntime(run_io=mw._run_project_io)
+    runtime = SubtitleSourceWatchRuntime()
     main_thread = threading.get_ident()
     checks = []
     original_file = Path.is_file
@@ -3421,14 +3383,216 @@ def test_source_watch_prepares_paths_off_gui_and_discards_old_pending(qapp, monk
         return add_paths(values)
 
     monkeypatch.setattr(runtime.watcher, "addPaths", add)
-    key = subtitle_source_key(path)
-    runtime.set_baseline(path, track)
-    runtime.sync({key: (path, track)})
+    key = runtime.register_baseline(path, track)
+    entries = runtime.watch_entries()
+    plan = mw.process_task_runner().run_blocking(
+        lambda: SubtitleSourceWatchRuntime.prepare_watch_sync(entries)
+    )
+    runtime.apply_watch_sync(plan)
     assert checks and all(thread != main_thread for thread in checks)
     assert commits and all(thread == main_thread for thread in commits)
+    assert runtime.state(key).seen_digest
+    assert not runtime.state(key).digest_pending
+
     runtime.queue(key)
-    runtime.sync({})
+    runtime.retain_states([])
+    plan = mw.process_task_runner().run_blocking(
+        lambda: SubtitleSourceWatchRuntime.prepare_watch_sync(())
+    )
+    runtime.apply_watch_sync(plan)
     assert not runtime.pending_keys
     assert not runtime.states
     assert not runtime.watcher.files()
-    runtime.deleteLater()
+    runtime.shutdown()
+
+
+def test_watch_sync_does_not_commit_digest_for_a_pending_change(qapp, tmp_path):
+    """摘要读取期间收到的改动不能被当成「内容相同」：digest 不得落账。"""
+    path = tmp_path / "pending.lrc"
+    path.write_text("[00:01:00]a[00:02:00]", encoding="utf-8")
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=2000)])
+    runtime = SubtitleSourceWatchRuntime()
+    key = runtime.register_baseline(path, track)
+    # 模拟：摘要还没算完，watcher 已经排队了一次改动。
+    runtime.queue(key)
+    plan = SubtitleSourceWatchRuntime.prepare_watch_sync(runtime.watch_entries())
+    assert plan.digests, "worker 应读到候选摘要"
+    runtime.apply_watch_sync(plan)
+    assert runtime.state(key).digest_pending is True
+    assert runtime.state(key).seen_digest == ""
+
+    path.write_text("[00:03:00]a[00:04:00]", encoding="utf-8")
+    parsed: list[object] = []
+
+    def load_candidate(source_path):
+        parsed.append(source_path)
+        return track
+
+    readout = read_track_source(
+        path, runtime.state(key).seen_digest, load_candidate, force_parse=True
+    )
+    assert parsed, "排队中的改动必须真正解析一次，而不是被 digest 短路"
+    assert readout.digest and readout.candidate == track
+    runtime.shutdown()
+
+
+def test_background_image_decodes_off_thread_exactly_once(
+    qapp, monkeypatch, tmp_path
+):
+    import threading
+
+    win = _make_window(qapp, monkeypatch)
+    image = tmp_path / "bg-once.png"
+    frame = QImage(64, 36, QImage.Format.Format_RGB32)
+    frame.fill(QColor("#123456"))
+    assert frame.save(str(image))
+    gui_thread = threading.get_ident()
+    seen: list[int] = []
+    original = mw.decode_background_image
+
+    def spy(path):
+        seen.append(threading.get_ident())
+        return original(path)
+
+    monkeypatch.setattr(mw, "decode_background_image", spy)
+    try:
+        assert win.load_background_image(image) is True
+        assert len(seen) == 1, f"同一张背景图被解码了 {len(seen)} 次"
+        assert seen[0] != gui_thread
+        qapp.processEvents()
+        assert len(seen) == 1
+    finally:
+        win.close()
+
+
+def test_lrc_and_sug_parsing_run_on_worker_threads(qapp, monkeypatch, tmp_path):
+    import threading
+
+    win = _make_window(qapp, monkeypatch)
+    gui_thread = threading.get_ident()
+    lrc = tmp_path / "worker.lrc"
+    lrc.write_text("[00:01:00]a[00:02:00]\n", encoding="utf-8-sig")
+    sug = tmp_path / "worker.sug"
+    _save_timing_sug(sug, [("君", 1000, 1400)])
+
+    lrc_threads: list[int] = []
+    axes_threads: list[int] = []
+    whole_threads: list[int] = []
+    original_lrc = win._subtitle_source_loader.load_lrc
+    original_axes = win._subtitle_source_loader.load_sug_axes
+    original_file = win._subtitle_source_loader.load_file
+
+    def load_lrc(path, **kwargs):
+        lrc_threads.append(threading.get_ident())
+        return original_lrc(path, **kwargs)
+
+    def load_axes(path, **kwargs):
+        axes_threads.append(threading.get_ident())
+        return original_axes(path, **kwargs)
+
+    def load_file(path, **kwargs):
+        whole_threads.append(threading.get_ident())
+        return original_file(path, **kwargs)
+
+    monkeypatch.setattr(win._subtitle_source_loader, "load_lrc", load_lrc)
+    monkeypatch.setattr(win._subtitle_source_loader, "load_sug_axes", load_axes)
+    monkeypatch.setattr(win._subtitle_source_loader, "load_file", load_file)
+    try:
+        assert win.load_from_lrc(lrc) is not None
+        assert win.load_from_sug(sug) is not None
+        # 副源添加（load_file 路径）同样走 worker 解析。
+        extra = tmp_path / "extra.lrc"
+        extra.write_text("[00:05:00]x[00:06:00]\n", encoding="utf-8-sig")
+        assert win.add_sug_as_extra_source(extra) is not None
+        assert whole_threads
+        assert lrc_threads and all(thread != gui_thread for thread in lrc_threads)
+        assert axes_threads and all(thread != gui_thread for thread in axes_threads)
+        assert all(thread != gui_thread for thread in whole_threads)
+    finally:
+        win.close()
+
+
+def test_grouped_sug_whole_track_reload_parses_off_thread(
+    qapp, monkeypatch, tmp_path
+):
+    """整份（普通）副源的热重载也必须在 worker 解析，不能回 GUI 线程读 .sug。"""
+    import threading
+
+    sug = tmp_path / "grouped-worker.sug"
+    _save_three_singer_sug(sug, [("主唱", ["a"], True), ("和声", ["b"], False)])
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    monkeypatch.setattr(mw, "fluent_question", lambda *args, **kwargs: True)
+    gui_thread = threading.get_ident()
+    try:
+        assert win.load_or_reload_sug(sug) is not None
+        # 同路径再挂一个「整份」副源：走 load_sug 的 plain-extra 合并分支。
+        assert win.add_sug_as_extra_source(sug) is not None
+        _save_three_singer_sug(
+            sug, [("主唱", ["a", "c"], True), ("和声", ["b"], False)]
+        )
+        calls: list[int] = []
+        original = win._subtitle_source_loader.load_sug
+
+        def spy(path, **kwargs):
+            calls.append(threading.get_ident())
+            return original(path, **kwargs)
+
+        monkeypatch.setattr(win._subtitle_source_loader, "load_sug", spy)
+        _reload_and_wait(qapp, win, win._subtitle_source_key(sug))
+        assert calls, "整份副源应触发一次 load_sug"
+        assert all(thread != gui_thread for thread in calls)
+    finally:
+        win.close()
+
+
+def test_in_memory_sug_handoff_parses_off_thread(qapp, monkeypatch, tmp_path):
+    import threading
+
+    win = _make_window(qapp, monkeypatch)
+    gui_thread = threading.get_ident()
+    calls: list[int] = []
+    expected = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=2000)]
+    )
+
+    def fake_load(project, **kwargs):
+        calls.append(threading.get_ident())
+        return expected
+
+    monkeypatch.setattr(win._subtitle_source_loader, "load_sug_project", fake_load)
+    try:
+        assert win.load_from_sug_project(object()) is expected
+        assert calls and all(thread != gui_thread for thread in calls)
+    finally:
+        win.close()
+
+
+def test_queue_marks_digest_pending_so_a_change_is_parsed(qapp, tmp_path):
+    """事件排队即视为内容已变：摘要短路必须失效（force parse）。"""
+    path = tmp_path / "changed.lrc"
+    path.write_text("[00:01:00]a[00:02:00]", encoding="utf-8")
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=2000)])
+    runtime = SubtitleSourceWatchRuntime()
+    key = runtime.register_baseline(path, track)
+    runtime.watch_entries()
+    plan = SubtitleSourceWatchRuntime.prepare_watch_sync(runtime.watch_entries())
+    runtime.apply_watch_sync(plan)
+    assert runtime.state(key).digest_pending is False
+    runtime.queue(key)
+    assert runtime.state(key).digest_pending is True
+    runtime.shutdown()
+
+def test_probe_cancel_is_a_clean_none(qapp, monkeypatch, tmp_path):
+    """用户取消媒体探测：返回 None，而不是把 _IO_CANCELED 哨兵当 MediaInfo 用。"""
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(
+        win,
+        "_run_cancelable_io",
+        lambda work, *, label="", owner="": mw._IO_CANCELED,
+    )
+    try:
+        assert win._probe(tmp_path / "movie.mp4", "视频") is None
+    finally:
+        win.close()

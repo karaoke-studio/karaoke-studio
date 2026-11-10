@@ -258,6 +258,11 @@ class SubtitleProjectDocument:
 
         self.preserved_project_data = deepcopy(data) if isinstance(data, dict) else {}
 
+    def remember_project_data_snapshot(self, snapshot: dict) -> None:
+        """Adopt an already-isolated snapshot (deepcopy done on a worker thread)."""
+
+        self.preserved_project_data = snapshot if isinstance(snapshot, dict) else {}
+
     def to_project_data(
         self,
         *,
@@ -605,6 +610,7 @@ class SubtitleProjectSession:
         missing_resources: tuple[tuple[str, Path], ...]
         | list[tuple[str, Path]] = (),
         source_data: Optional[dict] = None,
+        source_snapshot: Optional[dict] = None,
     ) -> None:
         """Adopt one loaded/imported/recovered project identity atomically."""
         self.path = Path(path) if path is not None else None
@@ -612,6 +618,7 @@ class SubtitleProjectSession:
         self.remember_missing_resources(
             missing_resources,
             source_data if isinstance(source_data, dict) else {},
+            snapshot=source_snapshot,
         )
         _sync_scanline_image_search_roots(self.path)
 
@@ -619,12 +626,21 @@ class SubtitleProjectSession:
         self,
         missing: tuple[tuple[str, Path], ...] | list[tuple[str, Path]],
         source_data: dict,
+        *,
+        snapshot: Optional[dict] = None,
     ) -> None:
-        """Record unavailable paths without adopting them into loaded document state."""
+        """Record unavailable paths without adopting them into loaded document state.
+
+        ``snapshot`` optionally supplies an already-isolated copy of
+        ``source_data`` (the load path deep-copies on a worker thread), so the
+        GUI thread never deep-copies a multi-megabyte project payload again.
+        """
         self.missing_resources = tuple(missing)
         self.unresolved_resource_labels = {label for label, _path in missing}
         self.missing_resource_source_data = (
-            deepcopy(source_data) if self.missing_resources else None
+            (snapshot if isinstance(snapshot, dict) else deepcopy(source_data))
+            if self.missing_resources
+            else None
         )
 
     def resolve_missing_resource_labels(self, labels: set[str]) -> bool:

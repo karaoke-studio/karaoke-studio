@@ -42,6 +42,7 @@ if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持�
     from krok_helper.workflow_host import SubtitleVideoSink
 
 from PyQt6.QtCore import (
+    QEventLoop,
     QObject,
     QThread,
     QTimer,
@@ -93,6 +94,7 @@ from krok_helper.qfluent_compat import (
 from krok_helper.settings import get_settings_path, load_app_settings, save_app_settings
 from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
+    background_sequence_frame_path,
     infer_image_sequence_pattern,
     normalize_sequence_fps,
 )
@@ -263,7 +265,11 @@ from krok_helper.subtitle_render.frontend.preview.player_window import (
 from krok_helper.subtitle_render.frontend.preview.workspace import (
     PreviewWorkspaceView,
 )
-from krok_helper.subtitle_render.frontend.preview.preview_view import PreviewPanel, TransportBar
+from krok_helper.subtitle_render.frontend.preview.preview_view import (
+    PreviewPanel,
+    TransportBar,
+    decode_background_image,
+)
 from krok_helper.subtitle_render.frontend.preview.roll_preview import (
     remember_roll_preview_frame,
 )
@@ -301,10 +307,21 @@ from krok_helper.subtitle_render.frontend.project.recent_projects import (
 )
 from krok_helper.subtitle_render.frontend.project.source_watch import (
     SourceReloadDisposition,
+    SourceReloadPreparation,
     SubtitleSourceWatchRuntime,
     WatchedSubtitleState as _WatchedSubtitleState,
+    normalized_source_path,
+    read_sug_source,
+    read_track_source,
     subtitle_source_digest,
     subtitle_source_key,
+)
+from krok_helper.subtitle_render.frontend.project.tasks import (
+    ProjectIoGuard,
+    ProjectTaskCanceled,
+    ProjectTaskRunner,
+    ProjectTaskScope,
+    ProjectTaskTimeout,
 )
 from krok_helper.subtitle_render.project.load import (
     ProjectLoadPlan,
@@ -512,7 +529,7 @@ def _pump_paint_events() -> None:
     if app is None:
         return
     # 不用 ExcludeUserInputEvents：Qt6 下同一标志也会压住定时器/窗口刷新
-    # （见 _await_pending_prefetch 的 2026-10 记录），而这里要的正是重绘。
+    # （Qt6 下 ExcludeUserInputEvents 连定时器一起压住），而这里要的正是重绘。
     app.processEvents()
 
 
@@ -532,41 +549,75 @@ def _tracks_window_async_refresh_supported() -> bool:
     return sys.platform == "win32"
 
 
-def _subtitle_prefetch_key(
-    path: Path,
-    *,
-    form: str,
-    compensation_ms: int,
-    singer_filter: Optional[frozenset[str]],
-    keep_singer_label_text: bool,
-) -> Optional[tuple]:
-    """字幕源预取缓存键；文件不可读（消失/占用）返回 ``None`` 不预取。"""
-    try:
-        stat = Path(path).stat()
-        stamp = (stat.st_mtime_ns, stat.st_size)
-    except OSError:
-        return None
-    return (
-        form,
-        subtitle_source_key(Path(path)),
-        stamp,
-        int(compensation_ms),
-        tuple(sorted(singer_filter)) if singer_filter is not None else None,
-        bool(keep_singer_label_text),
+
+#: Sentinel returned by :meth:`SubtitleRenderWindow._run_cancelable_io` when the
+#: user cancelled a standalone import (as opposed to a parse failure / None).
+_IO_CANCELED = object()
+
+#: 外部字幕源重载/监视同步的兜底时限：网络盘 hang 住时也要让在途标志落回，
+#: 否则 _source_reload_suspended 会永久为真（外部源从此不再热重载）。
+_SOURCE_RELOAD_TIMEOUT_S = 300.0
+_WATCH_SYNC_TIMEOUT_S = 120.0
+_BACKGROUND_IMAGE_TIMEOUT_S = 120.0
+
+
+class _ProjectAssemblySuperseded(Exception):
+    """A newer project action took over while assembly stages were running."""
+
+
+#: 关窗时等待后台 QThread 的上限。超时的线程刻意保留引用（不析构），
+#: 因为 Qt 6 在 QThread 尚在运行时析构会 qFatal。
+_SHUTDOWN_THREAD_WAIT_MS = 1500
+#: Cadence for advancing the loading-tooltip animation between heavy GUI
+#: sub-steps (the tooltip's own rotate timer is 50 ms).
+_LOAD_ANIMATION_INTERVAL_S = 0.045
+_DETACHED_THREADS: list[QThread] = []
+
+
+def _detach_thread(thread: QThread) -> None:
+    """Keep a still-running QThread alive so Qt never aborts during teardown."""
+    if thread in _DETACHED_THREADS:
+        return
+    logging.getLogger(__name__).warning(
+        "后台线程未在关窗时限内结束，已接管其生命周期: %r", thread
     )
+    try:
+        # 父对象随窗口销毁时会删掉仍在运行的 QThread -> qFatal；先解除父子关系，
+        # 再把引用交给模块级列表，线程结束后由自身 finished->deleteLater 收尾。
+        thread.setParent(None)
+    except RuntimeError:
+        return
+    _DETACHED_THREADS.append(thread)
 
 
-def _trim_prefetch_map(cache: dict, limit: int = 8) -> None:
-    """预取缓存保留最近写入的 ``limit`` 条，防止长期会话无限增长。"""
-    while len(cache) > limit:
-        cache.pop(next(iter(cache)))
+def _resolve_compensation_ms(apply_compensation: bool) -> int:
+    """Settings 读取留在 GUI 线程：worker 不碰 settings.py 的全局缓存。"""
+    return _sug_software_compensation_ms() if apply_compensation else 0
 
 
-class _PrefetchPending:
-    """预取进行中的占位哨兵（消费点泵事件等待其完成，GUI 保持响应）。"""
+#: Process-wide runner for call sites without a window handle (tests, standalone
+#: helpers).  Windows own their own :class:`ProjectTaskRunner` so it can be shut
+#: down (and its waiters released) with them.
+_DEFAULT_TASK_RUNNER: Optional[ProjectTaskRunner] = None
 
 
-_PREFETCH_PENDING = _PrefetchPending()
+def process_task_runner() -> ProjectTaskRunner:
+    """Return the process-wide task runner, creating it on first use."""
+    global _DEFAULT_TASK_RUNNER
+    if _DEFAULT_TASK_RUNNER is None:
+        _DEFAULT_TASK_RUNNER = ProjectTaskRunner()
+    return _DEFAULT_TASK_RUNNER
+
+
+def _run_project_io(work: Callable[[], Any], *, label: str = "") -> Any:
+    """Run non-Qt project work off-thread, preserving the caller's error contract.
+
+    Window call sites use :meth:`SubtitleRenderWindow._run_project_io`, which
+    shares the window's task runner and cancellation scope.  This module-level
+    entry exists for owners that only need the off-thread guarantee (source-watch
+    helpers, tests).  Cancellation raises :class:`ProjectTaskCanceled`.
+    """
+    return process_task_runner().run_blocking(work, label=label)
 
 
 def _suspend_source_reload(method):
@@ -577,138 +628,78 @@ def _suspend_source_reload(method):
         self._source_reload_suspend_depth = depth + 1
         try:
             return method(self, *args, **kwargs)
-        except BaseException:
-            tooltip = getattr(self, "_project_load_tooltip", None)
-            if tooltip is not None:
-                tooltip.close()
-                self._project_load_tooltip = None
-            raise
         finally:
             self._source_reload_suspend_depth = depth
-            runtime = getattr(self, "_source_watch_runtime", None)
-            if runtime is not None and not depth:
-                runtime.start_pending(0)
+            if not depth:
+                resume = getattr(self, "_resume_source_reloads", None)
+                if resume is not None:
+                    resume()
     return guarded
 
 
-class _ProjectIoDialog(QDialog):
-    """Modal guard: keep paint/timer events alive without allowing load reentry."""
+def _run_project_steps(
+    steps,
+    progress_cb=None,
+    guard: Optional[ProjectIoGuard] = None,
+    scope: Optional[ProjectTaskScope] = None,
+) -> None:
+    """Apply Qt-only stages on successive event-loop turns, under the shared guard.
 
-    def reject(self) -> None:
-        # The worker owns its inputs until completion; Escape must not unwind it.
-        pass
-
-    def closeEvent(self, event) -> None:  # noqa: N802
-        event.ignore()
-
-
-def _run_project_steps(steps, progress_cb=None) -> None:
-    """Apply Qt-only stages on successive event-loop turns, under a modal guard."""
-    dialog = _ProjectIoDialog(QApplication.activeWindow())
-    dialog.setWindowTitle("加载工程")
-    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    dialog.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-    layout = QVBoxLayout(dialog)
-    layout.addWidget(QLabel("正在恢复工程界面，请稍候…", dialog))
+    Progress is reported through ``progress_cb`` (the window's project-load
+    ``StateToolTip``); the guard only tracks nested operations and their
+    cancellation scopes, so no extra progress window is created.  ``scope`` is
+    checked before every stage so a cancel between stages aborts the assembly
+    even when no worker is currently running.
+    """
+    owner = guard if guard is not None else ProjectIoGuard()
+    owns_guard = guard is None
+    loop = QEventLoop()
     errors: list[BaseException] = []
-    timer = QTimer(dialog)
+    timer = QTimer()
     timer.setInterval(1)
 
     def advance() -> None:
         # Stop before entering a stage: it may start its own worker event loop.
         timer.stop()
+        if scope is not None and scope.canceled:
+            errors.append(ProjectTaskCanceled())
+            loop.quit()
+            return
         try:
             progress = next(steps)
             if progress_cb is not None and progress is not None:
                 progress_cb(*progress)
         except StopIteration:
-            dialog.accept()
+            loop.quit()
         except BaseException as exc:
             errors.append(exc)
-            dialog.accept()
+            loop.quit()
         else:
             timer.start()
 
     timer.timeout.connect(advance)
+    owner.begin("正在恢复工程界面，请稍候…", scope)
+    # 关窗/宿主强退时守卫会 quit 这个 loop，装配不会把进程挂住。
+    owner.register_stage_loop(loop)
+    aborted = False
     timer.start()
     try:
-        dialog.exec()
+        loop.exec()
     finally:
+        owner.unregister_stage_loop(loop)
+        # 被 quit 而不是 StopIteration 退出（关窗/代际接管）：不能当作装配成功。
+        aborted = owner.closed or (scope is not None and scope.canceled)
         timer.stop()
+        timer.deleteLater()
         steps.close()
-        dialog.deleteLater()
+        owner.end()
+        if owns_guard:
+            owner.close_now()
     if errors:
         raise errors[0]
+    if aborted:
+        raise ProjectTaskCanceled()
 
-
-def _run_project_io(work: Callable[[], Any]) -> Any:
-    """Run non-Qt project work off-thread, preserving the caller's error contract.
-
-    The modal event loop processes paint and timer events. No worker touches the
-    dialog or any QObject, including when a read fails. The caller resumes only
-    after the worker has published its result.
-    """
-    app = QApplication.instance()
-    if app is None or QThread.currentThread() != app.thread():
-        return work()
-    result: list[Any] = []
-    errors: list[BaseException] = []
-    done = threading.Event()
-
-    def run() -> None:
-        try:
-            result.append(work())
-        except BaseException as exc:
-            errors.append(exc)
-        finally:
-            done.set()
-
-    worker = threading.Thread(target=run, name="project-io", daemon=True)
-    worker.start()
-    # Avoid flashing a dialog for warm cache hits and local stat calls. The
-    # bounded grace period never grows with disk/network latency.
-    if done.wait(0.005):
-        if errors:
-            raise errors[0]
-        return result[0]
-    dialog = _ProjectIoDialog(QApplication.activeWindow())
-    dialog.setWindowTitle("加载工程")
-    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    dialog.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-    layout = QVBoxLayout(dialog)
-    layout.addWidget(QLabel("正在加载，请稍候…", dialog))
-    timer = QTimer(dialog)
-    timer.setInterval(15)
-    timer.timeout.connect(lambda: dialog.accept() if done.is_set() else None)
-    timer.start()
-    try:
-        dialog.exec()
-    finally:
-        timer.stop()
-        dialog.deleteLater()
-    if errors:
-        raise errors[0]
-    return result[0]
-
-
-def _await_pending_prefetch(cache: dict, key: object, timeout_s: float = 120.0) -> object:
-    """等待进行中的预取条目落定；期间泵事件保持界面响应。
-
-    返回最终条目（解析结果/异常），键消失或超时返回 ``None``（消费点回退
-    同步计算）。注意不能带 ``ExcludeUserInputEvents``：Qt6 该标志会连
-    timer 事件一起排除，QTimer 心跳/窗口刷新全部停摆，GUI 反而被判
-    「未响应」（2026-10 实测）。用户在等待段的重入由调用侧的代际校验
-    兜底。
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if QApplication.instance() is not None:
-            QApplication.processEvents()
-        time.sleep(0.005)
-        entry = cache.get(key)
-        if entry is None or not isinstance(entry, _PrefetchPending):
-            return entry
-    return None
 
 
 #: 标题里跟着"用户习惯"走的字段。除条目名、标题文字、逐字角色、自定义
@@ -1062,7 +1053,6 @@ class SubtitleRenderWindow(QWidget):
     projectStateChanged = Signal(object)
     _tracksViewWindowsReady = Signal(int, object)
     _layoutIssuesReady = Signal(int, object)
-    _projectLoadProgress = Signal(int, str)
     _layoutCheckProgress = Signal(int, str)
     _embedded: bool = False
 
@@ -1338,11 +1328,6 @@ class SubtitleRenderWindow(QWidget):
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
         self._project_controller = SubtitleProjectController()
         self._subtitle_source_loader = SubtitleSourceLoader()
-        # 打开/恢复工程的输入预取缓存：后台线程预解析的字幕源与 ffprobe
-        # 结果，按（路径 + mtime/size + 解析参数）命中。后台写一次、GUI 读，
-        # CPython dict 单操作原子，无需加锁。
-        self._source_parse_prefetch: dict[tuple, object] = {}
-        self._probe_prefetch: dict[tuple, object] = {}
         self._n3_import_controller = N3ProjectImportController()
         self._export_job_controller = ExportJobController()
         self._export_runtime_controller = ExportRuntimeController()
@@ -1427,9 +1412,18 @@ class SubtitleRenderWindow(QWidget):
             settings_key=_RECENT_PROJECTS_SETTINGS_KEY,
         )
         self._last_logged_project_state: Optional[tuple[object, ...]] = None
-        self._project_load_tooltip = None
+        # 每个窗口一个后台执行器 + 一个共享的取消守卫：读工程 / 解析字幕 /
+        # ffprobe / watch 摘要 / 图片解码全部走这里，GUI 线程只做 Qt 装配。
+        # 进度只走本页既有的 StateToolTip / InfoBar，不再弹任何进度窗口。
+        self._project_io = ProjectTaskRunner(
+            self, guard=ProjectIoGuard(self, parent_window=self)
+        )
+        self._io_scope: Optional[ProjectTaskScope] = None
+        self._io_scope_owner: Optional[str] = None
+        self._project_load_tooltip: Optional[StateToolTip] = None
+        self._project_load_progress_token: Optional[object] = None
         self._project_load_progress = (0, "准备中…")
-        self._projectLoadProgress.connect(self._on_project_load_progress)
+        self._project_deferred_load_progress_token: Optional[object] = None
         self._loading_project = False
         self._syncing_screen_controls = False
         self._auto_save_enabled = True
@@ -1465,10 +1459,13 @@ class SubtitleRenderWindow(QWidget):
         self._watch_primary_subtitle_source = False
         # 主字幕槽位上一次接受的源解析（.sug 分轴重载合并本地编辑用）。
         self._primary_source_baseline: Optional[TimingTrack] = None
+        # watch 同步与外部源重载都是异步的：在途时合并请求，完成后补跑一次。
+        self._watch_sync_inflight = False
+        self._watch_sync_rerun = False
+        self._source_reload_inflight: set[str] = set()
         self._source_watch_runtime = SubtitleSourceWatchRuntime(
             self,
             reload_suspended=self._source_reload_suspended,
-            run_io=_run_project_io,
         )
         self._source_watch_runtime.fileChanged.connect(
             self._on_subtitle_source_file_changed
@@ -1625,7 +1622,10 @@ class SubtitleRenderWindow(QWidget):
         self._roll_refresh_generation += 1
         for thread, worker in self._roll_refresh_tasks:
             thread.quit()
-            thread.wait()
+            # 有界等待：ffprobe/预览代理转码无法被 quit 打断，无界 wait 会把
+            # 关窗（含更新强退）永久卡在 GUI 线程。
+            if not thread.wait(_SHUTDOWN_THREAD_WAIT_MS):
+                _detach_thread(thread)
         self._roll_refresh_tasks.clear()
         self._roll_media_load_generation += 1
         self._roll_media_generations.clear()
@@ -1635,9 +1635,23 @@ class SubtitleRenderWindow(QWidget):
         self._roll_media_tooltips.clear()
         for thread, worker in self._roll_media_load_tasks:
             thread.quit()
-            thread.wait()
+            if not thread.wait(_SHUTDOWN_THREAD_WAIT_MS):
+                _detach_thread(thread)
         self._roll_media_load_tasks.clear()
+        self._shutdown_background_import_threads()
         self._preview_panel.set_roll_plan(None)
+        self._clear_project_deferred_loads(finish_progress=False)
+        self._clear_project_load_progress()
+        # 余白检查的定时器/提示也要在关窗前收掉：否则 shutdown 后 600ms 的
+        # 定时器仍会在已关闭窗口上创建并 show StateToolTip。
+        self._margin_check_timer.stop()
+        self._layout_check_tooltip_timer.stop()
+        self._dismiss_layout_check_tooltip()
+        if hasattr(self, "_source_watch_runtime"):
+            # 先把 QFileSystemWatcher 摘掉，避免关窗后排队事件回调到已销毁对象。
+            self._source_watch_runtime.shutdown()
+        if hasattr(self, "_project_io"):
+            self._project_io.shutdown()
         self._flush_persisted_state_save()
         self._stop_auto_save_runtime(wait=True)
         if self._playback is not None:
@@ -1647,6 +1661,32 @@ class SubtitleRenderWindow(QWidget):
             self._layout_issues_dialog = None
         if hasattr(self, "_preview_window"):
             self._preview_window.close()
+
+    def _shutdown_background_import_threads(self) -> None:
+        """Stop the N3/handoff QThreads before Qt destroys the window.
+
+        A QThread whose run() is still executing when its wrapper is destroyed
+        aborts the process (Qt 6.11 ``qFatal``), so a thread that does not finish
+        within the bounded wait is deliberately kept alive instead of deleted.
+        """
+        for attr_thread, attr_worker in (
+            ("_n3_import_thread", "_n3_import_worker"),
+            ("_handoff_probe_thread", "_handoff_probe_worker"),
+        ):
+            thread = getattr(self, attr_thread, None)
+            if thread is None:
+                continue
+            # 先断开结果回调：迟到的进度/结果不得再碰已关闭的窗口。
+            setattr(self, attr_worker, None)
+            setattr(self, attr_thread, None)
+            try:
+                thread.quit()
+                if not thread.wait(_SHUTDOWN_THREAD_WAIT_MS):
+                    _detach_thread(thread)
+            except RuntimeError:
+                continue
+        self._n3_import_tooltip_timer.stop()
+        self._dismiss_n3_import_tooltip()
 
     # ------------------------------------------------------------------ layout
 
@@ -2250,6 +2290,14 @@ class SubtitleRenderWindow(QWidget):
         if self._auto_save_runtime.wait(AUTO_SAVE_THREAD_WAIT_MS):
             return True
         logging.getLogger(__name__).warning("等待字幕项目自动保存线程退出超时")
+        # 仍在运行的 QThread 不能随窗口父链一起销毁（Qt 会 abort）：交给
+        # runtime 接管其生命周期，跑完后自己 deleteLater。
+        try:
+            self._auto_save_runtime.detach_running_thread()
+        except Exception:  # noqa: BLE001 — 收尾失败也不阻塞关闭
+            logging.getLogger(__name__).warning(
+                "接管自动保存线程失败", exc_info=True
+            )
         return False
 
     @staticmethod
@@ -2279,18 +2327,40 @@ class SubtitleRenderWindow(QWidget):
         return self._project_session.merge_unresolved_resource_references(payload)
 
     @_suspend_source_reload
-    def _apply_project_data(self, data: dict, *, defer_assets: bool = False) -> None:
+    def _apply_project_data(
+        self,
+        data: dict,
+        *,
+        defer_assets: bool = False,
+        generation: Optional[int] = None,
+        token: object = None,
+    ) -> bool:
+        """Apply one project payload; ``False`` means a newer action superseded it.
+
+        ``generation``/``token`` belong to the action that started the load.  They
+        are captured *before* the (nested event loop) file read, so a takeover that
+        completes during that read is detected instead of being applied as ours.
+        """
+        if generation is None:
+            generation = self._project_generation
+        if token is None:
+            token = self._project_load_progress_token
+        if getattr(self, "_closing_window", False):
+            raise ProjectTaskCanceled()
+        if generation != self._project_generation:
+            return False
+        previous_loading = self._loading_project
         self._loading_project = True
         self._tracks_window_refresh_timer.stop()
-        self._project_deferred_load_timer.stop()
-        self._project_deferred_loads = []
+        # 上一轮装配的延迟素材队列绝不允许跨代残留：残留会让
+        # _source_reload_suspended 永远为真（外部字幕源从此不再自动重载）。
+        self._clear_project_deferred_loads(finish_progress=False)
         self._defer_project_assets = bool(defer_assets)
         applied = False
         try:
-            self._apply_project_data_inner(data)
-            applied = True
+            applied = self._apply_project_data_inner(data, generation, token)
         finally:
-            self._loading_project = False
+            self._loading_project = previous_loading
             self._defer_project_assets = False
         if applied and self._timing_track is not None:
             # 平台开关与拖入路径同款（见 _tracks_window_async_refresh_supported）：
@@ -2302,21 +2372,54 @@ class SubtitleRenderWindow(QWidget):
                 self._tracks_window_refresh_timer.start(250)
             else:
                 self._refresh_tracks_view_windows()
+        return applied
 
-    def _apply_project_data_inner(self, data: dict) -> None:
-        _run_project_steps(self._project_data_steps(data), self._projectLoadProgress.emit)
+    def _apply_project_data_inner(
+        self,
+        data: dict,
+        generation: int,
+        token: object,
+    ) -> bool:
+        try:
+            _run_project_steps(
+                self._project_data_steps(data, generation, token),
+                self._progress_reporter(token),
+                self._project_io.guard,
+                self._io_scope,
+            )
+        except _ProjectAssemblySuperseded:
+            return False
+        return True
 
-    def _project_data_steps(self, data: dict):
-        plan = _run_project_io(lambda: ProjectLoadPlan.from_data(data))
-        self._project_document.remember_project_data(plan.source_data)
+    def _assert_project_generation(self, generation: int) -> None:
+        """Abort a staged assembly as soon as a newer project action took over."""
+        if getattr(self, "_closing_window", False):
+            raise ProjectTaskCanceled()
+        if generation != self._project_generation:
+            raise _ProjectAssemblySuperseded()
+
+    def _project_data_steps(self, data: dict, generation: int, token: object):
+        plan, preserved_snapshot = self._run_project_io(
+            lambda: (
+                ProjectLoadPlan.from_data(data),
+                deepcopy(data) if isinstance(data, dict) else {},
+            ),
+            label="解析工程数据",
+        )
+        # 解析是嵌套 I/O：返回后先校验代际，再写任何会话状态。
+        self._assert_project_generation(generation)
+        self._project_document.remember_project_data_snapshot(preserved_snapshot)
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
         yield 15, "恢复样式与字体"
         # 1) 样式 / 屏幕 / 配色方案
+        self._assert_project_generation(generation)
         self._screen_settings = plan.screen
         # 字体目录冷构建可达秒级且必须留在主线程——先给出可见占位再读取
         with font_list_loading_overlay(self):
             catalog = get_n3_font_catalog()
+        # overlay 内部会 processEvents：挂载完成后重新校验代际再写样式。
+        self._assert_project_generation(generation)
         self._style, _font_names_changed = normalize_style_font_families(
             plan.style, catalog
         )
@@ -2332,17 +2435,29 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.set_style(self._style)
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
+        self._pump_load_events()
         yield 30, "恢复导出设置"
         # 2) 导出参数
+        self._assert_project_generation(generation)
         self._apply_output_settings(plan.output)
+        self._pump_load_events()
         yield 40, "加载主字幕"
         # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
-        if plan.subtitle_path is not None and _run_project_io(lambda: plan.subtitle_path.is_file()):
+        self._assert_project_generation(generation)
+        if plan.subtitle_path is not None and self._run_project_io(
+            lambda: plan.subtitle_path.is_file(), label="检查字幕文件"
+        ):
+            # 检查/解析都是嵌套 I/O：进入加载和返回后都要校验代际。
+            self._assert_project_generation(generation)
+            self._pump_load_events()
             self.load_subtitle_source(
                 plan.subtitle_path,
                 sug_axis_singer_ids=plan.subtitle_sug_axis_singer_ids,
                 sug_axis_name=plan.subtitle_sug_axis_name,
+                generation=generation,
+                refresh_lyrics_panel=False,
             )
+            self._assert_project_generation(generation)
             if self._timing_track is not None:
                 applied_track_state = apply_track_project_data(
                     self._timing_track,
@@ -2355,10 +2470,10 @@ class SubtitleRenderWindow(QWidget):
                 applied_track_state is not None
                 and applied_track_state.char_role_labels_changed
             ):
-                self._lyrics_panel.set_track(self._timing_track)
+                # 角色标注被工程数据改写：只更新角色选项/属性面板；表格由下方
+                # 唯一一次带让出的重建统一刷新（避免同一 track 建两遍）。
                 self._lyrics_panel.set_role_options(self._merged_role_options())
                 self._property_panel.set_roles(self._content_role_options())
-                self._preview_panel.set_track(self._timing_track)
             guide_mismatches = (
                 applied_track_state.guide_symbol_mismatches
                 if applied_track_state is not None
@@ -2372,12 +2487,20 @@ class SubtitleRenderWindow(QWidget):
                     "部分导唱符替换未应用",
                     f"源字幕的行首标记已经变化，以下歌词行保持原文：{rows}{suffix}",
                 )
-            self._lyrics_panel.set_track(self._timing_track)
+            self._lyrics_panel.set_track(
+                self._timing_track, yield_cb=self._pump_load_events
+            )
             self._preview_panel.set_track(self._timing_track)
+            self._pump_load_events()
             self._refresh_tracks_view_windows()
+        # 字幕解析/加载是嵌套 I/O：返回后必须重新校验代际，旧 stage 不得继续
+        # 把素材装进已经被新动作接管（甚至已清空）的会话。
+        self._assert_project_generation(generation)
+        self._pump_load_events()
         yield 65, "恢复字幕布局"
         # 旧工程（schema < v3）与 N3 导入产物：空格宽度/字间距从方案域迁移到
         # 布局域。轨道可能缺失（无字幕源），此时按空行统计退化为全局值绑定。
+        self._assert_project_generation(generation)
         if plan.schema_version < PROJECT_SCHEMA_VERSION:
             migrated = migrate_spacing_bindings_to_used_layouts(
                 self._style,
@@ -2391,21 +2514,36 @@ class SubtitleRenderWindow(QWidget):
                 self._lyrics_panel.set_style(self._style)
                 self._mark_project_dirty()
         yield 75, "安排素材加载"
+        self._assert_project_generation(generation)
+        self._pump_load_events()
         if self._defer_project_assets:
-            self._queue_project_deferred_loads(plan)
+            self._queue_project_deferred_loads(plan, generation, token)
         else:
-            self._apply_extra_subtitle_sources(plan.extra_subtitle_sources)
+            self._apply_extra_subtitle_sources(
+                plan.extra_subtitle_sources, generation=generation
+            )
+            self._pump_load_events()
             if plan.background is not None:
-                self._load_background_payload(plan.background)
-            elif (
-                plan.fallback_video_path is not None
-                and _run_project_io(lambda: plan.fallback_video_path.is_file())
-            ):
-                self.load_video(plan.fallback_video_path)
+                self._load_background_payload(
+                    plan.background, generation=generation
+                )
+            elif plan.fallback_video_path is not None:
+                if self._run_project_io(
+                    lambda: plan.fallback_video_path.is_file(), label="检查背景视频"
+                ):
+                    self._assert_project_generation(generation)
+                    self.load_video(
+                        plan.fallback_video_path, generation=generation
+                    )
             audio = plan.audio_path
-            if audio is not None and _run_project_io(lambda: audio.is_file()) and audio != self._video_path:
-                self.load_audio(audio)
+            if audio is not None:
+                if self._run_project_io(lambda: audio.is_file(), label="检查独立音频"):
+                    self._assert_project_generation(generation)
+                    if audio != self._video_path:
+                        self.load_audio(audio, generation=generation)
         yield 85, "恢复前后黑与角色"
+        self._assert_project_generation(generation)
+        self._pump_load_events()
         # 前黑/后黑配置只在工程打开时整体替换（加载态不发信号/不平移标题）。
         self._pre_roll = plan.pre_roll
         self._post_roll = plan.post_roll
@@ -2436,6 +2574,7 @@ class SubtitleRenderWindow(QWidget):
                     seen.add(name)
                     content_roles.append(name)
         self._property_panel.set_roles(content_roles)
+        self._pump_load_events()
         self._apply_project_role_names(self._property_panel.role_names)
         self._lyrics_panel.set_role_options(self._merged_role_options())
 
@@ -2468,57 +2607,164 @@ class SubtitleRenderWindow(QWidget):
     def _queue_project_deferred_loads(
         self,
         plan: ProjectLoadPlan,
+        generation: int,
+        token: object,
     ) -> None:
-        self._project_deferred_loads = [
-            (asset.kind, asset.payload) for asset in plan.deferred_assets()
-        ]
-        self._project_deferred_load_generation = self._project_generation
+        # deferred_assets() 会 stat 背景视频（网络盘可达秒级）：一并离线程。
+        assets = self._run_project_io(
+            lambda: [(asset.kind, asset.payload) for asset in plan.deferred_assets()],
+            label="检查工程素材",
+        )
+        # 这段 I/O 期间可能已被新装配接管：绝不改写新工程的队列/token。
+        self._assert_project_generation(generation)
+        self._project_deferred_loads = assets
+        self._project_deferred_load_generation = generation
         self._project_deferred_load_total = len(self._project_deferred_loads)
+        self._project_deferred_load_progress_token = (
+            token if self._project_deferred_loads else None
+        )
         if self._project_deferred_loads:
             self._project_deferred_load_timer.start(500)
 
+    def _clear_project_deferred_loads(
+        self,
+        *,
+        finish_progress: bool,
+        message: str = "工程加载完成",
+        expected_generation: Optional[int] = None,
+    ) -> None:
+        """Drop the deferred queue in *every* termination path.
+
+        A queue left non-empty keeps ``_source_reload_suspended`` true forever
+        (external subtitle sources would never reload again) and, with the shared
+        progress token, would keep a stale loading tooltip alive.  When
+        ``expected_generation`` is given, a queue that already belongs to a newer
+        generation is left untouched.
+        """
+        if (
+            expected_generation is not None
+            and self._project_deferred_load_generation != expected_generation
+        ):
+            return
+        self._project_deferred_load_timer.stop()
+        self._project_deferred_loads = []
+        self._project_deferred_load_total = 0
+        token = self._project_deferred_load_progress_token
+        self._project_deferred_load_progress_token = None
+        self._resume_source_reloads()
+        if finish_progress:
+            self._finish_project_load_progress(message, token)
+        # 加载期间的轨道窗口重算被推迟过：队列排空/加载收尾时补一次。
+        if (
+            getattr(self, "_tracks_window_rerun_pending", False)
+            and not self._loading_project
+            and not getattr(self, "_closing_window", False)
+        ):
+            self._tracks_window_rerun_pending = False
+            self._refresh_tracks_view_windows_async()
+
     @_suspend_source_reload
     def _process_project_deferred_load(self) -> None:
+        queue_generation = self._project_deferred_load_generation
+        queue_token = self._project_deferred_load_progress_token
         if (
             not self._project_deferred_loads
-            or self._project_deferred_load_generation != self._project_generation
+            or queue_generation != self._project_generation
         ):
-            self._project_deferred_loads = []
+            self._clear_project_deferred_loads(
+                finish_progress=True, expected_generation=queue_generation
+            )
             return
         kind, payload = self._project_deferred_loads.pop(0)
         total = max(1, getattr(self, "_project_deferred_load_total", 1))
         completed = total - len(self._project_deferred_loads) - 1
-        labels = {"background": "加载背景", "video": "加载视频",
-                  "audio": "加载音频", "extra_subtitle_sources": "加载副字幕"}
-        self._projectLoadProgress.emit(90 + int(9 * completed / total),
-                                       labels.get(kind, "加载附加素材"))
+        labels = {
+            "background": "加载背景",
+            "video": "加载视频",
+            "audio": "加载音频",
+            "extra_subtitle_sources": "加载副字幕",
+        }
+        progress_token = queue_token
+        self._on_project_load_progress(
+            progress_token,
+            90 + int(9 * completed / total),
+            labels.get(kind, "加载附加素材"),
+        )
         was_loading = self._loading_project
         self._loading_project = True
         refresh_tracks = False
         try:
             if kind == "background" and isinstance(payload, dict):
-                self._load_background_payload(payload)
-            elif kind == "video" and isinstance(payload, Path) and _run_project_io(lambda: payload.is_file()):
-                self.load_video(payload)
+                self._assert_project_generation(queue_generation)
+                self._load_background_payload(payload, generation=queue_generation)
+            elif kind == "video" and isinstance(payload, Path):
+                if self._run_project_io(
+                    lambda: payload.is_file(), label="检查背景视频"
+                ):
+                    self._assert_project_generation(queue_generation)
+                    self.load_video(payload, generation=queue_generation)
             elif kind == "audio" and isinstance(payload, Path):
-                if _run_project_io(lambda: payload.is_file()) and payload != self._video_path:
-                    self.load_audio(payload)
+                if self._run_project_io(
+                    lambda: payload.is_file(), label="检查独立音频"
+                ):
+                    self._assert_project_generation(queue_generation)
+                    if payload != self._video_path:
+                        self.load_audio(payload, generation=queue_generation)
             elif kind == "extra_subtitle_sources" and isinstance(payload, tuple):
                 sources, project_roles = payload
-                self._apply_extra_subtitle_sources(sources)
+                self._apply_extra_subtitle_sources(
+                    sources, generation=queue_generation
+                )
                 self._apply_project_role_options(project_roles)
                 refresh_tracks = True
+        except ProjectTaskTimeout:
+            # 超时不是取消：提示超时并清掉本队列（不能用「已取消」成功态）。
+            self._notify_io_timeout()
+            self._clear_project_deferred_loads(
+                finish_progress=False, expected_generation=queue_generation
+            )
+            self._clear_project_load_progress(queue_token)
+            return
+        except ProjectTaskCanceled:
+            self._clear_project_deferred_loads(
+                finish_progress=True,
+                message="已取消加载素材",
+                expected_generation=queue_generation,
+            )
+            return
+        except _ProjectAssemblySuperseded:
+            # 队列已被新代际接管：新队列归新会话所有，这里什么都不清。
+            return
+        except BaseException:
+            # 队列绝不能留在半截（见 _clear_project_deferred_loads 注释）。
+            self._clear_project_deferred_loads(
+                finish_progress=True,
+                message="素材加载中断",
+                expected_generation=queue_generation,
+            )
+            raise
         finally:
             self._loading_project = was_loading
+        self._pump_load_events()
         if refresh_tracks and self._timing_track is not None:
-            self._refresh_tracks_view_windows()
+            # 整轨窗口重算是秒级 GUI 活；延迟阶段不能再同步阻塞它，按平台路由。
+            if _tracks_window_async_refresh_supported():
+                self._tracks_view.set_style(self._style)
+                self._refresh_tracks_view_windows_async()
+            else:
+                self._refresh_tracks_view_windows()
+        # 嵌套 I/O 返回后按「本队列自己的代际」校验：全局字段可能已被新队列改写。
         if (
-            self._project_deferred_loads
-            and self._project_deferred_load_generation == self._project_generation
+            self._project_deferred_load_generation != queue_generation
+            or queue_generation != self._project_generation
         ):
+            return
+        if self._project_deferred_loads:
             self._project_deferred_load_timer.start(120)
         else:
-            self._on_project_load_progress(100, "工程加载完成")
+            self._clear_project_deferred_loads(
+                finish_progress=True, expected_generation=queue_generation
+            )
 
     def _apply_output_settings(self, output: dict) -> None:
         directory_mode = output.get("directory_mode")
@@ -2695,24 +2941,43 @@ class SubtitleRenderWindow(QWidget):
     def _new_project(self) -> None:
         if not self._confirm_discard_changes():
             return
+        # 新建工程不启动进度提示，也必须收掉上一轮加载残留的提示（否则它会
+        # 一直停在「加载附加素材 90%」并被本次装配的进度串写）。
+        self._clear_project_load_progress()
+        self._clear_project_deferred_loads(finish_progress=False)
         self._begin_project_generation()
         self._clear_loaded_media()
         # 布局目录从预设库物化（勾选默认加载的条目），不再整库带入；
         # 标题引用按记忆的布局名（可为预设库名）解析，行数默认映射沿用
         # 应用级选择。
-        self._apply_project_data(
-            {
-                "style": style_to_dict(
-                    style_for_new_project(
-                        self._app_default_style,
-                        self._layout_presets,
-                        title_layout_name=self._new_project_title_layout_name,
-                    )
-                ),
-                "screen": screen_settings_to_dict(ScreenSettings()),
-                "selected_scheme_key": "global",
-            }
-        )
+        try:
+            applied = self._apply_project_data(
+                {
+                    "style": style_to_dict(
+                        style_for_new_project(
+                            self._app_default_style,
+                            self._layout_presets,
+                            title_layout_name=self._new_project_title_layout_name,
+                        )
+                    ),
+                    "screen": screen_settings_to_dict(ScreenSettings()),
+                    "selected_scheme_key": "global",
+                }
+            )
+        except ProjectTaskTimeout:
+            # 超时不是用户取消：装配可能已套了半份内容，收口到 coherent 空状态。
+            self._notify_io_timeout()
+            self._abort_project_open(
+                Path("(新建工程)"),
+                title="新建工程超时",
+                content="读取/初始化超时，已清空未命名工程。",
+            )
+            return
+        except ProjectTaskCanceled:
+            # 新建工程没有进度/取消 UI；只在关窗等边缘路径出现，干净退出即可。
+            return
+        if applied is False:
+            return
         self._reset_export_settings_for_new_project()
         self._project_session.adopt_project_identity(
             path=None,
@@ -2722,6 +2987,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _clear_loaded_media(self) -> None:
         """清空已加载的字幕 / 视频 / 音频，把各面板复位到空态（新建项目用）。"""
+        previous_loading = self._loading_project
         self._loading_project = True
         try:
             self._project_document.clear_loaded_media()
@@ -2764,7 +3030,7 @@ class SubtitleRenderWindow(QWidget):
             self._last_margin_warning_key = ""
             self._layout_issue_cache.clear()
         finally:
-            self._loading_project = False
+            self._loading_project = previous_loading
             self._sync_subtitle_source_watcher()
 
     def open_initial_project(self, project_path: Path | str) -> bool:
@@ -2786,26 +3052,269 @@ class SubtitleRenderWindow(QWidget):
             return
         self._open_project_path(path, confirm_discard=False)
 
-    def _on_project_load_progress(self, percent: int, message: str) -> None:
+    # ------------------------------------------------------------------ project progress
+    #
+    # One token per user-visible load owns the StateToolTip.  Stage callbacks are
+    # bound to that token, so an assembly that was superseded (new project, N3
+    # import, recovery restore) can never write into another load's tooltip, and
+    # every termination path (success / error / cancel / superseded) goes through
+    # exactly one of _finish / _clear.
+
+    def _progress_reporter(self, token: object):
+        if token is None:
+            return None
+
+        def report(percent: int, message: str) -> None:
+            self._on_project_load_progress(token, percent, message)
+
+        return report
+
+    def _on_project_load_progress(
+        self,
+        token: object,
+        percent: int,
+        message: str,
+    ) -> None:
+        if token is None or token is not self._project_load_progress_token:
+            return
         tooltip = self._project_load_tooltip
         if tooltip is None:
             return
         previous, _ = self._project_load_progress
         percent = max(previous, min(100, int(percent)))
         self._project_load_progress = (percent, message)
-        tooltip.setContent(f"{message} {percent}%")
-        if percent == 100:
-            tooltip.setState(True)
+        try:
+            tooltip.setContent(f"{message} {percent}%")
+        except RuntimeError:  # tooltip already destroyed
             self._project_load_tooltip = None
+            self._project_load_progress_token = None
+            return
+        if percent >= 100:
+            self._finish_project_load_progress()
 
-    def _start_project_load_progress(self) -> None:
-        if self._project_load_tooltip is not None:
-            self._project_load_tooltip.close()
-        self._project_load_progress = (0, "读取工程文件")
-        tooltip = StateToolTip("正在加载工程", "读取工程文件 0%", self)
+    def _start_project_load_progress(
+        self,
+        title: str = "正在加载工程",
+        label: str = "读取工程文件",
+    ) -> object:
+        """Open a fresh progress tooltip and return its ownership token."""
+        self._clear_project_load_progress()
+        token = object()
+        self._project_load_progress_token = token
+        self._project_load_progress = (0, label)
+        tooltip = StateToolTip(title, f"{label} 0%", self)
+        # 用户点掉提示只关 UI，不改变装配本身；同时断开 token，避免继续写它。
+        tooltip.closedSignal.connect(
+            lambda: self._forget_project_load_tooltip(tooltip)
+        )
         tooltip.move(tooltip.getSuitablePos())
         tooltip.show()
         self._project_load_tooltip = tooltip
+        return token
+
+    def _forget_project_load_tooltip(self, tooltip: StateToolTip) -> None:
+        if self._project_load_tooltip is tooltip:
+            self._project_load_tooltip = None
+            self._project_load_progress_token = None
+
+    def _finish_project_load_progress(
+        self,
+        message: str = "工程加载完成",
+        token: object = None,
+    ) -> None:
+        """Mark the load described by ``token`` as done (stale tokens are ignored)."""
+        if token is not None and token is not self._project_load_progress_token:
+            return
+        tooltip = self._project_load_tooltip
+        self._project_load_tooltip = None
+        self._project_load_progress_token = None
+        if tooltip is None:
+            return
+        try:
+            tooltip.setContent(f"{message} 100%")
+            tooltip.setState(True)
+        except RuntimeError:  # already destroyed
+            return
+
+    def _clear_project_load_progress(self, token: object = None) -> None:
+        """Drop the tooltip without a completion state (error / cancel / superseded)."""
+        if token is not None and token is not self._project_load_progress_token:
+            return
+        tooltip = self._project_load_tooltip
+        self._project_load_tooltip = None
+        self._project_load_progress_token = None
+        self._project_load_progress = (0, "准备中…")
+        if tooltip is None:
+            return
+        try:
+            tooltip.close()
+            tooltip.deleteLater()
+        except RuntimeError:  # already destroyed
+            return
+
+    # ------------------------------------------------------------------ io helpers
+
+    def _run_project_io(self, work: Callable[[], Any], *, label: str = "") -> Any:
+        """Run heavy project work off the GUI thread through the window runner."""
+        runner = getattr(self, "_project_io", None)
+        if runner is None:  # 构造早期 / 已销毁：退回同步执行
+            return work()
+        if getattr(self, "_closing_window", False):
+            raise ProjectTaskCanceled()
+        return runner.run_blocking(work, label=label, scope=self._io_scope)
+
+    def _begin_io_scope(self, owner: str) -> tuple[ProjectTaskScope, bool]:
+        """Start (or join) the cancellation scope of one user action.
+
+        Returns ``(scope, created)``; only the creator may end it, so a nested
+        operation can never disarm the outer action's cancel button.
+        """
+        scope = self._io_scope
+        if scope is not None:
+            return scope, False
+        scope = ProjectTaskScope()
+        self._io_scope = scope
+        self._io_scope_owner = owner
+        return scope, True
+
+    def _end_io_scope(self, scope: ProjectTaskScope, created: bool) -> None:
+        if created and self._io_scope is scope:
+            self._io_scope = None
+            self._io_scope_owner = None
+
+    def _pump_load_events(self) -> None:
+        """Keep the loading-tooltip animation alive during heavy GUI sub-steps.
+
+        The tooltip's rotate animation is driven by a 50 ms ``QTimer`` on the GUI
+        thread.  A stage that runs hundreds of milliseconds of pure QWidget work
+        (panel rebuild, table fill) starves that timer and makes the load look
+        frozen ("假异步").  Running a full ``processEvents`` per sub-step would
+        also dispatch unrelated timers and measurably slow the load, so this
+        advances just the progress tooltip's own animation at its native cadence
+        and repaints that one widget synchronously.  Cheap enough to call from
+        inside large fill loops.
+        """
+        now = time.monotonic()
+        if now - getattr(self, "_load_animation_pumped_at", 0.0) < (
+            _LOAD_ANIMATION_INTERVAL_S
+        ):
+            return
+        self._load_animation_pumped_at = now
+        tooltips = [
+            getattr(self, "_project_load_tooltip", None),
+            getattr(self, "_n3_import_tooltip", None),
+            getattr(self, "_layout_check_tooltip", None),
+        ]
+        tooltips.extend(
+            getattr(self, "_roll_media_tooltips", {}).values()
+        )
+        for tooltip in tooltips:
+            if tooltip is None:
+                continue
+            timer = getattr(tooltip, "rotateTimer", None)
+            try:
+                if timer is not None and timer.isActive():
+                    timer.timeout.emit()
+                else:
+                    self._warn_missing_tooltip_animation()
+                tooltip.repaint()
+            except RuntimeError:  # widget already destroyed
+                continue
+
+    def _warn_missing_tooltip_animation(self) -> None:
+        """One-shot diagnostic when qfluentwidgets no longer exposes rotateTimer."""
+        if getattr(self, "_load_animation_warned", False):
+            return
+        self._load_animation_warned = True
+        logging.getLogger(__name__).warning(
+            "StateToolTip 缺少 rotateTimer：加载进度动画退化为静态重绘"
+        )
+
+    def _run_cancelable_io(self, work: Callable[[], Any], *, label: str, owner: str):
+        """Run one user-initiated import; a local cancel returns ``_IO_CANCELED``.
+
+        When a project-level scope is already active the cancel belongs to that
+        outer action, so it is re-raised instead of being swallowed here.
+        """
+        scope, created = self._begin_io_scope(owner)
+        try:
+            return self._run_project_io(work, label=label)
+        except ProjectTaskTimeout:
+            if not created:
+                raise
+            self._notify_io_timeout()
+            return _IO_CANCELED
+        except ProjectTaskCanceled:
+            if not created:
+                raise
+            self._notify_io_canceled()
+            return _IO_CANCELED
+        finally:
+            self._end_io_scope(scope, created)
+
+    def _notify_io_canceled(self) -> None:
+        InfoBar.info(
+            title="已取消加载",
+            content="已停止读取，当前内容保持不变。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
+
+    def _notify_io_timeout(self) -> None:
+        InfoBar.warning(
+            title="加载超时",
+            content="读取/解析超时（磁盘或外置工具无响应），已中止本次操作。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=5000,
+        )
+
+    def _abort_project_open(
+        self,
+        path: Path,
+        *,
+        title: str = "已取消打开项目",
+        content: str = "",
+    ) -> None:
+        """Return to a coherent empty project after a cancelled/superseded open."""
+        # 旧工程在途的前/后黑素材回调按代际丢弃：取消也要推进代际。
+        self._begin_project_generation()
+        self._clear_project_deferred_loads(finish_progress=False)
+        self._clear_project_load_progress()
+        # 装配可能已套用了半份样式/素材：整体清回空态，别让取消后的未命名工程
+        # 悄悄带着半截内容让用户保存。
+        self._clear_loaded_media()
+        self._reset_aborted_assembly_state()
+        self._project_session.adopt_project_identity(
+            path=None,
+            disk_revision=None,
+        )
+        self._set_project_dirty(False)
+        InfoBar.warning(
+            title=title,
+            content=content or f"已停止加载：\n{path}",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=3500,
+        )
+
+    def _reset_aborted_assembly_state(self) -> None:
+        """Drop style/screen/export values a cancelled assembly may have applied."""
+        try:
+            self._style = ensure_page_layout_defaults(Style())
+            self._property_panel.set_style(self._style)
+            self._property_panel.mark_style_relayout_full()
+            self._preview_panel.set_style(self._style)
+            self._lyrics_panel.set_style(self._style)
+            self._screen_settings = ScreenSettings()
+            self._set_export_screen_controls(self._screen_settings)
+            self._sync_preview_output_size()
+            self._reset_export_settings_for_new_project()
+        except Exception:  # noqa: BLE001 — 收口尽力而为，不能再抛进取消路径
+            logging.getLogger(__name__).warning(
+                "取消装载后复位样式/导出设置失败", exc_info=True
+            )
 
     @_suspend_source_reload
     def _open_project_path(
@@ -2826,12 +3335,64 @@ class SubtitleRenderWindow(QWidget):
             return self._import_n3_project_path(path, confirm_discard=confirm_discard)
         if confirm_discard and not self._confirm_discard_changes():
             return False
-        self._start_project_load_progress()
+        # 读取成功前不动现有会话：失败/超时要让用户原来的工程原样保留。
+        scope, created = self._begin_io_scope("project-open")
+        token = self._start_project_load_progress()
+        attempt_generation = self._project_generation
+        phase = {"mutating": False}
         try:
-            loaded = _run_project_io(lambda: self._project_controller.open(path))
+            return self._open_project_path_scoped(
+                path, token, attempt_generation, phase
+            )
+        except ProjectTaskTimeout:
+            if phase["mutating"] and self._project_generation == attempt_generation:
+                # 装配已经开始且仍是我们的会话：收口到 coherent 空状态。
+                self._abort_project_open(
+                    path,
+                    title="加载工程超时",
+                    content=f"读取或解析超时，已停止加载：\n{path}",
+                )
+            elif phase["mutating"]:
+                # 代际已变（新动作接管）：绝不清空新会话，只收掉本轮提示。
+                self._clear_project_load_progress(token)
+            elif self._project_generation == attempt_generation:
+                self._clear_project_load_progress(token)
+                InfoBar.warning(
+                    title="加载工程超时",
+                    content=f"读取工程文件超时，当前工程保持不变：\n{path}",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+            return False
+        except ProjectTaskCanceled:
+            if phase["mutating"] and self._project_generation == attempt_generation:
+                # 装配已开始：与超时一样收口到 coherent 空状态。
+                self._abort_project_open(path)
+            elif not phase["mutating"]:
+                # 还停留在读取阶段：旧工程原样保留，只提示已取消。
+                self._notify_io_canceled()
+            else:
+                self._clear_project_load_progress(token)
+            return False
+        finally:
+            self._end_io_scope(scope, created)
+            # 只有当延迟队列属于本轮加载时才由这里收尾；否则归队列自己的 token。
+            if self._project_deferred_load_progress_token is not token:
+                self._clear_project_load_progress(token)
+
+    def _open_project_path_scoped(
+        self,
+        path: Path,
+        token: object,
+        attempt_generation: int,
+        phase: dict,
+    ) -> bool:
+        try:
+            loaded = self._run_project_io(
+                lambda: self._project_controller.open(path), label="读取工程文件"
+            )
         except (OSError, ValueError) as exc:
-            self._project_load_tooltip.close()
-            self._project_load_tooltip = None
             fluent_error(
                 self,
                 "打开项目失败",
@@ -2839,22 +3400,45 @@ class SubtitleRenderWindow(QWidget):
                 copyable=True,
             )
             return False
+        # 读取期间可能已有更新的工程动作接管：先校验，再动任何会话状态。
+        if attempt_generation != self._project_generation:
+            return False
         data = loaded.data
         missing_resources = loaded.missing_resources
-        # Source parsing and media probing always use a worker on cache misses.
+        # 读取成功：这一刻才推进代际、丢弃上一轮延迟素材链并清空旧媒体。
+        self._clear_project_deferred_loads(finish_progress=False)
         self._begin_project_generation()
+        generation = self._project_generation
+        phase["mutating"] = True
         self._clear_loaded_media()
-        self._apply_project_data(data, defer_assets=True)
+        if (
+            self._apply_project_data(
+                data,
+                defer_assets=True,
+                generation=generation,
+                token=token,
+            )
+            is False
+        ):
+            # 装配期间被更新的工程动作接管：不覆盖新会话的身份/进度。
+            return False
+        if generation != self._project_generation:
+            return False
+        self._pump_load_events()
         self._project_session.adopt_project_identity(
             path=path,
             disk_revision=loaded.revision,
             missing_resources=missing_resources,
             source_data=data,
+            source_snapshot=self._project_document.preserved_project_data,
         )
         self._set_project_dirty(False)
         self._record_recent_project(path)
-        self._on_project_load_progress(90 if self._project_deferred_loads else 100,
-                                       "加载附加素材" if self._project_deferred_loads else "工程加载完成")
+        self._on_project_load_progress(
+            token,
+            90 if self._project_deferred_loads else 100,
+            "加载附加素材" if self._project_deferred_loads else "工程加载完成",
+        )
         if missing_resources:
             fluent_warning(
                 self,
@@ -2866,104 +3450,6 @@ class SubtitleRenderWindow(QWidget):
                 copyable=True,
             )
         return True
-
-    def _prefetch_project_sources(self, data: dict) -> None:
-        """后台预解析主字幕源并预取媒体探测结果，供装配序列命中。
-
-        打开/恢复工程的耗时主体是 ``.sug`` 解析（大工程十几秒）与 ffprobe
-        （外置进程，杀软/冷盘下秒级到几十秒级），两者都不需要 GUI 线程；
-        装配序列（字体目录、面板 UI）与预取并行，走到 :meth:`load_from_sug`
-        / :meth:`_probe` 消费点时按（路径 + mtime/size + 解析参数）命中缓存
-        即免同步等待。参数在预取与消费两次调用间一致（同一装载会话内的
-        设置不变），键含全部影响结果的参数，不会误用。
-        """
-        if not isinstance(data, dict):
-            return
-        subtitle_raw = data.get("subtitle_path")
-        subtitle_path = Path(str(subtitle_raw)) if subtitle_raw else None
-        media_paths: list[Path] = []
-        background = data.get("background")
-        if isinstance(background, dict) and background.get("path"):
-            media_paths.append(Path(str(background["path"])))
-        for key in ("video_path", "audio_path"):
-            raw = data.get(key)
-            if raw:
-                media_paths.append(Path(str(raw)))
-
-        if subtitle_path is not None:
-            suffix = subtitle_path.suffix.lower()
-            if suffix not in {".sug", ".lrc"}:
-                subtitle_path = None
-        media_paths = [p for p in media_paths if p.is_file()]
-        if subtitle_path is None and not media_paths:
-            return
-
-        compensation = self._sug_compensation_value()
-        keep_labels = self._subtitle_loading_defaults.keep_singer_label_text
-        raw_filter = data.get("subtitle_sug_axis_singer_ids")
-        singer_filter = (
-            frozenset(str(item).strip() for item in raw_filter if str(item).strip())
-            if isinstance(raw_filter, list)
-            else None
-        )
-        try:
-            ffprobe_path = self._resolve_ffprobe_path()
-        except Exception:  # noqa: BLE001 — 预取失败退回消费点同步探测
-            ffprobe_path = None
-
-        def work() -> None:
-            if subtitle_path is not None and subtitle_path.is_file():
-                key = _subtitle_prefetch_key(
-                    subtitle_path,
-                    form="sug" if subtitle_path.suffix.lower() == ".sug" else "lrc",
-                    compensation_ms=compensation,
-                    singer_filter=singer_filter,
-                    keep_singer_label_text=keep_labels,
-                )
-                if key is not None and key not in self._source_parse_prefetch:
-                    # 先占位再计算：消费点看到 PENDING 即泵事件等待，GUI 不卡。
-                    self._source_parse_prefetch[key] = _PREFETCH_PENDING
-                    try:
-                        if subtitle_path.suffix.lower() == ".sug":
-                            result: object = self._subtitle_source_loader.load_sug(
-                                subtitle_path,
-                                software_compensation_ms=compensation,
-                                singer_filter=singer_filter,
-                            )
-                        else:
-                            result = self._subtitle_source_loader.load_lrc(
-                                subtitle_path,
-                                keep_singer_label_text=keep_labels,
-                            )
-                    except Exception as exc:  # noqa: BLE001 — 异常也缓存，消费点回放
-                        result = exc
-                    self._source_parse_prefetch[key] = result
-                    _trim_prefetch_map(self._source_parse_prefetch)
-            if ffprobe_path is None:
-                return
-            for media_path in media_paths:
-                try:
-                    stat = media_path.stat()
-                    probe_key = (
-                        subtitle_source_key(media_path),
-                        stat.st_mtime_ns,
-                        stat.st_size,
-                    )
-                except OSError:
-                    continue
-                if probe_key in self._probe_prefetch:
-                    continue
-                self._probe_prefetch[probe_key] = _PREFETCH_PENDING
-                try:
-                    info: object = probe_media(ffprobe_path, media_path)
-                except Exception as exc:  # noqa: BLE001
-                    info = exc
-                self._probe_prefetch[probe_key] = info
-                _trim_prefetch_map(self._probe_prefetch)
-
-        threading.Thread(
-            target=work, name="project-open-prefetch", daemon=True
-        ).start()
 
     @staticmethod
     def _missing_project_resources(data: dict) -> list[tuple[str, Path]]:
@@ -2989,18 +3475,26 @@ class SubtitleRenderWindow(QWidget):
             return
         current = self._missing_resources
         source = self._missing_resource_source_data
-        if isinstance(source, dict):
-            still_missing = {
-                (label, str(path))
-                for label, path in self._missing_project_resources(source)
-            }
-            remaining = tuple(
-                item
-                for item in current
-                if (item[0], str(item[1])) in still_missing
+
+        def still_missing_rows():
+            if isinstance(source, dict):
+                return {
+                    (label, str(path))
+                    for label, path in find_missing_project_resources(source)
+                }
+            return {(label, str(path)) for label, path in current if not path.is_file()}
+
+        try:
+            still_missing = self._run_cancelable_io(
+                still_missing_rows, label="检查素材状态", owner="resource-status"
             )
-        else:
-            remaining = tuple(item for item in current if not item[1].is_file())
+        except ProjectTaskCanceled:
+            raise
+        if still_missing is _IO_CANCELED:
+            return
+        remaining = tuple(
+            item for item in current if (item[0], str(item[1])) in still_missing
+        )
         recovered_count = len(current) - len(remaining)
         self._missing_resources = remaining
         self._refresh_project_title()
@@ -3093,6 +3587,7 @@ class SubtitleRenderWindow(QWidget):
         self._n3_import_worker = worker
         self._n3_import_thread = thread
         self._n3_import_path = path
+        self._n3_import_generation = self._project_generation
         self._n3_import_tooltip: Optional[StateToolTip] = None
         # 短导入（<400ms）不打扰用户；仍在跑才弹 StateToolTip。
         self._n3_import_tooltip_timer.start()
@@ -3100,7 +3595,7 @@ class SubtitleRenderWindow(QWidget):
         return True
 
     def _on_n3_import_progress(self, percent: int, message: str) -> None:
-        if self._n3_import_worker is None:
+        if self._n3_import_worker is None or getattr(self, "_closing_window", False):
             return
         if self._n3_import_tooltip is not None:
             self._n3_import_tooltip.setContent(f"{message} {percent}%")
@@ -3122,34 +3617,114 @@ class SubtitleRenderWindow(QWidget):
     def _on_n3_import_succeeded(self, worker: "_N3ImportWorker", result) -> None:
         if self._n3_import_worker is not worker:
             return  # 过期结果（新的导入已开始），丢弃
+        if getattr(self, "_closing_window", False):
+            return  # 关窗收尾中：迟到的装配不再碰窗口
         path = self._n3_import_path
+        generation = getattr(self, "_n3_import_generation", None)
         self._n3_import_worker = None
         self._n3_import_thread = None
         self._n3_import_path = None
         self._n3_import_tooltip_timer.stop()
         self._dismiss_n3_import_tooltip()
-        self._finish_n3_import(result, path)
+        if generation is not None and generation != self._project_generation:
+            # 导入期间用户已经打开/恢复了别的工程：丢弃这份旧结果，不能覆盖。
+            InfoBar.info(
+                title="已忽略过期的 N3 导入",
+                content=f"导入期间已切换到其他工程，本次导入已丢弃：\n{path}",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=4000,
+            )
+            return
+        self._finish_n3_import(result, path, generation=generation)
 
     def _on_n3_import_failed(self, worker: "_N3ImportWorker", message: str) -> None:
         if self._n3_import_worker is not worker:
             return
+        if getattr(self, "_closing_window", False):
+            return
         path = self._n3_import_path
+        generation = getattr(self, "_n3_import_generation", None)
         self._n3_import_worker = None
         self._n3_import_thread = None
         self._n3_import_path = None
         self._n3_import_tooltip_timer.stop()
         self._dismiss_n3_import_tooltip()
+        if generation is not None and generation != self._project_generation:
+            return  # 过期失败也不再打扰用户
         fluent_error(
             self,
             "导入失败",
             f"无法读取 NicoKaraMaker3 项目文件：\n{path}\n\n{message}",
         )
 
-    def _finish_n3_import(self, result, path: Path) -> None:
+    def _finish_n3_import(
+        self, result, path: Path, *, generation: Optional[int] = None
+    ) -> None:
         """后台导入完成后在 UI 线程套用工程（同步，供完成回调与测试复用）。"""
+        if generation is not None and generation != self._project_generation:
+            return
+        # 先停掉上一轮加载的延迟素材链并推进代际，避免旧队列/旧回调串写。
+        self._clear_project_deferred_loads(finish_progress=False)
         self._begin_project_generation()
-        self._clear_loaded_media()
-        self._apply_project_data(result.project_data)
+        attempt_generation = self._project_generation
+        phase = {"mutating": False}
+        scope, created = self._begin_io_scope("n3-import")
+        token = self._start_project_load_progress("正在导入 N3 项目", "套用工程设置")
+        try:
+            self._finish_n3_import_scoped(
+                result, path, token, attempt_generation, phase
+            )
+        except ProjectTaskTimeout:
+            if phase["mutating"] and self._project_generation == attempt_generation:
+                self._abort_project_open(
+                    path,
+                    title="导入 N3 项目超时",
+                    content=f"读取或解析超时，已停止导入：\n{path}",
+                )
+            elif self._project_generation == attempt_generation:
+                self._clear_project_deferred_loads(
+                    finish_progress=False, expected_generation=attempt_generation
+                )
+                self._clear_project_load_progress(token)
+                InfoBar.warning(
+                    title="导入 N3 项目超时",
+                    content=f"读取或解析超时，已停止导入：\n{path}",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+            # 代际已变：旧导入的超时不得碰新会话的队列/进度/提示。
+        except ProjectTaskCanceled:
+            if self._project_generation == attempt_generation:
+                self._clear_project_deferred_loads(finish_progress=False)
+                self._abort_project_open(
+                    path,
+                    title="已取消导入 N3 项目",
+                    content="已停止导入，当前项目已清空。",
+                )
+        finally:
+            self._end_io_scope(scope, created)
+            if not self._project_deferred_loads:
+                self._clear_project_load_progress(token)
+
+    def _finish_n3_import_scoped(
+        self, result, path: Path, token: object, generation: int, phase: dict
+    ) -> None:
+        previous_loading = self._loading_project
+        self._loading_project = True
+        phase["mutating"] = True
+        try:
+            self._clear_loaded_media()
+            applied = self._apply_project_data(
+                result.project_data, generation=generation, token=token
+            )
+        finally:
+            self._loading_project = previous_loading
+        if applied is False:
+            return
+        if generation != self._project_generation:
+            return
         # Opening a saved .yurika project must preserve its explicit canvas,
         # but a direct N3 import uses the referenced video's actual dimensions.
         # N3 visual fields are already absolute target pixels, so rebase their
@@ -3171,14 +3746,22 @@ class SubtitleRenderWindow(QWidget):
             )
             self._sync_output_size_to_video(self._video_info)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
-        missing_resources = self._missing_project_resources(result.project_data)
+        missing_resources = self._run_project_io(
+            lambda: self._missing_project_resources(result.project_data),
+            label="检查工程素材",
+        )
+        if generation != self._project_generation:
+            return
+        self._pump_load_events()
         self._project_session.adopt_project_identity(
             path=None,
             disk_revision=None,
             missing_resources=missing_resources,
             source_data=result.project_data,
+            source_snapshot=self._project_document.preserved_project_data,
         )
         self._set_project_dirty(True)
+        self._on_project_load_progress(token, 100, "工程加载完成")
         if result.warnings:
             fluent_info(
                 self,
@@ -3344,6 +3927,8 @@ class SubtitleRenderWindow(QWidget):
         self._preview_splitter = controls.workspace_splitter
         self._preview_window = controls.preview_window
         self._preview_panel = controls.preview_panel
+        # 大图解码（含图片序列逐帧）走窗口的后台执行器，预览线程只做合成。
+        self._preview_panel.set_image_loader(self._start_background_image_decode)
         self._transport_bar = controls.transport_bar
         self._lyrics_panel = controls.lyrics_panel
         self._property_panel = controls.property_panel
@@ -4424,58 +5009,75 @@ class SubtitleRenderWindow(QWidget):
         *,
         sug_axis_singer_ids: Optional[Collection[str]] = None,
         sug_axis_name: Optional[str] = None,
+        generation: Optional[int] = None,
+        refresh_lyrics_panel: bool = True,
     ) -> Optional[TimingTrack]:
         """加载字幕源文件。支持 SUG 项目（.sug）与 Nicokara 逐字 LRC（.lrc）。
 
         ``sug_axis_singer_ids`` / ``sug_axis_name`` 仅供工程打开使用：按工程快照
         里持久化的主轴过滤解析 ``.sug``（快照语义），而不是按文件当前的分组计
-        划分轴；``sug_axis_name`` 是主分组的展示名快照。
+        划分轴；``sug_axis_name`` 是主分组的展示名快照。``generation`` 由工程
+        装配传入：解析 I/O 返回后先校验代际，旧解析不得写进新会话。
+        ``refresh_lyrics_panel=False`` 供工程装配使用：表格由装配在
+        ``apply_track_project_data`` 之后统一重建一次，避免同一轨道建两遍。
         """
         suffix = path.suffix.lower()
         if suffix == ".sug":
             return self.load_from_sug(
-                path, axis_singer_ids=sug_axis_singer_ids, axis_name=sug_axis_name
+                path,
+                axis_singer_ids=sug_axis_singer_ids,
+                axis_name=sug_axis_name,
+                generation=generation,
+                refresh_lyrics_panel=refresh_lyrics_panel,
             )
-        return self.load_from_lrc(path)
+        return self.load_from_lrc(
+            path,
+            generation=generation,
+            refresh_lyrics_panel=refresh_lyrics_panel,
+        )
 
-    def load_from_lrc(self, path: Path) -> Optional[TimingTrack]:
+    def _assert_assembly_generation(self, generation: Optional[int]) -> None:
+        if generation is not None:
+            self._assert_project_generation(generation)
+
+    def load_from_lrc(
+        self,
+        path: Path,
+        *,
+        generation: Optional[int] = None,
+        refresh_lyrics_panel: bool = True,
+    ) -> Optional[TimingTrack]:
         """加载 Nicokara 逐字 LRC 文件。返回解析结果（失败返回 None 并弹错）。"""
         keep_labels = self._subtitle_loading_defaults.keep_singer_label_text
-        prefetch_key = _run_project_io(lambda: _subtitle_prefetch_key(
-            Path(path),
-            form="lrc",
-            compensation_ms=0,
-            singer_filter=None,
-            keep_singer_label_text=keep_labels,
-        ))
-        prefetch = (
-            _await_pending_prefetch(self._source_parse_prefetch, prefetch_key)
-            if prefetch_key is not None
-            else None
-        )
-        if isinstance(prefetch, TimingTrack):
-            track = prefetch
-        elif isinstance(prefetch, Exception):
+        try:
+            track = self._run_cancelable_io(
+                lambda: self._subtitle_source_loader.load_lrc(
+                    Path(path),
+                    keep_singer_label_text=keep_labels,
+                ),
+                label="解析字幕文件",
+                owner="subtitle-import",
+            )
+        except ProjectTaskCanceled:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
             fluent_error(
                 self,
                 "加载字幕失败",
-                f"无法解析字幕文件：\n{path}\n\n错误：{prefetch}",
+                f"无法解析字幕文件：\n{path}\n\n错误：{exc}",
             )
             return None
-        else:
-            try:
-                track = _run_project_io(lambda: self._subtitle_source_loader.load_lrc(
-                    path,
-                    keep_singer_label_text=keep_labels,
-                ))
-            except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
-                fluent_error(
-                    self,
-                    "加载字幕失败",
-                    f"无法解析字幕文件：\n{path}\n\n错误：{exc}",
-                )
-                return None
-        self._apply_timing_track(track, path, watch_source=True)
+        if track is _IO_CANCELED:
+            return None
+        # 解析是嵌套 I/O：返回后先校验代际，再写会话状态。
+        self._assert_assembly_generation(generation)
+        self._apply_timing_track(
+            track,
+            path,
+            watch_source=True,
+            generation=generation,
+            refresh_lyrics_panel=refresh_lyrics_panel,
+        )
         return track
 
     def load_from_sug(
@@ -4484,6 +5086,8 @@ class SubtitleRenderWindow(QWidget):
         *,
         axis_singer_ids: Optional[Collection[str]] = None,
         axis_name: Optional[str] = None,
+        generation: Optional[int] = None,
+        refresh_lyrics_panel: bool = True,
     ) -> Optional[TimingTrack]:
         """加载 SUG 项目文件，直接读取打轴数据而不导出中间 LRC。
 
@@ -4504,42 +5108,48 @@ class SubtitleRenderWindow(QWidget):
                         str(value) for value in axis_singer_ids
                     )
                 compensation = self._sug_compensation_value()
-                prefetch_key = _run_project_io(lambda: _subtitle_prefetch_key(
-                    Path(path),
-                    form="sug",
-                    compensation_ms=compensation,
-                    singer_filter=persisted_filter,
-                    keep_singer_label_text=False,
-                ))
-                prefetch = (
-                    _await_pending_prefetch(self._source_parse_prefetch, prefetch_key)
-                    if prefetch_key is not None
-                    else None
-                )
-                if isinstance(prefetch, TimingTrack):
-                    track = prefetch
-                elif isinstance(prefetch, Exception):
-                    raise prefetch
-                else:
-                    track = _run_project_io(lambda: self._subtitle_source_loader.load_sug(
+                track = self._run_project_io(
+                    lambda: self._subtitle_source_loader.load_sug(
                         path,
                         software_compensation_ms=compensation,
                         singer_filter=persisted_filter,
-                    ))
-            else:
-                axes = self._subtitle_source_loader.load_sug_axes(
-                    path,
-                    software_compensation_ms=self._sug_compensation_value(),
+                    ),
+                    label="解析 SUG 字幕",
                 )
+            else:
+                # 解析与分组拆分都不碰 Qt，放到工作线程；用户可取消。
+                compensation = self._sug_compensation_value()
+                axes = self._run_cancelable_io(
+                    lambda: self._subtitle_source_loader.load_sug_axes(
+                        path,
+                        software_compensation_ms=compensation,
+                    ),
+                    label="解析 SUG 字幕",
+                    owner="subtitle-import",
+                )
+                if axes is _IO_CANCELED:
+                    return None
                 track = axes[0].track
+        except ProjectTaskCanceled:
+            raise
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
             fluent_error(
                 self, "加载字幕失败", f"无法解析 SUG 项目：\n{path}\n\n错误：{exc}"
             )
             return None
-        self._apply_timing_track(track, path, watch_source=True)
+        # 解析是嵌套 I/O：返回后先校验代际，再写会话状态。
+        self._assert_assembly_generation(generation)
+        self._apply_timing_track(
+            track,
+            path,
+            watch_source=True,
+            generation=generation,
+            refresh_lyrics_panel=refresh_lyrics_panel,
+        )
         if axes is not None:
-            self._install_sug_axis_tracks(path, axes)
+            self._install_sug_axis_tracks(path, axes, generation=generation)
+            if generation is not None and generation != self._project_generation:
+                return track
             if len(axes) > 1:
                 primary_name = axes[0].name
                 InfoBar.success(
@@ -4561,19 +5171,27 @@ class SubtitleRenderWindow(QWidget):
             self._project_document.subtitle_axis_name = (
                 (name_text.strip() or None) if persisted_filter is not None else None
             )
-            self._primary_source_baseline = _run_project_io(lambda: deepcopy(track))
         return track
 
     def _install_sug_axis_tracks(
         self,
         path: Path,
         axes: list[SugAxisTrack],
+        *,
+        generation: Optional[int] = None,
     ) -> None:
         """把新解析的 SUG 轴集合装配为「主字幕 + 副字幕源」。
 
         主分组占主字幕（``_apply_timing_track`` 已完成主轨道装配），其余分
         组各成一个副字幕源；同路径的旧轴源整体替换，其他路径的副源保留。
         """
+        # 副轴轨道此刻尚未发布给任何面板，深拷贝放工作线程不会与 GUI 竞态。
+        secondary_baselines = self._run_project_io(
+            lambda: [deepcopy(axis.track) for axis in axes[1:]],
+            label="复制字幕基线",
+        )
+        # 深拷贝是嵌套 I/O：返回后先校验代际，再写轴身份/副源列表。
+        self._assert_assembly_generation(generation)
         primary_axis = axes[0]
         self._project_document.subtitle_axis_singer_ids = (
             primary_axis.singer_ids if primary_axis.is_split else None
@@ -4581,16 +5199,16 @@ class SubtitleRenderWindow(QWidget):
         self._project_document.subtitle_axis_name = (
             primary_axis.name if primary_axis.is_split else None
         )
-        self._primary_source_baseline = deepcopy(primary_axis.track)
         key = self._subtitle_source_key(path)
         kept = [
             source
             for source in self._extra_sources
             if self._subtitle_source_key(source.path) != key
         ]
-        for axis in axes[1:]:
+        for index, axis in enumerate(axes[1:]):
             track = axis.track
-            source_baseline = deepcopy(track)
+            source_baseline = secondary_baselines[index]
+            self._pump_load_events()
             track.loading_settings_mode = "global"
             track.loading_settings = None
             track.loading_settings_snapshot = self._subtitle_loading_defaults
@@ -4634,7 +5252,21 @@ class SubtitleRenderWindow(QWidget):
             and self._subtitle_source_key(self._subtitle_path) == key
             and self._source_watch_runtime.state(key) is not None
         ):
-            self._reload_external_subtitle_source(key)
+            # 宿主（工作流交接）要的是合并后的轨道：读取仍离线程，结果就地等待。
+            # 等待失败/超时/关窗时返回 None（宿主按“未交接”中止），绝不返回旧轨道。
+            try:
+                self._reload_external_subtitle_source_blocking(key)
+            except ProjectTaskTimeout:
+                InfoBar.warning(
+                    title="字幕源更新超时",
+                    content="外部字幕源仍在更新，已取消本次交接，请稍后重试。",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+                return None
+            except ProjectTaskCanceled:
+                return None
             return self._timing_track
         return self.load_from_sug(path)
 
@@ -4668,19 +5300,27 @@ class SubtitleRenderWindow(QWidget):
             )
             return None
         try:
-            track = self._load_timing_track_file(
-                path,
-                apply_sug_export_compensation=(
-                    self._subtitle_loading_defaults.apply_sug_export_compensation
+            track = self._run_cancelable_io(
+                lambda: self._parse_track_for_slot(
+                    path,
+                    software_compensation_ms=_resolve_compensation_ms(
+                        self._subtitle_loading_defaults.apply_sug_export_compensation
+                    ),
+                    keep_singer_label_text=(
+                        self._subtitle_loading_defaults.keep_singer_label_text
+                    ),
                 ),
-                keep_singer_label_text=(
-                    self._subtitle_loading_defaults.keep_singer_label_text
-                ),
+                label="解析字幕文件",
+                owner="subtitle-import",
             )
+        except ProjectTaskCanceled:
+            raise
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
             fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
+            return None
+        if track is _IO_CANCELED:
             return None
         track.loading_settings_mode = "global"
         track.loading_settings_snapshot = self._subtitle_loading_defaults
@@ -4719,17 +5359,28 @@ class SubtitleRenderWindow(QWidget):
         nicokara_tags: Optional[dict] = None,
     ) -> Optional[TimingTrack]:
         """加载嵌入式 SUG 当前项目对象，供主工作流第 4 步 → 第 5 步接线使用。"""
+        # 纯内存对象转换，但大工程也要秒级：与文件路径同口径离线程执行。
+        compensation = self._sug_compensation_value()
+        base_dir = source_path.parent if source_path is not None else None
         try:
-            track = self._subtitle_source_loader.load_sug_project(
-                project,
-                nicokara_tags=nicokara_tags,
-                software_compensation_ms=self._sug_compensation_value(),
-                base_dir=source_path.parent if source_path is not None else None,
+            track = self._run_cancelable_io(
+                lambda: self._subtitle_source_loader.load_sug_project(
+                    project,
+                    nicokara_tags=nicokara_tags,
+                    software_compensation_ms=compensation,
+                    base_dir=base_dir,
+                ),
+                label="读取打轴项目",
+                owner="subtitle-import",
             )
+        except ProjectTaskCanceled:
+            raise
         except Exception as exc:  # noqa: BLE001
             fluent_error(
                 self, "加载字幕失败", f"无法读取打轴项目：\n{exc}"
             )
+            return None
+        if track is _IO_CANCELED:
             return None
         # In-memory workflow handoff is intentionally not coupled to the SUG
         # editor.  Only files explicitly imported from disk are watched.
@@ -4742,7 +5393,11 @@ class SubtitleRenderWindow(QWidget):
         source_path: Optional[Path],
         *,
         watch_source: bool = False,
+        generation: Optional[int] = None,
+        refresh_lyrics_panel: bool = True,
     ) -> None:
+        # 解析 I/O 已由调用方校验过；再兜一次，防止直接调用绕过。
+        self._assert_assembly_generation(generation)
         self._watch_primary_subtitle_source = bool(watch_source and source_path)
         if self._watch_primary_subtitle_source and source_path is not None:
             self._set_subtitle_source_baseline(source_path, track)
@@ -4758,7 +5413,13 @@ class SubtitleRenderWindow(QWidget):
                 for source in self._extra_sources
                 if source.sug_axis_singer_ids is None
             ]
-        self._primary_source_baseline = _run_project_io(lambda: deepcopy(track))
+        # Deep-copy the pristine baseline *before* the track is published to the
+        # panels: doing it off-thread afterwards would race with GUI mutations.
+        self._primary_source_baseline = self._run_project_io(
+            lambda: deepcopy(track), label="复制字幕基线"
+        )
+        # 深拷贝是嵌套 I/O：返回后先校验代际再发布轨道，旧解析不得进新会话。
+        self._assert_assembly_generation(generation)
         self._timing_track = track
         self._subtitle_path = source_path
         if not self._loading_project:
@@ -4781,16 +5442,21 @@ class SubtitleRenderWindow(QWidget):
         self._active_title_index = None
         # 换字幕源后旧的行索引全部失效
         self._clear_undo_history()
+        self._pump_load_events()
         self._refresh_source_ui()
-        self._lyrics_panel.set_track(track)
+        # 大列表逐行建 item 会占住 GUI 线程：按批把事件循环还给进度动画。
+        if refresh_lyrics_panel:
+            self._lyrics_panel.set_track(track, yield_cb=self._pump_load_events)
         if not self._loading_project:
             self._apply_imported_role_preset_choices(track.role_options)
             self._property_panel.merge_roles(self._content_role_options())
             self._lyrics_panel.set_role_options(self._merged_role_options())
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
+        self._pump_load_events()
         self._preview_panel.set_track(track)
         self._sync_tracks_view()
+        self._pump_load_events()
         self._refresh_transport_duration()
         # A new subtitle source resets the playhead to the start.
         self._preview_window_controller.forget_position()
@@ -4814,54 +5480,98 @@ class SubtitleRenderWindow(QWidget):
         return subtitle_source_digest(path)
 
     def _set_subtitle_source_baseline(self, path: Path, track: TimingTrack) -> None:
-        self._source_watch_runtime.set_baseline(path, track)
+        self._source_watch_runtime.register_baseline(path, track)
 
     def _referenced_subtitle_sources(self) -> dict[str, tuple[Path, TimingTrack]]:
+        # 只做字符串归一化（不 resolve）：watch 事件回调在 GUI 线程，不能碰盘。
         referenced: dict[str, tuple[Path, TimingTrack]] = {}
         if (
             self._watch_primary_subtitle_source
             and self._subtitle_path is not None
             and self._timing_track is not None
         ):
-            path = self._subtitle_path.resolve(strict=False)
-            referenced[self._subtitle_source_key(path)] = (path, self._timing_track)
+            path = normalized_source_path(self._subtitle_path)
+            referenced[self._subtitle_source_key(path)] = (
+                path,
+                self._timing_track,
+            )
         for source in self._extra_sources:
-            path = source.path.resolve(strict=False)
+            path = normalized_source_path(source.path)
             referenced.setdefault(self._subtitle_source_key(path), (path, source.track))
         return referenced
 
-    def _sync_subtitle_source_watcher(self) -> None:
-        if self._source_watch_runtime.busy:
+    def _resume_source_reloads(self) -> None:
+        """Re-arm the watcher after leaving any suspended state."""
+        runtime = getattr(self, "_source_watch_runtime", None)
+        if runtime is None:
             return
-        self._source_watch_runtime.busy = True
-        try:
-            referenced = _run_project_io(self._referenced_subtitle_sources)
-        finally:
-            self._source_watch_runtime.busy = False
-        self._source_watch_runtime.sync(referenced)
+        if runtime.pending_keys and not self._source_reload_suspended():
+            runtime.start_pending(0)
+
+    def _sync_subtitle_source_watcher(self) -> None:
+        """Reconcile baselines + Qt watches; disk checks run off the GUI thread."""
+        if getattr(self, "_watch_sync_inflight", False):
+            self._watch_sync_rerun = True
+            return
+        referenced = self._referenced_subtitle_sources()
+        self._source_watch_runtime.retain_states(referenced)
+        for key, (path, track) in referenced.items():
+            if self._source_watch_runtime.state(key) is None:
+                self._source_watch_runtime.register_baseline(path, track)
+        entries = self._source_watch_runtime.watch_entries()
+        self._watch_sync_inflight = True
+
+        def work():
+            return SubtitleSourceWatchRuntime.prepare_watch_sync(entries)
+
+        def finish(plan) -> None:
+            self._watch_sync_inflight = False
+            self._source_watch_runtime.apply_watch_sync(plan)
+            if self._watch_sync_rerun:
+                self._watch_sync_rerun = False
+                self._sync_subtitle_source_watcher()
+            else:
+                self._resume_source_reloads()
+
+        def failed(exc: BaseException) -> None:
+            self._watch_sync_inflight = False
+            self._watch_sync_rerun = False
+            logging.getLogger(__name__).warning(
+                "字幕源监视同步失败: %s", exc, exc_info=exc
+            )
+            # 失败也要让挂起的改动继续：否则 pending 会一直等一个不会来的回调。
+            self._resume_source_reloads()
+
+        if self._project_io.submit(
+            work, on_done=finish, on_error=failed, timeout_s=_WATCH_SYNC_TIMEOUT_S
+        ) is None:
+            failed(RuntimeError("执行器已关闭"))
 
     def _on_subtitle_source_file_changed(self, path_text: str) -> None:
-        if self._source_reload_suspended():
-            for key in tuple(self._source_watch_runtime.states):
-                self._source_watch_runtime.queue(key)
-            self._source_watch_runtime.start_pending(50)
-            return
         key = self._subtitle_source_key(Path(path_text))
-        if self._source_watch_runtime.state(key) is not None:
-            self._queue_subtitle_source_reload(key)
+        state = self._source_watch_runtime.state(key)
+        if state is None:
+            # 未知路径（原子替换后的新文件 / 旧 watch 残留）：重算监视表。
+            self._sync_subtitle_source_watcher()
+            return
+        # 只排队真正变化的那个源；挂起期间的改动由 _resume_source_reloads 补跑。
+        self._queue_subtitle_source_reload(key)
+        if self._source_reload_suspended():
+            return
         # Editors may replace a file atomically, which removes Qt's file watch.
         self._sync_subtitle_source_watcher()
 
     def _on_subtitle_source_directory_changed(self, path_text: str) -> None:
-        if self._source_reload_suspended():
-            for key in tuple(self._source_watch_runtime.states):
-                self._source_watch_runtime.queue(key)
-            self._source_watch_runtime.start_pending(50)
-            return
         directory_key = self._subtitle_source_key(Path(path_text))
-        for key, state in self._source_watch_runtime.states.items():
-            if self._subtitle_source_key(state.path.parent) == directory_key:
-                self._queue_subtitle_source_reload(key)
+        matched = [
+            key
+            for key, state in self._source_watch_runtime.states.items()
+            if self._subtitle_source_key(state.path.parent) == directory_key
+        ]
+        for key in matched:
+            self._queue_subtitle_source_reload(key)
+        if self._source_reload_suspended():
+            return
         self._sync_subtitle_source_watcher()
 
     def _queue_subtitle_source_reload(self, key: str) -> None:
@@ -4869,16 +5579,34 @@ class SubtitleRenderWindow(QWidget):
 
     def _source_reload_suspended(self) -> bool:
         return bool(
-            getattr(self, "_source_reload_suspend_depth", 0)
+            getattr(self, "_closing_window", False)
+            or getattr(self, "_source_reload_suspend_depth", 0)
             or self._loading_project
             or self._project_deferred_loads
-            or self._source_watch_runtime.busy
+            or getattr(self, "_watch_sync_inflight", False)
+            or getattr(self, "_source_reload_inflight", set())
+            or self._render_thread is not None
+        )
+
+    def _source_reload_deferred(self) -> bool:
+        """Whether a finished reload must wait (project transaction / export).
+
+        Deliberately excludes the in-flight bookkeeping flags: the earlier apply
+        step starts a watch sync, and treating that as "suspended" would requeue
+        every finished reload into an endless loop.
+        """
+        return bool(
+            getattr(self, "_closing_window", False)
+            or getattr(self, "_source_reload_suspend_depth", 0)
+            or self._loading_project
+            or self._project_deferred_loads
             or self._render_thread is not None
         )
 
     def _process_subtitle_source_changes(self) -> None:
         if self._source_reload_suspended():
-            self._source_watch_runtime.start_pending(50)
+            # 保持 pending 即可：离开挂起态的一方调用 _resume_source_reloads。
+            # 不再每 50ms 唤醒一次（整个导出期间原本会空转上千次）。
             return
         self._consume_subtitle_source_changes()
 
@@ -4890,10 +5618,73 @@ class SubtitleRenderWindow(QWidget):
         self._sync_subtitle_source_watcher()
 
     def _reload_external_subtitle_source(self, key: str) -> None:
+        """Start an off-thread read of one externally changed source."""
+        self._start_external_source_reload(key, blocking=False)
+
+    def _reload_external_subtitle_source_blocking(self, key: str) -> None:
+        """Reload synchronously for callers that need the merged track back.
+
+        The read/parse still runs on a worker thread; only the *result* is
+        awaited here (workflow handoff returns the updated track to the host).
+        """
+        # 已有异步重载在途时先等它落定，否则宿主会拿到过期轨道。
+        if not self._wait_for_source_reload(key):
+            raise ProjectTaskTimeout("等待字幕源更新超时")
+        self._start_external_source_reload(key, blocking=True)
+
+    def _wait_for_source_reload(
+        self, key: str, timeout_s: float = _SOURCE_RELOAD_TIMEOUT_S + 5.0
+    ) -> bool:
+        """Pump the event loop until ``key`` leaves the in-flight set.
+
+        Returns ``False`` when the wait timed out or the window is closing, so the
+        caller never mistakes an unfinished reload for a fresh track.
+        """
+        if key not in self._source_reload_inflight:
+            return True
+        loop = QEventLoop()
+        poll = QTimer()
+        poll.setInterval(10)
+
+        def check() -> None:
+            if key not in self._source_reload_inflight:
+                loop.quit()
+
+        poll.timeout.connect(check)
+        poll.start()
+        guard_timer = QTimer()
+        guard_timer.setSingleShot(True)
+        guard_timer.timeout.connect(loop.quit)
+        guard_timer.start(int(timeout_s * 1000))
+        guard = getattr(self, "_project_io", None)
+        if guard is not None:
+            guard.guard.register_stage_loop(loop)
+        try:
+            loop.exec()
+        finally:
+            if guard is not None:
+                guard.guard.unregister_stage_loop(loop)
+            poll.stop()
+            poll.deleteLater()
+            guard_timer.stop()
+            guard_timer.deleteLater()
+        return (
+            key not in self._source_reload_inflight
+            and not getattr(self, "_closing_window", False)
+        )
+
+    def _start_external_source_reload(self, key: str, *, blocking: bool) -> None:
+        if key in self._source_reload_inflight:
+            # 上一次读取还没回来：留在 pending，完成后由 _resume_source_reloads 重排。
+            self._queue_subtitle_source_reload(key)
+            return
+        state = self._source_watch_runtime.state(key)
+        if state is None:
+            return
         if self._source_key_is_sug(key):
             # .sug 可能带分色分轴计划：主槽位/轴副源各自按歌手集合过滤重解
             # 析，无法复用「整文件一份候选」的 LRC 合并路径。
-            self._reload_external_sug_source(key)
+            self._start_sug_source_reload(key, state, blocking=blocking)
             return
         primary_track = None
         if (
@@ -4915,25 +5706,107 @@ class SubtitleRenderWindow(QWidget):
                 ),
                 None,
             )
-        preparation = self._source_watch_runtime.prepare_reload(
-            key,
-            load_candidate=lambda source_path: self._load_timing_track_file(
-                source_path,
-                apply_sug_export_compensation=(
-                    self._sug_compensation_enabled_for_track(owner_track)
+        compensation_enabled = self._sug_compensation_enabled_for_track(owner_track)
+        keep_labels = self._keep_singer_label_text_for_track(owner_track)
+        path = state.path
+        compensation_ms = _resolve_compensation_ms(compensation_enabled)
+        seen_digest = state.seen_digest
+        force_parse = state.digest_pending or not seen_digest
+        loader = self._subtitle_source_loader
+        generation = self._project_generation
+        self._source_reload_inflight.add(key)
+
+        def work():
+            return read_track_source(
+                path,
+                seen_digest,
+                lambda source_path: loader.load_file(
+                    source_path,
+                    software_compensation_ms=compensation_ms,
+                    keep_singer_label_text=keep_labels,
                 ),
-                keep_singer_label_text=(
-                    self._keep_singer_label_text_for_track(owner_track)
+                force_parse=force_parse,
+            )
+
+        def stale() -> bool:
+            # 读取期间换了工程/换了主字幕/窗口在关：结果属于旧会话，绝不合并。
+            return (
+                generation != self._project_generation
+                or getattr(self, "_closing_window", False)
+                or key not in self._source_watch_runtime.states
+            )
+
+        def apply(readout) -> None:
+            if stale():
+                return
+            preparation = self._source_watch_runtime.accept_readout(
+                key,
+                readout,
+                primary_track=primary_track,
+                extra_tracks=(
+                    (index, source.track)
+                    for index, source in enumerate(self._extra_sources)
+                    if self._subtitle_source_key(source.path) == key
                 ),
-            ),
-            primary_track=primary_track,
-            extra_tracks=(
-                (index, source.track)
-                for index, source in enumerate(self._extra_sources)
-                if self._subtitle_source_key(source.path) == key
-            ),
-            style=self._style,
-        )
+                style=self._style,
+            )
+            self._apply_external_track_reload(preparation, generation=generation)
+
+        if blocking:
+            try:
+                readout = self._run_project_io(work, label="读取字幕更新")
+            except BaseException:
+                self._source_reload_inflight.discard(key)
+                if not getattr(self, "_closing_window", False):
+                    # 失败也要把这次改动留在 pending（有界重试），不要吞掉。
+                    self._source_watch_runtime.retry(key)
+                self._resume_source_reloads()
+                raise
+            self._source_reload_inflight.discard(key)
+            try:
+                apply(readout)
+            finally:
+                self._resume_source_reloads()
+            return
+
+        def finish(readout) -> None:
+            self._source_reload_inflight.discard(key)
+            try:
+                if self._source_reload_deferred() and not stale():
+                    # 装配/导出/另一次重载仍在进行：结果留到恢复后再读一次。
+                    self._queue_subtitle_source_reload(key)
+                    return
+                apply(readout)
+            finally:
+                self._resume_source_reloads()
+
+        def failed(exc: BaseException) -> None:
+            self._source_reload_inflight.discard(key)
+            logging.getLogger(__name__).warning(
+                "外部字幕源读取失败: path=%s error=%s", path, exc, exc_info=exc
+            )
+            if not getattr(self, "_closing_window", False):
+                # 有界重试：最多 5 次，避免「一次失败 = 这次改动永远丢掉」。
+                self._source_watch_runtime.retry(key)
+            self._resume_source_reloads()
+
+        if self._project_io.submit(
+            work,
+            on_done=finish,
+            on_error=failed,
+            timeout_s=_SOURCE_RELOAD_TIMEOUT_S,
+        ) is None:
+            failed(RuntimeError("执行器已关闭"))
+
+    @_suspend_source_reload
+    def _apply_external_track_reload(
+        self,
+        preparation: Optional[SourceReloadPreparation],
+        *,
+        generation: Optional[int] = None,
+    ) -> None:
+        if generation is None:
+            generation = self._project_generation
         if preparation is None:
             return
         path = preparation.path
@@ -4991,13 +5864,20 @@ class SubtitleRenderWindow(QWidget):
                 self._source_watch_runtime.ignore_prepared(preparation)
                 self._sync_subtitle_source_watcher()
                 return
+            # 模态确认期间可能已有新工程接管：返回后重新校验再写入。
+            if generation != self._project_generation:
+                return
 
+        if generation != self._project_generation:
+            return
         for track in apply_reloaded_tracks(self._project_document, plan):
             track.page_plan = build_legacy_page_plan(track, self._style)
             project_page_plan_to_legacy_fields(track, self._style)
 
         if plan.structure_changed:
             self._clear_undo_history()
+        if generation != self._project_generation:
+            return
         self._source_watch_runtime.accept_prepared(preparation)
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
@@ -5033,8 +5913,10 @@ class SubtitleRenderWindow(QWidget):
             for path in paths
         )
 
-    def _reload_external_sug_source(self, key: str) -> None:
-        """重载外部 ``.sug``：一次解析出全部分轴，再按当前槽位协调应用。"""
+    def _start_sug_source_reload(
+        self, key: str, state: object, *, blocking: bool = False
+    ) -> None:
+        """Read an externally changed ``.sug`` (all axes) off the GUI thread."""
         primary_track = None
         if (
             self._watch_primary_subtitle_source
@@ -5053,28 +5935,118 @@ class SubtitleRenderWindow(QWidget):
                 ),
                 None,
             )
-        parsed: Optional[list[SugAxisTrack]] = None
-        compensation_ms: int = 0
-
-        def load_candidate(source_path: Path) -> TimingTrack:
-            nonlocal parsed, compensation_ms
-            compensation_ms = (
-                _sug_software_compensation_ms()
-                if self._sug_compensation_enabled_for_track(owner_track)
-                else 0
-            )
-            parsed = self._subtitle_source_loader.load_sug_axes(
-                source_path,
-                software_compensation_ms=compensation_ms,
-            )
-            return parsed[0].track
-
-        preparation = self._source_watch_runtime.prepare_reload(
-            key,
-            load_candidate=load_candidate,
-            primary_track=None,
-            extra_tracks=(),
+        compensation_ms = (
+            _sug_software_compensation_ms()
+            if self._sug_compensation_enabled_for_track(owner_track)
+            else 0
         )
+        path = state.path
+        seen_digest = state.seen_digest
+        force_parse = state.digest_pending or not seen_digest
+        loader = self._subtitle_source_loader
+        # 同路径「整份」副源也引用这个 .sug：整份轨道和分轴一起在 worker 里解析，
+        # 应用阶段绝不再回 GUI 线程重读一遍文件。
+        needs_whole = any(
+            source.sug_axis_singer_ids is None
+            and self._subtitle_source_key(source.path) == key
+            for source in self._extra_sources
+        )
+        generation = self._project_generation
+        self._source_reload_inflight.add(key)
+
+        def work():
+            return read_sug_source(
+                path,
+                seen_digest,
+                lambda source_path: loader.load_sug_axes(
+                    source_path,
+                    software_compensation_ms=compensation_ms,
+                ),
+                load_whole=(
+                    lambda source_path: loader.load_sug(
+                        source_path,
+                        software_compensation_ms=compensation_ms,
+                    )
+                    if needs_whole
+                    else None
+                ),
+                force_parse=force_parse,
+            )
+
+        def stale() -> bool:
+            return (
+                generation != self._project_generation
+                or getattr(self, "_closing_window", False)
+                or key not in self._source_watch_runtime.states
+            )
+
+        def apply(readout) -> None:
+            if stale():
+                return
+            preparation = self._source_watch_runtime.accept_readout(
+                key,
+                readout,
+                primary_track=None,
+                extra_tracks=(),
+            )
+            self._apply_sug_axis_source_readout(
+                preparation, readout, compensation_ms, generation=generation
+            )
+
+        if blocking:
+            try:
+                readout = self._run_project_io(work, label="读取 SUG 更新")
+            except BaseException:
+                self._source_reload_inflight.discard(key)
+                if not getattr(self, "_closing_window", False):
+                    self._source_watch_runtime.retry(key)
+                self._resume_source_reloads()
+                raise
+            self._source_reload_inflight.discard(key)
+            try:
+                apply(readout)
+            finally:
+                self._resume_source_reloads()
+            return
+
+        def finish(readout) -> None:
+            self._source_reload_inflight.discard(key)
+            try:
+                if self._source_reload_deferred() and not stale():
+                    self._queue_subtitle_source_reload(key)
+                    return
+                apply(readout)
+            finally:
+                self._resume_source_reloads()
+
+        def failed(exc: BaseException) -> None:
+            self._source_reload_inflight.discard(key)
+            logging.getLogger(__name__).warning(
+                "外部 SUG 字幕源读取失败: path=%s error=%s", path, exc, exc_info=exc
+            )
+            if not getattr(self, "_closing_window", False):
+                self._source_watch_runtime.retry(key)
+            self._resume_source_reloads()
+
+        if self._project_io.submit(
+            work,
+            on_done=finish,
+            on_error=failed,
+            timeout_s=_SOURCE_RELOAD_TIMEOUT_S,
+        ) is None:
+            failed(RuntimeError("执行器已关闭"))
+
+    @_suspend_source_reload
+    def _apply_sug_axis_source_readout(
+        self,
+        preparation: Optional[SourceReloadPreparation],
+        readout: object,
+        compensation_ms: int,
+        *,
+        generation: Optional[int] = None,
+    ) -> None:
+        if generation is None:
+            generation = self._project_generation
         if preparation is None:
             return
         path = preparation.path
@@ -5110,18 +6082,31 @@ class SubtitleRenderWindow(QWidget):
             return
         # UNCHANGED 只说明主轴解析相同：其他分组仍可能变化，交给协调计划的
         # no-op 判定统一处理。
-        axes = parsed or []
+        axes = getattr(readout, "payload", None)
+        axes = axes if isinstance(axes, list) else []
         if not axes:
             return
-        self._apply_sug_axis_reload(preparation, axes, compensation_ms)
+        whole_track = getattr(readout, "extra", None)
+        self._apply_sug_axis_reload(
+            preparation,
+            axes,
+            compensation_ms,
+            whole_track=whole_track if isinstance(whole_track, TimingTrack) else None,
+            generation=generation,
+        )
 
     def _apply_sug_axis_reload(
         self,
         preparation: Any,
         axes: list[SugAxisTrack],
         compensation_ms: int = 0,
+        *,
+        whole_track: Optional[TimingTrack] = None,
+        generation: Optional[int] = None,
     ) -> None:
         """按新解析的轴集合协调主槽位与轴副源（结构变化时整体重装）。"""
+        if generation is None:
+            generation = self._project_generation
         key = preparation.key
         path = preparation.path
         primary_owned = bool(
@@ -5144,6 +6129,8 @@ class SubtitleRenderWindow(QWidget):
             if source.sug_axis_singer_ids is not None
             and self._subtitle_source_key(source.path) == key
         ]
+        if generation != self._project_generation:
+            return
         file_split = bool(axes[0].is_split)
         primary_split = self._project_document.subtitle_axis_singer_ids is not None
 
@@ -5160,7 +6147,9 @@ class SubtitleRenderWindow(QWidget):
             project_page_plan_to_legacy_fields(primary_track, self._style)
             self._apply_remembered_layout_assignment(primary_track)
             self._project_document.replace_track(0, primary_track)
-            self._install_sug_axis_tracks(path, axes)
+            self._install_sug_axis_tracks(path, axes, generation=generation)
+            if generation != self._project_generation:
+                return
             self._clear_undo_history()
             self._source_watch_runtime.accept_prepared(preparation)
             self._refresh_source_ui()
@@ -5235,10 +6224,17 @@ class SubtitleRenderWindow(QWidget):
             if plain_extra_slots:
                 # 同路径的整份（普通）.sug 副源：文件带分组时也要热重载，
                 # 否则分轴计划匹配不到它们，改动会被静默忽略。
-                whole_track = self._subtitle_source_loader.load_sug(
-                    path,
-                    software_compensation_ms=compensation_ms,
-                )
+                if whole_track is None:
+                    # 兜底（直接调用本方法的路径）：仍然离线程，不在 GUI 解析。
+                    whole_track = self._run_project_io(
+                        lambda: self._subtitle_source_loader.load_sug(
+                            path,
+                            software_compensation_ms=compensation_ms,
+                        ),
+                        label="解析 SUG 字幕",
+                    )
+                if generation != self._project_generation:
+                    return
                 plan = combine_axis_reload_plans(
                     plan,
                     plan_single_axis_reload(
@@ -5292,7 +6288,12 @@ class SubtitleRenderWindow(QWidget):
                 self._source_watch_runtime.ignore_prepared(preparation)
                 self._sync_subtitle_source_watcher()
                 return
+            # 模态确认期间可能已有新工程接管：返回后重新校验再写入。
+            if generation != self._project_generation:
+                return
 
+        if generation != self._project_generation:
+            return
         merged_tracks: list[TimingTrack] = []
         if plan.primary_merge is not None and primary_slot is not None:
             self._project_document.replace_track(0, plan.primary_merge.track)
@@ -5393,7 +6394,11 @@ class SubtitleRenderWindow(QWidget):
         self._apply_style(style)
 
     def load_video(
-        self, path: Path, info: Optional[MediaInfo] = None
+        self,
+        path: Path,
+        info: Optional[MediaInfo] = None,
+        *,
+        generation: Optional[int] = None,
     ) -> Optional[MediaInfo]:
         """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。
 
@@ -5402,7 +6407,14 @@ class SubtitleRenderWindow(QWidget):
         路径）；为 ``None`` 时同步探测并维持原有的错误弹窗行为。
         """
         if info is None:
-            info = self._probe(path, "视频")
+            try:
+                info = self._probe(path, "视频")
+            except ProjectTaskCanceled:
+                if self._io_scope is not None:
+                    raise
+                return None
+            # 探测是嵌套 I/O：返回后先校验代际再写媒体状态。
+            self._assert_assembly_generation(generation)
         if info is None:
             return None
         if info.video_streams == 0:
@@ -5480,20 +6492,23 @@ class SubtitleRenderWindow(QWidget):
             )
 
     def load_background_image(self, path: Path) -> bool:
-        image = QImage(str(path))
-        if image.isNull():
+        try:
+            image = self._decode_background_image_offline(Path(path))
+        except ProjectTaskCanceled:
+            if self._io_scope is not None:
+                raise
+            return False
+        if image is None:
             fluent_warning(self, "背景图片不可用", f"无法读取图片：\n{path}")
             return False
-        self._set_non_video_background(BackgroundSource(kind="image", path=str(path)))
+        source = BackgroundSource(kind="image", path=str(path))
+        self._preview_panel.seed_background_image(Path(path), image)
+        self._set_non_video_background(source)
         return True
 
     def load_background_sequence(
         self, first_frame: Path, source_fps: int | float = 60
     ) -> bool:
-        image = QImage(str(first_frame))
-        if image.isNull():
-            fluent_warning(self, "图片序列不可用", f"无法读取首帧：\n{first_frame}")
-            return False
         pattern, start_number = infer_image_sequence_pattern(first_frame)
         if pattern == first_frame:
             fluent_warning(
@@ -5502,15 +6517,65 @@ class SubtitleRenderWindow(QWidget):
                 "首帧文件名需要以连续编号结尾，例如 frame_0001.png。",
             )
             return False
-        self._set_non_video_background(
-            BackgroundSource(
-                kind="image_sequence",
-                path=str(pattern),
-                source_fps=normalize_sequence_fps(source_fps),
-                sequence_start_number=start_number,
-            )
+        source = BackgroundSource(
+            kind="image_sequence",
+            path=str(pattern),
+            source_fps=normalize_sequence_fps(source_fps),
+            sequence_start_number=start_number,
         )
+        first_path = background_sequence_frame_path(source, 0) or Path(first_frame)
+        try:
+            image = self._decode_background_image_offline(Path(first_path))
+        except ProjectTaskCanceled:
+            if self._io_scope is not None:
+                raise
+            return False
+        if image is None:
+            fluent_warning(self, "图片序列不可用", f"无法读取首帧：\n{first_frame}")
+            return False
+        self._preview_panel.seed_background_image(Path(first_path), image)
+        self._set_non_video_background(source)
         return True
+
+    def _decode_background_image_offline(self, path: Path) -> Optional[QImage]:
+        """Decode one background frame on a worker thread (``None`` = unreadable)."""
+        try:
+            image = self._run_project_io(
+                lambda: decode_background_image(path), label="读取背景图片"
+            )
+        except ProjectTaskCanceled:
+            raise
+        except Exception:  # noqa: BLE001 — 损坏/占用按不可用处理
+            return None
+        if not isinstance(image, QImage) or image.isNull():
+            return None
+        return image
+
+    def _start_background_image_decode(
+        self,
+        path: Path,
+        callback: Callable[[object], None],
+    ) -> None:
+        """Off-thread decode entry injected into the preview canvases."""
+        runner = getattr(self, "_project_io", None)
+        if runner is None:
+            callback(decode_background_image(Path(path)))
+            return
+
+        def failed(exc: BaseException) -> None:
+            logging.getLogger(__name__).debug(
+                "背景图片解码失败: path=%s error=%s", path, exc
+            )
+            # 失败也要回一次 None，画布才会清掉上一张图/解除挂起标记。
+            callback(None)
+
+        if runner.submit(
+            lambda: decode_background_image(Path(path)),
+            on_done=callback,
+            on_error=failed,
+            timeout_s=_BACKGROUND_IMAGE_TIMEOUT_S,
+        ) is None:
+            callback(None)
 
     def set_solid_background(self, color: str) -> None:
         self._set_non_video_background(BackgroundSource(kind="solid", color=color))
@@ -5541,7 +6606,9 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_transport_duration()
         self._mark_project_dirty()
 
-    def _load_background_payload(self, payload: dict) -> None:
+    def _load_background_payload(
+        self, payload: dict, *, generation: Optional[int] = None
+    ) -> None:
         kind = str(payload.get("kind") or "solid")
         path = Path(str(payload.get("path"))) if payload.get("path") else None
         raw_fit = str(payload.get("image_fit") or "cover")
@@ -5558,19 +6625,33 @@ class SubtitleRenderWindow(QWidget):
             video_offset_ms=int(payload.get("video_offset_ms") or 0),
             image_fit=raw_fit if raw_fit in {"cover", "contain"} else "cover",
         )
-        if kind == "video" and path is not None and _run_project_io(lambda: path.is_file()):
-            self.load_video(path)
-            self._background_source = source
-            self._preview_panel.set_background_source(source)
-        elif kind == "image" and path is not None and _run_project_io(lambda: path.is_file()):
-            self._set_non_video_background(source)
+        if kind == "video" and path is not None:
+            if self._run_project_io(
+                lambda: path.is_file(), label="检查背景视频"
+            ):
+                # is_file/probe 都是嵌套 I/O：写媒体状态前先校验代际。
+                self._assert_assembly_generation(generation)
+                self.load_video(path, generation=generation)
+                self._assert_assembly_generation(generation)
+                self._background_source = source
+                self._preview_panel.set_background_source(source)
+        elif kind == "image" and path is not None:
+            if self._run_project_io(
+                lambda: path.is_file(), label="检查背景图片"
+            ):
+                self._assert_assembly_generation(generation)
+                self._set_non_video_background(source)
         elif kind == "image_sequence" and path is not None:
             self._set_non_video_background(source)
         elif kind == "solid":
             self._set_non_video_background(source)
 
     def load_audio(
-        self, path: Path, info: Optional[MediaInfo] = None
+        self,
+        path: Path,
+        info: Optional[MediaInfo] = None,
+        *,
+        generation: Optional[int] = None,
     ) -> Optional[MediaInfo]:
         """为图片/图片序列/纯色背景加载独立音轨。
 
@@ -5586,7 +6667,13 @@ class SubtitleRenderWindow(QWidget):
             )
             return None
         if info is None:
-            info = self._probe(path, "音频")
+            try:
+                info = self._probe(path, "音频")
+            except ProjectTaskCanceled:
+                if self._io_scope is not None:
+                    raise
+                return None
+            self._assert_assembly_generation(generation)
         if info is None:
             return None
         if info.audio_streams == 0:
@@ -5618,6 +6705,10 @@ class SubtitleRenderWindow(QWidget):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.probed.connect(self._on_handoff_media_probed)
+        # worker.run 结束即 quit，线程对象随之销毁：否则 QThread 在运行中析构。
+        worker.probed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         self._handoff_probe_worker = worker
         self._handoff_probe_thread = thread
         thread.start()
@@ -5629,6 +6720,8 @@ class SubtitleRenderWindow(QWidget):
             return  # 已有更新的交接请求，丢弃过期探测结果
         self._handoff_probe_worker = None
         self._handoff_probe_thread = None
+        if getattr(self, "_closing_window", False):
+            return
         if info is None:
             if worker.as_video:
                 self.load_video(worker.media_path)
@@ -5663,21 +6756,17 @@ class SubtitleRenderWindow(QWidget):
     # ------------------------------------------------------------------ helpers
 
     def _probe(self, path: Path, label: str) -> Optional[MediaInfo]:
-        # 打开/恢复工程的预取线程可能已探测（或正在探测）同一文件：进行中
-        # 则泵事件等待完成，GUI 不因 ffprobe 子进程阻塞进入「未响应」。
+        # ffprobe 是外置子进程（杀软/冷盘下可达几十秒）：工具路径在 GUI 线程
+        # 解析（只读设置），子进程在 worker 里跑；用户取消 -> 干净的 None。
+        ffprobe_path = self._resolve_ffprobe_path()
         try:
-            stat = _run_project_io(lambda: Path(path).stat())
-            probe_key = (subtitle_source_key(Path(path)), stat.st_mtime_ns, stat.st_size)
-            cached = self._probe_prefetch.get(probe_key)
-            if isinstance(cached, _PrefetchPending):
-                cached = _await_pending_prefetch(self._probe_prefetch, probe_key)
-        except OSError:
-            cached = None
-        if isinstance(cached, MediaInfo):
-            return cached
-        try:
-            ffprobe_path = _run_project_io(self._resolve_ffprobe_path)
-            return _run_project_io(lambda: probe_media(ffprobe_path, path))
+            result = self._run_cancelable_io(
+                lambda: probe_media(ffprobe_path, path),
+                label=f"探测{label}",
+                owner="media-probe",
+            )
+        except ProjectTaskCanceled:
+            raise
         except ProcessingError as exc:
             fluent_error(self, f"加载{label}失败", str(exc))
             return None
@@ -5688,6 +6777,9 @@ class SubtitleRenderWindow(QWidget):
                 f"无法读取媒体信息：\n{path}\n\n错误：{exc}",
             )
             return None
+        if result is _IO_CANCELED:
+            return None
+        return result
 
     def _resolve_ffprobe_path(self) -> str:
         ffmpeg_dir: Optional[Path] = None
@@ -6099,93 +7191,138 @@ class SubtitleRenderWindow(QWidget):
 
     # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
 
-    def _apply_extra_subtitle_sources(self, payload: object) -> None:
-        """从项目快照 / N3 导入恢复副字幕源（含每行布局与逐字角色）。"""
+    def _apply_extra_subtitle_sources(
+        self, payload: object, *, generation: Optional[int] = None
+    ) -> None:
+        """从项目快照 / N3 导入恢复副字幕源（含每行布局与逐字角色）。
+
+        解析与基线深拷贝是这条链上的重活：整批交给工作线程，GUI 只做装配。
+        """
+        specs = self._extra_source_load_specs(payload)
+        loaded = (
+            self._run_project_io(
+                lambda: self._load_extra_source_tracks(specs),
+                label="加载副字幕",
+            )
+            if specs
+            else []
+        )
+        # 解析是嵌套 I/O：返回后先校验代际，再清空/写入副源列表。
+        if generation is not None:
+            self._assert_project_generation(generation)
         self._extra_sources = []
         self._active_source_index = 0
         self._active_title_index = None
-        if isinstance(payload, list):
-            for item in payload:
-                if not isinstance(item, dict):
-                    continue
-                path_text = str(item.get("path") or "").strip()
-                if not path_text:
-                    continue
-                path = Path(path_text)
-                if not _run_project_io(lambda: path.is_file()):
-                    continue
-                # 副源在项目打开时按磁盘文件重新解析；导出偏移开关与「保留
-                # 【xxx】演唱者名」开关沿用该项目保存时该源的加载设置（旧项目
-                # 快照没有该字段时按默认值应用）。
-                apply_compensation = (
-                    self._subtitle_loading_defaults.apply_sug_export_compensation
+        for spec, track, source_baseline in loaded:
+            path = spec["path"]
+            item = spec["item"]
+            self._pump_load_events()
+            # 主字幕路径的 watch 基线已在加载主字幕时设置；这里只给独立
+            # 路径的副源建立基线，避免后写的副源覆盖主槽位的键。
+            if not (
+                self._subtitle_path is not None
+                and self._subtitle_source_key(path)
+                == self._subtitle_source_key(self._subtitle_path)
+            ):
+                self._set_subtitle_source_baseline(path, track)
+            apply_track_project_data(track, self._style, item)
+            name = str(item.get("name") or "").strip() or path.stem
+            self._extra_sources.append(
+                ExtraSubtitleSource(
+                    name=name,
+                    path=path,
+                    track=track,
+                    sug_axis_singer_ids=spec["axis_singer_ids"],
+                    source_baseline=source_baseline,
                 )
-                keep_singer_label = (
-                    self._subtitle_loading_defaults.keep_singer_label_text
-                )
-                if str(item.get("loading_settings_mode") or "") == "custom":
-                    saved_settings = subtitle_loading_settings_from_dict(
-                        item.get("loading_settings")
-                    )
-                    apply_compensation = saved_settings.apply_sug_export_compensation
-                    keep_singer_label = saved_settings.keep_singer_label_text
-                axis_ids_raw = item.get("sug_axis_singer_ids")
-                axis_singer_ids = (
-                    frozenset(
-                        str(value).strip()
-                        for value in axis_ids_raw
-                        if str(value).strip()
-                    )
-                    if isinstance(axis_ids_raw, list)
-                    else None
-                )
-                try:
-                    if axis_singer_ids is not None and path.suffix.lower() == ".sug":
-                        # 分轴副源：按持久化的分组歌手集合过滤解析（快照语义，
-                        # 不随 .sug 当前的分组计划漂移）。
-                        track = _run_project_io(lambda: self._subtitle_source_loader.load_sug(
-                            path,
-                            software_compensation_ms=(
-                                _sug_software_compensation_ms()
-                                if apply_compensation
-                                else 0
-                            ),
-                            singer_filter=axis_singer_ids,
-                        ))
-                    else:
-                        track = _run_project_io(lambda: self._load_timing_track_file(
-                            path,
-                            apply_sug_export_compensation=apply_compensation,
-                            keep_singer_label_text=keep_singer_label,
-                        ))
-                except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
-                    continue
-                source_baseline = _run_project_io(lambda: deepcopy(track))
-                # 主字幕路径的 watch 基线已在加载主字幕时设置；这里只给独立
-                # 路径的副源建立基线，避免后写的副源覆盖主槽位的键。
-                if not (
-                    self._subtitle_path is not None
-                    and self._subtitle_source_key(path)
-                    == self._subtitle_source_key(self._subtitle_path)
-                ):
-                    self._set_subtitle_source_baseline(path, track)
-                apply_track_project_data(track, self._style, item)
-                name = str(item.get("name") or "").strip() or path.stem
-                self._extra_sources.append(
-                    ExtraSubtitleSource(
-                        name=name,
-                        path=path,
-                        track=track,
-                        sug_axis_singer_ids=axis_singer_ids,
-                        source_baseline=source_baseline,
-                    )
-                )
+            )
         self._refresh_source_ui()
-        self._refresh_lyrics_panel_source()
+        if (
+            not self._title_source_active
+            and self._active_source_index == 0
+            and getattr(self._lyrics_panel, "_track", None) is self._timing_track
+        ):
+            # 活动源仍是主字幕、表格已经是同一 track（装配在副源之前统一建过）：
+            # 不再整表重建，只刷新角色下拉。
+            self._lyrics_panel.set_role_options(self._merged_role_options())
+        else:
+            self._refresh_lyrics_panel_source(yield_cb=self._pump_load_events)
         self._property_panel.set_roles(self._content_role_options())
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
         self._sync_subtitle_source_watcher()
+
+    def _extra_source_load_specs(self, payload: object) -> list[dict]:
+        """Collect per-source load settings on the GUI thread (pure data only)."""
+        specs: list[dict] = []
+        if not isinstance(payload, list):
+            return specs
+        apply_compensation = (
+            self._subtitle_loading_defaults.apply_sug_export_compensation
+        )
+        keep_singer_label = self._subtitle_loading_defaults.keep_singer_label_text
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            path_text = str(item.get("path") or "").strip()
+            if not path_text:
+                continue
+            item_compensation = apply_compensation
+            item_keep_labels = keep_singer_label
+            if str(item.get("loading_settings_mode") or "") == "custom":
+                saved_settings = subtitle_loading_settings_from_dict(
+                    item.get("loading_settings")
+                )
+                item_compensation = saved_settings.apply_sug_export_compensation
+                item_keep_labels = saved_settings.keep_singer_label_text
+            axis_ids_raw = item.get("sug_axis_singer_ids")
+            axis_singer_ids = (
+                frozenset(
+                    str(value).strip()
+                    for value in axis_ids_raw
+                    if str(value).strip()
+                )
+                if isinstance(axis_ids_raw, list)
+                else None
+            )
+            specs.append(
+                {
+                    "path": Path(path_text),
+                    "item": item,
+                    "apply_compensation": bool(item_compensation),
+                    "software_compensation_ms": _resolve_compensation_ms(item_compensation),
+                    "keep_singer_label": bool(item_keep_labels),
+                    "axis_singer_ids": axis_singer_ids,
+                }
+            )
+        return specs
+
+    def _load_extra_source_tracks(self, specs: list[dict]) -> list[tuple]:
+        """Parse every extra source off the GUI thread; bad sources are skipped."""
+        loaded: list[tuple] = []
+        for spec in specs:
+            path = spec["path"]
+            try:
+                if not path.is_file():
+                    continue
+                if spec["axis_singer_ids"] is not None and path.suffix.lower() == ".sug":
+                    # 分轴副源：按持久化的分组歌手集合过滤解析（快照语义，
+                    # 不随 .sug 当前的分组计划漂移）。
+                    track = self._subtitle_source_loader.load_sug(
+                        path,
+                        software_compensation_ms=spec["software_compensation_ms"],
+                        singer_filter=spec["axis_singer_ids"],
+                    )
+                else:
+                    track = self._subtitle_source_loader.load_file(
+                        path,
+                        software_compensation_ms=spec["software_compensation_ms"],
+                        keep_singer_label_text=spec["keep_singer_label"],
+                    )
+            except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
+                continue
+            loaded.append((spec, track, deepcopy(track)))
+        return loaded
 
     def _all_tracks(self) -> list[TimingTrack]:
         return self._project_document.tracks()
@@ -6475,7 +7612,7 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_preview_style_soon()
         self._mark_project_dirty()
 
-    def _refresh_lyrics_panel_source(self) -> None:
+    def _refresh_lyrics_panel_source(self, *, yield_cb=None) -> None:
         """把当前选中源的行喂给歌词列表。"""
         if self._title_source_active:
             title = self._active_title_overlay()
@@ -6486,7 +7623,7 @@ class SubtitleRenderWindow(QWidget):
                 )
             self._lyrics_panel.set_title(title)
         else:
-            self._lyrics_panel.set_track(self._active_track())
+            self._lyrics_panel.set_track(self._active_track(), yield_cb=yield_cb)
         self._lyrics_panel.set_role_options(self._merged_role_options())
 
     def _sync_extra_tracks_to_preview(self) -> None:
@@ -6542,7 +7679,12 @@ class SubtitleRenderWindow(QWidget):
         与渲染 IR 的后台构建一样直接读取实时的 track/style 对象；同一时刻只跑一
         个，跑的过程中又来了新请求就在结束后补跑一次，过期结果按代号丢弃。
         """
-        if self._timing_track is None or self._loading_project:
+        if self._timing_track is None:
+            return
+        if self._loading_project:
+            # 装配/deferred 嵌套等待期间不能开算：记待跑，加载收尾统一补一次，
+            # 否则延迟素材阶段的结果会被丢弃、底部轨道把手退回行起止。
+            self._tracks_window_rerun_pending = True
             return
         # 轨道字符块的样式更新与显示窗口重算解耦：busy 时早退不能顺带跳过
         # set_style（纯 karaoke_anim 修改可能被判为轻量动画而不触发窗口
@@ -6551,6 +7693,8 @@ class SubtitleRenderWindow(QWidget):
         if self._tracks_window_worker_busy:
             self._tracks_window_rerun_pending = True
             return
+        # 新的一次计算会覆盖此前的待跑请求。
+        self._tracks_window_rerun_pending = False
         self._tracks_window_generation += 1
         generation = self._tracks_window_generation
         tracks = list(self._all_tracks())
@@ -6597,8 +7741,10 @@ class SubtitleRenderWindow(QWidget):
             self._margin_check_timer.start(0)
         if generation != self._tracks_window_generation or windows is None:
             return
-        if self._timing_track is None or self._loading_project:
+        if self._timing_track is None:
             return
+        # 加载期间的 stale 窗口已由 generation 过滤；当前代际的结果直接应用，
+        # 不能因 _loading_project 丢弃（deferred 的 ffprobe 嵌套等待就会撞上）。
         self._tracks_view.set_display_windows(windows)
 
     def _schedule_tracks_view_window_refresh(self) -> None:
@@ -7259,28 +8405,24 @@ class SubtitleRenderWindow(QWidget):
             raise ValueError("字幕源不存在")
         path = self._source_path_for_track_index(track_index)
         singer_filter = self._sug_axis_filter_for_track_index(track_index)
+        compensation_ms = _resolve_compensation_ms(
+            settings.apply_sug_export_compensation
+        )
         parsed_source: Optional[TimingTrack] = None
-        if path is not None and path.is_file():
-            if path.suffix.lower() == ".sug" and singer_filter is not None:
-                # 分轴槽位（主轴或轴副源）：与工程打开同口径，按该槽位持久化
-                # 的分组歌手集合过滤解析，不能整份重读（会混入其他分组）。
-                parsed_source = self._subtitle_source_loader.load_sug(
+        if path is not None and self._run_project_io(
+            lambda: path.is_file(), label="检查字幕文件"
+        ):
+            # 解析整份 .sug/.lrc 是这条路径唯一的磁盘重活：交给工作线程，
+            # 合并计划仍在 GUI 线程按当前（可能在编辑中的）轨道计算。
+            parsed_source = self._run_project_io(
+                lambda: self._parse_track_for_slot(
                     path,
-                    software_compensation_ms=(
-                        _sug_software_compensation_ms()
-                        if settings.apply_sug_export_compensation
-                        else 0
-                    ),
-                    singer_filter=singer_filter,
-                )
-            else:
-                parsed_source = self._load_timing_track_file(
-                    path,
-                    apply_sug_export_compensation=(
-                        settings.apply_sug_export_compensation
-                    ),
+                    software_compensation_ms=compensation_ms,
                     keep_singer_label_text=settings.keep_singer_label_text,
-                )
+                    singer_filter=singer_filter,
+                ),
+                label="解析字幕文件",
+            )
             baseline = self._sug_axis_baseline_for_track_index(track_index)
             if baseline is None:
                 state = self._source_watch_runtime.state(
@@ -7319,6 +8461,7 @@ class SubtitleRenderWindow(QWidget):
         project_page_plan_to_legacy_fields(refreshed, self._style)
         return refreshed, parsed_source, conflicts
 
+    @_suspend_source_reload
     def _refresh_track_indices(
         self,
         indices: list[int],
@@ -7364,6 +8507,8 @@ class SubtitleRenderWindow(QWidget):
                 )
                 prepared.append((index, refreshed, parsed))
                 conflicts.extend(merge_conflicts)
+        except ProjectTaskCanceled:
+            return False
         except Exception as exc:  # noqa: BLE001 - transactional refresh
             fluent_error(
                 self,
@@ -7500,19 +8645,27 @@ class SubtitleRenderWindow(QWidget):
             return
         path = Path(path_str)
         try:
-            track = self._load_timing_track_file(
-                path,
-                apply_sug_export_compensation=(
-                    self._subtitle_loading_defaults.apply_sug_export_compensation
+            track = self._run_cancelable_io(
+                lambda: self._parse_track_for_slot(
+                    path,
+                    software_compensation_ms=_resolve_compensation_ms(
+                        self._subtitle_loading_defaults.apply_sug_export_compensation
+                    ),
+                    keep_singer_label_text=(
+                        self._subtitle_loading_defaults.keep_singer_label_text
+                    ),
                 ),
-                keep_singer_label_text=(
-                    self._subtitle_loading_defaults.keep_singer_label_text
-                ),
+                label="解析副字幕文件",
+                owner="subtitle-import",
             )
+        except ProjectTaskCanceled:
+            raise
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
             fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
+            return
+        if track is _IO_CANCELED:
             return
         track.loading_settings_mode = "global"
         track.loading_settings_snapshot = self._subtitle_loading_defaults
@@ -7543,17 +8696,48 @@ class SubtitleRenderWindow(QWidget):
         *,
         apply_sug_export_compensation: bool = True,
         keep_singer_label_text: bool = False,
+        software_compensation_ms: Optional[int] = None,
     ) -> TimingTrack:
         """按需解析字幕文件；``.sug`` 的软件导出补偿开关与 ``.lrc`` 的
-        「保留歌词中【xxx】演唱者名」开关由调用方的加载设置决定。"""
-        return self._subtitle_source_loader.load_file(
-            path,
-            software_compensation_ms=(
+        「保留歌词中【xxx】演唱者名」开关由调用方的加载设置决定。
+
+        ``software_compensation_ms`` 允许调用方传入在 GUI 线程解析好的补偿值，
+        这样 worker 线程不必再读 settings.py 的全局缓存。
+        """
+        compensation = (
+            int(software_compensation_ms)
+            if software_compensation_ms is not None
+            else (
                 _sug_software_compensation_ms()
                 if apply_sug_export_compensation
                 else 0
-            ),
+            )
+        )
+        return self._subtitle_source_loader.load_file(
+            path,
+            software_compensation_ms=compensation,
             keep_singer_label_text=keep_singer_label_text,
+        )
+
+    def _parse_track_for_slot(
+        self,
+        path: Path,
+        *,
+        software_compensation_ms: int,
+        keep_singer_label_text: bool,
+        singer_filter: Optional[frozenset[str]] = None,
+    ) -> TimingTrack:
+        """Pure parse used from worker threads (no window state is touched)."""
+        if singer_filter is not None and Path(path).suffix.lower() == ".sug":
+            return self._subtitle_source_loader.load_sug(
+                Path(path),
+                software_compensation_ms=int(software_compensation_ms),
+                singer_filter=singer_filter,
+            )
+        return self._load_timing_track_file(
+            Path(path),
+            keep_singer_label_text=keep_singer_label_text,
+            software_compensation_ms=int(software_compensation_ms),
         )
 
     def _on_source_remove_requested(self, index: int) -> None:
@@ -7626,19 +8810,27 @@ class SubtitleRenderWindow(QWidget):
             )
             return
         try:
-            track = self._load_timing_track_file(
-                path,
-                apply_sug_export_compensation=(
-                    self._subtitle_loading_defaults.apply_sug_export_compensation
+            track = self._run_cancelable_io(
+                lambda: self._parse_track_for_slot(
+                    path,
+                    software_compensation_ms=_resolve_compensation_ms(
+                        self._subtitle_loading_defaults.apply_sug_export_compensation
+                    ),
+                    keep_singer_label_text=(
+                        self._subtitle_loading_defaults.keep_singer_label_text
+                    ),
                 ),
-                keep_singer_label_text=(
-                    self._subtitle_loading_defaults.keep_singer_label_text
-                ),
+                label="解析字幕文件",
+                owner="subtitle-import",
             )
+        except ProjectTaskCanceled:
+            raise
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
             fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
+            return
+        if track is _IO_CANCELED:
             return
         # 与「添加副字幕源」同口径：新文件按全局加载设置重新分段分页。
         track.loading_settings_mode = "global"
@@ -8146,6 +9338,8 @@ class SubtitleRenderWindow(QWidget):
     def _on_layout_issues_ready(
         self, generation: int, issues: object
     ) -> None:
+        if getattr(self, "_closing_window", False):
+            return
         self._margin_check_busy = False
         self._dismiss_layout_check_tooltip()
         if self._margin_check_rerun_pending:
@@ -8200,6 +9394,8 @@ class SubtitleRenderWindow(QWidget):
 
     def _show_layout_check_tooltip(self) -> None:
         """检查仍在跑才弹进度提示；短检查（<600ms）不打扰用户。"""
+        if getattr(self, "_closing_window", False):
+            return
         if not self._margin_check_busy or self._layout_check_tooltip is not None:
             return
         tooltip = StateToolTip("正在检查字幕布局", "准备中…", self)
@@ -11586,15 +12782,42 @@ class SubtitleRenderWindow(QWidget):
 
     @_suspend_source_reload
     def _restore_recovery_candidate(self, candidate: RecoveryCandidate) -> bool:
+        # 读取前捕获代际：读期间完成的其它工程动作会让本次恢复过期。
+        attempt_generation = self._project_generation
+        scope, created = self._begin_io_scope("recovery-restore")
         try:
-            loaded = _run_project_io(lambda: self._project_controller.open_recovery(candidate))
-        except (OSError, ValueError) as exc:
-            fluent_error(
-                self,
-                "恢复字幕项目失败",
-                f"无法读取恢复文件：\n{candidate.path}\n\n{exc}",
+            try:
+                loaded = self._run_project_io(
+                    lambda: self._project_controller.open_recovery(candidate),
+                    label="读取恢复文件",
+                )
+            except (OSError, ValueError) as exc:
+                fluent_error(
+                    self,
+                    "恢复字幕项目失败",
+                    f"无法读取恢复文件：\n{candidate.path}\n\n{exc}",
+                )
+                return False
+            except ProjectTaskCanceled:
+                return False
+            if attempt_generation != self._project_generation:
+                InfoBar.info(
+                    title="已忽略过期的恢复",
+                    content="恢复期间已切换到其他工程，本次恢复已丢弃。",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=4000,
+                )
+                return False
+            return self._schedule_recovery_assembly(
+                candidate, loaded, attempt_generation
             )
-            return False
+        finally:
+            self._end_io_scope(scope, created)
+
+    def _schedule_recovery_assembly(
+        self, candidate: RecoveryCandidate, loaded, recovered_from_generation: int
+    ) -> bool:
         data = loaded.data
         missing_resources = loaded.missing_resources
         # 装配延后到恢复对话框的嵌套事件循环退出之后（QTimer.singleShot(0)
@@ -11605,38 +12828,72 @@ class SubtitleRenderWindow(QWidget):
         # 延迟装配中的解析和媒体探测统一在后台执行。
         # 等待段泵事件允许用户输入：期间再开新工程/丢弃改动会推进代际，
         # 过期装配按代际放弃，避免旧数据覆盖新会话。
-        assembly_generation = self._project_generation
+        assembly_generation = recovered_from_generation
 
         def apply_loaded_recovery() -> None:
             if self._project_generation != assembly_generation:
                 return
+            self._clear_project_deferred_loads(finish_progress=False)
             self._begin_project_generation()
-            self._clear_loaded_media()
-            self._apply_project_data(data)
-            self._project_session.adopt_project_identity(
-                path=loaded.source_project_path,
-                disk_revision=loaded.source_disk_revision,
-                missing_resources=missing_resources,
-                source_data=data,
+            attempt_generation = self._project_generation
+            scope, created = self._begin_io_scope("recovery-assembly")
+            token = self._start_project_load_progress(
+                "正在恢复字幕项目", "套用工程设置"
             )
-            self._set_project_dirty(True)
-            if missing_resources:
-                fluent_warning(
-                    self,
-                    "项目已恢复，但部分素材未找到",
-                    "以下素材路径无效，已跳过加载：\n\n"
-                    + "\n".join(
-                        f"• {label}：{path}" for label, path in missing_resources
-                    ),
-                    copyable=True,
+            try:
+                self._clear_loaded_media()
+                if (
+                    self._apply_project_data(
+                        data, generation=attempt_generation, token=token
+                    )
+                    is False
+                ):
+                    return
+                if attempt_generation != self._project_generation:
+                    return
+                self._pump_load_events()
+                self._project_session.adopt_project_identity(
+                    path=loaded.source_project_path,
+                    disk_revision=loaded.source_disk_revision,
+                    missing_resources=missing_resources,
+                    source_data=data,
+                    source_snapshot=self._project_document.preserved_project_data,
                 )
-            InfoBar.success(
-                title="字幕项目已恢复",
-                content="恢复内容尚未写入正式项目，请及时保存。",
-                parent=self,
-                position=InfoBarPosition.BOTTOM_RIGHT,
-                duration=5000,
-            )
+                self._set_project_dirty(True)
+                self._on_project_load_progress(token, 100, "工程加载完成")
+                if missing_resources:
+                    fluent_warning(
+                        self,
+                        "项目已恢复，但部分素材未找到",
+                        "以下素材路径无效，已跳过加载：\n\n"
+                        + "\n".join(
+                            f"• {label}：{path}" for label, path in missing_resources
+                        ),
+                        copyable=True,
+                    )
+                InfoBar.success(
+                    title="字幕项目已恢复",
+                    content="恢复内容尚未写入正式项目，请及时保存。",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+            except ProjectTaskCanceled:
+                # 装配已推进代际并清空旧媒体：按「空工程」收口，别留下半截
+                # 状态继续顶着旧工程的路径与磁盘版本。
+                if self._project_generation == attempt_generation:
+                    self._abort_project_open(
+                        candidate.path,
+                        title="已取消恢复项目",
+                        content="已停止恢复，当前项目已清空。",
+                    )
+            finally:
+                self._end_io_scope(scope, created)
+                if not self._project_deferred_loads:
+                    self._clear_project_load_progress(token)
+
+        QTimer.singleShot(0, apply_loaded_recovery)
+        return True
 
         QTimer.singleShot(0, apply_loaded_recovery)
         return True

@@ -3769,16 +3769,22 @@ def test_subtitle_source_watch_runtime_has_one_frontend_owner() -> None:
         if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
     )
     delegated_methods = {
-        "_set_subtitle_source_baseline": {"set_baseline"},
-        "_sync_subtitle_source_watcher": {"sync"},
-        "_queue_subtitle_source_reload": {"queue"},
-        "_process_subtitle_source_changes": {"start_pending"},
-        "_consume_subtitle_source_changes": {"take_pending"},
-        "_reload_external_subtitle_source": {
-            "accept_prepared",
-            "ignore_prepared",
-            "prepare_reload",
+        "_set_subtitle_source_baseline": {"register_baseline"},
+        "_sync_subtitle_source_watcher": {
+            "apply_watch_sync",
+            "register_baseline",
+            "retain_states",
+            "state",
+            "watch_entries",
         },
+        "_queue_subtitle_source_reload": {"queue"},
+        "_process_subtitle_source_changes": set(),
+        "_consume_subtitle_source_changes": {"take_pending"},
+        "_reload_external_subtitle_source": set(),
+        "_reload_external_subtitle_source_blocking": set(),
+        "_start_external_source_reload": {"accept_readout", "retry", "state"},
+        "_apply_external_track_reload": {"accept_prepared", "ignore_prepared"},
+        "_start_sug_source_reload": {"accept_readout", "retry"},
     }
     for method_name, expected_calls in delegated_methods.items():
         method = next(
@@ -4102,22 +4108,40 @@ def test_subtitle_render_window_delegates_source_reload_preparation() -> None:
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
     )
-    method = next(
-        node
-        for node in window_class.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_reload_external_subtitle_source"
-    )
-    direct_merge_calls = {
+    # 读取（digest/解析）在 worker 线程完成，合并计划与安装仍在 GUI 线程：
+    # 安装入口是 _apply_external_track_reload，读取入口是
+    # _start_external_source_reload，两者都不允许自己实现合并算法。
+    methods = {
+        method.name: method
+        for method in window_class.body
+        if isinstance(method, ast.FunctionDef)
+        and method.name
+        in {
+            "_apply_external_track_reload",
+            "_start_external_source_reload",
+        }
+    }
+    direct_apply_calls = {
         node.func.id
-        for node in ast.walk(method)
+        for node in ast.walk(methods["_apply_external_track_reload"])
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-
-    assert "apply_reloaded_tracks" in direct_merge_calls
-    assert "prepare_reloaded_tracks" not in direct_merge_calls
-    assert "plan_reloaded_tracks" not in direct_merge_calls
-    assert "merge_reloaded_track" not in direct_merge_calls
+    assert "apply_reloaded_tracks" in direct_apply_calls
+    for method in methods.values():
+        direct_merge_calls = {
+            node.func.id
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "prepare_reloaded_tracks" not in direct_merge_calls
+        assert "plan_reloaded_tracks" not in direct_merge_calls
+        assert "merge_reloaded_track" not in direct_merge_calls
+    read_calls = {
+        node.func.id
+        for node in ast.walk(methods["_start_external_source_reload"])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "read_track_source" in read_calls
 
 
 def test_subtitle_render_window_delegates_runtime_preference_loading() -> None:
@@ -5326,15 +5350,26 @@ def test_subtitle_render_window_delegates_project_identity_adoption() -> None:
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
     )
-    method_names = {
+    # 装配入口拆成「作用域包装 + 具体装配」两层（取消作用域/进度提示在包装层，
+    # 身份采纳在装配层）；两层都不允许直接写身份字段。
+    owner_methods = {
         "_new_project",
+        "_open_project_path_scoped",
+        "_finish_n3_import_scoped",
+        "_schedule_recovery_assembly",
+    }
+    wrapper_methods = {
         "_open_project_path",
         "_finish_n3_import",
         "_restore_recovery_candidate",
     }
+    seen: set[str] = set()
     for method in window_class.body:
-        if not isinstance(method, ast.FunctionDef) or method.name not in method_names:
+        if not isinstance(method, ast.FunctionDef):
             continue
+        if method.name not in owner_methods | wrapper_methods:
+            continue
+        seen.add(method.name)
         session_calls = {
             node.func.attr
             for node in ast.walk(method)
@@ -5343,7 +5378,10 @@ def test_subtitle_render_window_delegates_project_identity_adoption() -> None:
             and isinstance(node.func.value, ast.Attribute)
             and node.func.value.attr == "_project_session"
         }
-        assert "adopt_project_identity" in session_calls
+        if method.name in owner_methods:
+            assert "adopt_project_identity" in session_calls
+        else:
+            assert "adopt_project_identity" not in session_calls
         direct_identity_assignments = {
             target.attr
             for node in ast.walk(method)
@@ -5355,6 +5393,7 @@ def test_subtitle_render_window_delegates_project_identity_adoption() -> None:
             and target.attr in {"_project_disk_revision", "_project_path"}
         }
         assert direct_identity_assignments == set()
+    assert seen == owner_methods | wrapper_methods
 
 
 def test_subtitle_render_window_delegates_recovery_snapshot_loading() -> None:

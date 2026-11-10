@@ -41,6 +41,7 @@ class ProjectAutoSaveRuntime(QObject):
         super().__init__(parent)
         self._thread: Optional[QThread] = None
         self._worker: Optional[_RecoverySaveWorker] = None
+        self._detached_threads: list[QThread] = []
         self._pending = False
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
@@ -125,6 +126,32 @@ class ProjectAutoSaveRuntime(QObject):
         if thread is None or not thread.isRunning():
             return True
         return bool(thread.wait(max(0, int(timeout_ms))))
+
+    def detach_running_thread(self) -> bool:
+        """Keep a still-running save thread alive after a bounded wait timeout.
+
+        The thread is parented to this runtime (and thereby to the window).  If
+        window teardown deletes it while ``run()`` is still executing, Qt aborts
+        the process, so the thread is unparented and referenced here instead.
+        """
+        thread = self._thread
+        if thread is None or not thread.isRunning():
+            return False
+        try:
+            thread.setParent(None)
+        except RuntimeError:
+            return False
+        self._detached_threads.append(thread)
+        thread.destroyed.connect(
+            lambda *_args, item=thread: self._forget_detached_thread(item)
+        )
+        return True
+
+    def _forget_detached_thread(self, thread: QThread) -> None:
+        try:
+            self._detached_threads.remove(thread)
+        except ValueError:
+            return
 
     def cancel_pending(self) -> None:
         """Discard only the coalesced follow-up request."""

@@ -2473,7 +2473,29 @@ class KrokHelperQtApp(QMainWindow):
             self._save_all_settings()
         except Exception:
             pass
+        self._release_embedded_page_workers()
         super().closeEvent(event)
+
+    def _release_embedded_page_workers(self) -> None:
+        """Release embedded-page background workers before Qt destroys parents.
+
+        Embedded pages are plain child widgets: the main window's ``close()`` never
+        delivers ``closeEvent`` to them, so their own teardown hooks must be called
+        from the host or live QThreads/QMediaPlayers get destroyed while running.
+        """
+        subtitle_page = getattr(self, "subtitle_render_page", None)
+        shutdown = (
+            getattr(subtitle_page, "shutdown_for_host_exit", None)
+            if subtitle_page is not None
+            else None
+        )
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "字幕视频生成页收尾失败", exc_info=True
+                )
 
     def _shutdown_audio_separation(self, *, timeout_ms: int = 5000) -> bool:
         """Stop the managed PyMSS backend without touching external services."""

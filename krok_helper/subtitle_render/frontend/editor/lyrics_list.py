@@ -16,6 +16,7 @@ UI 设计：
 
 from __future__ import annotations
 
+import contextlib
 from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Optional
@@ -129,6 +130,10 @@ _COLUMN_HEADERS = ["轨", "角色", "特效", "内容", "布局"]
 
 _ROW_HEIGHT = 34
 _BLANK_ROW_HEIGHT = 18
+#: 大列表填充时每多少行让出一次事件循环（进度动画保活）。
+_LOAD_YIELD_ROWS = 8
+#: 只有列表足够大时才值得插入让出点，普通歌曲保持既有同步时序与速度。
+_LOAD_YIELD_MIN_ROWS = 400
 _DEFAULT_ROLE_TEXT = "（默认）"
 
 
@@ -1521,6 +1526,8 @@ class LyricsPanel(DropPanel):
         header_margin = self._table.style().pixelMetric(QStyle.PixelMetric.PM_HeaderMargin)
         hh.setMinimumSectionSize(max(1, header_margin * 2))
         self._setting_column_widths = False
+        #: 防止 set_track 内部回调触发的嵌套重建覆盖半完成状态。
+        self._filling = False
         self._user_sized_columns: set[int] = set()
         hh.sectionResized.connect(self._on_column_resized)
         # viewport 尺寸变化（拖 splitter / 缩放窗口 / 竖直滚动条出现）时重测列宽，
@@ -1710,9 +1717,11 @@ class LyricsPanel(DropPanel):
             self._swatch_refresh_timer.stop()
             self._swatch_refresh_pending = False
             if layout_changed and animation_changed:
-                self._refresh_presentation(update_widths=True)
+                with self._frozen_lane_measurement():
+                    self._refresh_presentation(update_widths=True)
             elif layout_changed:
-                self._refresh_layout_columns()
+                with self._frozen_lane_measurement():
+                    self._refresh_layout_columns()
             else:
                 self._refresh_effect_column()
             if absorb_swatch:
@@ -2027,8 +2036,65 @@ class LyricsPanel(DropPanel):
             )
         return rows
 
-    def set_track(self, track: Optional[TimingTrack]) -> None:
-        """加载 / 清空字幕。``None`` / 无行时回到空态。"""
+    def set_track(
+        self,
+        track: Optional[TimingTrack],
+        *,
+        yield_cb=None,
+    ) -> None:
+        """加载 / 清空字幕。``None`` / 无行时回到空态。
+
+        ``yield_cb``（可选）在填充大列表时按批回调，让调用方把事件循环还给
+        进度动画；默认不回调，保持既有同步语义与测试时序。
+
+        填充/刷新期间把轨列临时切到 Fixed：``ResizeToContents`` 下逐项改写文本
+        会让表头对整列反复重测（O(N²)，可见窗口 800 行可达秒级），而末尾恢复
+        原模式仍会得到同样的紧凑宽度。
+        """
+        if self._filling:
+            return
+        self._filling = True
+        try:
+            with self._frozen_lane_measurement():
+                self._set_track_impl(track, yield_cb=yield_cb)
+        finally:
+            self._filling = False
+
+    @contextlib.contextmanager
+    def _frozen_lane_measurement(self):
+        """Temporarily pin the lane column so item rewrites do not re-measure it.
+
+        ``ResizeToContents`` recalculates the whole column on every item text/font
+        change; a full-table refresh on a visible panel is O(N²) there.  The
+        pinned width equals the previous measurement, and the original mode is
+        restored afterwards.
+        """
+        header = self._table.horizontalHeader()
+        try:
+            mode = header.sectionResizeMode(COL_LANE)
+        except RuntimeError:  # table already destroyed
+            yield
+            return
+        frozen = mode == QHeaderView.ResizeMode.ResizeToContents
+        if frozen:
+            header.setSectionResizeMode(COL_LANE, QHeaderView.ResizeMode.Fixed)
+        try:
+            yield
+        finally:
+            if frozen:
+                try:
+                    header.setSectionResizeMode(
+                        COL_LANE, QHeaderView.ResizeMode.ResizeToContents
+                    )
+                except RuntimeError:  # table destroyed during the refresh
+                    pass
+
+    def _set_track_impl(
+        self,
+        track: Optional[TimingTrack],
+        *,
+        yield_cb=None,
+    ) -> None:
         self._title_mode = False
         self._table.setHorizontalHeaderLabels(_COLUMN_HEADERS)
         self._table.setColumnHidden(COL_EFFECT, False)
@@ -2047,6 +2113,9 @@ class LyricsPanel(DropPanel):
             self._presentation_rows = self._build_presentation_rows(track)
             edge_flags = self._section_edge_flags()
             num_rows = len(self._presentation_rows)
+            yield_in_batches = (
+                yield_cb is not None and num_rows >= _LOAD_YIELD_MIN_ROWS
+            )
             self._table.setRowCount(num_rows)
             for row, presentation in enumerate(self._presentation_rows):
                 line = (
@@ -2153,11 +2222,26 @@ class LyricsPanel(DropPanel):
                         lane_item.setText("♪")
                 else:
                     self._table.setRowHeight(row, _ROW_HEIGHT)
+                if (
+                    yield_in_batches
+                    and row
+                    and row % _LOAD_YIELD_ROWS == 0
+                ):
+                    yield_cb()
         finally:
             self._table.blockSignals(False)
 
+        pump = (
+            yield_cb
+            if self._table.rowCount() >= _LOAD_YIELD_MIN_ROWS
+            else None
+        )
         self.set_populated(True)
-        self._refresh_presentation()
+        if pump is not None:
+            pump()
+        self._refresh_presentation(yield_cb=pump)
+        if pump is not None:
+            pump()
         self._apply_measured_column_widths()
         self._clamp_columns_to_viewport()
 
@@ -2196,7 +2280,8 @@ class LyricsPanel(DropPanel):
         self.set_track(TimingTrack(lines=lines))
         self._title_mode = True
         self._table.setHorizontalHeaderLabels(["行", "角色", "", "内容", "布局"])
-        self._refresh_presentation()
+        with self._frozen_lane_measurement():
+            self._refresh_presentation()
         self._apply_measured_column_widths()
 
     def refresh_row_role(self, row: int) -> None:
@@ -2215,7 +2300,8 @@ class LyricsPanel(DropPanel):
         """
         if not self._populated:
             return
-        self._refresh_presentation(update_widths=True)
+        with self._frozen_lane_measurement():
+            self._refresh_presentation(update_widths=True)
 
     def refresh_row_effect(self, row: int) -> None:
         """逐行动画覆盖变化后刷新该行摘要。"""
@@ -2872,7 +2958,11 @@ class LyricsPanel(DropPanel):
         return color
 
     def _refresh_presentation(
-        self, rows: Optional[list[int]] = None, *, update_widths: bool = True
+        self,
+        rows: Optional[list[int]] = None,
+        *,
+        update_widths: bool = True,
+        yield_cb=None,
     ) -> None:
         """按当前 Style 刷新：轨标 / 内容对齐 / 角色色点 / 单行页居中。"""
         style = self._style
@@ -2888,7 +2978,13 @@ class LyricsPanel(DropPanel):
         self._table.blockSignals(True)
         try:
             target_rows = rows if rows is not None else range(self._table.rowCount())
-            for row in target_rows:
+            yield_in_batches = (
+                yield_cb is not None
+                and self._table.rowCount() >= _LOAD_YIELD_MIN_ROWS
+            )
+            for offset, row in enumerate(target_rows):
+                if yield_in_batches and offset and offset % _LOAD_YIELD_ROWS == 0:
+                    yield_cb()
                 if row < 0 or row >= len(self._row_meta):
                     continue
                 blank, render_index = self._row_meta[row]

@@ -10,12 +10,13 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 from fractions import Fraction
+from types import SimpleNamespace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QUrl, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QTimer, QUrl, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu  # noqa: E402
 from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E402
@@ -2300,7 +2301,7 @@ def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
         import_controller_module, "load_n3proj", lambda _path, progress_cb=None: Result()
     )
     monkeypatch.setattr(win, "_clear_loaded_media", lambda: None)
-    monkeypatch.setattr(win, "_apply_project_data", lambda _data: None)
+    monkeypatch.setattr(win, "_apply_project_data", lambda _data, **_kwargs: None)
     monkeypatch.setattr(win, "_refresh_project_title", lambda: None)
     captured: dict[str, object] = {}
 
@@ -4409,9 +4410,10 @@ def test_edit_animation_rows_emits_switch_signals(qapp, monkeypatch):
     assert captured["wipe"] == ([0], False)
 
 
-def test_open_project_slow_watch_digest_keeps_heartbeat_and_defers_reload(
+def test_slow_watch_digest_keeps_heartbeat_and_settles_digest(
     qapp, monkeypatch, tmp_path
 ):
+    """慢速 watch 摘要不占 GUI 线程：摘要阻塞期间事件心跳不停，落地后热重载照常。"""
     import threading
     import time
     from PyQt6.QtCore import QTimer
@@ -4420,66 +4422,71 @@ def test_open_project_slow_watch_digest_keeps_heartbeat_and_defers_reload(
     win = _make_window(qapp, monkeypatch)
     lrc = tmp_path / "slow-watch.lrc"
     lrc.write_text("[00:01:00]a[00:02:00]\n", encoding="utf-8-sig")
-    project = tmp_path / "slow-watch.yurika"
-    save_render_project(project, {"subtitle_path": str(lrc)})
     gui_thread = threading.get_ident()
-    ticks = []
-    slow_ticks = []
-    slow = threading.Event()
-    timer = QTimer()
-    timer.setInterval(40)
-    timer.timeout.connect(lambda: ticks.append(time.monotonic()))
-    timer.timeout.connect(lambda: slow_ticks.append(time.monotonic()) if slow.is_set() else None)
     digest = source_watch.subtitle_source_digest
-    reads = []
+    reads: list[int] = []
+    digest_started = threading.Event()
+    release_digest = threading.Event()
 
     def slow_digest(path):
         reads.append(threading.get_ident())
-        if len(reads) == 1:
-            slow.set()
-            try:
-                time.sleep(12)
-            finally:
-                slow.clear()
+        if not digest_started.is_set():
+            digest_started.set()
+            # 明确握手：摘要一直阻塞到测试放行，杜绝时长赌博。
+            assert release_digest.wait(10.0)
         return digest(path)
 
+    tick_times: list[float] = []
+    tick_timer = QTimer()
+    tick_timer.setInterval(20)
+    tick_timer.timeout.connect(lambda: tick_times.append(time.monotonic()))
     monkeypatch.setattr(source_watch, "subtitle_source_digest", slow_digest)
-    set_baseline = win._set_subtitle_source_baseline
-    changed = []
-
-    def baseline_then_change(path, track):
-        set_baseline(path, track)
-        if changed:
-            return
-        changed.append(True)
-
-        def external_save():
-            assert win._source_reload_suspended()
-            lrc.write_text("[00:03:00]a[00:04:00]\n", encoding="utf-8-sig")
-            win._on_subtitle_source_file_changed(str(lrc))
-            win._process_subtitle_source_changes()
-            assert win._source_watch_runtime.pending_keys
-            assert win._timing_track.lines[0].chars[0].start_ms == 1000
-
-        QTimer.singleShot(0, external_save)
-
-    monkeypatch.setattr(win, "_set_subtitle_source_baseline", baseline_then_change)
     monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
-    timer.start()
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
     try:
-        assert win._open_project_path(project, confirm_discard=False)
-        assert win._project_dirty is False
+        assert win.load_from_lrc(lrc) is not None
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not win._project_dirty:
+        while not digest_started.is_set() and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert digest_started.is_set(), "watch 摘要未在 worker 上启动"
+        assert all(thread != gui_thread for thread in reads)
+
+        # 摘要仍被阻塞时泵事件：若 GUI 线程在等摘要，这里不会积累心跳。
+        tick_timer.start()
+        pump_deadline = time.monotonic() + 0.5
+        while time.monotonic() < pump_deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        tick_timer.stop()
+        assert len(tick_times) >= 10, f"GUI 心跳只有 {len(tick_times)} 次"
+        assert max(b - a for a, b in zip(tick_times, tick_times[1:])) < 0.5
+
+        release_digest.set()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and win._watch_sync_inflight:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert not win._watch_sync_inflight
+        key = win._subtitle_source_key(lrc)
+        state = win._source_watch_runtime.state(key)
+        assert state is not None and state.seen_digest and not state.digest_pending
+        assert win._timing_track.lines[0].chars[0].start_ms == 1000
+
+        # 摘要落地后再改文件：热重载照常生效。
+        lrc.write_text("[00:03:00]a[00:04:00]\n", encoding="utf-8-sig")
+        win._on_subtitle_source_file_changed(str(lrc))
+        deadline = time.monotonic() + 10
+        while (
+            time.monotonic() < deadline
+            and win._timing_track.lines[0].chars[0].start_ms != 3000
+        ):
             qapp.processEvents()
             time.sleep(0.01)
         assert win._timing_track.lines[0].chars[0].start_ms == 3000
-        assert win._project_dirty is True
-        assert reads and all(thread != gui_thread for thread in reads)
-        assert len(slow_ticks) > 100
-        assert max(b - a for a, b in zip(slow_ticks, slow_ticks[1:])) < 2
     finally:
-        timer.stop()
+        release_digest.set()
+        tick_timer.stop()
         win.close()
 
 
@@ -4487,19 +4494,786 @@ def test_project_open_progress_reaches_completion(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     project = tmp_path / "progress.yurika"
     save_render_project(project, {})
-    seen = []
+    seen: list[int] = []
     callback = win._on_project_load_progress
 
-    def record(percent, message):
+    def record(token, percent, message):
         seen.append(percent)
-        callback(percent, message)
+        callback(token, percent, message)
 
-    win._projectLoadProgress.connect(lambda percent, message: seen.append(percent))
     monkeypatch.setattr(win, "_on_project_load_progress", record)
     try:
         assert win._open_project_path(project, confirm_discard=False)
         assert seen == sorted(seen)
         assert seen[-1] == 100
         assert win._project_load_tooltip is None
+        assert win._project_load_progress_token is None
+    finally:
+        win.close()
+
+
+def test_superseded_project_load_progress_tooltip_is_cleared(
+    qapp, monkeypatch, tmp_path
+):
+    """上一轮加载残留的进度提示绝不能被新工程的装配串写、也不能永久留在屏幕上。"""
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "bg.mp4"
+    video.write_bytes(b"stub")
+    project = tmp_path / "deferred.yurika"
+    save_render_project(
+        project,
+        {"background": {"kind": "video", "path": str(video)}},
+    )
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mw.SubtitleRenderWindow, "_probe", lambda self, path, label: None
+    )
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        # 打开结束但延迟素材还在排队：进度提示归它所有。
+        assert win._project_deferred_loads
+        assert win._project_load_tooltip is not None
+        stale = win._project_load_tooltip
+
+        # 用户新建工程：队列被丢弃，工具提示必须一并收掉（不能停 90%）。
+        win._new_project()
+        assert win._project_load_tooltip is None
+        assert win._project_deferred_loads == []
+        assert not win._project_deferred_load_timer.isActive()
+        try:
+            assert stale.isHidden() is True
+        except RuntimeError:
+            pass  # 已被 deleteLater 回收也算收干净
+    finally:
+        win.close()
+
+
+def test_deferred_load_failure_clears_queue_and_releases_suspension(
+    qapp, monkeypatch, tmp_path
+):
+    """延迟素材装到一半炸掉：队列/进度提示必须收干净，否则外部源永远不再重载。"""
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "bg.mp4"
+    video.write_bytes(b"stub")
+    project = tmp_path / "deferred-fail.yurika"
+    save_render_project(
+        project, {"background": {"kind": "video", "path": str(video)}}
+    )
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert win._project_deferred_loads
+        win._project_deferred_load_timer.stop()
+
+        def explode(_payload, **_kwargs):
+            raise RuntimeError("素材加载炸了")
+
+        monkeypatch.setattr(win, "_load_background_payload", explode)
+        with pytest.raises(RuntimeError):
+            win._process_project_deferred_load()
+        assert win._project_deferred_loads == []
+        assert not win._source_reload_suspended()
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_cancelled_project_open_leaves_a_clean_empty_project(
+    qapp, monkeypatch, tmp_path
+):
+    """取消打开：作用域取消即中止装配，不留进度提示/延迟队列/半截身份。"""
+    win = _make_window(qapp, monkeypatch)
+    project = tmp_path / "cancel.yurika"
+    save_render_project(project, {"subtitle_path": str(tmp_path / "missing.lrc")})
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    real_run = win._run_project_io
+    triggered: list[bool] = []
+
+    def cancel_then_run(work, *, label=""):
+        if not triggered:
+            triggered.append(True)
+            # 模拟用户在守卫对话框点「取消」：作用域作废，后续阻塞读取立刻中止。
+            assert win._io_scope is not None
+            win._io_scope.cancel()
+        return real_run(work, label=label)
+
+    monkeypatch.setattr(win, "_run_project_io", cancel_then_run)
+    try:
+        assert win._open_project_path(project, confirm_discard=False) is False
+        assert win._project_load_tooltip is None
+        assert win._project_load_progress_token is None
+        assert win._project_deferred_loads == []
+        assert win._project_path is None
+        assert win._project_dirty is False
+        assert win._io_scope is None
+    finally:
+        win.close()
+
+
+def test_superseded_assembly_aborts_without_overwriting_the_new_session(
+    qapp, monkeypatch, tmp_path
+):
+    """装配中途被新代际接管：停止推进、不采纳旧工程身份、不留进度提示。"""
+    win = _make_window(qapp, monkeypatch)
+    project = tmp_path / "superseded.yurika"
+    save_render_project(project, {"style": {"font_size_px": 42}})
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    real_run = win._run_project_io
+    bumped: list[bool] = []
+
+    def bumping(work, *, label=""):
+        result = real_run(work, label=label)
+        if label == "解析工程数据" and not bumped:
+            bumped.append(True)
+            # 模拟装配第一个 stage 之后另一个工程动作推进代际（例如 N3 导入完成）。
+            win._begin_project_generation()
+        return result
+
+    monkeypatch.setattr(win, "_run_project_io", bumping)
+    try:
+        assert win._open_project_path(project, confirm_discard=False) is False
+        assert bumped == [True]
+        assert win._project_path is None
+        assert win._project_dirty is False
+        assert win._project_load_tooltip is None
+        assert win._project_load_progress_token is None
+        assert win._project_deferred_loads == []
+    finally:
+        win.close()
+
+
+def test_failed_project_read_keeps_the_open_project_identity_intact(
+    qapp, monkeypatch, tmp_path
+):
+    """打开损坏工程失败：不能顺手清掉当前工程的磁盘版本/缺失素材/延迟队列。"""
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    good = tmp_path / "good.yurika"
+    save_render_project(good, {"subtitle_path": str(tmp_path / "missing.lrc")})
+    bad = tmp_path / "broken.yurika"
+    bad.write_text("not a project", encoding="utf-8")
+    try:
+        assert win._open_project_path(good, confirm_discard=False)
+        revision = win._project_disk_revision
+        missing = tuple(win._missing_resources)
+        generation = win._project_generation
+        assert revision is not None
+
+        assert win._open_project_path(bad, confirm_discard=False) is False
+        assert win._project_path == good
+        assert win._project_disk_revision == revision
+        assert tuple(win._missing_resources) == missing
+        assert win._project_generation == generation
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_supersede_inside_subtitle_parse_keeps_old_track_out(
+    qapp, monkeypatch, tmp_path
+):
+    """字幕解析的嵌套 I/O 期间被接管：旧解析结果不得写进新会话。"""
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "parsed.lrc"
+    lrc.write_text("[00:01:00]a[00:02:00]\n", encoding="utf-8-sig")
+    project = tmp_path / "supersede-parse.yurika"
+    save_render_project(project, {"subtitle_path": str(lrc)})
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    real_run = win._run_project_io
+    bumped: list[str] = []
+
+    def bumping(work, *, label=""):
+        result = real_run(work, label=label)
+        if label == "解析字幕文件" and not bumped:
+            bumped.append(label)
+            win._begin_project_generation()
+        return result
+
+    monkeypatch.setattr(win, "_run_project_io", bumping)
+    try:
+        assert win._open_project_path(project, confirm_discard=False) is False
+        assert bumped == ["解析字幕文件"]
+        assert win._timing_track is None
+        assert win._subtitle_path is None
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_deferred_asset_takeover_is_not_applied_to_the_new_session(
+    qapp, monkeypatch, tmp_path
+):
+    """延迟素材逐项 I/O 期间被接管：该项不得写进新会话，也不再抛到定时器槽。"""
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "deferred-takeover.mp4"
+    video.write_bytes(b"stub")
+    project = tmp_path / "deferred-takeover.yurika"
+    save_render_project(
+        project, {"background": {"kind": "video", "path": str(video)}}
+    )
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    real_run = win._run_project_io
+    bumped: list[str] = []
+
+    def bumping(work, *, label=""):
+        result = real_run(work, label=label)
+        if label == "检查背景视频" and not bumped:
+            bumped.append(label)
+            win._begin_project_generation()
+        return result
+
+    monkeypatch.setattr(win, "_run_project_io", bumping)
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert win._project_deferred_loads
+        win._project_deferred_load_timer.stop()
+        win._process_project_deferred_load()  # 不得抛异常
+        assert bumped == ["检查背景视频"]
+        assert win._background_source is None or win._background_source.kind != "video"
+    finally:
+        win.close()
+
+
+def test_superseded_assembly_leaves_media_and_deferred_queue_untouched(
+    qapp, monkeypatch, tmp_path
+):
+    """接管发生在「检查字幕/素材」之后：旧字幕与旧延迟队列不得写进新会话。"""
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "old-subtitle.lrc"
+    lrc.write_text("[00:01:00]a[00:02:00]\n", encoding="utf-8-sig")
+    video = tmp_path / "old-bg.mp4"
+    video.write_bytes(b"stub")
+    project = tmp_path / "superseded-assets.yurika"
+    save_render_project(
+        project,
+        {
+            "subtitle_path": str(lrc),
+            "background": {"kind": "video", "path": str(video)},
+        },
+    )
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    real_run = win._run_project_io
+    bumped: list[str] = []
+
+    def bumping(work, *, label=""):
+        result = real_run(work, label=label)
+        # 只接管一次：在字幕检查返回后模拟另一工程动作完成装配。
+        if label == "检查字幕文件" and not bumped:
+            bumped.append(label)
+            win._begin_project_generation()
+        return result
+
+    monkeypatch.setattr(win, "_run_project_io", bumping)
+    try:
+        assert win._open_project_path(project, confirm_discard=False) is False
+        assert bumped == ["检查字幕文件"]
+        assert win._timing_track is None
+        assert win._subtitle_path is None
+        assert win._project_deferred_loads == []
+        assert win._background_source is None or win._background_source.kind != "video"
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_n3_import_result_from_an_older_generation_is_discarded(
+    qapp, monkeypatch, tmp_path
+):
+    """N3 后台导入完成时代际已变：不能覆盖用户后来打开/编辑的工程。"""
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    try:
+        win._begin_project_generation()
+        stale_generation = win._project_generation
+        win._begin_project_generation()
+        result = SimpleNamespace(
+            project_data={"style": style_to_dict(Style(font_size_px=123))},
+            warnings=[],
+        )
+        win._finish_n3_import(
+            result, tmp_path / "stale.n3proj", generation=stale_generation
+        )
+        assert win._style.font_size_px != 123
+        assert win._project_dirty is False
+    finally:
+        win.close()
+
+
+def test_n3_assembly_takeover_does_not_write_old_background(
+    qapp, monkeypatch, tmp_path
+):
+    """非延迟装配（N3 导入）的媒体探测 I/O 期间被接管：旧背景不得写入新会话。"""
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "n3-bg.mp4"
+    video.write_bytes(b"stub")
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    monkeypatch.setattr(
+        win,
+        "_probe",
+        lambda path, label: mw.MediaInfo(
+            path=Path(path),
+            duration=10.0,
+            video_streams=1,
+            audio_streams=1,
+            subtitle_streams=0,
+            video_width=1280,
+            video_height=720,
+            video_fps=30.0,
+        ),
+    )
+    real_run = win._run_project_io
+    bumped: list[str] = []
+
+    def bumping(work, *, label=""):
+        result = real_run(work, label=label)
+        if label == "检查背景视频" and not bumped:
+            bumped.append(label)
+            win._begin_project_generation()
+        return result
+
+    monkeypatch.setattr(win, "_run_project_io", bumping)
+    result = SimpleNamespace(
+        project_data={"background": {"kind": "video", "path": str(video)}},
+        warnings=[],
+    )
+    try:
+        win._finish_n3_import(result, tmp_path / "takeover.n3proj")
+        assert bumped == ["检查背景视频"]
+        assert win._video_path is None
+        assert win._background_source is None or win._background_source.kind != "video"
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_io_timeout_is_reported_as_timeout_not_user_cancel(qapp, monkeypatch):
+    """执行器超时必须给出超时反馈，不能伪装成「已取消」。"""
+    from krok_helper.subtitle_render.frontend.project.tasks import ProjectTaskTimeout
+
+    win = _make_window(qapp, monkeypatch)
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.InfoBar,
+        "warning",
+        lambda **kwargs: notices.append(str(kwargs.get("title", ""))),
+    )
+    monkeypatch.setattr(
+        mw.InfoBar,
+        "info",
+        lambda **kwargs: notices.append("cancel:" + str(kwargs.get("title", ""))),
+    )
+
+    def timed_out(work, *, label=""):
+        raise ProjectTaskTimeout("超时")
+
+    monkeypatch.setattr(win, "_run_project_io", timed_out)
+    try:
+        assert win._run_cancelable_io(lambda: 1, label="x", owner="probe") is mw._IO_CANCELED
+        assert notices and "加载超时" in notices[0]
+        assert not any(item.startswith("cancel:") for item in notices)
+    finally:
+        win.close()
+
+
+def test_deferred_asset_timeout_is_reported_and_clears_queue(
+    qapp, monkeypatch, tmp_path
+):
+    """延迟素材超时：提示超时（不是「已取消」成功态），并清掉本队列。"""
+    from krok_helper.subtitle_render.frontend.project.tasks import ProjectTaskTimeout
+
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "timeout-bg.mp4"
+    video.write_bytes(b"stub")
+    project = tmp_path / "timeout-deferred.yurika"
+    save_render_project(
+        project, {"background": {"kind": "video", "path": str(video)}}
+    )
+    notices: list[str] = []
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mw.InfoBar,
+        "warning",
+        lambda **kwargs: notices.append(str(kwargs.get("title", ""))),
+    )
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert win._project_deferred_loads
+        win._project_deferred_load_timer.stop()
+
+        def timed_out(work, *, label=""):
+            raise ProjectTaskTimeout("超时")
+
+        monkeypatch.setattr(win, "_run_project_io", timed_out)
+        win._process_project_deferred_load()  # 不得把超时抛到定时器槽
+        assert win._project_deferred_loads == []
+        assert not win._source_reload_suspended()
+        assert win._project_load_tooltip is None
+        assert "加载超时" in notices
+        assert not any("已取消" in item for item in notices)
+    finally:
+        win.close()
+
+
+def test_read_failure_with_previous_deferred_queue_still_clears_progress(
+    qapp, monkeypatch, tmp_path
+):
+    """上一工程延迟队列还在排队时，新工程读失败也要收掉本轮进度提示。"""
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "prev-bg.mp4"
+    video.write_bytes(b"stub")
+    good = tmp_path / "with-deferred.yurika"
+    save_render_project(good, {"background": {"kind": "video", "path": str(video)}})
+    bad = tmp_path / "broken2.yurika"
+    bad.write_text("not a project", encoding="utf-8")
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    try:
+        assert win._open_project_path(good, confirm_discard=False)
+        assert win._project_deferred_loads
+        assert win._project_load_tooltip is not None
+        assert win._open_project_path(bad, confirm_discard=False) is False
+        assert win._project_load_tooltip is None
+        assert win._project_load_progress_token is None
+    finally:
+        win.close()
+
+
+def test_stale_progress_token_cannot_finish_a_newer_load(qapp, monkeypatch, tmp_path):
+    """旧一轮加载的 token 不能收掉/串写新一轮的工具提示。"""
+    win = _make_window(qapp, monkeypatch)
+    try:
+        old_token = win._start_project_load_progress("旧工程", "旧")
+        old_tooltip = win._project_load_tooltip
+        new_token = win._start_project_load_progress("新工程", "新")
+        new_tooltip = win._project_load_tooltip
+        assert new_tooltip is not old_tooltip
+        try:
+            assert old_tooltip.isHidden() is True
+        except RuntimeError:
+            pass
+
+        win._finish_project_load_progress("旧完成", old_token)
+        assert win._project_load_tooltip is new_tooltip
+        assert win._project_load_progress_token is new_token
+        win._clear_project_load_progress(old_token)
+        assert win._project_load_tooltip is new_tooltip
+
+        win._on_project_load_progress(old_token, 99, "旧进度")
+        assert win._project_load_tooltip is new_tooltip
+        win._clear_project_load_progress(new_token)
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_external_reload_during_project_transaction_is_deferred_then_applied(
+    qapp, monkeypatch, tmp_path
+):
+    """工程事务/渲染期间的异步重载结果必须延后，恢复后自动应用（不能吞掉）。"""
+    import time
+
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    lrc = tmp_path / "deferred-reload.lrc"
+    lrc.write_text("[00:01:00]a[00:02:00]\n", encoding="utf-8-sig")
+    try:
+        assert win.load_from_lrc(lrc) is not None
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and win._watch_sync_inflight:
+            qapp.processEvents()
+            time.sleep(0.01)
+        key = win._subtitle_source_key(lrc)
+        assert win._source_watch_runtime.state(key) is not None
+
+        win._loading_project = True
+        try:
+            lrc.write_text("[00:03:00]a[00:04:00]\n", encoding="utf-8-sig")
+            win._reload_external_subtitle_source(key)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and win._source_reload_inflight:
+                qapp.processEvents()
+                time.sleep(0.01)
+            assert not win._source_reload_inflight
+            # 延后期间不改轨道，但 key 必须留在 pending 等恢复后补跑。
+            assert win._timing_track.lines[0].chars[0].start_ms == 1000
+            assert key in win._source_watch_runtime.pending_keys
+        finally:
+            win._loading_project = False
+        win._resume_source_reloads()
+        deadline = time.monotonic() + 8
+        while (
+            time.monotonic() < deadline
+            and win._timing_track.lines[0].chars[0].start_ms != 3000
+        ):
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert win._timing_track.lines[0].chars[0].start_ms == 3000
+    finally:
+        win.close()
+
+
+def test_deferred_asset_timer_chain_loads_background_video(qapp, monkeypatch, tmp_path):
+    """延迟素材必须由定时器链路真正装完（不能只靠直接调用 _process_…）。"""
+    import time
+
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "timer-bg.mp4"
+    video.write_bytes(b"stub")
+    project = tmp_path / "timer.yurika"
+    save_render_project(
+        project, {"background": {"kind": "video", "path": str(video)}}
+    )
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    monkeypatch.setattr(
+        win,
+        "_probe",
+        lambda path, label: mw.MediaInfo(
+            path=Path(path),
+            duration=10.0,
+            video_streams=1,
+            audio_streams=1,
+            subtitle_streams=0,
+            video_width=1280,
+            video_height=720,
+            video_fps=30.0,
+        ),
+    )
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert win._project_deferred_loads
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and win._project_deferred_loads:
+            qapp.processEvents()
+            time.sleep(0.02)
+        assert win._project_deferred_loads == []
+        assert win._background_source is not None
+        assert win._background_source.kind == "video"
+        assert win._project_load_tooltip is None
+        assert not win._source_reload_suspended()
+    finally:
+        win.close()
+
+
+def test_window_shutdown_releases_a_blocked_project_read(qapp, monkeypatch, tmp_path):
+    """加载中被关窗/宿主强退：读取立即中止，不能把进程挂在嵌套事件循环里。"""
+    import time
+
+    win = _make_window(qapp, monkeypatch)
+    project = tmp_path / "closing.yurika"
+    save_render_project(project, {})
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    remote_open = win._project_controller.open
+
+    def slow_open(path):
+        time.sleep(1.0)
+        return remote_open(path)
+
+    monkeypatch.setattr(win._project_controller, "open", slow_open)
+    QTimer.singleShot(120, win.shutdown_for_host_exit)
+    started = time.monotonic()
+    try:
+        assert win._open_project_path(project, confirm_discard=False) is False
+        elapsed = time.monotonic() - started
+        assert elapsed < 2.5, f"关窗后仍等待了 {elapsed:.2f}s"
+        assert win._project_load_tooltip is None
+    finally:
+        win.close()
+
+
+def test_load_pump_animates_and_throttles_the_progress_tooltip(qapp, monkeypatch):
+    """加载期间的进度动画不能停：分步驱动 tooltip 的旋转并在其节拍内节流。"""
+    from PyQt6.QtCore import QEvent, QObject
+
+    class _PaintCounter(QObject):
+        def __init__(self) -> None:
+            super().__init__()
+            self.count = 0
+
+        def eventFilter(self, obj, event):  # noqa: N802 — Qt API
+            if event.type() == QEvent.Type.Paint:
+                self.count += 1
+            return False
+
+    win = _make_window(qapp, monkeypatch)
+    try:
+        win.show()
+        qapp.processEvents()
+        win._start_project_load_progress()
+        tooltip = win._project_load_tooltip
+        assert tooltip is not None
+        counter = _PaintCounter()
+        tooltip.installEventFilter(counter)
+
+        win._load_animation_pumped_at = 0.0
+        angle_before = tooltip.rotateAngle
+        win._pump_load_events()
+        angle_after_first = tooltip.rotateAngle
+        assert angle_after_first != angle_before, "进度动画未被推进"
+        pumped = counter.count
+        if tooltip.isVisible():
+            assert pumped >= 1, "进度提示没有重绘"
+
+        # 同一 45ms 节拍内的重复调用必须 no-op，避免把加载拖慢。
+        win._pump_load_events()
+        assert counter.count == pumped
+        assert tooltip.rotateAngle == angle_after_first
+    finally:
+        win.close()
+
+
+def test_large_lyrics_table_fill_yields_between_batches(qapp, monkeypatch):
+    """超大列表逐行填充时按批让出；普通歌曲不分批（保持既有同步时序）。"""
+    from krok_helper.subtitle_render.domain.timing import (
+        TimingChar,
+        TimingLine,
+        TimingTrack,
+    )
+
+    win = _make_window(qapp, monkeypatch)
+    try:
+        yields: list[int] = []
+        large = TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar("a", index * 1000)],
+                    end_ms=index * 1000 + 900,
+                )
+                for index in range(800)
+            ]
+        )
+        win._lyrics_panel.set_track(large, yield_cb=lambda: yields.append(1))
+        assert yields, "大列表填充必须在批间让出"
+        assert win._lyrics_panel._table.rowCount() >= 800
+        header = win._lyrics_panel._table.horizontalHeader()
+        assert (
+            header.sectionResizeMode(lyrics_list.COL_LANE)
+            == lyrics_list.QHeaderView.ResizeMode.ResizeToContents
+        ), "填充期间的轨列临时 Fixed 必须还原"
+
+        yields.clear()
+        medium = TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar("c", index * 1000)],
+                    end_ms=index * 1000 + 900,
+                )
+                for index in range(399)
+            ]
+        )
+        win._lyrics_panel.set_track(medium, yield_cb=lambda: yields.append(1))
+        assert yields == [], "低于阈值的中等列表不应走分批让出"
+
+        yields.clear()
+        small = TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar("b", index * 1000)],
+                    end_ms=index * 1000 + 900,
+                )
+                for index in range(4)
+            ]
+        )
+        win._lyrics_panel.set_track(small, yield_cb=lambda: yields.append(1))
+        assert yields == []
+    finally:
+        win.close()
+
+
+def test_project_open_builds_the_lyrics_table_only_once(
+    qapp, monkeypatch, tmp_path
+):
+    """装配只应整表重建一次：_apply_timing_track 的首建被跳过，副源不再重建。"""
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "once.lrc"
+    lrc.write_text("[00:01:00]あ[00:01:50]い[00:02:00]\r\n", encoding="utf-8-sig")
+    project = tmp_path / "once.yurika"
+    save_render_project(project, {"subtitle_path": str(lrc)})
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+
+    builds: list[object] = []
+    original = win._lyrics_panel.set_track
+
+    def spy(track, **kwargs):
+        if track is not None:
+            builds.append(track)
+        return original(track, **kwargs)
+
+    monkeypatch.setattr(win._lyrics_panel, "set_track", spy)
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        assert len(builds) == 1, f"主表应只构建一次，实际 {len(builds)} 次"
+    finally:
+        win.close()
+
+
+def test_loading_window_result_is_applied_during_assembly(qapp, monkeypatch):
+    """deferred 的嵌套 ffprobe 期间到达的轨道窗口结果不能被丢弃。"""
+    win = _make_window(qapp, monkeypatch)
+    applied: list[object] = []
+    monkeypatch.setattr(
+        win._tracks_view,
+        "set_display_windows",
+        lambda windows: applied.append(windows),
+    )
+    try:
+        win._timing_track = SimpleNamespace(lines=[])
+        win._tracks_window_generation = 7
+        windows = {"main": object()}
+        win._loading_project = True
+        win._tracks_window_rerun_pending = False
+        win._on_tracks_view_windows_ready(7, windows)
+        assert applied == [windows]
+        assert win._tracks_window_rerun_pending is False
+    finally:
+        win.close()
+
+
+def test_shutdown_stops_layout_check_tooltip_and_timers(qapp, monkeypatch):
+    """关窗后余白检查不得再创建/显示进度提示。"""
+    win = _make_window(qapp, monkeypatch)
+    try:
+        win._margin_check_timer.start()
+        win._layout_check_tooltip_timer.start()
+        win.shutdown_for_host_exit()
+        assert not win._margin_check_timer.isActive()
+        assert not win._layout_check_tooltip_timer.isActive()
+        assert win._layout_check_tooltip is None
+        # 关窗后的迟到调用同样不得创建提示。
+        win._show_layout_check_tooltip()
+        assert win._layout_check_tooltip is None
+    finally:
+        win.close()
+
+
+def test_missing_resources_reuse_the_worker_snapshot(qapp, monkeypatch, tmp_path):
+    """缺素材工程不能在 GUI 线程再 deepcopy 一份完整工程。"""
+    win = _make_window(qapp, monkeypatch)
+    missing = tmp_path / "missing-subtitle.lrc"
+    project = tmp_path / "missing.yurika"
+    save_render_project(project, {"subtitle_path": str(missing)})
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    try:
+        assert win._open_project_path(project, confirm_discard=False)
+        session = win._project_session
+        document = win._project_document
+        assert session.missing_resources
+        assert (
+            session.missing_resource_source_data
+            is document.preserved_project_data
+        )
     finally:
         win.close()

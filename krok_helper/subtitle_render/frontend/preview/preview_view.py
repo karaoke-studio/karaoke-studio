@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import (
     QElapsedTimer,
@@ -150,6 +150,14 @@ def _audio_clock_anchor_correction(target_ms: int, audio_pos_ms: int) -> int:
     return int(drift * _AUDIO_CLOCK_GAIN)
 
 
+def decode_background_image(path: Path) -> QImage:
+    """Decode one background frame (worker-thread safe; ``QImage`` is a value type)."""
+    image = QImage(str(path))
+    if image.isNull():
+        return image
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+
+
 class PreviewCanvas(QWidget):
     """字幕预览画布：原地 ``paint_frame`` 重绘当前时刻活跃行。"""
 
@@ -167,6 +175,12 @@ class PreviewCanvas(QWidget):
         self._video_path: Optional[Path] = None
         self._background_source = BackgroundSource()
         self._background_image_cache: dict[Path, QImage] = {}
+        # 背景图片解码（大 PNG/JPEG 可达数百毫秒）走注入的后台加载器；命中缓存
+        # 前先保持上一帧，回调到了再换图。
+        self._image_loader: Optional[Callable[[Path, Callable[[object], None]], None]] = None
+        self._background_image_generation: int = 0
+        # latest-wins：同一时刻只允许一帧在途解码，播放推进时丢弃中间帧。
+        self._background_image_inflight: Optional[Path] = None
         self._video_image: Optional[QImage] = None
         self._scaled_video_image: Optional[QImage] = None
         self._scaled_video_key: Optional[tuple[int, int, int, int]] = None
@@ -335,7 +349,10 @@ class PreviewCanvas(QWidget):
 
     def set_background_source(self, source: BackgroundSource) -> None:
         self._background_source = source
-        self._background_image_cache.clear()
+        # 缓存按路径键控且有条数上限：换背景不清空（seed 过的首帧得以复用，
+        # 切回上一张图也免二次解码）；只作废上一来源的在途解码请求。
+        self._background_image_generation += 1
+        self._background_image_inflight = None
         self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
         if source.kind in {"image", "image_sequence"}:
             image_path = (
@@ -345,12 +362,105 @@ class PreviewCanvas(QWidget):
                 if source.kind == "image_sequence"
                 else Path(source.path) if source.path else None
             )
-            image = self._load_background_image(image_path)
+            image = self._request_background_image(image_path)
             self._video_image = (
                 image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-                if not image.isNull() else None
+                if image is not None and not image.isNull()
+                else None
             )
         self.update()
+
+    def set_image_loader(
+        self,
+        loader: Optional[Callable[[Path, Callable[[object], None]], None]],
+    ) -> None:
+        """Inject the off-thread background image decoder (``None`` = decode inline)."""
+        self._image_loader = loader
+
+    def seed_background_image(self, path: Path, image: Optional[QImage]) -> None:
+        """Store an already-decoded background frame so the preview need not decode twice."""
+        if image is None or image.isNull():
+            return
+        key = Path(path)
+        self._store_background_image(key, image)
+        if self._background_image_inflight == key:
+            self._background_image_inflight = None
+        current = self._current_background_image_path()
+        if current is not None and current == key:
+            self._video_image = image
+            self._scaled_video_image = None
+            self._scaled_video_key = None
+            self.update()
+
+    def _current_background_image_path(self) -> Optional[Path]:
+        source = self._background_source
+        if source.kind == "image":
+            return Path(source.path) if source.path else None
+        if source.kind == "image_sequence":
+            return background_sequence_frame_path(
+                source, max(self._t_ms - self._roll_offset_ms, 0)
+            )
+        return None
+
+    def _request_background_image(self, path: Optional[Path]) -> Optional[QImage]:
+        """Return the cached decode, or schedule it off-thread and return ``None``."""
+        if path is None:
+            return None
+        cached = self._background_image_cache.get(path)
+        if cached is not None:
+            return cached
+        loader = self._image_loader
+        if loader is None:
+            # 没有注入后台加载器（单测 / 独立嵌入）：退回同步解码。
+            return self._load_background_image(path)
+        if self._background_image_inflight is not None:
+            # 上一帧仍在解码：丢弃中间帧，等它落地后按当时的最新帧再请求。
+            return None
+        self._background_image_inflight = path
+        generation = self._background_image_generation
+
+        def ready(image: object) -> None:
+            if self._background_image_inflight == path:
+                self._background_image_inflight = None
+            self._on_background_image_ready(path, image, generation)
+            # latest-wins：等待期间播放/seek 又换了帧时，立刻补请求当前帧，
+            # 否则暂停后画面会停在旧帧直到下一次 set_time。
+            if generation != self._background_image_generation:
+                return
+            current = self._current_background_image_path()
+            if current is not None and current != path:
+                self._request_background_image(current)
+
+        loader(path, ready)
+        return None
+
+    def _on_background_image_ready(
+        self,
+        path: Path,
+        image: object,
+        generation: int,
+    ) -> None:
+        if generation != self._background_image_generation:
+            return
+        if not isinstance(image, QImage) or image.isNull():
+            # 解码失败：当前帧确实指向这张图时清空，别把上一张图当成结果。
+            if self._current_background_image_path() == path:
+                self._video_image = None
+                self._scaled_video_image = None
+                self._scaled_video_key = None
+                self.update()
+            return
+        self._store_background_image(path, image)
+        if self._current_background_image_path() == path:
+            self._video_image = image
+            self._scaled_video_image = None
+            self._scaled_video_key = None
+            self.update()
+
+    def _store_background_image(self, path: Path, image: QImage) -> None:
+        self._background_image_cache[path] = image
+        while len(self._background_image_cache) > 8:
+            self._background_image_cache.pop(next(iter(self._background_image_cache)))
 
     def set_playing(self, playing: bool) -> None:
         """Mirror the transport state into the silent video preview player."""
@@ -456,7 +566,10 @@ class PreviewCanvas(QWidget):
     def _sync_video_position(self, *, force: bool = False) -> None:
         if self._background_source.kind == "image_sequence":
             image_path = background_sequence_frame_path(self._background_source, max(self._t_ms - self._roll_offset_ms, 0))
-            image = self._load_background_image(image_path)
+            image = self._request_background_image(image_path)
+            if image is None:
+                # 该帧仍在后台解码：保留上一帧，回调到了再换（不闪烁）。
+                return
             self._video_image = (
                 image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
                 if not image.isNull() else None
@@ -477,13 +590,10 @@ class PreviewCanvas(QWidget):
         cached = self._background_image_cache.get(path)
         if cached is not None:
             return cached
-        image = QImage(str(path))
+        image = decode_background_image(path)
         if image.isNull():
             return image
-        image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-        self._background_image_cache[path] = image
-        while len(self._background_image_cache) > 8:
-            self._background_image_cache.pop(next(iter(self._background_image_cache)))
+        self._store_background_image(path, image)
         return image
 
     def _ensure_video_player(self) -> QMediaPlayer:
@@ -733,6 +843,21 @@ class PreviewPanel(DropPanel):
         else:
             self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
         self.set_populated(True)
+
+    def set_image_loader(
+        self,
+        loader: Optional[Callable[[Path, Callable[[object], None]], None]],
+    ) -> None:
+        """Forward the off-thread background image decoder to the active canvas."""
+        setter = getattr(self._canvas, "set_image_loader", None)
+        if setter is not None:
+            setter(loader)
+
+    def seed_background_image(self, path: Path, image: object) -> None:
+        """Hand a worker-decoded frame to the canvas so it is not decoded twice."""
+        setter = getattr(self._canvas, "seed_background_image", None)
+        if setter is not None:
+            setter(path, image)
 
     def set_playing(self, playing: bool) -> None:
         self._canvas.set_playing(playing)

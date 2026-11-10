@@ -167,6 +167,10 @@ class DropPanel(QFrame):
 
     def set_populated(self, populated: bool) -> None:
         """切换到内容页 / 空态页。"""
+        populated = bool(populated)
+        if populated == getattr(self, "_populated", None):
+            # 重复设置只会整子树重刷 QSS（实测 ~200ms），空态切换必须幂等。
+            return
         self._populated = populated
         self._stack.setCurrentIndex(1 if populated else 0)
         # 空态整块可点击浏览 → 手型；载入内容后恢复箭头，避免误导

@@ -124,8 +124,9 @@ class SubtitleRenderPage(Protocol):
     def load_video(self, path: Path, info: object | None = None) -> object | None:
         """Load a video as the current background source.
 
-        ``info`` carries a pre-probed MediaInfo so callers that probed in the
-        background can skip the synchronous ffprobe here.
+        ``info`` carries a pre-probed MediaInfo so callers that already probed in
+        the background can skip the ffprobe worker task here; without it the
+        probe runs off the GUI thread and this call only waits for its result.
         """
         ...
 

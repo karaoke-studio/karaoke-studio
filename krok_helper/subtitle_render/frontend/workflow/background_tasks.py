@@ -53,11 +53,21 @@ class _N3ImportWorker(QObject):
 
     def run(self) -> None:
         try:
-            result = self._loader(self.path)
-        except (OSError, ValueError) as exc:
-            self.failed.emit(self, str(exc))
-            return
-        self.succeeded.emit(self, result)
+            try:
+                result = self._loader(self.path)
+            except (OSError, ValueError) as exc:
+                self.failed.emit(self, str(exc))
+                return
+            except Exception as exc:  # noqa: BLE001 — 绝不让线程带着异常常驻
+                logging.getLogger(__name__).warning(
+                    "N3 导入失败: %s", exc, exc_info=exc
+                )
+                self.failed.emit(self, str(exc))
+                return
+            self.succeeded.emit(self, result)
+        finally:
+            # 任何出口都退出事件循环：QThread 析构时仍在运行会让 Qt abort。
+            QThread.currentThread().quit()
 
 
 class _RecoverySaveWorker(QObject):

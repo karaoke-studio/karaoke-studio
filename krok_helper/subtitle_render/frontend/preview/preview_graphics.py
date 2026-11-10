@@ -404,6 +404,11 @@ class PreviewGraphicsView(QGraphicsView):
 
         self._video_path: Optional[Path] = None
         self._background_pixmap_cache: dict[Path, QPixmap] = {}
+        # 背景图解码走注入的后台加载器（QImage 可在工作线程解码，QPixmap 只在
+        # GUI 线程由 QImage 转换）。未注入时退回同步解码。
+        self._image_loader: Optional[Callable[[Path, Callable[[object], None]], None]] = None
+        self._background_image_generation: int = 0
+        self._background_image_inflight: Optional[Path] = None
         self._video_playing: bool = False
         self._t_ms: int = 0
         self._duration_ms: int = 0
@@ -1226,7 +1231,10 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_background_source(self, source: BackgroundSource) -> None:
         self._background_source = source
-        self._background_pixmap_cache.clear()
+        # 缓存按路径键控且有条数上限：换背景不清空（seed 过的首帧得以复用）；
+        # 只作废上一来源的在途解码请求。
+        self._background_image_generation += 1
+        self._background_image_inflight = None
         self._video_item.setVisible(source.kind == "video")
         self._image_item.setVisible(source.kind in {"image", "image_sequence"})
         self._update_letterbox_rect()
@@ -1239,18 +1247,84 @@ class PreviewGraphicsView(QGraphicsView):
             QGraphicsScene.SceneLayer.BackgroundLayer,
         )
 
+    def set_image_loader(
+        self,
+        loader: Optional[Callable[[Path, Callable[[object], None]], None]],
+    ) -> None:
+        """Inject the off-thread background image decoder (``None`` = decode inline)."""
+        self._image_loader = loader
+
+    def seed_background_image(self, path: Path, image: object) -> None:
+        """Accept a worker-decoded frame so switching backgrounds never re-decodes."""
+        if not isinstance(image, QImage) or image.isNull():
+            return
+        key = Path(path)
+        self._background_pixmap_cache[key] = QPixmap.fromImage(image)
+        if self._background_image_inflight == key:
+            self._background_image_inflight = None
+        if self._current_background_path() == key:
+            self._refresh_background_image()
+
+    def _current_background_path(self) -> Optional[Path]:
+        source = self._background_source
+        if source.kind == "image" and source.path:
+            return Path(source.path)
+        if source.kind == "image_sequence" and source.path:
+            offset = (
+                self._roll_plan.pre_ms
+                if self._roll_plan is not None and self._roll_plan.active
+                else 0
+            )
+            return background_sequence_frame_path(source, max(self._t_ms - offset, 0))
+        return None
+
+    def _request_background_image(self, path: Optional[Path]) -> Optional[QPixmap]:
+        if path is None:
+            return None
+        cached = self._background_pixmap_cache.get(path)
+        if cached is not None:
+            return cached
+        loader = self._image_loader
+        if loader is None:
+            return None
+        if self._background_image_inflight is not None:
+            # latest-wins：上一帧仍在解码，丢弃中间帧（播放推进时避免堆积）。
+            return None
+        self._background_image_inflight = path
+        generation = self._background_image_generation
+
+        def ready(image: object) -> None:
+            if self._background_image_inflight == path:
+                self._background_image_inflight = None
+            if generation != self._background_image_generation:
+                return
+            if not isinstance(image, QImage) or image.isNull():
+                if self._current_background_path() == path:
+                    self._image_item.setPixmap(QPixmap())
+                return
+            self._background_pixmap_cache[path] = QPixmap.fromImage(image)
+            while len(self._background_pixmap_cache) > 8:
+                self._background_pixmap_cache.pop(
+                    next(iter(self._background_pixmap_cache))
+                )
+            # latest-wins：无论完成的是不是当前帧，都重算一次当前帧（未命中则
+            # 立刻补请求），暂停/seek 后画面才能追平最新位置。
+            self._refresh_background_image()
+
+        loader(path, ready)
+        return None
+
     def _refresh_background_image(self) -> None:
         source = self._background_source
         if source.kind not in {"image", "image_sequence"} or not source.path:
             self._image_item.setPixmap(QPixmap())
             return
-        path = (
-            background_sequence_frame_path(source, max(self._t_ms - (self._roll_plan.pre_ms if self._roll_plan else 0), 0))
-            if source.kind == "image_sequence"
-            else Path(source.path)
-        )
-        pixmap = self._background_pixmap_cache.get(path) if path is not None else None
+        path = self._current_background_path()
+        pixmap = self._request_background_image(path)
         if pixmap is None:
+            if self._image_loader is not None:
+                # 首帧仍在后台解码：保留当前画面（切换来源时清空）。
+                return
             pixmap = QPixmap(str(path)) if path is not None else QPixmap()
             if path is not None and not pixmap.isNull():
                 self._background_pixmap_cache[path] = pixmap
