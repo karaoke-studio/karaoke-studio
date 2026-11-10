@@ -409,6 +409,9 @@ class KrokHelperQtApp(QMainWindow):
         # 最近一次窗口化（非最大化/全屏/最小化）几何 [x, y, width, height]。
         # 启动恢复后由 move/resize 事件实时维护，供退出最大化与下次启动复用。
         self._last_normal_geometry: list[int] = []
+        # _track_normal_geometry 的采样是否已排队（QTimer.singleShot(0)）。
+        # 同一批事件里 resize/move 反复来只排一次，settle 后统一落值。
+        self._normal_geometry_capture_pending = False
         self._page_transition_overlay: PageTransitionOverlay | None = None
         self._page_switch_anim: QPropertyAnimation | None = None
         self._settings_dialogs = SettingsDialogs(host=self, parent=self)
@@ -698,11 +701,36 @@ class KrokHelperQtApp(QMainWindow):
     def _track_normal_geometry(self) -> None:
         """窗口化状态下实时记住当前几何，供退出最大化与下次启动恢复。
 
+        Windows 上进入最大化/全屏时，带全屏矩形的 resize/move 事件会**先于**
+        WindowStateChange 送达（2026-11 真机探针实测：PostMessage SC_MAXIMIZE
+        后事件顺序是 resize → move → changeEvent）。若在这里同步采样，
+        ``windowState()`` 还没翻转，最大化的全屏矩形会被当成窗口化几何记进
+        ``_last_normal_geometry``，之后每次退出最大化都恢复成满屏大小并随
+        设置持久化 —— 表现为「最大化再还原，窗口越还原越大」。因此采样不
+        在事件当场落值，而是排一个 ``QTimer.singleShot(0)`` 延后到本批原生
+        事件 settle 之后（与 changeEvent 排恢复走同一套时序），由
+        :meth:`_commit_normal_geometry` 按落值时刻重判守卫条件。
+
         最大化/全屏/最小化期间的 move/resize 反映的是系统摆放，不是用户的
         窗口化几何，一律跳过；``_restoring_from_maximized`` 期间（我们正在
         显式恢复几何）也跳过，避免中间态覆盖要恢复的目标矩形 —— 恢复方法
         自己负责在落位后更新 ``_last_normal_geometry``。
         """
+        if not getattr(self, "_startup_geometry_applied", False):
+            return
+        if self._restoring_from_maximized:
+            return
+        if not self._normal_geometry_capture_pending:
+            self._normal_geometry_capture_pending = True
+            QTimer.singleShot(0, self._commit_normal_geometry)
+
+    def _commit_normal_geometry(self) -> None:
+        """settle 之后的几何采样：守卫条件在落值时刻重判一遍。
+
+        排队期间窗口可能已被同一批事件带进最大化/全屏/最小化（这正是当年
+        同步采样出错的原因），或恢复流程已接管几何；此时一律不落值。
+        """
+        self._normal_geometry_capture_pending = False
         if not getattr(self, "_startup_geometry_applied", False):
             return
         if self._restoring_from_maximized:

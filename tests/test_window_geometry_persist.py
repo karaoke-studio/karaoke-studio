@@ -7,6 +7,10 @@
 
 断言注意：恢复路径会把几何夹进当前屏幕可用区，offscreen 平台的屏幕可能只有
 800×600，所以期望值要按 ``screen().availableGeometry()`` 现算，不能写死。
+
+另外 Windows 真机上进入最大化/全屏时，resize/move 会先于 WindowStateChange
+送达，几何采样因此延后到事件 settle 之后（见 gui_qt ``_track_normal_geometry``
+注释）——相关回归用例在文末。
 """
 
 from __future__ import annotations
@@ -210,3 +214,37 @@ def test_min_size_tracks_screen_when_restoring(workbench) -> None:
     assert workbench.minimumSize() == QSize(
         min(WINDOW_MIN_WIDTH, available.width()), min(WINDOW_MIN_HEIGHT, available.height())
     )
+
+
+# ── 回归：Windows 事件顺序造成的最大化几何污染 ───────────────
+#
+# 真机上 PostMessage SC_MAXIMIZE 后事件顺序是 resize → move → changeEvent：
+# 带全屏矩形的 resize 到达时 windowState() 还是 NoState。同步采样会把满屏
+# 矩形记进 _last_normal_geometry，之后每次退出最大化都恢复成满屏大小并
+# 持久化（用户报的「最大化再还原，窗口越还原越大」）。修复是采样延后到
+# 事件 settle 之后，这里在逻辑层重放同一顺序。
+
+
+def test_maximize_race_does_not_pollute_remembered_geometry(workbench) -> None:
+    """状态翻转先于 settle 的 resize，不得把满屏矩形记成窗口化几何。"""
+    _simulate_user_sizing(workbench)
+    assert workbench._last_normal_geometry == [USER_X, USER_Y, USER_W, USER_H]
+
+    # 重放真机顺序：先来一个「满屏矩形」的 resize（此刻 windowState 仍是
+    # NoState，采样被排队），同一批事件里状态才翻成 Maximized。
+    available = workbench.screen().availableGeometry()
+    workbench.setGeometry(available.x(), available.y(), available.width(), available.height())
+    workbench.setWindowState(Qt.WindowState.WindowMaximized)
+    QApplication.processEvents()  # 跑掉 _track_normal_geometry 排的 singleShot(0)
+
+    # settle 之后守卫判到最大化：不落值，记忆仍是用户摆的窗口化矩形。
+    assert workbench._last_normal_geometry == [USER_X, USER_Y, USER_W, USER_H]
+
+
+def test_windowed_resize_still_updates_remembered_geometry(workbench) -> None:
+    """正向对照：窗口化状态下的 resize 在 settle 后仍要更新记忆矩形，
+    防止延迟采样把跟踪整个弄丢。"""
+    _simulate_user_sizing(workbench)
+    workbench.setGeometry(USER_X + 40, USER_Y + 30, USER_W - 60, USER_H - 50)
+    QApplication.processEvents()
+    assert workbench._last_normal_geometry == [USER_X + 40, USER_Y + 30, USER_W - 60, USER_H - 50]
