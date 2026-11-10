@@ -27,6 +27,11 @@ def pyinstaller_args(*, clean: bool = False) -> list[str]:
         str(REPO_ROOT),
         "--paths",
         str(SUG_ROOT),
+        # Package initialization installs the SUG directory probe before main.
+        # Runtime sys.path changes are not PyInstaller analysis search paths.
+        "--paths",
+        str(SUG_ROOT / "src"),
+        "--hidden-import=strange_uta_game.app_dirs",
         "--collect-submodules=requests",
         "--hidden-import=updater_app.main",
         "--hidden-import=updater_app.gui",
@@ -98,6 +103,13 @@ def main() -> int:
     exe = PROJECT_ROOT / "dist" / "Updater.exe"
     if not exe.exists():
         print("Build finished, but dist/Updater.exe was not found.", file=sys.stderr)
+        return 1
+    # Missing imports can be warnings only; reject an unusable frozen payload.
+    from PyInstaller.archive.readers import CArchiveReader
+
+    archive = CArchiveReader(str(exe)).open_embedded_archive("PYZ.pyz")
+    if "strange_uta_game.app_dirs" not in archive.toc:
+        print("Updater.exe is missing strange_uta_game.app_dirs.", file=sys.stderr)
         return 1
     print(f"Built {exe} ({exe.stat().st_size / 1024 / 1024:.1f} MB)")
     return 0

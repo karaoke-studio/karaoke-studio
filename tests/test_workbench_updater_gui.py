@@ -44,6 +44,9 @@ def test_updater_is_built_as_windowed_gui() -> None:
     assert "--hidden-import=updater_app.gui" in args
     assert "--hidden-import=PyQt6.QtWidgets" in args
     assert "--hidden-import=qfluentwidgets" in args
+    assert "--hidden-import=strange_uta_game.app_dirs" in args
+    search_paths = [args[i + 1] for i, arg in enumerate(args) if arg == "--paths"]
+    assert str(build_updater.SUG_ROOT / "src") in search_paths
     assert "--exclude-module=PyQt6" not in args
     assert "--exclude-module=qfluentwidgets" not in args
 
