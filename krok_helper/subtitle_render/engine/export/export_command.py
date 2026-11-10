@@ -19,13 +19,17 @@ from krok_helper.subtitle_render.domain.roll import (
     ROLL_FILL_TILE,
     ROLL_MAIN_TRANSITION_CROSSFADE,
     ROLL_MAIN_TRANSITION_WHITE,
-    ROLL_SELF_TRANSITION_NONE,
     ROLL_TILE_MAX_CELLS,
     RollSegmentConfig,
     RollTimelinePlan,
     roll_dip_half_ms,
 )
-from krok_helper.subtitle_render.engine.export.encoder_select import video_encoder_options
+from krok_helper.subtitle_render.engine.export.encoder_select import (
+    ENCODER_ADRENO_TERMUXVA,
+    ENCODER_MAIL_TERMUXVA,
+    is_termuxva_mode,
+    video_encoder_options,
+)
 from krok_helper.subtitle_render.engine.render.render_bands import packed_offsets
 from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_MP4,
@@ -47,6 +51,10 @@ from krok_helper.subtitle_render.engine.export.render_job_policy import (
 _PREVIEW_FPS = 2
 _PREVIEW_WIDTH = 640
 _PREVIEW_MIN_WIDTH = 320
+
+# Termux VAAPI 模式固定的编码输入像素格式。与简单转码的
+# ``-vf "format=nv12,hwupload"`` 等价，只是被拼进 filter_complex。
+_TERMUXVA_FORMAT = "nv12"
 
 
 def ffmpeg_sequence_pattern(path: str) -> str:
@@ -340,7 +348,7 @@ def _roll_segment_chain(
     chain += f",trim=duration={_seconds(segment_ms + prepend_clone_ms)},setpts=PTS-STARTPTS"
     chain += _fade("in", head_fade_color, 0, head_fade_ms)
     self_ms = min(normalized.self_transition_ms, segment_ms)
-    if self_ms > 0 and normalized.self_transition_style != ROLL_SELF_TRANSITION_NONE:
+    if self_ms > 0:
         color = "white" if normalized.self_transition_style == "white" else "black"
         if self_fade_in:
             chain += _fade("in", color, 0, self_ms)
@@ -773,6 +781,43 @@ def background_input_args(
     return args
 
 
+def _termuxva_prefix_and_device(mode: str) -> tuple[list[str], str | None]:
+    """TermuxVA 模式的环境变量前缀与 ``-vaapi_device`` 参数值。
+
+    Adreno 走 kgsl 后端（DRM 渲染节点 ``/dev/kgsl-3d0``），Mali 走 llvmpipe
+    软件后端（X11 display ``:0``）。两者都用 termuxva 的 libva 驱动，区别
+    只在 GPU 后端相关环境变量。
+    """
+
+    if mode == ENCODER_ADRENO_TERMUXVA:
+        return (
+            [
+                "env",
+                "MESA_LOADER_DRIVER_OVERRIDE=kgsl",
+                "LIBVA_DRIVER_NAME=termuxva",
+                "TERMUX_VA_BRIDGE=1",
+                "TERMUX_VA_GPU_BACKEND=kgsl",
+                "LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libtva_drm_shim_wayland.so",
+                "TERMUX_VA_X11_DRI3=1",
+                "DISPLAY=:0",
+            ],
+            "/dev/kgsl-3d0",
+        )
+    if mode == ENCODER_MAIL_TERMUXVA:
+        return (
+            [
+                "env",
+                "MESA_LOADER_DRIVER_OVERRIDE=llvmpipe",
+                "LIBVA_DRIVER_NAME=termuxva",
+                "TERMUX_VA_BRIDGE=1",
+                "TERMUX_VA_GPU_BACKEND=sw",
+                "DISPLAY=:0",
+            ],
+            ":0",
+        )
+    return [], None
+
+
 def build_render_command(
     ffmpeg_path: str,
     job: RenderJob,
@@ -786,6 +831,10 @@ def build_render_command(
     """Build the ffmpeg command used by the subtitle export executor."""
 
     validate_render_job(job)
+    vaapi_mode = is_termuxva_mode(job.encoder_mode)
+    if vaapi_mode and job.output_format != OUTPUT_FORMAT_MP4:
+        # VAAPI 编码器只能封进 MP4；透明 MOV / qtrle / PNG 序列都不是合法目标。
+        raise ProcessingError("TermuxVA 编码仅支持 MP4 输出")
     duration = resolve_duration_ms(job) if duration_ms is None else duration_ms
     duration_seconds = max(duration / 1000.0, 0.001)
     roll_plan = resolve_roll_timeline(job)
@@ -822,8 +871,17 @@ def build_render_command(
                 f"[vpin]fps={_PREVIEW_FPS},scale={preview_width}:-2[vprev]"
             )
         video_label = "[venc]"
+    if vaapi_mode:
+        # 方案 A：背景/overlay 仍在 CPU，只在编码前上传到 VAAPI 设备。
+        # 等价于简单转码里的 -vf "format=nv12,hwupload"，但本项目已有
+        # -filter_complex，同一输出流不能再挂 -vf，故拼在图末尾。
+        filter_graph += f";{video_label}format={_TERMUXVA_FORMAT},hwupload[vout]"
+        video_label = "[vout]"
     needs_background = format_needs_background(job.output_format)
+
+    vaapi_prefix, vaapi_device = _termuxva_prefix_and_device(job.encoder_mode)
     command = [
+        *vaapi_prefix,
         ffmpeg_path,
         "-y",
         "-hide_banner",
@@ -834,17 +892,23 @@ def build_render_command(
         "-progress",
         "pipe:2",
         "-nostats",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgba",
-        "-s:v",
-        f"{pipe_w}x{pipe_h}",
-        "-r",
-        frame_rate_text(job.fps),
-        "-i",
-        "pipe:0",
     ]
+    if vaapi_device is not None:
+        command.extend(["-vaapi_device", vaapi_device])
+    command.extend(
+        [
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s:v",
+            f"{pipe_w}x{pipe_h}",
+            "-r",
+            frame_rate_text(job.fps),
+            "-i",
+            "pipe:0",
+        ]
+    )
     audio_input_index: int | None = None
     roll_audio_active = (
         roll_plan.active and job.include_audio and not is_png_sequence(job.output_format)
@@ -915,7 +979,10 @@ def build_render_command(
                 bitrate_mbps=job.bitrate_mbps,
             )
         )
-        command.extend(["-pix_fmt", "yuv420p"])
+        # VAAPI 编码器的输入格式由滤镜图里的 format=nv12,hwupload 决定，
+        # 不接受（也不应该）再传 -pix_fmt。
+        if not vaapi_mode:
+            command.extend(["-pix_fmt", "yuv420p"])
         if has_output_audio:
             command.extend(["-c:a", "aac", "-b:a", "192k"])
         command.extend(["-movflags", "+faststart", str(job.output_path)])
