@@ -16609,7 +16609,12 @@ def test_gpu_title_before_decoration_ignores_global_before_sync_flag() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
-@pytest.mark.parametrize("reading, count", [("ɛ̃t͡ʃa", 3), ("t̃͡ʃ", 1), ("t͡,a", 3), ("がきゃ", 3)])
+@pytest.mark.parametrize("reading, count", [
+    ("ɛ̃t͡ʃa", 3), ("t̃͡ʃ", 1), ("t͡,a", 3), ("がきゃ", 3),
+    # SUG's Unicode 17 additions, unassigned holes and supplementary vowels.
+    ("a\u1acf", 1), ("a\u1dff", 1), ("a\u1ade", 2),
+    ("a\U00016d63\U00016d67", 2),
+])
 @pytest.mark.parametrize("explicit_parts", [False, True])
 def test_gpu_ipa_ruby_keeps_graphemes_in_cached_geometry(monkeypatch, reading, count, explicit_parts):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")

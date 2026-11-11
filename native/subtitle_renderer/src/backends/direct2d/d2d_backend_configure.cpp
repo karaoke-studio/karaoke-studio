@@ -2780,6 +2780,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         );
                         if (fallbackFace.face) {
                             metricFace = fallbackFace.face;
+                        } else {
+                            // Match the drawing path's missing-glyph fallback.
+                            // Failed fallback clears the output glyph vector.
+                            metricFace = outlineFace;
+                            measureGlyphs = glyphIndices(metricFace.Get(), sourceUnit.text);
                         }
                     }
                     std::vector<DWRITE_GLYPH_METRICS> metrics(measureGlyphs.size());
