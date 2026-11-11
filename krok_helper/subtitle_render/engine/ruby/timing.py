@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtGui import QFontMetrics
+from strange_uta_game.backend.domain.graphemes import split_graphemes
 
 from krok_helper.subtitle_render.domain.models import (
     Style,
@@ -361,18 +362,13 @@ def _ruby_utopia_reading_units_and_intervals(ruby: RubyAnnotation) -> list[tuple
 
 
 def _ruby_utopia_visual_units(text: str) -> list[str]:
-    units: list[str] = []
-    for ch in text:
-        if units and ch in {"\u3099", "\u309A"}:
-            units[-1] += ch
-        else:
-            units.append(ch)
-    return units
+    # Keep authored punctuation and part boundaries; only join grapheme clusters.
+    return split_graphemes(text)
 
 
 def _ruby_reading_units(reading: str) -> list[str]:
     units: list[str] = []
-    for ch in reading:
+    for ch in split_graphemes(reading):
         if units and ch in _RUBY_COMBINING_CHARS:
             units[-1] += ch
         else:

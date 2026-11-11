@@ -16606,3 +16606,22 @@ def test_gpu_title_before_decoration_ignores_global_before_sync_flag() -> None:
     # 走字前发光必须比无装饰多出一圈半透明像素：修复前两者逐字节相同。
     assert glow_alpha > plain_alpha * 1.5, (plain_alpha, glow_alpha)
     assert plain != glowing
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("reading, count", [("ɛ̃t͡ʃa", 3), ("t̃͡ʃ", 1), ("t͡,a", 3), ("がきゃ", 3)])
+@pytest.mark.parametrize("explicit_parts", [False, True])
+def test_gpu_ipa_ruby_keeps_graphemes_in_cached_geometry(monkeypatch, reading, count, explicit_parts):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("字", 0)], end_ms=1000)],
+        rubies=[RubyAnnotation(kanji="字", reading=reading, reading_parts=[reading] if explicit_parts else [],
+            reading_part_ms=[], pos_start_ms=0, pos_end_ms=1000)],
+    )
+    style = _g1_style(ruby_font_family="Times New Roman", ruby_font_follow_main=False)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(track, style, width=640, height=360,
+            fps=60, force_warp=True, realization_enabled=False)
+        frames = [renderer.render_gpu_frame(t, force_warp=True) for t in (0, 250, 500, 750, 999)]
+    assert configured["cached_chars"] == 1 + count
+    assert all(frames)

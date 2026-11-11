@@ -1498,3 +1498,39 @@ def test_sug_decomposed_dakuten_merges_into_base_cell() -> None:
     )
     assert targets == [(0, 1), (1, 2)]
     assert all(r.kanji in {"テ", "こ"} for r in track.rubies)
+
+
+def test_ipa_ruby_visual_units_preserve_authored_pause_and_checkpoints():
+    from krok_helper.subtitle_render.engine.ruby.timing import (
+        _ruby_visual_units_and_intervals, _ruby_reading_units,
+        _ruby_utopia_visual_units,
+    )
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+
+    ruby = RubyAnnotation(
+        kanji="字", reading="ɛ̃t͡ʃa", reading_parts=["ɛ̃", "", "t͡ʃa"],
+        reading_part_ms=[200, 400], pos_start_ms=1000, pos_end_ms=1800,
+    )
+    assert _ruby_visual_units_and_intervals(ruby) == [
+        ("ɛ̃", (1000, 1200)), ("t͡ʃ", (1400, 1600)), ("a", (1600, 1800)),
+    ]
+    assert _ruby_utopia_visual_units("がきゃ,っー") == ["が", "き", "ゃ", ",", "っ", "ー"]
+    assert _ruby_reading_units("きゃっー") == ["きゃ", "っ", "ー"]
+    assert _ruby_reading_units("ɛ̃t͡ʃ") == ["ɛ̃", "t͡ʃ"]
+
+
+def test_sug_ipa_grapheme_roundtrip_preserves_cells_and_ruby(tmp_path):
+    project = _sample_sug_project()
+    char = project.sentences[0].characters[0]
+    char.char = "t͡ʃ"
+    char.ruby = Ruby(parts=[RubyPart("ɛ̃"), RubyPart("t͡ʃ")])
+    expected = timing_track_from_sug_project(project)
+    path = tmp_path / "ipa.sug"
+    SugProjectParser.save(project, str(path))
+    actual = load_sug_timing_track(path)
+    assert actual.lines[0].chars[0].text == "t͡ʃ"
+    assert actual.lines[0].chars[0].checkpoint_ms == expected.lines[0].chars[0].checkpoint_ms
+    assert actual.rubies[0].reading_parts == ["ɛ̃", "t͡ʃ"]
+    assert actual.rubies[0].reading_part_ms == expected.rubies[0].reading_part_ms
+    assert actual.rubies[0].target_char_end == 1
+    assert track_to_ir(actual) == track_to_ir(expected)

@@ -2,6 +2,8 @@
 
 #include "qt_character_animation.h"
 
+#include <QTextBoundaryFinder>
+
 #include <algorithm>
 #include <cmath>
 
@@ -106,22 +108,36 @@ std::vector<RubyTimedUnit> rubyProgressPartsAndIntervals(
 }  // namespace
 
 std::vector<QString> rubyReadingUnits(const QString &reading) {
-    std::vector<QString> units;
-    units.reserve(static_cast<std::size_t>(reading.size()));
-    for (const QChar &ch : reading) {
-        units.push_back(QString(ch));
-    }
-    return units;
+    return rubyUtopiaVisualUnits(reading);
 }
 
 std::vector<QString> rubyUtopiaVisualUnits(const QString &text) {
     std::vector<QString> units;
-    for (const QChar &ch : text) {
-        if (!units.empty() && (ch == QChar(0x3099) || ch == QChar(0x309A))) {
-            units.back().append(ch);
+    QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, text);
+    int start = 0;
+    bool pendingDouble = false;
+    for (int end = finder.toNextBoundary(); end >= 0;
+         end = finder.toNextBoundary()) {
+        const QString cluster = text.mid(start, end - start);
+        // SUG extends Unicode graphemes with IPA double-diacritic ties.
+        // The mark belongs to both bases, so retain the following cluster.
+        if (!units.empty() && pendingDouble && !cluster.isEmpty()
+            && cluster.front().isLetter()) {
+            units.back() += cluster;
         } else {
-            units.push_back(QString(ch));
+            units.push_back(cluster);
         }
+        pendingDouble = false;
+        for (const QChar ch : cluster) {
+            const auto code = ch.unicode();
+            if ((code >= 0x035C && code <= 0x0362)
+                || code == 0x1DCD || code == 0x1DFC) {
+                pendingDouble = true;
+            } else if (!ch.isMark() && code != 0x200D) {
+                pendingDouble = false;
+            }
+        }
+        start = end;
     }
     return units;
 }
