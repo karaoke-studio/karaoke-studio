@@ -13607,7 +13607,8 @@ def test_gpu_g1_n3_glow_matches_python_painter_within_bounded_diff(monkeypatch) 
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
-def test_gpu_export_pipeline_matches_serial_frames(monkeypatch) -> None:
+@pytest.mark.parametrize("ipa", [False, True])
+def test_gpu_export_pipeline_matches_serial_frames(monkeypatch, ipa) -> None:
     """G7: the two-slot pipelined export yields the same bytes as serial renders."""
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtGui import QImage
@@ -13615,13 +13616,21 @@ def test_gpu_export_pipeline_matches_serial_frames(monkeypatch) -> None:
     from krok_helper.subtitle_render.engine.export.native_export import iter_gpu_rgba_frames
 
     track = _g1_track()
+    if ipa:
+        track = TimingTrack(
+            lines=[TimingLine(chars=[TimingChar("ɛ̃", 0, checkpoint_ms=[0, 50]),
+                TimingChar("t͡ʃ", 100)], end_ms=250)],
+            rubies=[RubyAnnotation(kanji="ɛ̃t͡ʃ", reading="ɛ̃t͡ʃ",
+                reading_parts=["ɛ̃", "", "t͡ʃ"], reading_part_ms=[50, 100],
+                pos_start_ms=0, pos_end_ms=250)],
+        )
     style = _g1_style(
         decoration_kind="glow",
         glow_before_radius_px=6,
         glow_after_radius_px=6,
         glow_concentration_level=1,
     )
-    width, height, fps, total = 320, 180, 30, 8
+    width, height, fps, total = 320, 180, 60, 16
 
     pipelined = list(
         iter_gpu_rgba_frames(
@@ -16630,3 +16639,37 @@ def test_gpu_ipa_ruby_keeps_graphemes_in_cached_geometry(monkeypatch, reading, c
         frames = [renderer.render_gpu_frame(t, force_warp=True) for t in (0, 250, 500, 750, 999)]
     assert configured["cached_chars"] == 1 + count
     assert all(frames)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("as_ruby", [False, True])
+def test_gpu_ipa_combining_mark_is_positioned_over_base(monkeypatch, as_ruby):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(font_family="Segoe UI", font_family_latin="Segoe UI",
+        font_size_px=100, latin_font_size_px=100, stroke_width_px=0,
+        stroke2_enabled=False, decoration_kind="none",
+        ruby_font_follow_main=False, ruby_colors_follow_main=False, ruby_font_family="Segoe UI",
+        ruby_font_family_latin="Segoe UI", ruby_font_size_px=48,
+        ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_decoration_kind="none")
+    if as_ruby:
+        transparent = KaraokeColorState(text=PaintFill(mode="solid", color="#00000000"))
+        visible = KaraokeColorState(text=PaintFill(mode="solid", color="#FFFFFFFF"))
+        style = replace(style, karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+            ruby_karaoke_colors=KaraokeColors(before=visible, after=visible))
+    bounds = []
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        for text in ("ɛ", "ɛ̃"):
+            track = TimingTrack(lines=[TimingLine(chars=[TimingChar(text, 0)], end_ms=1000)])
+            if as_ruby:
+                track = TimingTrack(
+                    lines=[TimingLine(chars=[TimingChar("字", 0)], end_ms=1000)],
+                    rubies=[RubyAnnotation(kanji="字", reading=text, reading_parts=[text],
+                        reading_part_ms=[], pos_start_ms=0, pos_end_ms=1000,
+                        target_line_index=0, target_char_start=0, target_char_end=1)],
+                )
+            _, frames = _render_g1_frames(renderer, style, (500,), force_warp=True, track=track)
+            bounds.append(_payload_alpha_bounds(frames[0], alpha_min=32))
+    plain, marked = bounds
+    # Mark positioning must add ink above, not a second advance-width cell.
+    assert abs((marked[2] - marked[0]) - (plain[2] - plain[0])) <= 4
+    assert marked[3] - marked[1] > plain[3] - plain[1] + 3

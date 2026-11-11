@@ -1032,6 +1032,35 @@ private:
     std::wstring locale_;
 };
 
+class ScriptSink final : public IDWriteTextAnalysisSink {
+public:
+    explicit ScriptSink(std::size_t count) : scripts(count) {}
+    std::vector<DWRITE_SCRIPT_ANALYSIS> scripts;
+    HRESULT STDMETHODCALLTYPE SetScriptAnalysis(UINT32 start, UINT32 length,
+        const DWRITE_SCRIPT_ANALYSIS *value) override {
+        if (!value || start > scripts.size() || length > scripts.size() - start)
+            return E_INVALIDARG;
+        std::fill(scripts.begin() + start, scripts.begin() + start + length, *value);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetLineBreakpoints(UINT32, UINT32,
+        const DWRITE_LINE_BREAKPOINT *) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetBidiLevel(UINT32, UINT32, UINT8, UINT8) override { return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetNumberSubstitution(UINT32, UINT32,
+        IDWriteNumberSubstitution *) override { return S_OK; }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **object) override {
+        if (!object) return E_POINTER;
+        *object = nullptr;
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IDWriteTextAnalysisSink)) {
+            *object = this;
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+};
+
 // Family name of a DirectWrite-selected fallback font, preferring the Win32
 // (GDI) family name so the caller's resolver finds it in either collection.
 std::wstring familyNameOfFont(IDWriteFont *font) {
@@ -1059,6 +1088,45 @@ std::wstring familyNameOfFont(IDWriteFont *font) {
 }
 
 }  // namespace
+
+HRESULT shapeGlyphRun(IDWriteFactory *factory, IDWriteFontFace *face,
+    const std::wstring &text, float size, ShapedGlyphRun &result) {
+    result = {};
+    if (!factory || !face || text.empty()) return E_INVALIDARG;
+    Microsoft::WRL::ComPtr<IDWriteTextAnalyzer> analyzer;
+    HRESULT hr = factory->CreateTextAnalyzer(analyzer.ReleaseAndGetAddressOf());
+    if (FAILED(hr)) return hr;
+    TextSource source(text);
+    ScriptSink sink(text.size());
+    hr = analyzer->AnalyzeScript(&source, 0, static_cast<UINT32>(text.size()), &sink);
+    if (FAILED(hr)) return hr;
+    for (UINT32 start = 0; start < text.size();) {
+        UINT32 end = start + 1;
+        while (end < text.size() && sink.scripts[end].script == sink.scripts[start].script
+            && sink.scripts[end].shapes == sink.scripts[start].shapes) ++end;
+        const UINT32 length = end - start;
+        UINT32 capacity = length * 3 + 16, count = 0;
+        std::vector<UINT16> clusters(length), glyphs(capacity);
+        std::vector<DWRITE_SHAPING_TEXT_PROPERTIES> textProps(length);
+        std::vector<DWRITE_SHAPING_GLYPH_PROPERTIES> glyphProps(capacity);
+        hr = analyzer->GetGlyphs(text.data() + start, length, face, FALSE, FALSE,
+            &sink.scripts[start], nullptr, nullptr, nullptr, nullptr, 0, capacity,
+            clusters.data(), textProps.data(), glyphs.data(), glyphProps.data(), &count);
+        if (FAILED(hr)) return hr;
+        std::vector<FLOAT> advances(count);
+        std::vector<DWRITE_GLYPH_OFFSET> offsets(count);
+        hr = analyzer->GetGlyphPlacements(text.data() + start, clusters.data(),
+            textProps.data(), length, glyphs.data(), glyphProps.data(), count, face,
+            size, FALSE, FALSE, &sink.scripts[start], nullptr, nullptr, nullptr, 0,
+            advances.data(), offsets.data());
+        if (FAILED(hr)) return hr;
+        result.glyphs.insert(result.glyphs.end(), glyphs.begin(), glyphs.begin() + count);
+        result.advances.insert(result.advances.end(), advances.begin(), advances.end());
+        result.offsets.insert(result.offsets.end(), offsets.begin(), offsets.end());
+        start = end;
+    }
+    return S_OK;
+}
 
 // 缺字回退：优先级固定为「Python 决策族名（Qt 实测选字）→ DirectWrite
 // 系统字体回退（MapCharacters，带语言/字重/斜体）」。没有按脚本硬编码的

@@ -1388,14 +1388,21 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         const Microsoft::WRL::ComPtr<IDWriteFontFace> &face,
         const std::vector<UINT16> &glyphs,
         float unit,
-        int stretchPct
+        int stretchPct,
+        const std::wstring &text
     ) -> GlyphGeometryResource & {
+        const QString qtText = QString::fromStdWString(text);
+        const bool useShaping = text.size() > 1 && std::any_of(
+            qtText.begin(), qtText.end(), [](QChar ch) {
+                return ch.isMark() || ch.isSurrogate() || ch.unicode() == 0x200D;
+            });
         const Impl::TextGlyphKey key{
             reinterpret_cast<std::uintptr_t>(face.Get()),
             static_cast<int>(std::bit_cast<std::uint32_t>(unit)),
             layoutScaleKey,
             stretchPct,
             glyphs,
+            useShaping ? text : std::wstring{},
         };
         const auto found = textGlyphRealizations.find(key);
         if (found != textGlyphRealizations.end()) {
@@ -1422,12 +1429,17 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         );
         sink->SetFillMode(D2D1_FILL_MODE_WINDING);
         sink->SetSegmentFlags(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN);
+        direct2d::ShapedGlyphRun shaped;
+        if (useShaping) {
+            checkHr(direct2d::shapeGlyphRun(device_.dwriteFactory(), face.Get(),
+                text, unit, shaped), "shapeGlyphRun", device_);
+        }
         const HRESULT outlineResult = face->GetGlyphRunOutline(
             static_cast<float>(unit),
-            glyphs.data(),
-            nullptr,
-            nullptr,
-            static_cast<UINT32>(glyphs.size()),
+            useShaping ? shaped.glyphs.data() : glyphs.data(),
+            useShaping ? shaped.advances.data() : nullptr,
+            useShaping ? shaped.offsets.data() : nullptr,
+            static_cast<UINT32>(useShaping ? shaped.glyphs.size() : glyphs.size()),
             FALSE,
             FALSE,
             sink.Get()
@@ -1870,7 +1882,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
                 if (outlineFace && !glyphs.empty()) {
                     glyphResource = &textRealizationFor(
-                        outlineFace, glyphs, unit * fallbackScale, stretchPct
+                        outlineFace, glyphs, unit * fallbackScale, stretchPct, sourceChar.text
                     );
                     path = glyphResource->path;
                 }
@@ -2739,7 +2751,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 GlyphGeometryResource *glyphResource = nullptr;
                 if (outlineFace && !glyphs.empty()) {
                     glyphResource = &textRealizationFor(
-                        outlineFace, glyphs, drawingUnit * fallbackScale, stretchPct
+                        outlineFace, glyphs, drawingUnit * fallbackScale, stretchPct, sourceUnit.text
                     );
                     path = glyphResource->path;
                 }
@@ -2807,12 +2819,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         ? drawingInkWidth * measureUnit / drawingUnit
                         : drawingInkWidth;
                     int leftBearing = metrics.front().leftSideBearing;
-                    int rightBearing = metrics.front().rightSideBearing;
+                    int rightBearing = metrics.back().rightSideBearing;
                     if (!rubyStyle.allowBiting) {
                         leftBearing = std::max(leftBearing, 0);
                         rightBearing = std::max(rightBearing, 0);
                     }
-                    const int advance = std::max(static_cast<int>(metrics.front().advanceWidth), 1);
+                    int advance = 0;
+                    for (const auto &metric : metrics) {
+                        advance += std::max(static_cast<int>(metric.advanceWidth), 0);
+                    }
+                    advance = std::max(advance, 1);
                     const int bodyWidth = inkWidth * (leftBearing + advance + rightBearing) / advance;
                     glyph.layoutWidth = static_cast<float>(
                         std::max(bodyWidth, 0) + rubyEdgeSize

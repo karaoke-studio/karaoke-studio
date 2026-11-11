@@ -332,7 +332,7 @@ struct Direct2DGpuBackend::Impl {
         std::vector<std::pair<std::wstring, float>>, std::wstring
     >;
     using TextGlyphKey = std::tuple<
-        std::uintptr_t, int, std::uint32_t, int, std::vector<UINT16>
+        std::uintptr_t, int, std::uint32_t, int, std::vector<UINT16>, std::wstring
     >;
     using VectorGlyphKey = std::tuple<std::string, int, std::uint32_t>;
     using RealizationCacheKey = std::tuple<

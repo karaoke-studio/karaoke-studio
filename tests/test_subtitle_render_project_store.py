@@ -5277,3 +5277,27 @@ def test_missing_resources_reuse_the_worker_snapshot(qapp, monkeypatch, tmp_path
         )
     finally:
         win.close()
+
+
+def test_yurika_sug_ipa_roundtrip_keeps_graphemes_and_checkpoints(qapp, monkeypatch, tmp_path):
+    from tests.test_subtitle_render_sug_project import _sample_sug_project
+    from strange_uta_game.backend.domain import Ruby, RubyPart
+    from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
+    from krok_helper.subtitle_render.native.protocol import track_to_ir
+
+    project = _sample_sug_project()
+    char = project.sentences[0].characters[0]
+    char.char = "t͡ʃ"
+    char.ruby = Ruby(parts=[RubyPart("ɛ̃"), RubyPart("t͡ʃ")])
+    source = tmp_path / "ipa.sug"
+    SugProjectParser.save(project, str(source))
+    win = _make_window(qapp, monkeypatch)
+    win._apply_project_data({"subtitle_path": str(source), "style": style_to_dict(Style())})
+    before = track_to_ir(win._timing_track)
+    path = tmp_path / "ipa.yurika"
+    assert win._write_project(path)
+    win._new_project()
+    win._apply_project_data(load_render_project(path))
+    assert track_to_ir(win._timing_track) == before
+    assert win._timing_track.lines[0].chars[0].text == "t͡ʃ"
+    assert win._timing_track.rubies[0].reading_parts == ["ɛ̃", "t͡ʃ"]

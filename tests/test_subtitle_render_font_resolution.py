@@ -510,3 +510,11 @@ def test_italic_uses_variable_face_from_request_pool():
     upright_request = resolve_instance(cap, FontRequest(family="Dual", weight=550))
     assert upright_request.face_style == "Regular"
     assert upright_request.axis_value == 550.0
+
+
+def test_font_fallback_clusters_preserve_ipa_ties_and_unicode17_boundaries():
+    from krok_helper.subtitle_render.engine.text.font_fallback import grapheme_clusters
+    assert grapheme_clusters("t̃͡ʃɛ̃") == ("t̃͡ʃ", "ɛ̃")
+    assert grapheme_clusters("t͡,a") == ("t͡", ",", "a")
+    assert grapheme_clusters("a\u1acfa\u1ade") == ("a\u1acf", "a", "\u1ade")
+    assert grapheme_clusters("a\U00016d63\U00016d67") == ("a", "\U00016d63\U00016d67")

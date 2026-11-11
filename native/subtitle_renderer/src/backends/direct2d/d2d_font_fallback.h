@@ -13,6 +13,15 @@
 
 namespace krok::subtitle::native::direct2d {
 
+struct ShapedGlyphRun {
+    std::vector<UINT16> glyphs;
+    std::vector<FLOAT> advances;
+    std::vector<DWRITE_GLYPH_OFFSET> offsets;
+};
+
+HRESULT shapeGlyphRun(IDWriteFactory *factory, IDWriteFontFace *face,
+    const std::wstring &text, float size, ShapedGlyphRun &result);
+
 // Scene-model alias: one resolved font instance = one hint record.
 using ResolvedFaceHint = FontInstanceHint;
 

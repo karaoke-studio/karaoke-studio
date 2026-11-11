@@ -26,7 +26,7 @@ import threading
 import unicodedata
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QTextBoundaryFinder
+from strange_uta_game.backend.domain.graphemes import split_graphemes
 from PyQt6.QtGui import QFont, QRawFont, QTextLayout, QTextOption
 
 from krok_helper.subtitle_render.engine.text.font_capabilities import (
@@ -80,44 +80,13 @@ def _is_optional_scalar(char: str) -> bool:
     return unicodedata.category(char) in _OPTIONAL_CATEGORIES
 
 
-def _utf16_to_python_index(text: str) -> dict[int, int]:
-    """UTF-16 位置 → Python 码点下标（代理对只映射首单元与末尾）。"""
-    mapping: dict[int, int] = {}
-    utf16 = 0
-    for index, char in enumerate(text):
-        mapping[utf16] = index
-        utf16 += 2 if ord(char) > 0xFFFF else 1
-    mapping[utf16] = len(text)
-    return mapping
-
-
 def grapheme_clusters(text: str) -> tuple[str, ...]:
-    """按 Unicode 字素簇切分（Qt 的边界扫描器，与渲染侧同源）。
+    """Use the source model's clusters, including IPA double-diacritic ties.
 
-    ``QTextBoundaryFinder`` 返回的是 **UTF-16 位置**，而 Python 字符串按
-    码点索引——非 BMP 字符（emoji、扩展 B 区汉字如 𠮷）差一个单元，直接切片
-    会把后一个字符并进前一个簇（实测 ``'😀AB'`` → ``('😀A','B','')``）。
-    这里先把边界位置换算成码点下标再切。
+    A tied base pair must be resolved together so its font and mark positioning
+    cannot diverge between the loader, fallback prewarm and rendering paths.
     """
-    if not text:
-        return ()
-    finder = QTextBoundaryFinder(QTextBoundaryFinder.BoundaryType.Grapheme, text)
-    boundaries: list[int] = []
-    position = finder.toNextBoundary()
-    while position != -1:
-        boundaries.append(position)
-        position = finder.toNextBoundary()
-    mapping = _utf16_to_python_index(text)
-    clusters: list[str] = []
-    start = 0
-    for position in boundaries:
-        end = mapping.get(position, len(text))
-        if end > start:
-            clusters.append(text[start:end])
-            start = end
-    if start < len(text):
-        clusters.append(text[start:])
-    return tuple(clusters)
+    return tuple(split_graphemes(text))
 
 
 # ---------------------------------------------------------------------------
