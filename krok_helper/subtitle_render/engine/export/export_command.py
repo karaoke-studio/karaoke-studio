@@ -348,7 +348,7 @@ def _roll_segment_chain(
     chain += f",trim=duration={_seconds(segment_ms + prepend_clone_ms)},setpts=PTS-STARTPTS"
     chain += _fade("in", head_fade_color, 0, head_fade_ms)
     self_ms = min(normalized.self_transition_ms, segment_ms)
-    if self_ms > 0:
+    if self_ms > 0 and normalized.self_transition_style != "none":
         color = "white" if normalized.self_transition_style == "white" else "black"
         if self_fade_in:
             chain += _fade("in", color, 0, self_ms)
@@ -362,6 +362,8 @@ def _roll_segment_chain(
         max(segment_ms + prepend_clone_ms - tail_fade_ms, 0),
         tail_fade_ms,
     )
+    # Restore CFR metadata after setpts/tpad before a downstream xfade.
+    chain += f",fps={frame_rate_text(job.fps)}"
     graph += f"[{in_label}f]{chain}[{out_label}];"
     return graph
 
@@ -402,6 +404,7 @@ def _roll_main_chain(
         max(prepend_clone_ms + main_ms - tail_fade_ms, 0),
         tail_fade_ms,
     )
+    chain += f",fps={frame_rate_text(job.fps)}"
     return f"[{in_label}]{chain}[{out_label}];"
 
 
@@ -594,7 +597,8 @@ def roll_background_graph(
         )
         if post_cross:
             graph_parts.append(
-                f"[rollpm]trim=duration={_seconds(plan.main_end_ms)},setpts=PTS-STARTPTS[rollpmt];"
+                f"[rollpm]trim=duration={_seconds(plan.main_end_ms)},setpts=PTS-STARTPTS,"
+                f"fps={frame_rate_text(job.fps)}[rollpmt];"
                 f"[rollpmt][rollpost]xfade=transition={_roll_xfade(post_style)}"
                 f":duration={_seconds(post_v)}:offset={_seconds(plan.main_end_ms - post_v)}[rollall];"
             )

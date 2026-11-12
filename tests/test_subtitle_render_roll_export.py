@@ -504,7 +504,8 @@ def _ffmpeg_path() -> str | None:
 
 
 @pytest.mark.skipif(_ffmpeg_path() is None, reason="本机无 ffmpeg，跳过实跑冒烟")
-def test_roll_graph_runs_real_ffmpeg(tmp_path):
+@pytest.mark.parametrize("fps", [30, 59.94, 60, 120])
+def test_roll_graph_runs_real_ffmpeg(tmp_path, fps):
     """合成素材实跑一次前黑+后黑导出命令，校验滤镜图可执行与总时长。"""
     ffmpeg = _ffmpeg_path()
 
@@ -526,7 +527,7 @@ def test_roll_graph_runs_real_ffmpeg(tmp_path):
         background_source=BackgroundSource(kind="video", path=str(main_video)),
         width=320,
         height=180,
-        fps=30,
+        fps=fps,
         duration_ms=4000,
         output_format=OUTPUT_FORMAT_MP4,
         pre_roll=RollSegmentConfig(
@@ -544,8 +545,8 @@ def test_roll_graph_runs_real_ffmpeg(tmp_path):
     command = build_render_command(ffmpeg, job)
     process = subprocess.Popen(command, stdin=subprocess.PIPE)
     frame = bytes(320 * 180 * 4)
-    # 期望 total = max(1500+3500, 1500+4000+1000) = 6500ms → 195 帧。
-    for _ in range(195):
+    # total = max(1500+3500, 1500+4000+1000) = 6500ms.
+    for _ in range(round(6.5 * fps)):
         process.stdin.write(frame)
     process.stdin.close()
     assert process.wait(timeout=60) == 0
