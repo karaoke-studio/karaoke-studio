@@ -1484,6 +1484,8 @@ class NativeRendererProcess:
         height: int,
         src_x: int = 0,
         src_y: int = 0,
+        canvas_width: int = 0,
+        canvas_height: int = 0,
         force_warp: bool = False,
         generation: int = 0,
         frame_index: int = 0,
@@ -1491,7 +1493,7 @@ class NativeRendererProcess:
         """Present one GPU frame in a DirectComposition child HWND without readback.
 
         ``x/y/width/height`` 为子窗口在父窗口客户区的物理矩形；``src_x/src_y``
-        为该矩形在渲染纹理里的物理像素起点（场景矩形被视口裁剪时非零）。
+        为完整显示画布内的裁切起点；canvas 缺省时沿用纹理像素的 1:1 口径。
         """
         request = {
             "cmd": "gpu_present_frame",
@@ -1507,6 +1509,8 @@ class NativeRendererProcess:
             "src_x": int(src_x),
             "src_y": int(src_y),
         }
+        if canvas_width > 0 and canvas_height > 0:
+            request.update(canvas_width=int(canvas_width), canvas_height=int(canvas_height))
         self._send(request)
         return self._read_command_response(
             {"gpu_frame_presented", "gpu_frame_dropped"},
@@ -1554,6 +1558,8 @@ class NativeRendererProcess:
         height: int,
         src_x: int = 0,
         src_y: int = 0,
+        canvas_width: int = 0,
+        canvas_height: int = 0,
         t_ms: int = 0,
         force_warp: bool = False,
         generation: int = 0,
@@ -1572,6 +1578,8 @@ class NativeRendererProcess:
             "src_x": int(src_x),
             "src_y": int(src_y),
         }
+        if canvas_width > 0 and canvas_height > 0:
+            request.update(canvas_width=int(canvas_width), canvas_height=int(canvas_height))
         self._send(request)
         return self._read_command_response(
             {"gpu_frame_presented", "gpu_frame_dropped"},

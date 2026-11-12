@@ -406,8 +406,12 @@ QJsonObject handlePresentGpuFrame(
     target.height = intValue(request, QStringLiteral("height"), 0);
     target.srcX = intValue(request, QStringLiteral("src_x"), 0);
     target.srcY = intValue(request, QStringLiteral("src_y"), 0);
+    target.canvasWidth = intValue(request, QStringLiteral("canvas_width"), config->physicalWidth());
+    target.canvasHeight = intValue(request, QStringLiteral("canvas_height"), config->physicalHeight());
     // 子窗口矩形可小于渲染纹理（视口裁剪），但拷贝源区域必须完整在纹理内。
-    if (target.width <= 0 || target.height <= 0) {
+    if (target.width <= 0 || target.height <= 0
+        || target.canvasWidth <= 0 || target.canvasHeight <= 0
+        || target.canvasWidth > 8192 || target.canvasHeight > 8192) {
         QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
         out.insert(
             QStringLiteral("error"),
@@ -416,8 +420,8 @@ QJsonObject handlePresentGpuFrame(
         return out;
     }
     if (target.srcX < 0 || target.srcY < 0
-        || target.srcX + target.width > config->physicalWidth()
-        || target.srcY + target.height > config->physicalHeight()) {
+        || static_cast<std::int64_t>(target.srcX) + target.width > target.canvasWidth
+        || static_cast<std::int64_t>(target.srcY) + target.height > target.canvasHeight) {
         QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
         out.insert(
             QStringLiteral("error"),
@@ -558,14 +562,18 @@ QJsonObject handlePresentRenderedGpuFrame(
     target.height = intValue(request, QStringLiteral("height"), 0);
     target.srcX = intValue(request, QStringLiteral("src_x"), 0);
     target.srcY = intValue(request, QStringLiteral("src_y"), 0);
-    if (target.width <= 0 || target.height <= 0) {
+    target.canvasWidth = intValue(request, QStringLiteral("canvas_width"), config->physicalWidth());
+    target.canvasHeight = intValue(request, QStringLiteral("canvas_height"), config->physicalHeight());
+    if (target.width <= 0 || target.height <= 0
+        || target.canvasWidth <= 0 || target.canvasHeight <= 0
+        || target.canvasWidth > 8192 || target.canvasHeight > 8192) {
         QJsonObject out = response(false, QStringLiteral("gpu_present_rendered"));
         out.insert(QStringLiteral("error"), QStringLiteral("native preview dimensions must be positive"));
         return out;
     }
     if (target.srcX < 0 || target.srcY < 0
-        || target.srcX + target.width > config->physicalWidth()
-        || target.srcY + target.height > config->physicalHeight()) {
+        || static_cast<std::int64_t>(target.srcX) + target.width > target.canvasWidth
+        || static_cast<std::int64_t>(target.srcY) + target.height > target.canvasHeight) {
         QJsonObject out = response(false, QStringLiteral("gpu_present_rendered"));
         out.insert(QStringLiteral("error"), QStringLiteral("native preview source region exceeds the configured render target"));
         return out;

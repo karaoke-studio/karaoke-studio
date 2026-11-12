@@ -340,15 +340,17 @@ def test_async_preview_target_size_uses_device_pixel_ratio():
     assert preview_render_target_size(1, 1, -1.0) == (1, 1, 0.01)
 
 
-def test_preview_quality_caps_lower_tiers_and_preserves_full_quality():
+def test_preview_quality_uses_fixed_project_scales_at_every_window_size():
     from krok_helper.subtitle_render.frontend.preview.preview_async import (
         normalize_preview_quality,
         preview_quality_render_scale,
     )
 
     assert preview_quality_render_scale(0.8, "low") == 0.25
-    assert preview_quality_render_scale(0.4, "medium") == 0.4
-    assert preview_quality_render_scale(1.5, "high") == 1.5
+    assert preview_quality_render_scale(0.4, "medium") == 0.5
+    assert preview_quality_render_scale(1.5, "high") == 1.0
+    for display_scale in (0.1, 0.2, 0.4, 1.0, 2.0):
+        assert [preview_quality_render_scale(display_scale, tier) for tier in ("low", "medium", "high")] == [0.25, 0.5, 1.0]
     assert normalize_preview_quality("unknown") == "high"
 
 
@@ -720,7 +722,7 @@ def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
         display_scale = graphics._scene_device_pixel_ratio()
         graphics.set_preview_quality("low")
         assert renderer.targets[-1][:2] == (1280, 720)
-        assert math.isclose(renderer.targets[-1][2], min(display_scale, 0.25))
+        assert math.isclose(renderer.targets[-1][2], 0.25)
         assert renderer.requests[-1] == graphics.current_time_ms
     finally:
         graphics.close()
@@ -957,8 +959,9 @@ def test_preview_graphics_repeated_gpu_toggles_stop_worker_threads(qapp, monkeyp
         qapp.processEvents()
 
 
+@pytest.mark.parametrize("quality, scale", [("low", 0.25), ("medium", 0.5), ("high", 1.0)])
 def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
-    qapp, monkeypatch
+    qapp, monkeypatch, quality, scale
 ):
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
@@ -982,8 +985,9 @@ def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
         def set_render_target(self, width, height, device_pixel_ratio=1.0):
             self.render_targets.append((width, height, device_pixel_ratio))
 
-        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0):
+        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0, **kwargs):
             self.native_targets.append((parent_hwnd, x, y, width, height, src_x, src_y))
+            self.canvas_size = (kwargs["canvas_width"], kwargs["canvas_height"])
 
         def clear_native_target(self):
             self.native_targets.clear()
@@ -1006,6 +1010,7 @@ def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
     graphics = PreviewGraphicsView()
     try:
         graphics.resize(800, 500)
+        graphics.set_preview_quality(quality)
         graphics.show()
         qapp.processEvents()
         graphics._refresh_async_target()  # noqa: SLF001
@@ -1018,12 +1023,9 @@ def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
         # 子窗口挂在顶层窗口 HWND 上（不是视口的原生 HWND——视口原生化会
         # 把悬浮播放窗的标题栏/传输条压到视频下面）。
         assert parent_hwnd == int(graphics.window().winId())
-        # G6 渲染目标不做质量钳制：纹理=屏幕物理尺寸。
-        display_scale = graphics._display_device_scale()  # noqa: SLF001
-        assert render_dpr == display_scale
-        expected_w, expected_h, _ = pg.preview_render_target_size(
-            logical_w, logical_h, render_dpr
-        )
+        # Render size follows quality; the physical child/crop stays independent.
+        assert render_dpr == scale
+        expected_w, expected_h = renderer.canvas_size
         # 窗口矩形 = 视口可见部分映射到顶层客户区的物理像素，绝不超过纹理。
         assert 1 <= win_w <= expected_w
         assert 1 <= win_h <= expected_h
@@ -1039,7 +1041,8 @@ def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
         qapp.processEvents()
 
 
-def test_preview_graphics_g6_clips_child_window_to_viewport(qapp, monkeypatch):
+@pytest.mark.parametrize("quality", ["low", "medium", "high"])
+def test_preview_graphics_g6_clips_child_window_to_viewport(qapp, monkeypatch, quality):
     """视口比场景更宽时（expanding fit 上下溢出），子窗口必须裁剪到视口可见区。
 
     裁掉的部分用户本来看不见；若照搬整个映射矩形，字幕会画到视口上下
@@ -1069,8 +1072,9 @@ def test_preview_graphics_g6_clips_child_window_to_viewport(qapp, monkeypatch):
         def set_render_target(self, width, height, device_pixel_ratio=1.0):
             self.render_targets.append((width, height, device_pixel_ratio))
 
-        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0):
+        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0, **kwargs):
             self.native_targets.append((parent_hwnd, x, y, width, height, src_x, src_y))
+            self.canvas_size = (kwargs["canvas_width"], kwargs["canvas_height"])
 
         def clear_native_target(self):
             self.native_targets.clear()
@@ -1096,6 +1100,7 @@ def test_preview_graphics_g6_clips_child_window_to_viewport(qapp, monkeypatch):
         # 方向溢出视口（mapped.top() < 0），子窗口必须只取可见部分。
         graphics.set_output_size(1920, 1080)
         graphics.resize(1200, 300)
+        graphics.set_preview_quality(quality)
         graphics.show()
         qapp.processEvents()
         graphics._fit_scene_to_view()
@@ -1106,17 +1111,16 @@ def test_preview_graphics_g6_clips_child_window_to_viewport(qapp, monkeypatch):
             renderer.native_targets[-1]
         )
         logical_w, logical_h, render_dpr = renderer.render_targets[-1]
-        physical_w, physical_h, _ = pg.preview_render_target_size(
-            logical_w, logical_h, render_dpr
-        )
+        physical_w, physical_h = renderer.canvas_size
         dpr = graphics.window().devicePixelRatioF() or 1.0
         viewport_rect = QRectF(graphics.viewport().rect())
         mapped = graphics.mapFromScene(graphics.scene().sceneRect()).boundingRect()
         # 前置：expanding fit 让场景在竖直方向两侧都溢出视口。
         assert mapped.top() < 0 < mapped.bottom() - viewport_rect.height()
         # 窗口矩形 = 视口可见区（两侧裁剪后只剩中间），不超出纹理。
-        assert win_w == min(int(round(viewport_rect.width() * dpr)), physical_w)
-        assert win_h == min(int(round(viewport_rect.height() * dpr)), physical_h)
+        visible = QRectF(mapped).intersected(viewport_rect)
+        assert win_w == min(int(round(visible.width() * dpr)), physical_w)
+        assert win_h == min(int(round(visible.height() * dpr)), physical_h)
         assert win_h < physical_h
         # 顶部被裁掉的部分通过源偏移补回（可见左上角在映射矩形内的偏移）。
         expected_src_y = round((viewport_rect.top() - mapped.top()) * dpr)
@@ -1154,8 +1158,9 @@ def test_preview_graphics_g6_clears_native_target_when_hidden(qapp, monkeypatch)
         def set_render_target(self, width, height, device_pixel_ratio=1.0):
             self.render_targets.append((width, height, device_pixel_ratio))
 
-        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0):
+        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0, **kwargs):
             self.native_targets.append((parent_hwnd, x, y, width, height, src_x, src_y))
+            self.canvas_size = (kwargs["canvas_width"], kwargs["canvas_height"])
 
         def clear_native_target(self):
             self.cleared += 1
@@ -1221,8 +1226,9 @@ def test_preview_graphics_g6_toggle_while_hidden_engages_on_show(qapp, monkeypat
         def set_render_target(self, width, height, device_pixel_ratio=1.0):
             self.render_targets.append((width, height, device_pixel_ratio))
 
-        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0):
+        def set_native_target(self, parent_hwnd, x, y, width, height, src_x=0, src_y=0, **kwargs):
             self.native_targets.append((parent_hwnd, x, y, width, height, src_x, src_y))
+            self.canvas_size = (kwargs["canvas_width"], kwargs["canvas_height"])
 
         def clear_native_target(self):
             self.cleared += 1
@@ -1352,6 +1358,7 @@ def test_gpu_native_preview_presents_without_shared_memory_or_qimage(qapp, monke
     from krok_helper.subtitle_render.domain.models import Style, TimingTrack
 
     presented_calls: list[tuple[int, dict]] = []
+    surface_calls: list[dict] = []
     presented_signal: list[int] = []
     finished = threading.Event()
 
@@ -1379,6 +1386,7 @@ def test_gpu_native_preview_presents_without_shared_memory_or_qimage(qapp, monke
             }
 
         def present_rendered_gpu_frame(self, **kwargs):
+            surface_calls.append(kwargs)
             return {
                 "ok": True,
                 "event": "gpu_frame_presented",
@@ -1432,6 +1440,28 @@ def test_gpu_native_preview_presents_without_shared_memory_or_qimage(qapp, monke
         assert timings["present_ms"]["mean"] == 0.2
         assert timings["readback_ms"]["mean"] == 0.0
         assert renderer.stats_snapshot()["max_pending"] == 1
+        # Low-resolution raster must still fill the full physical child window.
+        renderer.set_render_target(320, 180, 0.25)
+        renderer.set_native_target(12345, 0, 0, 640, 360, canvas_width=640, canvas_height=360)
+        renderer.request(1_000)
+        deadline = time.monotonic() + 2.0
+        while len(surface_calls) < 2 and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert surface_calls[-1]["width"] == 640
+        assert surface_calls[-1]["canvas_width"] == 640
+        # A paused geometry-only change must re-present the same timestamp,
+        # even though neither the raster target nor scene generation changed.
+        renderer.set_native_target(12345, 10, 5, 600, 300, 17, 9,
+                                   canvas_width=640, canvas_height=360)
+        renderer.request(1_000)
+        deadline = time.monotonic() + 2.0
+        while len(surface_calls) < 3 and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert surface_calls[-1]["width"] == 600
+        assert surface_calls[-1]["src_x"] == 17
+        assert renderer.timing_snapshot()["readback_ms"]["mean"] == 0.0
     finally:
         renderer.stop()
 
@@ -1530,6 +1560,7 @@ def test_gpu_native_preview_skips_redundant_same_key_frames(qapp, monkeypatch):
 
     presented: list[int] = []
     emitted: list[int] = []
+    completed: list[int] = []
     first_present = threading.Event()
 
     class FakeGpuProcess:
@@ -1581,6 +1612,7 @@ def test_gpu_native_preview_skips_redundant_same_key_frames(qapp, monkeypatch):
     monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
     renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
     renderer.frame_presented.connect(emitted.append)
+    renderer.native_present_completed.connect(completed.append)
     try:
         renderer.set_native_target(12345, 0, 0, 320, 180)
         renderer.set_state(TimingTrack(), Style())
@@ -1596,7 +1628,63 @@ def test_gpu_native_preview_skips_redundant_same_key_frames(qapp, monkeypatch):
             time.sleep(0.01)
         assert len(presented) == 1  # GPU 只渲染了一次
         assert len(emitted) == 2  # 两次请求都闭合了 delivery
+        assert len(completed) == 1  # FPS 只计真正上屏，重复请求的确认不计帧。
         assert renderer.stats_snapshot()["native_redundant_frames_skipped"] >= 1
+    finally:
+        renderer.stop()
+
+
+@pytest.mark.parametrize("outcome", [
+    "late", "very_late", "dropped", "cancelled", "seek_before_delivery", "old_renderer",
+])
+def test_gpu_native_fps_counts_completed_presents_independent_of_delivery(
+    qapp, monkeypatch, outcome,
+):
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.domain.models import Style, TimingTrack
+
+    monkeypatch.setattr(pa, "gpu_native_preview_enabled", lambda: True)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    painted, delivered = [], []
+    view = SimpleNamespace(
+        _async_renderer=renderer,
+        sender=lambda: object() if outcome == "old_renderer" else renderer,
+        framePainted=SimpleNamespace(emit=lambda: painted.append(True)),
+    )
+    renderer.native_present_completed.connect(
+        lambda generation: PreviewGraphicsView._on_native_present_completed(view, generation),
+        Qt.ConnectionType.QueuedConnection,
+    )
+    renderer.frame_presented.connect(delivered.append)
+
+    class Process:
+        def present_rendered_gpu_frame(self, **kwargs):
+            # A valid frame was submitted before the next GUI request advanced.
+            with renderer._condition:
+                renderer._latest_t = 1_200 if outcome == "very_late" else 1_010
+                if outcome == "cancelled":
+                    renderer._generation += 1
+            return {"dropped": outcome == "dropped", "present_ms": 0.2}
+
+    try:
+        renderer.set_native_target(12345, 0, 0, 320, 180)
+        renderer.set_state(TimingTrack(), Style())
+        with renderer._condition:
+            renderer._latest_t = 1_000
+            renderer._playing = True
+            renderer._g6_media_t = 1_000
+            renderer._g6_media_wall = time.monotonic()
+        renderer._present_g6_frame(
+            Process(), 1_000, renderer._native_target, renderer._generation, False,
+        )
+        if outcome == "seek_before_delivery":
+            with renderer._condition:
+                renderer._generation += 1
+        qapp.processEvents()
+        assert len(painted) == (1 if outcome in ("late", "very_late") else 0)
+        assert delivered == []  # Existing timestamp delivery rules stay intact.
     finally:
         renderer.stop()
 
