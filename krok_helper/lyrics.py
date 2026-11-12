@@ -9,7 +9,6 @@ from html.parser import HTMLParser
 import hashlib
 import json
 import logging
-import random
 import re
 import time
 import unicodedata
@@ -614,77 +613,58 @@ class QqMusicLyricsProvider:
         items: list[LyricsSearchCandidate] = []
         request_page = max(1, page)
         for current_page in range(request_page, request_page + _page_count(limit, page_size)):
-            payload = {
-                "comm": {
-                    "ct": 11,
-                    "cv": "1003006",
-                    "v": "1003006",
-                    "os_ver": "15",
-                    "phonetype": "24122RKC7C",
-                    "rom": "Redmi/miro/miro:15/AE3A.240806.005/OS2.0.105.0.VOMCNXM:user/release-keys",
-                    "tmeAppID": "qqmusiclight",
-                    "nettype": "NETWORK_WIFI",
-                    "udid": "0",
-                },
-                "request": {
-                    "method": "DoSearchForQQMusicLite",
-                    "module": "music.search.SearchCgiService",
-                    "param": {
-                        "search_id": str(random.randint(10**16, 10**17 - 1)),
-                        "remoteplace": "search.android.keyboard",
-                        "query": keyword,
-                        "search_type": 0,
-                        "num_per_page": page_size,
-                        "page_num": current_page,
-                        "highlight": 0,
-                        "nqc_flag": 0,
-                        "page_id": 1,
-                        "grp": 1,
-                    },
-                },
-            }
+            # The Lite/desktop RPCs can reject anonymous searches with 2001.
+            # The web search endpoint still supports them. Do not add new_json=1:
+            # that response mode can silently return an empty song list.
             request = Request(
-                "https://u.y.qq.com/cgi-bin/musicu.fcg",
-                data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?" + urlencode({
+                    "w": keyword,
+                    "n": page_size,
+                    "p": current_page,
+                    "format": "json",
+                    "platform": "yqq.json",
+                    "ct": 24,
+                    "t": 0,
+                }),
                 headers={
                     "Accept-Encoding": "gzip",
-                    "Content-Type": "application/json",
-                    "Cookie": "tmeLoginType=-1;",
-                    "User-Agent": "okhttp/3.14.9",
+                    "Referer": "https://y.qq.com/",
+                    "User-Agent": "Mozilla/5.0",
                 },
-                method="POST",
             )
             try:
                 response = _load_json_from_request(request)
             except LyricsSearchError as exc:
                 raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
 
-            _check_api_response(response, self.provider_name)
-            _check_api_response(response.get("request"), self.provider_name)
-            songs = response.get("request", {}).get("data", {}).get("body", {}).get("item_song", [])
-            if not isinstance(songs, list) or not songs:
+            response = _check_api_response(response, self.provider_name)
+            data = response.get("data")
+            song_group = data.get("song") if isinstance(data, dict) else None
+            songs = song_group.get("list") if isinstance(song_group, dict) else None
+            if not isinstance(songs, list):
+                raise LyricsSearchError(f"{self.provider_name} 返回了无效的歌曲列表。")
+            if not songs:
                 break
-            for song in songs:
+            for position, song in enumerate(songs, start=1):
                 if not isinstance(song, dict):
                     continue
                 singers = song.get("singer") or []
                 singer_names = [str(singer.get("name") or "").strip() for singer in singers if isinstance(singer, dict)]
-                album = song.get("album") or {}
                 items.append(
                     LyricsSearchCandidate(
                         provider_id=self.provider_id,
                         provider_name=self.provider_name,
-                        track_id=str(song.get("id") or ""),
-                        title=str(song.get("title") or "").strip(),
+                        track_id=str(song.get("songid") or ""),
+                        title=str(song.get("songname") or "").strip(),
                         artist=" / ".join([name for name in singer_names if name]),
-                        album=str(album.get("name") or "").strip() if isinstance(album, dict) else "",
+                        album=str(song.get("albumname") or "").strip(),
                         duration_seconds=_coerce_float(song.get("interval")),
                         provider_payload={
-                            "id": str(song.get("id") or ""),
-                            "mid": str(song.get("mid") or ""),
+                            "id": str(song.get("songid") or ""),
+                            "mid": str(song.get("songmid") or ""),
                         },
                         source_priority=self.source_priority,
-                        provider_position=((current_page - 1) * page_size) + len(items) + 1,
+                        provider_position=((current_page - 1) * page_size) + position,
                     )
                 )
                 if len(items) >= limit:
