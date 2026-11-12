@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from PyQt6 import sip
@@ -11,7 +12,6 @@ from PyQt6.QtGui import (
     QCursor,
     QIcon,
     QImage,
-    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
@@ -19,26 +19,29 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
-    QColorDialog,
     QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QSizePolicy,
-    QSpinBox,
     QStackedWidget,
+    QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
     Action,
     FluentIcon as FIF,
+    CaptionLabel,
     LineEdit as FluentLineEdit,
     RoundMenu,
+    PrimaryPushButton,
+    PushButton as FluentPushButton,
+    ScrollArea as FluentScrollArea,
     ToolButton as FluentToolButton,
 )
 
-from krok_helper.subtitle_render.frontend.widgets.theme import palette
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
+from krok_helper.subtitle_render.settings.recent_colors import RECENT_COLOR_LIMIT, RecentColorStore
+from .color_picker_widgets import ColorChannelSlider, ColorTile, HueSaturationPlane
 
 
 COLOR_COMMIT_DEBOUNCE_MS = 250
@@ -507,421 +510,401 @@ class ScreenColorPicker(QWidget):
         self.deleteLater()
 
 
-class _AlphaSlider(QWidget):
-    """Vertical checkerboard slider for editing a QColor alpha channel."""
+class _RecentColorList(FluentScrollArea):
+    """Scrollable RGBA color bars, with color/text drag-and-drop support."""
 
-    alphaChanged = Signal(int)
+    colorPicked = Signal(QColor)
+    colorDropped = Signal(QColor)
+    selectionChanged = Signal(QColor)
 
-    def __init__(self, color: QColor, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
-        self._color = QColor(color)
-        self._alpha = color.alpha()
-        self.setObjectName("ColorAlphaSlider")
-        self.setFixedWidth(42)
-        self.setMinimumHeight(80)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setAccessibleName("透明度")
-        self._update_tooltip()
+        self.setAcceptDrops(True)
+        self.setAccessibleName("最近使用的颜色")
+        self.setWidgetResizable(True)
+        self.setFrameShape(FluentScrollArea.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setMinimumHeight(140)
+        self.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        content = QWidget(self)
+        content.setStyleSheet("background: transparent;")
+        self.setWidget(content)
+        self.tiles: list[ColorTile] = []
+        self._selected_color = QColor()
+        rows = QVBoxLayout(content)
+        rows.setContentsMargins(0, 0, 12, 0)
+        rows.setSpacing(8)
+        rows.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._empty_hint = CaptionLabel("暂无最近颜色", content)
+        self._empty_hint.setWordWrap(True)
+        rows.addWidget(self._empty_hint)
+        for _index in range(RECENT_COLOR_LIMIT):
+            tile = ColorTile(parent=content)
+            tile.setFixedHeight(30)
+            tile.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            tile.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            tile.setCheckable(True)
+            tile.clicked.connect(lambda checked=False, tile=tile: self._pick_color(tile.color))
+            rows.addWidget(tile)
+            self.tiles.append(tile)
+
+    def set_colors(self, colors: list[QColor]) -> None:
+        self._empty_hint.setVisible(not colors)
+        for index, tile in enumerate(self.tiles):
+            tile.set_color(colors[index] if index < len(colors) else QColor())
+            tile.setVisible(index < len(colors))
+        self.verticalScrollBar().setValue(0)
+        self.set_selected_color(self._selected_color)
 
     @property
-    def alpha(self) -> int:
-        return self._alpha
+    def selected_color(self) -> QColor:
+        return QColor(self._selected_color)
 
-    def set_color(self, color: QColor) -> None:
-        if not color.isValid():
-            return
-        changed = color.rgba() != self._color.rgba()
-        self._color = QColor(color)
-        self._alpha = color.alpha()
-        self._update_tooltip()
+    def set_selected_color(self, color: QColor) -> None:
+        selected = QColor()
+        for tile in self.tiles:
+            matches = color.isValid() and tile.color.isValid() and tile.color.rgba() == color.rgba()
+            tile.setChecked(matches)
+            if matches:
+                selected = QColor(tile.color)
+        changed = selected != self._selected_color
+        self._selected_color = selected
         if changed:
-            self.update()
+            self.selectionChanged.emit(QColor(selected))
 
-    def _set_alpha(self, alpha: int, *, emit: bool) -> None:
-        alpha = max(0, min(255, int(alpha)))
-        if alpha == self._alpha:
-            return
-        self._alpha = alpha
-        self._color.setAlpha(alpha)
-        self._update_tooltip()
-        self.update()
-        if emit:
-            self.alphaChanged.emit(alpha)
+    def _pick_color(self, color: QColor) -> None:
+        self.set_selected_color(color)
+        self.colorPicked.emit(QColor(color))
 
-    def _set_alpha_from_y(self, y: float) -> None:
-        groove = self._groove_rect()
-        ratio = 1.0 - (y - groove.top()) / max(groove.height() - 1, 1)
-        self._set_alpha(round(max(0.0, min(1.0, ratio)) * 255), emit=True)
+    @staticmethod
+    def _drop_color(mime) -> QColor:
+        if mime.hasColor():
+            color = QColor(mime.colorData())
+            if color.isValid():
+                return color
+        parsed = _parse_hex_color(mime.text()) if mime.hasText() else None
+        return QColor(parsed) if parsed else QColor()
 
-    def _groove_rect(self) -> QRect:
-        return QRect(9, 4, max(self.width() - 18, 1), max(self.height() - 8, 1))
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self._drop_color(event.mimeData()).isValid():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
-    def _update_tooltip(self) -> None:
-        percent = round(self._alpha * 100 / 255)
-        self.setToolTip(f"透明度：{percent}%（Alpha {self._alpha}）")
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._set_alpha_from_y(event.position().y())
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        if event.buttons() & Qt.MouseButton.LeftButton:
-            self._set_alpha_from_y(event.position().y())
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        steps = {
-            Qt.Key.Key_Up: 1,
-            Qt.Key.Key_Right: 1,
-            Qt.Key.Key_Down: -1,
-            Qt.Key.Key_Left: -1,
-            Qt.Key.Key_PageUp: 16,
-            Qt.Key.Key_PageDown: -16,
-        }
-        step = steps.get(event.key())
-        if step is not None:
-            self._set_alpha(self._alpha + step, emit=True)
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-            groove = self._groove_rect()
-            tile = 6
-            light = QColor("#FFFFFF")
-            dark = QColor("#C8CDD5")
-            for y in range(groove.top(), groove.bottom() + 1, tile):
-                for x in range(groove.left(), groove.right() + 1, tile):
-                    color = light if ((x // tile) + (y // tile)) % 2 == 0 else dark
-                    painter.fillRect(
-                        QRect(
-                            x,
-                            y,
-                            min(tile, groove.right() - x + 1),
-                            min(tile, groove.bottom() - y + 1),
-                        ),
-                        color,
-                    )
-
-            opaque = QColor(self._color)
-            opaque.setAlpha(255)
-            transparent = QColor(opaque)
-            transparent.setAlpha(0)
-            gradient = QLinearGradient(
-                float(groove.left()),
-                float(groove.top()),
-                float(groove.left()),
-                float(groove.bottom()),
-            )
-            gradient.setColorAt(0.0, opaque)
-            gradient.setColorAt(1.0, transparent)
-            painter.fillRect(groove, gradient)
-            painter.setPen(QPen(QColor(palette().input_border), 1))
-            painter.drawRect(groove.adjusted(0, 0, -1, -1))
-
-            handle_y = groove.top() + round(
-                (255 - self._alpha) * max(groove.height() - 1, 1) / 255
-            )
-            painter.setPen(QPen(QColor("#FFFFFF"), 3))
-            painter.drawLine(3, handle_y, self.width() - 4, handle_y)
-            painter.setPen(QPen(QColor("#111827"), 1))
-            painter.drawLine(3, handle_y, self.width() - 4, handle_y)
-        finally:
-            painter.end()
+    def dropEvent(self, event) -> None:  # noqa: N802
+        color = self._drop_color(event.mimeData())
+        if color.isValid():
+            self.colorDropped.emit(color)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
-class _ColorDialog(QColorDialog):
-    """Qt color dialog with a visible alpha slider beside the hue strip.
+class _ColorDialog(QDialog):
+    """Fluent color editor with N3-style HS, value and alpha surfaces.
 
-    The custom-colors row doubles as the app's recent colors, newest first
-    and filled row by row. Qt treats those slots as RGB-only in practice (its
-    getter reports them opaque and picking a swatch never touches alpha) and
-    its own "add" button writes wherever its cursor points, so the dialog
-    keeps a slot -> color map to put the remembered alpha back on a pick and
-    re-sorts the row from the recent list right after an in-dialog add or
-    drop. Its built-in captions are relabelled in Chinese here because the
-    app installs no qtbase translator.
+    RGB remains exact when a color is loaded or only alpha changes. Hue and
+    saturation are retained while the color is gray/black so moving value back
+    up does not unexpectedly reset a chosen hue.
     """
 
-    # QColorDialog lays the custom row out as 2 rows x 8 columns (its
-    # customCount() of 16) and indexes slots column-major:
-    # index = row + rows * col.
-    _CUSTOM_ROWS = 2
-    _CUSTOM_COLS = 8
+    currentColorChanged = Signal(QColor)
+    def __init__(self, current: QColor, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubtitleColorDialog")
+        self.setWindowTitle("选择颜色")
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(700)
+        self._current = QColor("#FFFFFF")
+        self._selected = QColor()
+        self._hue, self._saturation, self._value = 0.0, 0.0, 1.0
+        self._screen_picker: Optional[ScreenColorPicker] = None
 
-    # Qt's source captions with the mnemonic '&' stripped -> Chinese.
-    _LABEL_TEXTS = {
-        "Basic colors": "基本颜色(&B)",
-        "Custom colors": "自定义颜色(&C)",
-        "Hue:": "色调(&E):",
-        "Sat:": "饱和度(&S):",
-        "Val:": "亮度(&V):",
-        "Red:": "红色(&R):",
-        "Green:": "绿色(&G):",
-        "Blue:": "蓝色(&U):",
-        "Alpha channel:": "Alpha 通道(&L):",
-        "HTML:": "HTML(&H):",
-    }
-    _BUTTON_TEXTS = {
-        "Pick Screen Color": "选择屏幕颜色(&P)",
-        "Add to Custom Colors": "添加到自定义颜色(&A)",
-    }
-    _STANDARD_BUTTON_TEXTS = {
-        QDialogButtonBox.StandardButton.Ok: "确定",
-        QDialogButtonBox.StandardButton.Cancel: "取消",
-    }
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 12, 16, 16)
+        root.setSpacing(12)
+        body = QHBoxLayout()
+        body.setSpacing(20)
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        self._color_plane = HueSaturationPlane(self)
+        self._color_plane.setMinimumSize(340, 250)
+        left.addWidget(self._color_plane, 1)
+        self._color_plane.colorChanged.connect(self._set_hue_saturation)
 
-    def __init__(
-        self, current: QColor, parent: Optional[QWidget] = None
-    ) -> None:
-        super().__init__(current, parent)
-        self._recent_slot_colors: dict[int, QColor] = {}
-        self._custom_well: Optional[QWidget] = None
-        self._alpha_spin_box: Optional[QSpinBox] = None
-        self._recent_hooks_installed = False
-        self.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
-        self.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
-        # Ruling out the native dialog guarantees the widget tree exists.
-        self._localize_builtin_texts()
-        self._alpha_spin_box = self._find_alpha_spin_box()
-        self._install_recent_color_hooks()
-        self.setCurrentColor(current)
-        self._alpha_slider = _AlphaSlider(self.currentColor(), self)
-        self._alpha_slider.alphaChanged.connect(self._set_current_alpha)
-        self.currentColorChanged.connect(self._alpha_slider.set_color)
+        self._value_slider = ColorChannelSlider("value", self)
+        self._alpha_slider = ColorChannelSlider("alpha", self)
+        left.addWidget(self._value_slider)
+        left.addWidget(self._alpha_slider)
+        self._value_slider.valueChanged.connect(self._set_value)
+        self._alpha_slider.valueChanged.connect(self._set_current_alpha)
 
-    @classmethod
-    def recent_slot_index(cls, position: int) -> int:
-        """Qt slot holding the ``position``-th recent color.
+        hex_row = QHBoxLayout()
+        self._hex_edit = FluentLineEdit(self)
+        self._hex_edit.setMaxLength(9)
+        self._hex_edit.setAccessibleName("十六进制色号")
+        self._hex_edit.setPlaceholderText("#RRGGBB / #AARRGGBB")
+        self._hex_edit.setToolTip("支持 RGB / ARGB 色号；8 位格式的前两位为 Alpha")
+        self._hex_edit.textEdited.connect(self._edit_hex)
+        self._hex_edit.editingFinished.connect(self._finish_hex)
+        hex_row.addWidget(self._hex_edit, 1)
+        left.addLayout(hex_row)
+        self._hex_hint = CaptionLabel("请输入有效色号：#RRGGBB 或 #AARRGGBB", self)
+        self._hex_hint.hide()
+        left.addWidget(self._hex_hint)
+        body.addLayout(left, 1)
 
-        Rows fill left to right; the second row only once the first is full.
-        """
-        row, col = divmod(position, cls._CUSTOM_COLS)
-        return row + cls._CUSTOM_ROWS * col
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        self._original_swatch = ColorTile(current, self)
+        self._current_swatch = ColorTile(current, self)
+        self._current_swatch.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._current_swatch.setCursor(Qt.CursorShape.ArrowCursor)
+        compare = QHBoxLayout()
+        for caption, tile in (("原色", self._original_swatch), ("新色", self._current_swatch)):
+            column = QVBoxLayout()
+            column.setSpacing(4)
+            tile.setFixedHeight(24)
+            column.addWidget(CaptionLabel(caption, self))
+            column.addWidget(tile)
+            compare.addLayout(column, 1)
+        right.addLayout(compare)
+        self._original_swatch.clicked.connect(lambda: self.setCurrentColor(self._original_swatch.color))
+        right.addWidget(CaptionLabel("最近使用", self))
+        self._recent_list = _RecentColorList(self)
+        self._recent_list.colorPicked.connect(self.setCurrentColor)
+        self._recent_list.colorDropped.connect(self._record_dropped_color)
+        right.addWidget(self._recent_list, 1)
+        self._delete_recent_button = FluentPushButton("删除当前色", self)
+        self._delete_recent_button.setAutoDefault(False)
+        self._delete_recent_button.setEnabled(False)
+        self._delete_recent_button.clicked.connect(self._delete_current_color)
+        self._recent_list.selectionChanged.connect(
+            lambda color: self._delete_recent_button.setEnabled(color.isValid())
+        )
+        right.addWidget(self._delete_recent_button)
+        right_container = QWidget(self)
+        right_container.setFixedWidth(240)
+        right_container.setLayout(right)
+        right.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(right_container)
+        root.addLayout(body, 1)
 
-    def _localize_builtin_texts(self) -> None:
-        for label in self.findChildren(QLabel):
-            text = self._LABEL_TEXTS.get(label.text().replace("&", ""))
-            if text is not None:
-                label.setText(text)
-        for button in self.findChildren(QPushButton):
-            text = self._BUTTON_TEXTS.get(button.text().replace("&", ""))
-            if text is not None:
-                button.setText(text)
-        box = self.findChild(QDialogButtonBox)
-        if box is not None:
-            for standard, text in self._STANDARD_BUTTON_TEXTS.items():
-                button = box.button(standard)
-                if button is not None:
-                    button.setText(text)
+        footer = QHBoxLayout()
+        self._screen_button = FluentPushButton(_eyedropper_icon(), "从屏幕取色", self)
+        self._screen_button.setAutoDefault(False)
+        self._screen_button.clicked.connect(self._pick_screen_color)
+        footer.addWidget(self._screen_button)
+        footer.addStretch(1)
+        self._cancel_button = FluentPushButton("取消", self)
+        self._ok_button = PrimaryPushButton("确定", self)
+        self._cancel_button.setFixedWidth(96)
+        self._ok_button.setFixedWidth(96)
+        self._cancel_button.clicked.connect(self.reject)
+        self._ok_button.clicked.connect(self.accept)
+        # Enter finishes the active field first; it must not accidentally
+        # accept a partial hex value.
+        self._cancel_button.setAutoDefault(False)
+        self._ok_button.setAutoDefault(False)
+        footer.addWidget(self._cancel_button)
+        footer.addWidget(self._ok_button)
+        root.addLayout(footer)
+        themed(self, self._theme_stylesheet)
+        self.set_initial_color(current)
+        self.set_recent_colors(recent_colors())
 
-    def _find_alpha_spin_box(self) -> Optional[QSpinBox]:
-        for label in self.findChildren(QLabel):
-            buddy = label.buddy()
-            caption = label.text().replace("&", "").lower()
-            if isinstance(buddy, QSpinBox) and "alpha" in caption:
-                return buddy
-        return None
+    def _theme_stylesheet(self) -> str:
+        self._screen_button.setIcon(_eyedropper_icon())
+        return f"QDialog#SubtitleColorDialog {{ background: {palette().panel_bg}; }}"
 
-    def _apply_alpha(self, alpha: int) -> None:
-        """Change only the alpha of the current color.
+    def currentColor(self) -> QColor:  # noqa: N802
+        return QColor(self._current)
 
-        setCurrentColor() would also run Qt's selectColor(), which looks the
-        RGB up in the basic-colors grid first and moves selection and focus
-        there whenever it matches; driving the alpha spin box updates the
-        color without that side effect.
-        """
-        if self._alpha_spin_box is not None:
-            self._alpha_spin_box.setValue(alpha)
-            return
-        color = self.currentColor()
-        color.setAlpha(alpha)
+    def selectedColor(self) -> QColor:  # noqa: N802
+        return QColor(self._selected)
+
+    def set_initial_color(self, color: QColor) -> None:
+        color = QColor(color) if color.isValid() else QColor("#FFFFFF")
+        self._selected = QColor()
+        self._deleted_recent_rgba: set[int] = set()
+        self._hue, self._saturation = 0.0, 0.0
+        self._original_swatch.set_color(color)
         self.setCurrentColor(color)
 
-    def _set_current_alpha(self, alpha: int) -> None:
-        if self.currentColor().alpha() != alpha:
-            self._apply_alpha(alpha)
-
-    def _position_alpha_slider(self) -> None:
-        candidates = [
-            child
-            for child in self.children()
-            if isinstance(child, QWidget)
-            and child is not self._alpha_slider
-            and child.width() <= 40
-            and child.height() >= 100
-        ]
-        if not candidates:
-            self._alpha_slider.hide()
+    def setCurrentColor(self, color: QColor) -> None:  # noqa: N802
+        if not color.isValid():
             return
-        hue_picker = max(candidates, key=lambda child: child.height())
-        geometry = hue_picker.geometry()
-        self._alpha_slider.setGeometry(
-            geometry.right() + 10,
-            geometry.top(),
-            self._alpha_slider.width(),
-            geometry.height(),
-        )
-        self._alpha_slider.show()
-        self._alpha_slider.raise_()
+        hue, saturation, value, _alpha = color.getHsvF()
+        if hue >= 0:
+            self._hue = hue * 360
+        if value > 0:
+            self._saturation = saturation
+        self._value = value
+        self._apply_color(color)
+
+    def _apply_color(self, color: QColor) -> None:
+        changed = color.rgba() != self._current.rgba()
+        self._current = QColor(color)
+        self._sync_controls()
+        if changed:
+            self.currentColorChanged.emit(QColor(color))
+
+    def _sync_controls(self) -> None:
+        self._color_plane.set_color(self._hue, self._saturation)
+        full_value = QColor.fromHsvF(self._hue / 360, self._saturation, 1)
+        self._value_slider.set_color(full_value, round(self._value * 255))
+        self._alpha_slider.set_color(self._current)
+        self._current_swatch.set_color(self._current)
+        self._recent_list.set_selected_color(self._current)
+        self._hex_edit.setText(_normalize_hex(self._current.name(QColor.NameFormat.HexArgb)))
+        self._hex_hint.hide()
+        self._ok_button.setEnabled(True)
+
+    def _set_hue_saturation(self, hue: float, saturation: float) -> None:
+        self._hue, self._saturation = hue, saturation
+        self._apply_hsv()
+
+    def _apply_hsv(self) -> None:
+        self._apply_color(QColor.fromHsvF(self._hue / 360, self._saturation, self._value,
+                                         self._current.alphaF()))
+
+    def _set_value(self, value: int) -> None:
+        self._value = value / 255
+        self._apply_hsv()
+
+    def _set_current_alpha(self, alpha: int) -> None:
+        color = self.currentColor()
+        color.setAlpha(alpha)
+        self._apply_color(color)
+
+    def _edit_hex(self, text: str) -> None:
+        parsed = _parse_hex_color(text)
+        if parsed is None:
+            self._hex_hint.show()
+            self._ok_button.setEnabled(False)
+            return
+        cursor = self._hex_edit.cursorPosition()
+        self.setCurrentColor(QColor(parsed))
+        # Keep the user's partially typed spelling and cursor while updating
+        # the other controls; normalize once focus leaves the editor.
+        self._hex_edit.setText(text)
+        self._hex_edit.setCursorPosition(cursor)
+
+    def _finish_hex(self) -> None:
+        if _parse_hex_color(self._hex_edit.text()) is not None:
+            self._sync_controls()
+
+    def set_recent_colors(self, colors: list[QColor]) -> None:
+        self._recent_list.set_colors(colors)
+        self._recent_list.set_selected_color(self._current)
+
+    def _delete_current_color(self) -> None:
+        selected = self._recent_list.selected_color
+        if not selected.isValid():
+            return
+        self._deleted_recent_rgba.add(selected.rgba())
+        remove_recent_color(selected)
+        self.set_recent_colors(recent_colors())
+
+    def remember_selected_color(self, color: QColor) -> None:
+        # Accepting the current preview must not immediately undo a deletion.
+        if color.rgba() not in self._deleted_recent_rgba:
+            record_recent_color(color)
+
+    def _record_dropped_color(self, color: QColor) -> None:
+        self._deleted_recent_rgba.discard(color.rgba())
+        record_recent_color(color)
+        self.set_recent_colors(recent_colors())
+
+    def _pick_screen_color(self) -> None:
+        if self._screen_picker is not None:
+            return
+        original = self.currentColor()
+        picked = False
+        picker = ScreenColorPicker()
+        picker.setParent(self, picker.windowFlags())
+        self._screen_picker = picker
+
+        def confirm(color: QColor) -> None:
+            nonlocal picked
+            picked = True
+            self.setCurrentColor(color)
+            self.set_recent_colors(recent_colors())
+
+        def finish() -> None:
+            self._screen_picker = None
+            if not picked:
+                self.setCurrentColor(original)
+            self._ensure_active()
+
+        picker.colorHovered.connect(self.setCurrentColor)
+        picker.colorPicked.connect(confirm)
+        picker.finished.connect(finish)
+        picker.start()
+
+    def accept(self) -> None:
+        if _parse_hex_color(self._hex_edit.text()) is None:
+            self._hex_edit.setFocus()
+            return
+        self._selected = self.currentColor()
+        super().accept()
+
+    def done(self, result: int) -> None:
+        if self._screen_picker is not None:
+            self._screen_picker.cancel()
+        super().done(result)
 
     def _ensure_active(self) -> None:
-        self.raise_()
-        self.activateWindow()
+        if not sip.isdeleted(self) and self.isVisible():
+            self.raise_()
+            self.activateWindow()
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        if self._alpha_spin_box is None:
-            # A platform that builds the widget tree late gets a second pass.
-            self._localize_builtin_texts()
-            self._alpha_spin_box = self._find_alpha_spin_box()
-        self._install_recent_color_hooks()
-        self._position_alpha_slider()
-        # 共享对话框会被反复 hide/exec，Windows 不保证重新显示的顶层窗口
-        # 一定压住刚点过的那扇主窗口。显示时先抬一次，等事件循环跑起来再
-        # 抬一次，保证每次点开调色板都出现在最前面（不改全局置顶）。
         self._ensure_active()
         QTimer.singleShot(0, self._ensure_active)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        if hasattr(self, "_alpha_slider"):
-            self._position_alpha_slider()
-
-    # -- recent colors ----------------------------------------------------
-
-    def set_recent_slot_colors(self, colors: list[QColor]) -> None:
-        """Remember what each custom slot was seeded with, alpha included."""
-        self._recent_slot_colors = {
-            self.recent_slot_index(position): QColor(color)
-            for position, color in enumerate(colors)
-        }
-
-    def _custom_color_well(self) -> Optional[QWidget]:
-        # Both grids are QColorWell; the custom one has fewer rows, which its
-        # size hint reflects regardless of how the layout stretched it.
-        wells = [
-            child
-            for child in self.findChildren(QWidget)
-            if child.metaObject().className() == "QColorWell"
-        ]
-        if len(wells) < 2:
-            return None
-        return min(wells, key=lambda well: well.sizeHint().height())
-
-    def _add_custom_button(self) -> Optional[QPushButton]:
-        # Match Qt's own (possibly translated) caption so a qtbase translator
-        # cannot silently disable the hooks; keep the raw match as a backstop.
-        caption = QApplication.translate(
-            "QColorDialog", "&Add to Custom Colors"
-        ).replace("&", "")
-        for button in self.findChildren(QPushButton):
-            text = button.text().replace("&", "")
-            if text == caption or "Custom" in text or "自定义" in text:
-                return button
-        return None
-
-    def _install_recent_color_hooks(self) -> None:
-        if self._recent_hooks_installed:
-            return
-        well = self._custom_color_well()
-        button = self._add_custom_button()
-        if well is None or button is None:
-            return
-        self._recent_hooks_installed = True
-        self._custom_well = well
-        well.selected.connect(self._restore_recent_alpha)
-        well.colorChanged.connect(self._record_dropped_custom_color)
-        button.clicked.connect(self._record_added_custom_color)
-
-    def _restore_recent_alpha(self, row: int, col: int) -> None:
-        remembered = self._recent_slot_colors.get(row + self._CUSTOM_ROWS * col)
-        current = self.currentColor()
-        # Qt already applied the slot's RGB; only trust the map if it agrees.
-        if remembered is None or remembered.rgb() != current.rgb():
-            return
-        if remembered.alpha() != current.alpha():
-            self._apply_alpha(remembered.alpha())
-
-    def _refresh_recent_slots(self) -> None:
-        """Re-sort the row newest-first after Qt wrote at its own cursor."""
-        _seed_custom_color_slots(self)
-        if self._custom_well is not None:
-            self._custom_well.update()
-
-    def _record_added_custom_color(self) -> None:
-        record_recent_color(self.currentColor())
-        self._refresh_recent_slots()
-
-    def _record_dropped_custom_color(self, _index: int, rgb: int) -> None:
-        # Qt stores dropped colors opaque.
-        record_recent_color(QColor.fromRgb(rgb))
-        self._refresh_recent_slots()
 
 
 _shared_color_dialog: Optional[_ColorDialog] = None
 
-# Qt keeps the dialog's 16 "custom colors" in one process-wide array but never
-# fills it on its own: only the dialog's "add to custom colors" button or a
-# drop onto the row writes there, so the row stays blank unless the user does
-# that bookkeeping by hand. The app treats those slots as the recently picked
-# colors instead: dialog picks, screen picks and committed hex edits (or
-# pastes) all land at the front of this list, and the list is written back
-# into the slots right before the dialog opens and right after an in-dialog
-# add or drop, so the row always reads newest-first, filled row by row, with
-# the oldest pushed out. It lives for the process only. Alpha is kept here
-# and restored by _ColorDialog on swatch picks, since Qt itself treats the
-# slots as RGB-only.
-_recent_colors: list[QColor] = []
+_recent_color_store = RecentColorStore()
 
 
 def recent_colors() -> list[QColor]:
-    """Recently picked colors, newest first; process lifetime only."""
-    return [QColor(color) for color in _recent_colors]
+    """Shared user history, newest first, including alpha and across restarts."""
+    try:
+        return [QColor(color) for color in _recent_color_store.load()]
+    except Exception:
+        logging.getLogger(__name__).warning("读取最近颜色失败", exc_info=True)
+        return []
 
 
 def clear_recent_colors() -> None:
-    _recent_colors.clear()
+    _recent_color_store.clear()
 
 
 def record_recent_color(color: QColor) -> None:
     """Move ``color`` to the front of the recent list, dropping duplicates."""
     if not color.isValid():
         return
-    rgba = color.rgba()
-    _recent_colors[:] = [c for c in _recent_colors if c.rgba() != rgba]
-    _recent_colors.insert(0, QColor(color))
-    del _recent_colors[QColorDialog.customCount():]
+    try:
+        _recent_color_store.remember(color.name(QColor.NameFormat.HexArgb))
+    except Exception:
+        logging.getLogger(__name__).warning("保存最近颜色失败", exc_info=True)
 
 
-def _seed_custom_color_slots(dialog: _ColorDialog) -> None:
-    """Write the recent colors into Qt's custom slots, newest first.
+def remove_recent_color(color: QColor) -> None:
+    """Remove only the exact RGBA entry, leaving same-RGB variants alone."""
+    if color.isValid():
+        try:
+            _recent_color_store.remove(color.name(QColor.NameFormat.HexArgb))
+        except Exception:
+            logging.getLogger(__name__).warning("删除最近颜色失败", exc_info=True)
 
-    Runs before ``dialog`` opens and again after an in-dialog add or drop.
-    The first row fills left to right, the second only once the first is
-    full. Unused slots are reset to white, Qt's own "empty" value, so the row
-    shows exactly the recent list and nothing stale from an earlier open. The
-    dialog is told what went where so it can restore alpha when a swatch is
-    picked.
-    """
-    count = QColorDialog.customCount()
-    empty = QColor(Qt.GlobalColor.white)
-    for index in range(count):
-        QColorDialog.setCustomColor(index, QColor(empty))
-    for position, color in enumerate(_recent_colors[:count]):
-        QColorDialog.setCustomColor(
-            _ColorDialog.recent_slot_index(position), QColor(color)
-        )
-    dialog.set_recent_slot_colors(_recent_colors)
+
+def _refresh_recent_colors(dialog: _ColorDialog) -> None:
+    """Refresh the dialog history before opening."""
+    dialog.set_recent_colors(recent_colors())
 
 
 def _alive_color_dialog() -> Optional[_ColorDialog]:
@@ -935,9 +918,8 @@ def _alive_color_dialog() -> Optional[_ColorDialog]:
 def prewarm_color_dialog() -> None:
     """Build the shared color dialog ahead of the first click.
 
-    constructing a non-native QColorDialog lays out its 140-swatch grid and
-    the custom alpha slider; doing it at panel creation time moves that cost
-    off the first color click entirely.
+    Building the Fluent inputs and painted surfaces at panel creation time
+    moves that cost off the first color click.
     """
     global _shared_color_dialog
     if _alive_color_dialog() is not None:
@@ -984,9 +966,8 @@ def _release_color_dialog_owner(dialog: _ColorDialog) -> None:
 def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
     """Open the regular color dialog used by the palette action.
 
-    Dialog instances are cached and reused: non-native QColorDialog builds
-    a 140-swatch grid plus the custom alpha slider, so constructing one on
-    every click puts that cost right on the click itself.
+    The shared instance is re-owned and reset on every open, retaining
+    shared user history while keeping the original-color comparison fresh.
     """
     global _shared_color_dialog
     dialog = _alive_color_dialog()
@@ -995,13 +976,13 @@ def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
         _shared_color_dialog = dialog
     _adopt_color_dialog_owner(dialog, parent)
     dialog.setWindowTitle(title)
-    dialog.setCurrentColor(current)
+    dialog.set_initial_color(current)
     try:
-        _seed_custom_color_slots(dialog)
+        _refresh_recent_colors(dialog)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return QColor()
         selected = dialog.selectedColor()
-        record_recent_color(selected)
+        dialog.remember_selected_color(selected)
         return selected
     finally:
         _release_color_dialog_owner(dialog)
