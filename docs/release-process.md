@@ -169,6 +169,7 @@ Release X.Y.Z.N                                       # APP_VERSION + README + C
 - 分类条目，**逐条**列出用户能感知的差异。
 - 不要写内部重构、CI、文档之类纯开发者改动——这些放 commit message 里。
 - **逐笔核对提交作者并署名**：用 `git log <上一个tag>..HEAD --format='%an <%ae> %s'` 核对作者，必要时通过 GitHub 提交记录确认账号，不得凭猜测署名。GitHub 用户 `Myosotis11037` 的所有提交统一标注 **`@凛夜`**；`Xuan-cc` 的提交标注 `@Xuan-cc`。CHANGELOG 与 release body 使用同一署名映射。
+- **条目署名必须链接本人 GitHub 主页**：使用可点击的 Markdown 链接，显示名沿用上述映射。凛夜统一写作 `[@凛夜](https://github.com/Myosotis11037)`；Xuan-cc 写作 `[@Xuan-cc](https://github.com/Xuan-cc)`；其他作者使用核实后的真实账号主页。CHANGELOG 与 release body 使用相同写法。主页链接不能代替版本末尾「本版贡献者」中的真实账号 `@mention`。
 - **发版补改不得转移贡献归属**：agent 在发版检查中对已有贡献做补改、回归修复或整理时，不得仅凭补改提交自动继承的本机 `user.name` / `user.email`，把原贡献重新署给当前机器的账号。须结合原始提交、`git blame`、实际改动范围及用户确认核对归属；用户明确纠正的归属优先。GitHub 将提交邮箱关联到某账号，仅证明提交记录的账号关联，不能据此认定实际贡献作者。也不得反过来把独立的新修复一律归给原代码作者。
 - **保留 GitHub Contributors 账号关联**：条目仍使用上述显示署名，但每个版本节末尾（分隔线前）必须添加「本版贡献者」一行，按核实后的实际贡献归属去重列出真实 GitHub 账号。例如两位均有贡献时写：`本版贡献者：凛夜（@Myosotis11037）、@Xuan-cc`。只有其中一位有贡献时只列该位，不得固定添加无贡献的账号。此行同时进入 CHANGELOG 与生成的 release body。
 
