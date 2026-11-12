@@ -279,7 +279,8 @@ python -m pytest tests\
   `config.json`，缓存目录来自 `SUG_CACHE_DIR`。
 - 宿主还注入了 `KaraokeAiTimingHost`，让 SUG 的 AI 打轴复用工作台的人声分离后端。
 - **版本号约定**：工作台自身的改动走三段 SemVer；**只同步子模块**的发版用第 4 段递增
-  （如 `4.2.6.3` → `4.2.6.4`）。
+  （如 `4.2.6.3` → `4.2.6.4`）。Lin-K 与 SUG 的版本号独立，废弃“SUG 更新就必须提升
+  Lin-K 大版本”的联动规则；SUG 自身提升主/次版本也不自动要求 Lin-K 提升 MAJOR / MINOR。
 
 ---
 

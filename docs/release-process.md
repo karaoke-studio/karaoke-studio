@@ -19,6 +19,10 @@
 
 `APP_VERSION` 在 [`krok_helper/config.py`](../krok_helper/config.py) 第 2 行；[`README.md`](../README.md) 顶部「当前版本」文本同步。
 
+**Lin-K 与 SUG 的版本号独立，废弃“SUG 更新就必须提升 Lin-K 大版本”的联动规则。**
+同步子模块、SUG 自身提升主版本或次版本，都不自动要求 Lin-K 提升 MAJOR / MINOR。
+纯子模块同步仍按流程 B 递增第 4 段；Lin-K 自身的版本升级按实际改动性质决定。
+
 | 流程 | bump 规则 | 例子 |
 |---|---|---|
 | A · 工作台 | SemVer 3 段：PATCH（修复/重构）/ MINOR（用户可见功能）/ MAJOR（破坏性接口变更）。若上一版有第 4 段，**丢掉它**。 | `3.0.2.1` → `3.0.3`（修复） / `3.1.0`（新功能） |
@@ -275,7 +279,7 @@ gh release view vX.Y.Z[.N] --json body --jq .body
   不要用 `--force` 推**已经创建过 GitHub Release** 的 tag——已经下载过的用户不会重拉。
 - **release 已发布但有问题**：在 GitHub Release 页面把它标 prerelease，按流程 A 出一个 PATCH 修复版（`x.y.(z+1)`），CHANGELOG 写明被替代的版本。
 - **SUG 改了 URL/路径**：同步改 [`.gitmodules`](../.gitmodules)，跑 `git submodule sync --recursive`。
-- **SUG 新 API 主程序还没接进去**：仍按流程 B 推到 `origin/main`，CHANGELOG **只列已经接好的能力**；未接的能力等主程序集成完，按流程 A 单独 MINOR 发版。
+- **SUG 新 API 主程序还没接进去**：仍按流程 B 推到 `origin/main`，CHANGELOG **只列已经接好的能力**；未接的能力等主程序集成完，按流程 A 和实际改动性质选择版本号，不因 SUG 更新强制提升 Lin-K 大版本。
 - **回滚 SUG**：把 gitlink checkout 回旧 commit（这是唯一允许停在历史 commit 的情况），按流程 B 第 4 段递增发版，CHANGELOG 写明回滚原因与目标 commit。
 
 ---

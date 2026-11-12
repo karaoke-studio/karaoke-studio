@@ -132,6 +132,7 @@ git submodule status
 - 工作台与 submodule **不会同时发版**，分两条流程：
   - **流程 A · 工作台更新**：SemVer 3 段 bump（`3.0.2 → 3.0.3` 等）。
   - **流程 B · Submodule 更新**：第 4 段递增（`3.0.2 → 3.0.2.1`）。
+- **废弃 SUG 与 Lin-K 大版本联动**：同步 SUG 或 SUG 自身提升主/次版本，不自动要求 Lin-K 提升 MAJOR / MINOR。纯子模块同步仍递增第 4 段；Lin-K 自身的版本升级按实际改动性质决定。
 - Tag 格式 `vX.Y.Z[.N]`，push tag 触发 [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动打包+发 release。
 - 发版准备统一运行 `python scripts/release.py prepare X.Y.Z[.N]`：它会同步 `APP_VERSION` 与 [`README.md`](README.md) 顶部「当前版本」，并在 `CHANGELOG.md` 插入当天的占位段。补全 CHANGELOG 后运行 `python scripts/release.py notes X.Y.Z[.N]` 生成中文 release body。
 - **release body 由 CI 从 `CHANGELOG.md` 当前 tag 的版本段提取**，更新弹窗会原样展示，所以必须是中文；打 tag 前必须先跑上面的 notes 命令校验，避免更新弹窗展示错误内容。
