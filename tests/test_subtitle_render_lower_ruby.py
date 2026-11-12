@@ -19,7 +19,8 @@ from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 
 def _style(**kwargs):
     return Style(font_family="Meiryo", font_size_px=64, ruby_font_size_px=24,
-                 lower_ruby_enabled=True, **kwargs)
+                 lower_ruby_enabled=True,
+                 _lower_romaji_options=(False, False, False, False), **kwargs)
 
 
 def _line(text):
@@ -348,3 +349,72 @@ def test_lower_fonts_prepare_on_gui_thread(qapp, monkeypatch):
     line = _line("かな")
     list(font_preparation._iter_prewarm_font_fallback(TimingTrack(lines=[line]), _style(), []))
     assert prepared.count("下层注音样式") == 1
+
+
+@pytest.mark.parametrize("settings,expected", [
+    ({}, ["ka", "t", "ta", "a"]),
+    ({"romaji_repeat_long_vowels": False}, ["ka", "t", "ta-"]),
+    ({"romaji_link_long_vowels": True}, ["ka", "t", "taa"]),
+    ({"romaji_link_sokuon": True}, ["ka", "tta", "a"]),
+    ({"romaji_link_long_vowels": True, "romaji_link_sokuon": True,
+      "romaji_uppercase": True}, ["KA", "TTAA"]),
+])
+def test_lower_reads_embedded_sug_auto_check_options(qapp, monkeypatch, settings, expected):
+    from types import SimpleNamespace
+    from strange_uta_game.frontend.settings import app_settings
+    calls = []
+    def get(key, default=None):
+        calls.append(key)
+        assert key == "auto_check"
+        return settings
+    monkeypatch.setattr(app_settings, "AppSettings", lambda: SimpleNamespace(get=get))
+    line = _line("カッター")
+    style = replace(_style(), _lower_romaji_options=None)
+    before = deepcopy(line)
+    result = lower_rubies_for_line(line, [], [(i * 500, (i + 1) * 500) for i in range(4)], style)
+    assert [ruby.reading for ruby in result] == expected
+    assert calls == ["auto_check"]
+    assert line == before
+
+
+def test_lower_reuses_sug_sentence_particle_readings(qapp):
+    line = _line("私は")
+    upper = RubyAnnotation("私", "わたし", pos_start_ms=0, pos_end_ms=500,
+                           target_line_index=0, target_char_start=0, target_char_end=1)
+    before = deepcopy((line, upper))
+    result = lower_rubies_for_line(line, [upper], [(0, 500), (500, 1000)], _style())
+    assert [ruby.reading for ruby in result] == ["watashi", "wa"]
+    assert (line, upper) == before
+
+
+def test_sug_romaji_snapshot_is_runtime_only_and_survives_worker_pickle(qapp, monkeypatch):
+    import pickle
+    from strange_uta_game.backend.infrastructure.parsers.romaji import RomajiOptions
+    from krok_helper.subtitle_render.engine.ruby import lower
+    monkeypatch.setattr(lower, "read_sug_romaji_options", lambda: RomajiOptions(uppercase=True))
+    original = replace(_style(), _lower_romaji_options=None)
+    frozen = lower.snapshot_lower_romaji_options(original)
+    assert original._lower_romaji_options is None
+    assert frozen._lower_romaji_options == (True, False, False, True)
+    assert "_lower_romaji_options" not in style_to_dict(frozen)
+    assert style_from_dict({"_lower_romaji_options": [True] * 4})._lower_romaji_options is None
+    worker_style = pickle.loads(pickle.dumps(frozen))
+    monkeypatch.setattr(lower, "read_sug_romaji_options", lambda: pytest.fail("worker must use frozen SUG settings"))
+    line = _line("かな")
+    assert [r.reading for r in lower_rubies_for_line(line, [], [(0, 500), (500, 1000)], worker_style)] == ["KA", "NA"]
+    disabled = replace(original, lower_ruby_enabled=False)
+    assert lower.snapshot_lower_romaji_options(disabled) is disabled
+
+
+def test_sug_romaji_options_invalidate_lower_layout_patch_key(qapp, monkeypatch):
+    from strange_uta_game.backend.infrastructure.parsers.romaji import RomajiOptions
+    from krok_helper.subtitle_render.engine.ruby import lower
+    from krok_helper.subtitle_render.frontend.preview.preview_async import style_patch_base_key
+    track = TimingTrack(lines=[_line("ユー")])
+    style = replace(_style(), _lower_romaji_options=None)
+    def key():
+        return style_patch_base_key(track, style, [], width=640, height=360, fps=60, dpr=1)
+    monkeypatch.setattr(lower, "read_sug_romaji_options", lambda: RomajiOptions())
+    original = key()
+    monkeypatch.setattr(lower, "read_sug_romaji_options", lambda: RomajiOptions(uppercase=True))
+    assert key() != original

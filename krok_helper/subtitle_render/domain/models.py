@@ -992,6 +992,8 @@ class Style:
     lower_ruby_gap_px: int = 0
     lower_ruby_style: dict = field(default_factory=dict)
     """Render-only lower reading overrides; source ruby and clocks stay untouched."""
+    _lower_romaji_options: tuple[bool, bool, bool, bool] | None = field(default=None, repr=False)
+    """Runtime SUG option snapshot for worker processes; never a project setting."""
     ruby_font_size_px: int = 45
     ruby_font_family: Optional[str] = None
     ruby_font_family_latin: Optional[str] = None
@@ -2320,6 +2322,8 @@ def style_to_dict(style: Style) -> dict:
     data: dict = {}
     for item in fields(Style):
         value = getattr(style, item.name)
+        if item.name == "_lower_romaji_options":
+            continue
         if item.name in {"karaoke_colors", "ruby_karaoke_colors"}:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
         elif item.name == "scanline_legacy_global":
@@ -2579,6 +2583,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
     changes: dict = {}
     style_fields = {item.name for item in fields(Style)}
     for key, value in payload.items():
+        if key == "_lower_romaji_options":
+            continue
         if key == "title_overlay":
             # 旧版单标题 key 已不是 Style 字段，必须在字段过滤之前处理：
             # 折算成单条目列表；不覆盖权威 key ``title_overlays``（两个 key

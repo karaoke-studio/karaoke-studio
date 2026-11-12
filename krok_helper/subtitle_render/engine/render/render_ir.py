@@ -286,6 +286,8 @@ def build_render_ir(
     # 扫字线像素字段与指示灯/音量柱偏移存储恒为 1080 基准:发给 sidecar
     # 前一次性换算成本 IR 输出高度下的实画值(C++ 端继续直读,不感知基准
     # 语义)。
+    from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+    style = snapshot_lower_romaji_options(style)
     style = style_with_output_signal_offsets(
         style_with_output_scanline(style, height), height
     )
@@ -465,6 +467,8 @@ def build_style_patch_ir(
     正确性闸门在调用方（GpuAsyncSubtitleRenderer）：布局签名/轨道签名/画面
     尺寸任一变化都不得走差分。布局计划按缓存复用（签名命中即几何不变）。
     """
+    from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+    style = snapshot_lower_romaji_options(style)
     style = style_with_output_signal_offsets(
         style_with_output_scanline(style, height), height
     )

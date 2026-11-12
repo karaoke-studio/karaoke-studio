@@ -215,6 +215,7 @@ class LayoutPropertyPageBuilder:
         host._lower_ruby_enabled_check = CheckBox("生成下层罗马音注音", section)
         host._lower_ruby_enabled_check.setToolTip(
             "横排字幕：根据已有注音及正文假名生成下层罗马音，沿用原有分组与走字时间。"
+            "转换选项沿用打轴模块的自动注音设置。"
             "竖排暂不生成下层注音。"
         )
         host._lower_ruby_enabled_check.toggled.connect(

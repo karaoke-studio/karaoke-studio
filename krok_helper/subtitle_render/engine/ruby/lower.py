@@ -18,7 +18,7 @@ from krok_helper.subtitle_render.engine.ruby.style import (
 from krok_helper.subtitle_render.engine.ruby.timing import ruby_visual_units_and_intervals
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from strange_uta_game.backend.infrastructure.parsers.romaji import (
-    RomajiOptions, is_self_romanizable_kana, romanize_ruby_parts,
+    RomajiOptions, is_self_romanizable_kana, romanize_sentence_in_place,
 )
 
 
@@ -33,8 +33,21 @@ LOWER_APPEARANCE_FIELDS = frozenset(
 )
 
 
-def _romanized_parts(parts: list[str]) -> tuple[list[str], list[str]]:
-    original = romanize_ruby_parts(parts, options=RomajiOptions(repeat_long_vowels=False))
+def read_sug_romaji_options() -> RomajiOptions:
+    from strange_uta_game.frontend.settings.app_settings import AppSettings
+    return RomajiOptions.from_mapping(AppSettings().get("auto_check", {}))
+
+
+def snapshot_lower_romaji_options(style: Style | None) -> Style | None:
+    """Freeze the embedded SUG choices before handing a scene/job to workers."""
+    if style is None or not style.lower_ruby_enabled or style._lower_romaji_options is not None:
+        return style
+    options = read_sug_romaji_options()
+    return replace(style, _lower_romaji_options=(options.repeat_long_vowels,
+        options.link_long_vowels, options.link_sokuon, options.uppercase))
+
+
+def _timed_parts(parts: list[str], original: list[str]) -> list[str]:
     timed = list(original)
     # The SUG converter groups digraphs/long marks on the leading part. Keep
     # its spelling and group, but retain the original checkpoint inside it.
@@ -45,7 +58,7 @@ def _romanized_parts(parts: list[str]) -> tuple[list[str], list[str]]:
             timed[index - 1], timed[index] = timed[index - 1][:-1], "-"
         elif parts[index] in "ゃゅょぁぃぅぇぉャュョァィゥェォ":
             timed[index - 1], timed[index] = timed[index - 1][:-1], timed[index - 1][-1:]
-    return original, timed
+    return timed
 
 
 def lower_style_snapshot(style: Style) -> dict:
@@ -81,14 +94,11 @@ def lower_style(style: Style) -> Style:
 
 def _romanized(
     ruby: RubyAnnotation, indices: list[int], line: TimingLine, style: Style,
-    converted: list[str] | None = None,
-    units: list[tuple[str, tuple[int, int]]] | None = None,
+    converted: list[str],
+    units: list[tuple[str, tuple[int, int]]],
 ) -> LowerRuby | None:
-    units = ruby_visual_units_and_intervals(ruby) if units is None else units
     if not units:
         return None
-    if converted is None:
-        _, converted = _romanized_parts([text for text, _ in units])
     parts: list[str] = []
     starts: list[int] = []
     cursor = ruby.pos_start_ms
@@ -140,6 +150,22 @@ def lower_rubies_for_line(
         sources.append((RubyAnnotation(char.text, char.text, pos_start_ms=start, pos_end_ms=end),
                         [index], False))
     sources.sort(key=lambda item: min(item[1]))
+    if not sources:
+        return []
+    # Transient SUG characters carry the complete written context for particle
+    # detection. Conversion may link those copies, never the authored track.
+    from strange_uta_game.backend.domain.models import Character, Ruby, RubyPart
+    from strange_uta_game.backend.domain.entities import Sentence
+    sentence = Sentence(singer_id="lower-romaji", id="lower-romaji",
+                        characters=[Character(char=char.text) for char in line.chars])
+    unit_groups = [ruby_visual_units_and_intervals(source) for source, _, _ in sources]
+    for (_source, indices, _authored), units in zip(sources, unit_groups):
+        sentence.characters[min(indices)].ruby = Ruby(parts=[RubyPart(text=text) for text, _ in units])
+    options = (RomajiOptions(*style._lower_romaji_options)
+               if style._lower_romaji_options is not None else read_sug_romaji_options())
+    romanize_sentence_in_place(sentence, options=options)
+    converted_groups = [[part.text for part in sentence.characters[min(indices)].ruby.parts]
+                        for _source, indices, _authored in sources]
     result: list[LowerRuby] = []
     run_start = 0
     while run_start < len(sources):
@@ -147,11 +173,12 @@ def lower_rubies_for_line(
         while run_end < len(sources) and max(sources[run_end - 1][1]) + 1 == min(sources[run_end][1]):
             run_end += 1
         run = sources[run_start:run_end]
-        unit_groups = [ruby_visual_units_and_intervals(source) for source, _, _ in run]
-        flat_units = [unit for units in unit_groups for unit in units]
-        original, timed = _romanized_parts([text for text, _ in flat_units])
+        run_units = unit_groups[run_start:run_end]
+        flat_units = [unit for units in run_units for unit in units]
+        original = [part for group in converted_groups[run_start:run_end] for part in group]
+        timed = _timed_parts([text for text, _ in flat_units], original)
         starts = [0]
-        for units in unit_groups:
+        for units in run_units:
             starts.append(starts[-1] + len(units))
         index = 0
         while index < len(run):
@@ -161,7 +188,8 @@ def lower_rubies_for_line(
             if not run[index][2]:
                 while (end_index < len(run) and not run[end_index][2]
                        and starts[end_index] < starts[end_index + 1]
-                       and not original[starts[end_index]]):
+                       and (not original[starts[end_index]]
+                            or sentence.characters[max(run[end_index - 1][1])].linked_to_next)):
                     end_index += 1
             source, indices, _authored = run[index]
             units = flat_units[starts[index]:starts[end_index]]

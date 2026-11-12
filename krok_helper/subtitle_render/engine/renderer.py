@@ -354,6 +354,10 @@ def _render_subtitle_video_prepared(
     preview_width: int | None = None,
 ) -> Path:
     """Render ``job`` to MP4 using a transparent rawvideo subtitle pipe."""
+    from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+    resolved_style = snapshot_lower_romaji_options(job.style)
+    if resolved_style is not job.style:
+        job = replace(job, style=resolved_style)
     logger = logger or (lambda _message: None)
     _validate_job(job)
     ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)

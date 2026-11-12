@@ -229,6 +229,49 @@ def test_gpu_lower_ruby_matches_painter_position(monkeypatch, semantics, animati
 
 
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("upper_row", [None, 0, 1])
+@pytest.mark.parametrize("animation", ["none", "utopia", "utopia_scanline"])
+def test_gpu_lower_kana_rows_without_upper_ruby_match_painter(monkeypatch, semantics, upper_row, animation):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+    texts = ["国" if index == upper_row else "かな" for index in range(2)]
+    lines = [TimingLine(chars=[TimingChar(char, index * 1000 + cell * 400, explicit_start=True)
+                               for cell, char in enumerate(text)], end_ms=(index + 1) * 1000,
+                        track_line_index=index, display_start_override_ms=0,
+                        display_end_override_ms=2000) for index, text in enumerate(texts)]
+    rubies = [] if upper_row is None else [RubyAnnotation(
+        "国", "に", pos_start_ms=upper_row * 1000, pos_end_ms=(upper_row + 1) * 1000,
+        target_line_index=upper_row, target_char_start=0, target_char_end=1)]
+    track = TimingTrack(lines=lines, rubies=rubies,
+                        page_plan=TrackPagePlan([TrackSection([TrackPage(2)])]))
+    def colors(color):
+        state = KaraokeColorState(text=PaintFill(color=color))
+        return KaraokeColors(before=state, after=state)
+    style = _g1_style(layout_semantics=semantics, font_family="Meiryo",
+        font_family_latin="Meiryo", ruby_font_family="Meiryo", font_size_px=50,
+        ruby_font_size_px=22, stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
+        ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_decoration_kind="none",
+        ruby_colors_follow_main=False, karaoke_colors=colors("#FF0000"),
+        ruby_karaoke_colors=colors("#00FF00"), lower_ruby_enabled=True,
+        lower_ruby_follow_upper=False, line_gap_px=20, dual_line_layout=True,
+        karaoke_anim=animation, title_overlays=[])
+    style = replace(style, lower_ruby_style=lower_style_snapshot(
+        replace(style, ruby_karaoke_colors=colors("#0000FF"))))
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        _, frames = _render_g1_frames(renderer, style, (500,), force_warp=True, track=track)
+    bounds = []
+    for payload in (_render_painter_oracle(style, t_ms=500, track=track), frames[0]):
+        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+        mask = ((rgba[:, :, 2] > 150) & (rgba[:, :, 0] < 40)
+                & (rgba[:, :, 1] < 40) & (rgba[:, :, 3] > 100))
+        rows = np.flatnonzero(mask.any(axis=1))
+        breaks = np.flatnonzero(np.diff(rows) > 12)
+        assert len(breaks) == 1, (upper_row, rows)
+        bounds.append(rows[[0, breaks[0], breaks[0] + 1, -1]])
+    assert np.max(np.abs(bounds[0] - bounds[1])) <= 3
+
+
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
 @pytest.mark.parametrize("position", ["top", "center", "bottom"])
 def test_gpu_lower_ruby_two_row_zero_gap_matches_painter(monkeypatch, semantics, position):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")

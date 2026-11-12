@@ -1057,6 +1057,8 @@ def paint_frame_to_painter(
     """
     # 扫字线像素字段与指示灯/音量柱偏移存储恒为 1080 基准,绘制入口一次
     # 性换算成当前输出高度下的实画值;深处的各消费点继续直读画布值。
+    from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+    style = snapshot_lower_romaji_options(style)
     style = style_with_output_signal_offsets(
         style_with_output_scanline(style, logical_h), logical_h
     )
@@ -1606,7 +1608,7 @@ def _display_line_vertical_bounds(
         if display_line.display_start_ms is not None
         else _line_start_ms(line),
     )
-    if layout.active_rubies and layout.ruby_metrics is not None:
+    if layout.ruby_layouts and layout.ruby_metrics is not None:
         layers.extend(_ruby_layer_stack(layout, line, track_t_ms, line_style))
     line_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(ctx, layers)
     if line_bounds is None:
@@ -5037,7 +5039,7 @@ def _paint_line_static(
     def paint_ruby_glow_under_main() -> None:
         if (
             transition is not None
-            or not layout.active_rubies
+            or not layout.ruby_layouts
             or layout.ruby_metrics is None
         ):
             return
@@ -5052,7 +5054,7 @@ def _paint_line_static(
         )
 
     def paint_rubies_on_top() -> None:
-        if not layout.active_rubies or layout.ruby_metrics is None:
+        if not layout.ruby_layouts or layout.ruby_metrics is None:
             return
         # N3 renders main text decoration first, then ruby on top.  Painting
         # ruby before the main glyphs lets a large main glow bleed over the
@@ -5734,7 +5736,7 @@ def _utopia_transition_scope_layers(
     if transition.effect != "utopia":
         return []
     layers = _utopia_main_scope_layers(layout, line, style, t_ms, transition, frame_height)
-    if layout.active_rubies and layout.ruby_metrics is not None:
+    if layout.ruby_layouts and layout.ruby_metrics is not None:
         layers.extend(
             _utopia_ruby_scope_layers(layout, line, style, t_ms, transition, frame_height)
         )

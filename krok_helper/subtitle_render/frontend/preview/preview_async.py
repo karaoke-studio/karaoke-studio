@@ -103,6 +103,8 @@ def style_patch_base_key(
     # track IR. A layout-only patch cannot replace that render-only payload.
     if style.lower_ruby_enabled:
         include_layout_signature = True
+    from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+    style = snapshot_lower_romaji_options(style)
     parts: list[object] = [track_signature_for_windows(track)]
     if include_layout_signature:
         # layout scope（P6）：布局签名刻意缺席——行级摆放字段随差分载荷
@@ -724,6 +726,8 @@ class AsyncSubtitleRenderer(QObject):
     ) -> None:
         if self._stopped:
             return
+        from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+        style = snapshot_lower_romaji_options(style)
         _prewarm_font_axis_capabilities(track, style, extra_tracks)
         self._track = track
         self._style = style
@@ -984,6 +988,8 @@ class GpuAsyncSubtitleRenderer(QObject):
         relayout_scope: str | None = None,
         roll_shift_ms: int | None = None,
     ) -> None:
+        from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+        style = snapshot_lower_romaji_options(style)
         _prewarm_font_axis_capabilities(track, style, extra_tracks)
         with self._condition:
             if self._stopped:
@@ -3333,6 +3339,8 @@ class NativeAsyncSubtitleRenderer(QObject):
         relayout_scope: str | None = None,
         roll_shift_ms: int | None = None,
     ) -> None:
+        from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+        style = snapshot_lower_romaji_options(style)
         _prewarm_font_axis_capabilities(track, style, extra_tracks)
         with self._condition:
             if self._stopped:
