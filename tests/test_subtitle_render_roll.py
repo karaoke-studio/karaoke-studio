@@ -748,11 +748,16 @@ def test_timeline_view_displays_and_writes_display_coordinates(qapp):
     view.set_timing_display_offset(8000)
     block = view._lanes[0].blocks[0]
     assert block.start_ms == 18_000
+    # 字幕源刷新会重新 set_tracks；已有前黑偏移必须继续作用在新轨道上。
+    view.set_tracks([("主字幕", track)])
+    refreshed = view._lanes[0].blocks[0]
+    assert refreshed.start_ms == 18_000
+    assert refreshed.end_ms == 22_000
     # 把手拖到 display 20s → 写回源坐标 12s。
-    view._set_display_start_override(0, block, 20_000)
+    view._set_display_start_override(0, refreshed, 20_000)
     assert track.lines[0].display_start_override_ms == 12_000
     # 余量编辑同理（display → source）。
-    view._set_display_end_override(0, block, 25_000)
+    view._set_display_end_override(0, refreshed, 25_000)
     assert track.lines[0].display_end_override_ms == 17_000
 
 

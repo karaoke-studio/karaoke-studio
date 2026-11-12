@@ -379,7 +379,9 @@ class TrackTimelineView(QWidget):
 
         重置视口到开头、比例尺回默认 15 秒，并清除句子选中态。
         """
-        self._lanes = build_lanes(tracks, self._style)
+        self._lanes = build_lanes(
+            tracks, self._style, time_offset_ms=self._timing_display_offset_ms
+        )
         self._track_names = [name for name, _track in tracks]
         self._track_refs = [track for _name, track in tracks]
         self._windows = []
