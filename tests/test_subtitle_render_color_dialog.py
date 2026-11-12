@@ -102,6 +102,56 @@ def test_titlebar_close_rejects_the_dialog_without_recording_a_color(dialog):
     assert colors.recent_colors() == []
 
 
+def test_reopening_after_mouse_close_clears_pressed_state_and_allows_dragging(dialog, qapp):
+    from qframelesswindow.titlebar.title_bar_buttons import TitleBarButtonState
+
+    for _ in range(3):
+        # click() skips the library's mousePressEvent and cannot reproduce this.
+        QTest.mouseClick(dialog.titleBar.closeBtn, Qt.MouseButton.LeftButton)
+        assert not dialog.isVisible()
+        dialog.show()
+        qapp.processEvents()
+        assert dialog.titleBar.closeBtn._state == TitleBarButtonState.NORMAL
+        assert not dialog.titleBar.closeBtn.isPressed()
+        assert not dialog.titleBar.closeBtn.isDown()
+        assert dialog.titleBar.canDrag(QPoint(180, 16))
+
+
+def test_active_close_press_still_blocks_drag_and_hiding_clears_it(dialog, qapp):
+    button = dialog.titleBar.closeBtn
+    QTest.mousePress(button, Qt.MouseButton.LeftButton)
+    assert button.isPressed() and button.isDown()
+    assert not dialog.titleBar.canDrag(QPoint(180, 16))
+    dialog.hide()
+    assert not button.isPressed() and not button.isDown()
+    dialog.show()
+    qapp.processEvents()
+    assert dialog.titleBar.canDrag(QPoint(180, 16))
+
+
+def test_titlebar_drag_dispatch_works_immediately_after_mouse_close(dialog, qapp, monkeypatch):
+    import importlib
+    import sys
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QMouseEvent
+
+    method = dialog.titleBar.mouseMoveEvent if sys.platform == "win32" else dialog.titleBar.mousePressEvent
+    module = importlib.import_module(method.__func__.__module__)
+    moves = []
+    monkeypatch.setattr(module, "startSystemMove", lambda window, point: moves.append((window, point)))
+    QTest.mouseClick(dialog.titleBar.closeBtn, Qt.MouseButton.LeftButton)
+    dialog.show()
+    qapp.processEvents()
+    local = QPoint(180, 16)
+    global_pos = dialog.titleBar.mapToGlobal(local)
+    event_type = QEvent.Type.MouseMove if sys.platform == "win32" else QEvent.Type.MouseButtonPress
+    event = QMouseEvent(event_type, QPointF(local), QPointF(global_pos),
+                        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                        Qt.KeyboardModifier.NoModifier)
+    method(event)
+    assert moves == [(dialog, global_pos)]
+
+
 def test_shared_fluent_dialog_can_be_reowned_and_reopened(qapp):
     first, second = QWidget(), QWidget()
     first.show()
@@ -114,7 +164,8 @@ def test_shared_fluent_dialog_can_be_reowned_and_reopened(qapp):
                 assert dialog.parentWidget() is host
                 assert dialog.titleBar.isVisible()
                 assert dialog.windowFlags() & Qt.WindowType.FramelessWindowHint
-                dialog.titleBar.closeBtn.click()
+                assert dialog.titleBar.canDrag(QPoint(180, 16))
+                QTest.mouseClick(dialog.titleBar.closeBtn, Qt.MouseButton.LeftButton)
 
             QTimer.singleShot(20, close_dialog)
             result = colors._select_color(QColor("#804093E9"), host, "选择颜色")

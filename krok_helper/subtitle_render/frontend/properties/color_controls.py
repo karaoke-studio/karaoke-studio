@@ -40,6 +40,7 @@ from qfluentwidgets import (
     ToolButton as FluentToolButton,
 )
 from qframelesswindow import FramelessDialog
+from qframelesswindow.titlebar.title_bar_buttons import TitleBarButtonState
 
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.settings.recent_colors import RECENT_COLOR_LIMIT, RecentColorStore
@@ -869,7 +870,20 @@ class _ColorDialog(FramelessDialog):
             self.raise_()
             self.activateWindow()
 
+    def _reset_titlebar_button_states(self) -> None:
+        # A mouse click closes/hides the cached dialog before the close button
+        # receives leaveEvent. Its independent PRESSED state then survives the
+        # next show and makes TitleBarBase.canDrag() reject the entire bar.
+        for button in (self.titleBar.minBtn, self.titleBar.maxBtn, self.titleBar.closeBtn):
+            button.setDown(False)
+            button.setState(TitleBarButtonState.NORMAL)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._reset_titlebar_button_states()
+        super().hideEvent(event)
+
     def showEvent(self, event) -> None:  # noqa: N802
+        self._reset_titlebar_button_states()
         super().showEvent(event)
         self._ensure_active()
         QTimer.singleShot(0, self._ensure_active)
