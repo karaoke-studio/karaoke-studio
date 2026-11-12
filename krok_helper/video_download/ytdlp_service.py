@@ -442,6 +442,10 @@ class YtDlpService:
         )
         outtmpl = str(save_dir / f"{output_stem}.%(ext)s")
         selected_format = task.selected_format.download_format if task.selected_format else "best"
+        if self._download_separate_tracks(task, options):
+            # Commas download each format independently; '+' asks yt-dlp to merge.
+            selected_format = selected_format.replace("+", ",")
+            outtmpl = str(save_dir / f"{output_stem}.f%(format_id)s.%(ext)s")
         extractor_args_hint = task.info.extractor_args_hint if task.info else ""
         extractor_args_hint = self._youtube_download_extractor_args_hint(task.url, extractor_args_hint)
         preexisting_outputs = self._snapshot_output_candidates(save_dir, output_stem)
@@ -1167,7 +1171,8 @@ class YtDlpService:
             if task.cancel_requested:
                 raise DownloadCancelledError("下载已取消。")
             resolved_file = self._resolve_output_file(save_dir, output_stem, {}, task, options)
-            if resolved_file is not None and resolved_file.is_file() and resolved_file.stat().st_size > 0:
+            if (not self._download_separate_tracks(task, options)
+                    and resolved_file is not None and resolved_file.is_file() and resolved_file.stat().st_size > 0):
                 task.local_file = resolved_file
                 return
             message = self._pick_cli_error_message(output_lines, progress_marker)
@@ -1617,6 +1622,14 @@ class YtDlpService:
         except (TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _download_separate_tracks(task: DownloadTask, options: DownloadOptions) -> bool:
+        return bool(
+            not options.merge_video_audio
+            and task.selected_format
+            and task.selected_format.requires_merge
+        )
+
     def _resolve_output_file(
         self,
         save_dir: Path,
@@ -1625,6 +1638,11 @@ class YtDlpService:
         task: DownloadTask,
         options: DownloadOptions,
     ) -> Path | None:
+        if self._download_separate_tracks(task, options):
+            # Keep the video as the primary file for playback / the next workflow step.
+            video = task.selected_format
+            video_id = video.download_format.split("+", 1)[0]
+            return save_dir / f"{output_stem}.f{video_id}.{video.ext or 'mp4'}"
         requested_downloads = info.get("requested_downloads") or []
         for item in requested_downloads:
             filepath = item.get("filepath")
