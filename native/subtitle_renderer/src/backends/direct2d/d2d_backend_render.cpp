@@ -10837,7 +10837,6 @@ NativePreviewResult Direct2DGpuBackend::presentFrame(
         result = previewSurface_.present(
             device_.d3dDevice(),
             device_.d3dContext(),
-            device_.d2dDevice(),
             impl_->frameStore[static_cast<std::size_t>(slotIndex)].texture.Get(),
             rendered.renderMs,
             target
@@ -10925,7 +10924,6 @@ NativePreviewResult Direct2DGpuBackend::presentRendered(
         result = previewSurface_.present(
             device_.d3dDevice(),
             device_.d3dContext(),
-            device_.d2dDevice(),
             impl_->frameStore[foundIndex].texture.Get(),
             0.0,
             target

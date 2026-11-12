@@ -31,17 +31,15 @@ struct BackendCaps {
 
 struct NativePreviewTarget {
     std::uintptr_t parentWindow = 0;
-    // Child and crop coordinates are physical display pixels. Optional canvas
-    // dimensions describe the full, unclipped display canvas; zero keeps the
-    // legacy 1:1 texture-pixel contract.
+    // 子窗口在父窗口客户区的物理像素矩形（可能小于渲染纹理：场景映射
+    // 矩形被视口裁剪）。srcX/srcY 是窗口左上角在纹理里的物理像素偏移，
+    // present 时从该偏移 1:1 拷贝窗口大小的区域。
     int x = 0;
     int y = 0;
     int width = 0;
     int height = 0;
     int srcX = 0;
     int srcY = 0;
-    int canvasWidth = 0;
-    int canvasHeight = 0;
 };
 
 // G6 拆分路径第一步：只渲染到纹理（不上屏），Python 侧到点后调

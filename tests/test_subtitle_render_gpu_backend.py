@@ -409,28 +409,6 @@ def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypa
                 )
                 result.update(configured=configured, event=event)
                 result["sub_rect_event"] = sub_rect_event
-                # Render texture and the visible canvas are independent. Exercise
-                # fractional source crops and both split/direct present commands.
-                scaled_events = []
-                for scale in (0.25, 0.5, 1.0, 0.25):
-                    resized = process.resize_gpu_target(width=320, height=180, dpr=scale,
-                        force_warp=True, prewarm_t_ms=600, worker_count=1)
-                    assert (resized["width"], resized["height"]) == (round(320 * scale), round(180 * scale))
-                    process.render_gpu_frame_direct(600, force_warp=True)
-                    scaled = process.present_rendered_gpu_frame(
-                        parent_hwnd=parent_hwnd, x=16, y=8, width=288, height=164,
-                        src_x=17, src_y=9, canvas_width=640, canvas_height=360,
-                        t_ms=600, force_warp=True)
-                    assert scaled["readback_ms"] == 0.0
-                    assert scaled["child_hwnd"] == sub_rect_event["child_hwnd"]
-                    scaled_events.append(scaled)
-                    direct = process.present_gpu_frame(650, parent_hwnd=parent_hwnd,
-                        x=16, y=8, width=288, height=164, src_x=17, src_y=9,
-                        canvas_width=640, canvas_height=360, force_warp=True)
-                    assert direct["readback_ms"] == 0.0
-                result["scaled_events"] = scaled_events
-                process.resize_gpu_target(width=320, height=180, dpr=1.0,
-                    force_warp=True, prewarm_t_ms=600, worker_count=1)
                 # 长时覆盖 HWND 被关闭、合成目标释放/重绑；进程始终存活。
                 original_pid = process.process_id
                 lifecycle_deadline = time.monotonic() + 12.0

@@ -283,7 +283,6 @@ void NativePreviewSurface::resizeSwapChain(int width, int height) {
 NativePreviewResult NativePreviewSurface::present(
     ID3D11Device *device,
     ID3D11DeviceContext *context,
-    ID2D1Device *d2dDevice,
     ID3D11Texture2D *source,
     double renderMs,
     const NativePreviewTarget &target
@@ -293,14 +292,12 @@ NativePreviewResult NativePreviewSurface::present(
     }
     D3D11_TEXTURE2D_DESC sourceDescription{};
     source->GetDesc(&sourceDescription);
-    const int canvasWidth = target.canvasWidth > 0 ? target.canvasWidth : static_cast<int>(sourceDescription.Width);
-    const int canvasHeight = target.canvasHeight > 0 ? target.canvasHeight : static_cast<int>(sourceDescription.Height);
     // 子窗口矩形可以小于渲染纹理（场景映射矩形被视口裁剪），但拷贝源
     // 区域必须完整落在纹理内，否则看到的是越界垃圾。
     if (target.srcX < 0 || target.srcY < 0
         || target.width <= 0 || target.height <= 0
-        || static_cast<std::int64_t>(target.srcX) + target.width > canvasWidth
-        || static_cast<std::int64_t>(target.srcY) + target.height > canvasHeight) {
+        || static_cast<UINT>(target.srcX + target.width) > sourceDescription.Width
+        || static_cast<UINT>(target.srcY + target.height) > sourceDescription.Height) {
         throw BackendError("native preview source region exceeds the GPU texture");
     }
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -329,73 +326,25 @@ NativePreviewResult NativePreviewSurface::present(
         swapChain_->GetBuffer(0, IID_PPV_ARGS(backBuffer.ReleaseAndGetAddressOf())),
         "IDXGISwapChain1::GetBuffer(native preview)"
     );
-    if (canvasWidth == static_cast<int>(sourceDescription.Width)
-        && canvasHeight == static_cast<int>(sourceDescription.Height)) {
-        D3D11_BOX sourceBox;
-        sourceBox.left = static_cast<UINT>(target.srcX);
-        sourceBox.top = static_cast<UINT>(target.srcY);
-        sourceBox.front = 0;
-        sourceBox.right = static_cast<UINT>(target.srcX + target.width);
-        sourceBox.bottom = static_cast<UINT>(target.srcY + target.height);
-        sourceBox.back = 1;
-        // 拷贝区域与 back buffer 同尺寸：flip 模型 swap chain 要求每帧覆盖
-        // 整个 back buffer，1:1 无缩放拷贝正好满足，且不会有重采样模糊。
-        context->CopySubresourceRegion(
-            backBuffer.Get(),
-            0,
-            0,
-            0,
-            0,
-            source,
-            0,
-            &sourceBox
-        );
-    } else {
-        // GPU-only resampling. Both surfaces use premultiplied alpha so transparent
-        // subtitle edges remain transparent after interpolation. The caller holds
-        // the shared immediate-context mutex for the whole present operation.
-        if (scaleContext_ == nullptr) {
-            if (d2dDevice == nullptr) {
-                throw BackendError("native preview scaling requires a D2D device");
-            }
-            checkHr(d2dDevice->CreateDeviceContext(
-                D2D1_DEVICE_CONTEXT_OPTIONS_NONE, scaleContext_.ReleaseAndGetAddressOf()),
-                "CreateDeviceContext(native preview scaling)");
-            scaleContext_->SetUnitMode(D2D1_UNIT_MODE_PIXELS);
-        }
-        Microsoft::WRL::ComPtr<IDXGISurface> sourceSurface;
-        Microsoft::WRL::ComPtr<IDXGISurface> targetSurface;
-        checkHr(source->QueryInterface(IID_PPV_ARGS(sourceSurface.ReleaseAndGetAddressOf())),
-                "Query source surface(native preview scaling)");
-        checkHr(backBuffer->QueryInterface(IID_PPV_ARGS(targetSurface.ReleaseAndGetAddressOf())),
-                "Query target surface(native preview scaling)");
-        auto properties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> sourceBitmap;
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> targetBitmap;
-        checkHr(scaleContext_->CreateBitmapFromDxgiSurface(sourceSurface.Get(), &properties,
-                sourceBitmap.ReleaseAndGetAddressOf()), "Create source bitmap(native preview scaling)");
-        properties.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
-        checkHr(scaleContext_->CreateBitmapFromDxgiSurface(targetSurface.Get(), &properties,
-                targetBitmap.ReleaseAndGetAddressOf()), "Create target bitmap(native preview scaling)");
-        const double scaleX = static_cast<double>(sourceDescription.Width) / canvasWidth;
-        const double scaleY = static_cast<double>(sourceDescription.Height) / canvasHeight;
-        const auto sourceRect = D2D1::RectF(
-            static_cast<float>(target.srcX * scaleX), static_cast<float>(target.srcY * scaleY),
-            static_cast<float>((static_cast<double>(target.srcX) + target.width) * scaleX),
-            static_cast<float>((static_cast<double>(target.srcY) + target.height) * scaleY));
-        const auto destination = D2D1::RectF(0.0f, 0.0f,
-            static_cast<float>(target.width), static_cast<float>(target.height));
-        scaleContext_->SetTarget(targetBitmap.Get());
-        scaleContext_->BeginDraw();
-        scaleContext_->Clear(D2D1::ColorF(0.0f, 0.0f));
-        scaleContext_->DrawBitmap(sourceBitmap.Get(), destination, 1.0f,
-                                 D2D1_INTERPOLATION_MODE_LINEAR, sourceRect);
-        const HRESULT drawResult = scaleContext_->EndDraw();
-        // No back-buffer reference may survive into ResizeBuffers / close.
-        scaleContext_->SetTarget(nullptr);
-        checkHr(drawResult, "EndDraw(native preview scaling)");
-    }
+    D3D11_BOX sourceBox;
+    sourceBox.left = static_cast<UINT>(target.srcX);
+    sourceBox.top = static_cast<UINT>(target.srcY);
+    sourceBox.front = 0;
+    sourceBox.right = static_cast<UINT>(target.srcX + target.width);
+    sourceBox.bottom = static_cast<UINT>(target.srcY + target.height);
+    sourceBox.back = 1;
+    // 拷贝区域与 back buffer 同尺寸：flip 模型 swap chain 要求每帧覆盖
+    // 整个 back buffer，1:1 无缩放拷贝正好满足，且不会有重采样模糊。
+    context->CopySubresourceRegion(
+        backBuffer.Get(),
+        0,
+        0,
+        0,
+        0,
+        source,
+        0,
+        &sourceBox
+    );
     checkHr(swapChain_->Present(0, 0), "IDXGISwapChain1::Present(native preview)");
     pumpWindowMessages();
     const auto presentEnd = std::chrono::steady_clock::now();
@@ -431,7 +380,6 @@ void NativePreviewSurface::close() noexcept {
     compositionTarget_.Reset();
     compositionDevice_.Reset();
     swapChain_.Reset();
-    scaleContext_.Reset();
     width_ = 0;
     height_ = 0;
     if (window_ != nullptr) {

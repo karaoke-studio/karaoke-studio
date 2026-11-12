@@ -716,12 +716,6 @@ class PreviewGraphicsView(QGraphicsView):
             )
 
     def _connect_native_preview_signal(self) -> None:
-        completed = getattr(self._async_renderer, "native_present_completed", None)
-        if completed is not None:
-            completed.connect(
-                self._on_native_present_completed,
-                Qt.ConnectionType.QueuedConnection,
-            )
         signal = getattr(self._async_renderer, "frame_presented", None)
         if signal is not None:
             signal.connect(
@@ -992,17 +986,6 @@ class PreviewGraphicsView(QGraphicsView):
         self._note_frame_delivered()
         self._subtitle_item.set_async_image(image)
 
-    def _on_native_present_completed(self, generation: int) -> None:
-        renderer = self._async_renderer
-        source = self.sender()
-        if source is not None and source is not renderer:
-            return
-        if (
-            getattr(renderer, "uses_native_preview", False)
-            and renderer.accepts_native_presentation(generation)
-        ):
-            self.framePainted.emit()
-
     def _on_native_frame_presented(self, t_ms: int) -> None:
         if not getattr(self._async_renderer, "uses_native_preview", False):
             return
@@ -1015,10 +998,7 @@ class PreviewGraphicsView(QGraphicsView):
             if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:
                 return
         self._note_frame_delivered()
-        # Older renderer adapters report FPS through the delivery notification.
-        # Native renderers count only completed presents, including late ones.
-        if getattr(self._async_renderer, "native_present_completed", None) is None:
-            self.framePainted.emit()
+        self.framePainted.emit()
 
     def set_output_size(self, width: int, height: int) -> None:
         w = max(int(width), 1)
@@ -1075,7 +1055,12 @@ class PreviewGraphicsView(QGraphicsView):
         )
 
     def _display_device_scale(self) -> float:
-        """DPR × scene-to-viewport scale, separate from subtitle raster quality."""
+        """DPR × scene→viewport 缩放，即视频矩形在屏幕上的物理口径。
+
+        未做质量钳制；G6 直画用它作为渲染目标尺度，保证纹理与屏幕矩形
+        逐像素对应（present 走 1:1 拷贝）。质量钳制只应作用于 G5/CPU 的
+        栅格分辨率，见 :meth:`_scene_device_pixel_ratio`。
+        """
         # DPR-aware 渲染（af1ad4e）：worker 直接按 viewport 设备倍率（DPR × scene→viewport
         # 缩放）栅格化，GUI 等倍 blit，省掉 1920×1080→viewport device 的 smooth-scale。
         # KROK_SUBTITLE_PREVIEW_DPR_AWARE=0 回退到旧路径（worker 渲 logical、GUI 缩放），用于 A/B。
@@ -1093,6 +1078,9 @@ class PreviewGraphicsView(QGraphicsView):
             else self.devicePixelRatioF()
         )
         scene_scale = abs(self.transform().m11()) or 1.0
+        # 按显示物理分辨率栅格化即可：文字直接在目标尺寸光栅化比
+        # 高分辨率渲染再缩小更锐（实测边缘梯度更高）。预览清晰度的上限
+        # 是窗口像素数——想看 1:1 细节请把预览窗口拉大 / 最大化。
         return max(float(dpr or 1.0) * float(scene_scale), 0.01)
 
     def _scene_device_pixel_ratio(self) -> float:
@@ -1105,7 +1093,9 @@ class PreviewGraphicsView(QGraphicsView):
         if self._async_renderer is None:
             return
         native_mode = getattr(self._async_renderer, "uses_native_preview", False)
-        render_dpr = self._scene_device_pixel_ratio()
+        render_dpr = self._display_device_scale() if native_mode else (
+            self._scene_device_pixel_ratio()
+        )
         self._async_renderer.set_render_target(
             self._output_w,
             self._output_h,
@@ -1128,18 +1118,20 @@ class PreviewGraphicsView(QGraphicsView):
         ``fitInView`` 是 KeepAspectRatioByExpanding，映射矩形可能超出视口
         （视口更宽时上下溢出）；超出的部分用户本来看不见，子窗口必须裁掉，
         否则字幕会画到视口相邻的 UI 上。裁剪后纹理与窗口不再同源起点，
-        src_x/src_y 与 canvas 尺寸均使用显示像素，sidecar 映射到源纹理后缩放。
+        通过 src_x/src_y 告诉 sidecar 从渲染纹理的哪个物理像素开始 1:1 拷贝。
         """
         window = self.window()
         viewport = self.viewport()
         if window is None or viewport is None or not self.isVisible():
             self._async_renderer.clear_native_target()
             return
+        physical_w, physical_h, _ = preview_render_target_size(
+            self._output_w,
+            self._output_h,
+            render_dpr,
+        )
         dpr = max(float(window.devicePixelRatioF() or 1.0), 0.01)
-        mapped_scene = QRectF(self.mapFromScene(self._scene.sceneRect()).boundingRect())
-        # Presentation geometry stays in screen pixels at every quality tier.
-        physical_w = max(round(mapped_scene.width() * dpr), 1)
-        physical_h = max(round(mapped_scene.height() * dpr), 1)
+        mapped_scene = self.mapFromScene(self._scene.sceneRect()).boundingRect()
         viewport_rect = QRectF(viewport.rect())
         visible = QRectF(
             max(mapped_scene.left(), viewport_rect.left()),
@@ -1173,8 +1165,6 @@ class PreviewGraphicsView(QGraphicsView):
             win_h,
             src_x,
             src_y,
-            canvas_width=physical_w,
-            canvas_height=physical_h,
         )
         if os.environ.get("KROK_G6_GEOM_DEBUG", "0").strip().lower() in (
             "1",

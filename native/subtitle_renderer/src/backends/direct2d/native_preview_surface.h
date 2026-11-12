@@ -3,7 +3,6 @@
 #include "../render_backend.h"
 
 #include <d3d11.h>
-#include <d2d1_1.h>
 #include <dcomp.h>
 #include <dxgi1_3.h>
 #include <windows.h>
@@ -23,7 +22,6 @@ public:
     NativePreviewResult present(
         ID3D11Device *device,
         ID3D11DeviceContext *context,
-        ID2D1Device *d2dDevice,
         ID3D11Texture2D *source,
         double renderMs,
         const NativePreviewTarget &target
@@ -52,7 +50,6 @@ private:
     Microsoft::WRL::ComPtr<IDCompositionDevice> compositionDevice_;
     Microsoft::WRL::ComPtr<IDCompositionTarget> compositionTarget_;
     Microsoft::WRL::ComPtr<IDCompositionVisual> compositionVisual_;
-    Microsoft::WRL::ComPtr<ID2D1DeviceContext> scaleContext_;
 };
 
 }  // namespace krok::subtitle::native

@@ -134,8 +134,18 @@ def normalize_preview_quality(value: object) -> str:
 
 
 def preview_quality_render_scale(display_scale: float, quality: object) -> float:
-    """Fixed project-space raster tiers, independent of window size and DPR."""
-    return _PREVIEW_QUALITY_SCALES[normalize_preview_quality(quality)]
+    """Cap subtitle raster scale for a quality tier without invisible oversampling.
+
+    Full quality deliberately preserves the existing display-native behaviour,
+    including DPR > 1 for a small project shown in a large window. Lower tiers
+    follow N3's 1/4 and 1/2 project-space render targets, capped by the actual
+    display scale so a small preview never renders pixels it cannot show.
+    """
+    safe_display_scale = max(float(display_scale or 1.0), 0.01)
+    key = normalize_preview_quality(quality)
+    if key == DEFAULT_PREVIEW_QUALITY:
+        return safe_display_scale
+    return max(min(safe_display_scale, _PREVIEW_QUALITY_SCALES[key]), 0.01)
 
 
 def _env_enabled(name: str, default: str) -> bool:
@@ -776,9 +786,6 @@ class GpuAsyncSubtitleRenderer(QObject):
 
     frame_ready = Signal(QImage, int)
     frame_presented = Signal(int)
-    # Actual native presents, tagged with the scene generation. Timestamp-based
-    # delivery filters and same-frame acknowledgements must not affect FPS.
-    native_present_completed = Signal(int)
     renderProgress = Signal(int, str)
     fallback_occurred = Signal(str)
     backendModeChanged = Signal(str)
@@ -846,7 +853,9 @@ class GpuAsyncSubtitleRenderer(QObject):
         # worker=1 是模式约束（直画渲染走主后端），由 _worker_request_for_mode
         # 在 configure/resize 调用点按当前模式取值，切回 G5 即恢复多 worker。
         self._active_worker_count = 1
-        self._native_target: Optional[tuple[int, ...]] = None
+        self._native_target: Optional[
+            tuple[int, int, int, int, int, int, int]
+        ] = None
         # sidecar 里是否可能还挂着 DComp 子窗口；True 时若 target 被清空，
         # worker 会通过 close 哨兵主动撤掉，避免隐藏视图后残留画面。
         self._native_child_open = False
@@ -867,7 +876,6 @@ class GpuAsyncSubtitleRenderer(QObject):
         # _render_ms_ema 服务 GPU 直渲/读回路径；CPU 回退帧量级差一个数量
         # 级，单独一条 EMA。
         self._native_last_presented: Optional[tuple[int, int]] = None
-        self._native_last_presented_target: Optional[tuple[int, ...]] = None
         self._render_ms_ema = 0.0
         # 读回填缝的前沿前移量（毫秒，控制器式 EMA 自校正）：让帧的完成
         # 时刻恰好落在请求键上，避免填进缓存时播放头已越过该键。
@@ -1127,15 +1135,13 @@ class GpuAsyncSubtitleRenderer(QObject):
         height: int,
         src_x: int = 0,
         src_y: int = 0,
-        canvas_width: int = 0,
-        canvas_height: int = 0,
     ) -> None:
         """Update the sidecar child HWND parent and physical target geometry.
 
         ``x/y/width/height`` 是子窗口在父（顶层）窗口客户区里的物理像素
         矩形（已裁剪到视口可见范围）；``src_x/src_y`` 是该矩形左上角在
-        完整显示画布里的物理像素偏移。canvas 尺寸与渲染纹理解耦，
-        sidecar 将显示区域按比例映射到源纹理；缺省保留旧协议的 1:1 口径。
+        渲染纹理里的物理像素偏移——场景映射矩形超出视口被裁掉时，纹理
+        与窗口起点不再重合，sidecar 从偏移处 1:1 拷贝。
         """
         target = (
             int(parent_hwnd),
@@ -1146,8 +1152,6 @@ class GpuAsyncSubtitleRenderer(QObject):
             max(int(src_x), 0),
             max(int(src_y), 0),
         )
-        if canvas_width > 0 and canvas_height > 0:
-            target += (int(canvas_width), int(canvas_height))
         with self._condition:
             if self._stopped or not self._native_preview:
                 return
@@ -1714,7 +1718,6 @@ class GpuAsyncSubtitleRenderer(QObject):
                             target_height,
                             src_x,
                             src_y,
-                            *canvas_size,
                         ) = native_target
                         render_t = self._native_render_timestamp(
                             t_ms, submitted_at, needs_configure or needs_target_resize
@@ -1750,7 +1753,6 @@ class GpuAsyncSubtitleRenderer(QObject):
                             height=target_height,
                             src_x=src_x,
                             src_y=src_y,
-                            **(dict(zip(("canvas_width", "canvas_height"), canvas_size))),
                             t_ms=render_t,
                             force_warp=force_warp,
                             generation=generation,
@@ -1764,8 +1766,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             continue
                         if event.get("render_ms") in (None, 0.0):
                             event["render_ms"] = render_event.get("render_ms", 0.0)
-                        self._native_note_presented(generation, render_t, event, native_target)
-                        self.native_present_completed.emit(generation)
+                        self._native_note_presented(generation, render_t, event)
                         if _env_enabled("KROK_SUBTITLE_NATIVE_DUMP_PNG", "0"):
                             # 调试：G6 暂停态 present 后，把同一 t 的纹理按
                             # 读回路径落 PNG（与 present 内容同源同尺寸），
@@ -2803,18 +2804,17 @@ class GpuAsyncSubtitleRenderer(QObject):
             target_height,
             src_x,
             src_y,
-            *canvas_size,
         ) = current_target
-        # Clip in display-canvas pixels. Legacy callers without a canvas keep
-        # the old texture-pixel clamping during resize.
+        # 窗口几何来自 GUI 线程的最新值，纹理尺寸是本 worker 最近一次
+        # configure/resize 的值——resize 期间两者短暂不一致时把区域
+        # 钳进纹理内，避免 present 校验失败被计入连续失败弹回退框。
         with self._condition:
             phys_w = max(int(round(self._logical_w * self._device_pixel_ratio)), 1)
             phys_h = max(int(round(self._logical_h * self._device_pixel_ratio)), 1)
-        canvas_w, canvas_h = canvas_size or (phys_w, phys_h)
-        src_x = min(max(src_x, 0), max(canvas_w - 1, 0))
-        src_y = min(max(src_y, 0), max(canvas_h - 1, 0))
-        target_width = min(max(target_width, 1), canvas_w - src_x)
-        target_height = min(max(target_height, 1), canvas_h - src_y)
+        src_x = min(max(src_x, 0), max(phys_w - 1, 0))
+        src_y = min(max(src_y, 0), max(phys_h - 1, 0))
+        target_width = min(max(target_width, 1), phys_w - src_x)
+        target_height = min(max(target_height, 1), phys_h - src_y)
         if target_width < 1 or target_height < 1:
             return
 
@@ -2841,7 +2841,6 @@ class GpuAsyncSubtitleRenderer(QObject):
             height=target_height,
             src_x=src_x,
             src_y=src_y,
-            **(dict(zip(("canvas_width", "canvas_height"), canvas_size))),
             t_ms=render_t,
             force_warp=force_warp,
             generation=generation,
@@ -2857,8 +2856,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._native_preview_failures = 0
         self._note("frames_emitted")
         self._record_event_timing("present_ms", event.get("present_ms"))
-        self._native_note_presented(generation, render_t, event, current_target)
-        self.native_present_completed.emit(generation)
+        self._native_note_presented(generation, render_t, event)
         if self._may_emit(render_t, generation):
             self.frame_presented.emit(int(render_t))
             self._note_backend_mode("gpu")
@@ -2920,8 +2918,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         # 媒体时钟前进，而不是再画一遍。
         with self._condition:
             last = self._native_last_presented
-            same_target = self._native_last_presented_target == self._native_target
-        if last is not None and last[0] == self._generation and same_target:
+        if last is not None and last[0] == self._generation:
             if last[1] == key:
                 return None
             projected_key = self._frame_cache.key_for(projected)
@@ -2930,15 +2927,13 @@ class GpuAsyncSubtitleRenderer(QObject):
         return projected
 
     def _native_note_presented(
-        self, generation: int, t_ms: int, event: dict,
-        native_target: Optional[tuple[int, ...]] = None,
+        self, generation: int, t_ms: int, event: dict
     ) -> None:
         with self._condition:
             self._native_last_presented = (
                 int(generation),
                 self._frame_cache.key_for(int(t_ms)),
             )
-            self._native_last_presented_target = native_target
         render_ms = float(event.get("render_ms") or 0.0)
         if render_ms > 0.0:
             self._render_ms_ema = (
@@ -2999,16 +2994,6 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._note("native_frame_png_dumped")
         except Exception as exc:  # pragma: no cover - 调试路径
             _preview_diagnostic(f"[native-dump] failed: {exc}", flush=True)
-
-    def accepts_native_presentation(self, generation: int) -> bool:
-        """Reject queued presentation statistics from an obsolete scene/transport."""
-        with self._condition:
-            return (
-                not self._stopped
-                and self._native_preview
-                and self._native_target is not None
-                and int(generation) == self._generation
-            )
 
     def _may_emit(self, t_ms: int, generation: int) -> bool:
         with self._condition:
