@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     Action,
     FluentIcon as FIF,
+    FluentTitleBar,
     CaptionLabel,
     LineEdit as FluentLineEdit,
     RoundMenu,
@@ -38,6 +39,7 @@ from qfluentwidgets import (
     ScrollArea as FluentScrollArea,
     ToolButton as FluentToolButton,
 )
+from qframelesswindow import FramelessDialog
 
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.settings.recent_colors import RECENT_COLOR_LIMIT, RecentColorStore
@@ -600,7 +602,7 @@ class _RecentColorList(FluentScrollArea):
             event.ignore()
 
 
-class _ColorDialog(QDialog):
+class _ColorDialog(FramelessDialog):
     """Fluent color editor with N3-style HS, value and alpha surfaces.
 
     RGB remains exact when a color is loaded or only alpha changes. Hue and
@@ -611,6 +613,14 @@ class _ColorDialog(QDialog):
     currentColorChanged = Signal(QColor)
     def __init__(self, current: QColor, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setTitleBar(FluentTitleBar(self))
+        self.titleBar.setFixedHeight(36)
+        self.titleBar.hBoxLayout.setContentsMargins(16, 0, 0, 0)
+        self.titleBar.iconLabel.hide()
+        self.titleBar.minBtn.hide()
+        self.titleBar.maxBtn.hide()
+        self.titleBar.setDoubleClickEnabled(False)
+        self.titleBar.closeBtn.setAccessibleName("关闭颜色选择窗口")
         self.setObjectName("SubtitleColorDialog")
         self.setWindowTitle("选择颜色")
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
@@ -621,7 +631,7 @@ class _ColorDialog(QDialog):
         self._screen_picker: Optional[ScreenColorPicker] = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 12, 16, 16)
+        root.setContentsMargins(16, self.titleBar.height() + 12, 16, 16)
         root.setSpacing(12)
         body = QHBoxLayout()
         body.setSpacing(20)

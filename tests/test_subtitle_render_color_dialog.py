@@ -46,7 +46,10 @@ def test_dialog_uses_painted_surfaces_and_chinese_fluent_controls(dialog):
     assert not isinstance(dialog, QColorDialog)
     assert isinstance(dialog._color_plane, HueSaturationPlane)
     assert dialog.findChildren(QColorDialog) == []
-    label_texts = {label.text() for label in dialog.findChildren(QLabel)}
+    label_texts = {
+        label.text() for label in dialog.findChildren(QLabel)
+        if not dialog.titleBar.isAncestorOf(label)
+    }
     assert {"最近使用", "原色", "新色"} <= label_texts
     assert label_texts.isdisjoint({"选择颜色", "色相 / 饱和度", "颜色对比", "常用颜色", "明度", "不透明度", "色号"})
     assert dialog.findChildren(QSpinBox) == []
@@ -68,6 +71,59 @@ def test_dialog_uses_painted_surfaces_and_chinese_fluent_controls(dialog):
     for widget in (dialog._color_plane, dialog._alpha_slider, dialog._hex_edit, dialog._recent_list):
         assert widget.isVisible()
         assert dialog.rect().contains(widget.mapTo(dialog, widget.rect().bottomRight()))
+
+
+def test_color_dialog_has_a_real_fluent_window_without_a_mask(dialog):
+    from qfluentwidgets import FluentTitleBar, MaskDialogBase
+    from qframelesswindow import FramelessDialog
+
+    assert isinstance(dialog, FramelessDialog)
+    assert isinstance(dialog.titleBar, FluentTitleBar)
+    assert not isinstance(dialog, MaskDialogBase)
+    assert dialog.isWindow()
+    assert dialog.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert dialog.titleBar.isVisible()
+    assert not dialog.titleBar.minBtn.isVisible()
+    assert not dialog.titleBar.maxBtn.isVisible()
+    assert dialog._color_plane.mapTo(dialog, QPoint()).y() >= dialog.titleBar.height()
+    dialog.setWindowTitle("选择描边颜色")
+    assert dialog.titleBar.titleLabel.text() == "选择描边颜色"
+    dialog.resize(dialog.width() + 80, dialog.height() + 40)
+    assert dialog.titleBar.width() == dialog.width()
+    assert dialog.titleBar.canDrag(QPoint(180, 16))
+    assert not dialog.titleBar.canDrag(dialog.titleBar.closeBtn.geometry().center())
+
+
+def test_titlebar_close_rejects_the_dialog_without_recording_a_color(dialog):
+    dialog.setCurrentColor(QColor("#60123456"))
+    QTimer.singleShot(10, dialog.titleBar.closeBtn.click)
+    assert dialog.exec() == QDialog.DialogCode.Rejected
+    assert not dialog.selectedColor().isValid()
+    assert colors.recent_colors() == []
+
+
+def test_shared_fluent_dialog_can_be_reowned_and_reopened(qapp):
+    first, second = QWidget(), QWidget()
+    first.show()
+    second.show()
+    colors.clear_recent_colors()
+    try:
+        for host in (first, second):
+            def close_dialog():
+                dialog = colors._shared_color_dialog
+                assert dialog.parentWidget() is host
+                assert dialog.titleBar.isVisible()
+                assert dialog.windowFlags() & Qt.WindowType.FramelessWindowHint
+                dialog.titleBar.closeBtn.click()
+
+            QTimer.singleShot(20, close_dialog)
+            result = colors._select_color(QColor("#804093E9"), host, "选择颜色")
+            assert not result.isValid()
+            assert colors._shared_color_dialog.parentWidget() is None
+    finally:
+        first.close()
+        second.close()
+        colors.clear_recent_colors()
 
 
 def test_plane_mouse_keyboard_and_black_recovery_preserve_chosen_hue(dialog):
