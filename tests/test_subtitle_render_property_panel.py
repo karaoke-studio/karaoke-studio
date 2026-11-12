@@ -5623,6 +5623,16 @@ def test_hex_entry_and_screen_pick_record_recent_colors(qapp):
             Qt.KeyboardModifier.NoModifier,
         )
         picker.mousePressEvent(event)
+        assert picked == []
+        release = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(2, 2),
+            QPointF(2, 2),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        picker.mouseReleaseEvent(release)
         assert [c.name(hex_argb).upper() for c in picked] == ["#FF776655"]
         recent = [
             c.name(hex_argb).upper() for c in color_controls_module.recent_colors()

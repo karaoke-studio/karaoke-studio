@@ -10,6 +10,7 @@ from PyQt6.QtCore import QPoint, QPointF, QRect, QTimer, Qt, pyqtSignal as Signa
 from PyQt6.QtGui import (
     QColor,
     QCursor,
+    QFont,
     QIcon,
     QImage,
     QPainter,
@@ -386,7 +387,7 @@ class ColorButton(QWidget):
 
 
 class ScreenColorPicker(QWidget):
-    """Transparent virtual-desktop overlay for direct screen color picking."""
+    """Opaque desktop snapshots that consume the entire color-picking click."""
 
     colorPicked = Signal(QColor)
     colorHovered = Signal(QColor)
@@ -401,7 +402,13 @@ class ScreenColorPicker(QWidget):
         )
         self._active = True
         self._last_hovered_rgba: Optional[int] = None
-        self._screens: list[tuple[QRect, QImage]] = []
+        self._screens: list[tuple[QRect, QImage | QPixmap]] = []
+        self._pressed_buttons = Qt.MouseButton.NoButton
+        self._pending_button = Qt.MouseButton.NoButton
+        self._pending_color = QColor()
+        self._cancel_pending = False
+        self._preview_color = QColor()
+        self._preview_rect = QRect()
         self._hover_timer = QTimer(self)
         self._hover_timer.setInterval(16)
         self._hover_timer.timeout.connect(
@@ -410,12 +417,10 @@ class ScreenColorPicker(QWidget):
         desktop_geometry = QRect()
         for screen in QApplication.screens():
             desktop_geometry = desktop_geometry.united(screen.geometry())
-        # 不在构造时整屏截图：grabWindow(0).toImage() 会把整块帧缓冲深拷贝成
-        # QImage，多显示器/4K 下耗时约一秒且阻塞 UI 线程。取色时按需只抓
-        # 光标处 1x1 像素即可，开销从整屏降为常数。
-
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        # Alpha-zero pixels of a Windows layered window are hit-test transparent.
+        # Paint captured pixels opaquely instead, so other apps cannot receive
+        # either half of the picking click. Capture only when start() is called.
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -423,6 +428,19 @@ class ScreenColorPicker(QWidget):
             self.setGeometry(desktop_geometry)
 
     def start(self) -> None:
+        if not self._active:
+            return
+        if not self._screens:
+            for screen in QApplication.screens():
+                pixmap = screen.grabWindow(0)
+                if not pixmap.isNull():
+                    # Keep the pixmap: converting a whole 4K desktop to QImage
+                    # is expensive. Only convert the picked 1x1 pixel below.
+                    self._screens.append((QRect(screen.geometry()), pixmap))
+        if not self._screens:
+            logging.getLogger(__name__).warning("无法截取屏幕，已取消屏幕取色")
+            self._finish()
+            return
         self.show()
         self.raise_()
         self.activateWindow()
@@ -430,14 +448,79 @@ class ScreenColorPicker(QWidget):
         self.grabMouse()
         self.grabKeyboard()
         self._emit_hovered_color(QCursor.pos())
-        # Windows may stop delivering hover-only mouseMoveEvent events after
-        # the cursor leaves the application even though the final captured
-        # click still arrives. Poll the global cursor while picking so the
-        # inline swatch keeps previewing colors across the virtual desktop.
+        # Poll as well as handling mouse moves to keep the preview responsive
+        # across the virtual desktop.
         self._hover_timer.start()
 
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        try:
+            painter.fillRect(self.rect(), Qt.GlobalColor.black)
+            for geometry, image in self._screens:
+                target = geometry.translated(-self.geometry().topLeft())
+                if isinstance(image, QPixmap):
+                    painter.drawPixmap(target, image)
+                else:
+                    painter.drawImage(target, image)
+            self._paint_color_preview(painter)
+        finally:
+            painter.end()
+
+    def _preview_geometry(self, global_position: QPoint) -> QRect:
+        screen_rect = next((geometry for geometry, _image in self._screens
+                            if geometry.contains(global_position)), QRect())
+        if screen_rect.isEmpty():
+            return QRect()
+        bounds = screen_rect.translated(-self.geometry().topLeft()).adjusted(8, 8, -8, -8)
+        local = global_position - self.geometry().topLeft()
+        width, height, gap = 208, 68, 20
+        if bounds.width() < width or bounds.height() < height:
+            return QRect()
+        # Try the pointer's lower-right first; flip near screen edges. Stay on
+        # the sampled monitor, including monitors with negative desktop origins.
+        for x, y in ((local.x() + gap, local.y() + gap),
+                     (local.x() - gap - width, local.y() + gap),
+                     (local.x() + gap, local.y() - gap - height),
+                     (local.x() - gap - width, local.y() - gap - height)):
+            rect = QRect(max(bounds.left(), min(x, bounds.right() - width + 1)),
+                         max(bounds.top(), min(y, bounds.bottom() - height + 1)), width, height)
+            if not rect.adjusted(-6, -6, 6, 6).contains(local):
+                return rect
+        return QRect()
+
+    def _paint_color_preview(self, painter: QPainter) -> None:
+        if self._preview_rect.isEmpty() or not self._preview_color.isValid():
+            return
+        painter.save()
+        try:
+            rect = self._preview_rect
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor("#687384"), 1))
+            painter.setBrush(QColor("#20242C"))
+            painter.drawRoundedRect(rect, 8, 8)
+            swatch = QRect(rect.left() + 12, rect.top() + 14, 40, 40)
+            painter.setBrush(self._preview_color)
+            painter.setPen(QPen(QColor("#D8DEE8"), 1))
+            painter.drawRoundedRect(swatch, 5, 5)
+            font = QFont(self.font())
+            font.setPixelSize(16)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(QRect(rect.left() + 64, rect.top() + 10, 132, 24),
+                             Qt.AlignmentFlag.AlignVCenter, self._preview_color.name().upper())
+            font.setPixelSize(12)
+            font.setBold(False)
+            painter.setFont(font)
+            painter.setPen(QColor("#D8DEE8"))
+            color = self._preview_color
+            painter.drawText(QRect(rect.left() + 64, rect.top() + 36, 132, 22),
+                             Qt.AlignmentFlag.AlignVCenter,
+                             f"RGB {color.red()}, {color.green()}, {color.blue()}")
+        finally:
+            painter.restore()
+
     def color_at(self, global_position: QPoint) -> QColor:
-        # 测试会预先往 _screens 塞缓存图像；有覆盖该点的缓存时优先使用。
         for geometry, image in self._screens:
             if not geometry.contains(global_position) or image.isNull():
                 continue
@@ -447,45 +530,54 @@ class ScreenColorPicker(QWidget):
             y = int((global_position.y() - geometry.y()) * y_ratio)
             x = min(max(x, 0), image.width() - 1)
             y = min(max(y, 0), image.height() - 1)
+            if isinstance(image, QPixmap):
+                return image.copy(x, y, 1, 1).toImage().pixelColor(0, 0)
             return image.pixelColor(x, y)
-        screen = QApplication.screenAt(global_position)
-        if screen is None:
-            return QColor()
-        geometry = screen.geometry()
-        x = global_position.x() - geometry.x()
-        y = global_position.y() - geometry.y()
-        x = min(max(x, 0), max(geometry.width() - 1, 0))
-        y = min(max(y, 0), max(geometry.height() - 1, 0))
-        # grabWindow 的区域坐标是屏幕逻辑坐标（Qt 内部处理 DPR 缩放），
-        # 1x1 抓取返回的图像即为该点像素。
-        image = screen.grabWindow(0, x, y, 1, 1).toImage()
-        if image.isNull():
-            return QColor()
-        return image.pixelColor(0, 0)
+        return QColor()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            color = self.color_at(event.globalPosition().toPoint())
+        if self._active:
+            self._emit_hovered_color(event.globalPosition().toPoint())
+            self._pressed_buttons |= event.button()
+            if event.button() == Qt.MouseButton.LeftButton and not self._cancel_pending:
+                self._pending_button = event.button()
+                self._pending_color = self.color_at(event.globalPosition().toPoint())
+            elif event.button() == Qt.MouseButton.RightButton:
+                self._cancel_pending = True
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self.mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._pressed_buttons &= ~event.button()
+        event.accept()
+        if not self._active or self._pressed_buttons or event.buttons():
+            return
+        if self._cancel_pending:
+            self._finish()
+        elif self._pending_button == Qt.MouseButton.LeftButton:
+            color = QColor(self._pending_color)
+            self._pending_button = Qt.MouseButton.NoButton
             if color.isValid():
                 record_recent_color(color)
                 self.colorPicked.emit(color)
             self._finish()
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.RightButton:
-            self._finish()
-            event.accept()
-            return
-        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         self._emit_hovered_color(event.globalPosition().toPoint())
         event.accept()
 
     def _emit_hovered_color(self, global_position: QPoint) -> None:
-        if not self._active:
+        if not self._active or self._pressed_buttons or self._cancel_pending:
             return
         color = self.color_at(global_position)
+        rect = self._preview_geometry(global_position) if color.isValid() else QRect()
+        if rect != self._preview_rect or color != self._preview_color:
+            dirty = self._preview_rect.united(rect).adjusted(-1, -1, 1, 1)
+            self._preview_rect = rect
+            self._preview_color = QColor(color)
+            self.update(dirty)
         if not color.isValid() or color.rgba() == self._last_hovered_rgba:
             return
         self._last_hovered_rgba = color.rgba()
@@ -493,13 +585,27 @@ class ScreenColorPicker(QWidget):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
-            self._finish()
-            event.accept()
-            return
-        super().keyPressEvent(event)
+            self.cancel()
+        event.accept()
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        event.accept()
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.accept()
 
     def cancel(self) -> None:
-        self._finish()
+        self._cancel_pending = True
+        self._hover_timer.stop()
+        if not self._pressed_buttons:
+            self._finish()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.cancel()
+        if self._active:
+            event.ignore()
+        else:
+            event.accept()
 
     def _finish(self) -> None:
         if not self._active:
