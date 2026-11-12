@@ -1115,9 +1115,10 @@ krok_helper/audio_processing/
    - 素材/输出选择写入 `settings_ns["last_input"]` / `output_dir` / `output_format`
      并调 `save_settings()`；切换内部 Tab 不得清空任何内容（§3.2）。
 4. ✅ **`page.py`（容器页）**：`AudioProcessingPage(alignment_page, separation_page,
-   settings, save_settings, parent=None)`：Pivot 两项「波形对齐 / 音频分离」+
+   settings, parent=None)`：Pivot 两项「波形对齐 / 音频分离」+
    QStackedWidget；恢复 `settings.pymss["last_internal_tab"]`（默认 alignment），
-   切换即保存；暴露 `current_tab()` 供测试。
+   切换只更新内存，随工作台统一保存设置时写盘（含正常退出和更新退出），避免导航触发
+   全量设置收集与序列化；暴露 `current_tab()` 供测试。
 5. ✅ **接线（三处小改）**：
    - `krok_helper/settings.py`：`AppSettings` 增加 `pymss: dict = field(default_factory=dict)`
      （放在 `subtitle_render` 字段后）；`load_app_settings` 返回处增加

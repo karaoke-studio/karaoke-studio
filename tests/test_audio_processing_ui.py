@@ -46,7 +46,7 @@ def _make_separation_page(settings: AppSettings | None = None) -> AudioSeparatio
 class TestContainerPage:
     def test_default_tab_is_alignment(self) -> None:
         settings = AppSettings()
-        container = AudioProcessingPage(QWidget(), QWidget(), settings, lambda: None)
+        container = AudioProcessingPage(QWidget(), QWidget(), settings)
         assert container.current_tab() == "alignment"
 
     def test_merge_tab_registered_and_persisted(self) -> None:
@@ -55,7 +55,7 @@ class TestContainerPage:
         settings = AppSettings()
         merge = QWidget()
         container = AudioProcessingPage(
-            QWidget(), QWidget(), settings, lambda: None, merge_page=merge
+            QWidget(), QWidget(), settings, merge_page=merge
         )
         container.switch_tab(TAB_MERGE)
         assert container.current_tab() == "merge"
@@ -69,7 +69,7 @@ class TestContainerPage:
 
         settings = AppSettings()
         settings.pymss["last_internal_tab"] = TAB_MERGE
-        container = AudioProcessingPage(QWidget(), QWidget(), settings, lambda: None)
+        container = AudioProcessingPage(QWidget(), QWidget(), settings)
         # 没有 merge 页（独立运行/旧用法）时，持久化的 merge tab 回落到对齐页。
         assert container.current_tab() == "alignment"
 
@@ -158,23 +158,21 @@ class TestManagedUpgradeFlow:
         page._dispatch_action(ACTION_REPAIR)
         assert repairs == [True]
 
-    def test_tab_switch_persists_and_restores(self) -> None:
+    def test_tab_switch_remembers_and_restores(self) -> None:
         settings = AppSettings()
-        saved: list[bool] = []
         container = AudioProcessingPage(
-            QWidget(), QWidget(), settings, lambda: saved.append(True)
+            QWidget(), QWidget(), settings
         )
         container.switch_tab("separation")
         assert settings.pymss["last_internal_tab"] == "separation"
-        assert saved, "切换内部 Tab 应触发设置保存"
 
-        restored = AudioProcessingPage(QWidget(), QWidget(), settings, lambda: None)
+        restored = AudioProcessingPage(QWidget(), QWidget(), settings)
         assert restored.current_tab() == "separation"
 
     def test_invalid_tab_falls_back_to_alignment(self) -> None:
         settings = AppSettings()
         settings.pymss["last_internal_tab"] = "not-a-tab"
-        container = AudioProcessingPage(QWidget(), QWidget(), settings, lambda: None)
+        container = AudioProcessingPage(QWidget(), QWidget(), settings)
         assert container.current_tab() == "alignment"
 
 
@@ -365,7 +363,7 @@ class TestSwitcherAndWidgets:
         from krok_helper.workspace_switcher import WorkspaceSwitcher
 
         settings = AppSettings()
-        container = AudioProcessingPage(QWidget(), QWidget(), settings, lambda: None)
+        container = AudioProcessingPage(QWidget(), QWidget(), settings)
         assert isinstance(container._pivot, WorkspaceSwitcher)
         assert container._pivot.currentRouteKey() == "alignment"
 

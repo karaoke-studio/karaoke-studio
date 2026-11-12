@@ -992,7 +992,6 @@ class KrokHelperQtApp(QMainWindow):
             self.align_page,
             self.audio_separation_page,
             self.settings,
-            self._save_all_settings,
             parent=self.page_stack,
             merge_page=self.audio_merge_page,
         )

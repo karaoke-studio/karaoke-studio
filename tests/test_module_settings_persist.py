@@ -179,6 +179,39 @@ def test_the_shell_collects_again_once_loaded(workbench) -> None:
     assert _on_disk()["on_name_template"] == "{video_name}_换了"
 
 
+@pytest.mark.parametrize("shutdown", ["close", "_prepare_force_quit_for_update"])
+def test_audio_tab_switch_does_not_save_until_host_shutdown(workbench, monkeypatch, shutdown) -> None:
+    """Navigation must stay cheap; normal/update shutdown still persists the last tab."""
+    from PyQt6.QtWidgets import QWidget
+    from krok_helper import gui_qt
+    from krok_helper.audio_processing.page import AudioProcessingPage
+
+    saved = []
+    original_save = gui_qt.save_app_settings
+
+    def save(settings, **kwargs):
+        saved.append(True)
+        return original_save(settings, **kwargs)
+
+    monkeypatch.setattr(gui_qt, "save_app_settings", save)
+    disk_before = get_settings_path().read_bytes()
+    container = workbench.audio_processing_page
+    for tab in ("separation", "alignment", "merge"):
+        container.switch_tab(tab)
+        assert container.current_tab() == tab
+    assert not saved, "切换内部 Tab 不应触发工作台全量保存"
+    assert get_settings_path().read_bytes() == disk_before
+
+    getattr(workbench, shutdown)()
+    assert saved
+    restored_settings = load_app_settings()
+    assert restored_settings.pymss["last_internal_tab"] == "merge"
+    restored = AudioProcessingPage(
+        QWidget(), QWidget(), restored_settings, merge_page=QWidget()
+    )
+    assert restored.current_tab() == "merge"
+
+
 def test_a_save_before_loading_does_not_collect(workbench) -> None:
     """直接把旗按回去，模拟构造期间的那次落盘。"""
     workbench._settings_loaded = False

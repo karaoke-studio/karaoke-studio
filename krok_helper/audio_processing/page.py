@@ -6,7 +6,8 @@
 - 「音频合成」：挂载 MergePage（多段拼接 + 去静音 + 接缝淡化）。
 
 切换内部 Tab 不清空任何页面状态；最后使用的内部 Tab 持久化到
-``settings.pymss["last_internal_tab"]``（需求文档 §3.7）。
+``settings.pymss["last_internal_tab"]``（需求文档 §3.7）。切换只更新内存，
+由工作台统一保存设置（含正常退出和更新退出）时写盘。
 """
 
 from __future__ import annotations
@@ -29,13 +30,11 @@ class AudioProcessingPage(QWidget):
         alignment_page: QWidget,
         separation_page: QWidget,
         settings,
-        save_settings,
         parent: QWidget | None = None,
         merge_page: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
-        self._save_settings = save_settings
         self.alignment_page = alignment_page
         self.separation_page = separation_page
         self.merge_page = merge_page
@@ -107,5 +106,6 @@ class AudioProcessingPage(QWidget):
         self._stack.setCurrentWidget(target)
         self._pivot.setCurrentItem(tab)
         if persist:
+            # Navigation must not collect/serialize all module settings on the
+            # GUI thread. The host already saves these on normal/update exit.
             self._settings_ns()["last_internal_tab"] = tab
-            self._save_settings()
