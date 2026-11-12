@@ -96,3 +96,53 @@ def test_detach_fluent_qss_survives_theme_reapply() -> None:
         setTheme(original_theme, lazy=False)
         managed.deleteLater()
         detached.deleteLater()
+
+
+@pytest.mark.parametrize("dark", [False, True])
+@pytest.mark.parametrize("scope", ["application", "parent"])
+def test_progress_bar_styles_do_not_flatten_progress_rings(qapp, monkeypatch, dark, scope):
+    from PyQt6.QtCore import QSize
+    from PyQt6.QtGui import QColor
+    from PyQt6.QtWidgets import QProgressBar, QVBoxLayout, QWidget
+    from qfluentwidgets import ProgressBar, ProgressRing
+
+    monkeypatch.setattr(theme_workbench, "palette", lambda: theme_workbench.WorkbenchPalette(dark))
+    original_qss = qapp.styleSheet()
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    bars = [QProgressBar(host), ProgressBar(host)]
+    rings = [ProgressRing(host, useAni=False), ProgressRing(host, useAni=False)]
+    for ring, size in zip(rings, (48, 100)):
+        ring.setFixedSize(size, size)
+        ring.setCustomBarColor(QColor("#ff5470"), QColor("#ff5470"))
+    for widget in [*bars, *rings]:
+        widget.setValue(100)
+        layout.addWidget(widget)
+    try:
+        host.show()
+        # Style installation and subsequent repolish both used to turn a 48px
+        # ring into a 10px strip, despite its earlier setFixedSize(48, 48).
+        for _ in range(2):
+            qss = theme_workbench.build_app_qss()
+            (qapp if scope == "application" else host).setStyleSheet(qss)
+            qapp.processEvents()
+            for bar in bars:
+                assert bar.height() == 10
+            bar_image = bars[0].grab().toImage()
+            assert bar_image.pixelColor(bar_image.width() // 4, bar_image.height() // 2) == QColor(
+                theme_workbench.palette().progress_chunk
+            )
+            for ring, size in zip(rings, (48, 100)):
+                assert ring.size() == QSize(size, size)
+                image = ring.grab().toImage()
+                points = [(x, y) for y in range(image.height()) for x in range(image.width())
+                          if (color := image.pixelColor(x, y)).red() > 200
+                          and color.green() < 140 and color.blue() < 180]
+                assert points
+                # Check the painted circle, not only its widget's geometry.
+                assert max(x for x, _ in points) - min(x for x, _ in points) >= image.width() - 3
+                assert max(y for _, y in points) - min(y for _, y in points) >= image.height() - 3
+    finally:
+        host.close()
+        host.deleteLater()
+        qapp.setStyleSheet(original_qss)

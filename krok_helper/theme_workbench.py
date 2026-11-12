@@ -817,14 +817,15 @@ def build_app_qss() -> str:
             padding: 3px 8px;
             font-size: 10pt;
         }}
-        QProgressBar {{
+        /* Match exact bar classes: ProgressRing also inherits QProgressBar. */
+        .QProgressBar, .ProgressBar {{
             border: 0;
             background: {p.progress_bg};
             min-height: 10px;
             max-height: 10px;
             border-radius: 5px;
         }}
-        QProgressBar::chunk {{
+        .QProgressBar::chunk, .ProgressBar::chunk {{
             background: {p.progress_chunk};
             border-radius: 5px;
         }}
