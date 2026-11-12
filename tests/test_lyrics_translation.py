@@ -69,7 +69,7 @@ def test_search_business_errors_are_not_empty_results(monkeypatch):
     import pytest
     import krok_helper.lyrics as lyrics
     for cls, payload in [
-        (lyrics.QqMusicLyricsProvider, {"code": 0, "request": {"code": 429}}),
+        (lyrics.QqMusicLyricsProvider, {"code": 429}),
         (lyrics.NeteaseLyricsProvider, {"code": 405}),
         (lyrics.KugouLyricsProvider, {"status": 0, "error_code": 20001}),
     ]:

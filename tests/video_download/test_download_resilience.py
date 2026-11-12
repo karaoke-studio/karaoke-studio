@@ -620,3 +620,84 @@ def test_real_ytdlp_resumes_near_completed_http_download(tmp_path, make_download
 
     assert f"bytes={prefix}-" in ranges
     assert task.local_file.read_bytes() == content
+
+
+@pytest.mark.parametrize("cli", [False, True])
+@pytest.mark.parametrize("merge", [False, True])
+def test_real_ytdlp_merge_toggle_preserves_separate_tracks(tmp_path, monkeypatch, cli, merge):
+    import functools
+    import json
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from krok_helper.settings import AppSettings
+    from krok_helper.video_download.download_task import DownloadTask
+    from krok_helper.video_download.format_parser import FormatParser
+
+    yt_dlp = pytest.importorskip("yt_dlp")
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        pytest.skip("ffmpeg and ffprobe required")
+    # Same extension deliberately exercises filename collision prevention.
+    for name, args in [
+        ("video.mp4", ["-f", "lavfi", "-i", "color=size=160x90:rate=25", "-an", "-c:v", "libx264"]),
+        ("audio.mp4", ["-f", "lavfi", "-i", "sine=frequency=440", "-vn", "-c:a", "aac"]),
+    ]:
+        subprocess.run([ffmpeg, "-v", "error", *args, "-t", "1", str(tmp_path / name)], check=True)
+
+    class Handler(SimpleHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(tmp_path)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    formats = [
+        dict(format_id="v", url=base + "/video.mp4", ext="mp4", vcodec="avc1", acodec="none", width=160, height=90),
+        dict(format_id="a", url=base + "/audio.mp4", ext="mp4", vcodec="none", acodec="mp4a", abr=128),
+    ]
+    info = dict(id="probe", title="probe", extractor="local", webpage_url=base, formats=formats)
+
+    class LocalYDL(yt_dlp.YoutubeDL):
+        def extract_info(self, url, download=True, **kwargs):
+            return self.process_ie_result(json.loads(json.dumps(info)), download=download)
+
+    service = YtDlpService(app_settings=AppSettings())
+    monkeypatch.setattr(service, "_configured_ffmpeg_location", lambda: ffmpeg)
+    monkeypatch.setattr(service, "_should_prefer_cli_backend", lambda url: cli)
+    monkeypatch.setattr(service, "_import_ytdlp", lambda: LocalYDL)
+    if cli:
+        metadata = tmp_path / "info.json"
+        metadata.write_text(json.dumps(info), encoding="utf-8")
+        real_popen = subprocess.Popen
+
+        def run_cli(command, **kwargs):
+            if command[0] != "yt-dlp":
+                return real_popen(command, **kwargs)
+            return real_popen([sys.executable, "-m", "yt_dlp", "--ignore-config", "--load-info-json", str(metadata), *command[1:]], **kwargs)
+
+        monkeypatch.setattr(service, "_find_ytdlp_cli", lambda: "yt-dlp")
+        monkeypatch.setattr(ytdlp_service.subprocess, "Popen", run_cli)
+    output = tmp_path / "output"
+    task = DownloadTask(task_id="probe", url=base, title="probe", source="local",
+                        selected_format=FormatParser().parse_formats(formats)[0])
+    try:
+        service.download(task, _options(save_dir=str(output), merge_video_audio=merge, use_aria2c=False), lambda _: None)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        if cli:
+            monkeypatch.setattr(ytdlp_service.subprocess, "Popen", real_popen)
+    files = sorted(output.iterdir())
+    assert len(files) == (1 if merge else 2)
+
+    def streams(path):
+        result = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type", "-of", "json", str(path)],
+                                capture_output=True, text=True, check=True)
+        return {stream["codec_type"] for stream in json.loads(result.stdout)["streams"]}
+
+    assert streams(task.local_file) == ({"video", "audio"} if merge else {"video"})
+    if not merge:
+        audio = next(path for path in files if path != task.local_file)
+        assert streams(audio) == {"audio"}
