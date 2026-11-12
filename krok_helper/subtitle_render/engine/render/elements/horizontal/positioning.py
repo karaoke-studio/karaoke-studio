@@ -223,9 +223,9 @@ def _line_total_width_uncached(
         text_width = line_text_width(char_widths, style)
     left_ext = right_ext = 0
     gap_total = 0
-    if rubies:
+    if rubies or style.lower_ruby_enabled:
         active = active_rubies_for_line(rubies, source_line)
-        if active:
+        if active or style.lower_ruby_enabled:
             gaps, ruby_left, ruby_right = ruby_char_gaps(
                 line,
                 char_widths,

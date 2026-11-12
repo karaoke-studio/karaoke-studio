@@ -188,6 +188,7 @@ struct Direct2DGpuBackend::Impl {
     };
 
     struct CachedRuby {
+        bool lower = false;
         int startMs = 0;
         int endMs = 0;
         float baselineOffset = 0.0f;
@@ -210,6 +211,7 @@ struct Direct2DGpuBackend::Impl {
     };
 
     struct CachedLine {
+        std::optional<float> annotationBaselineY;
         int startMs = 0;
         int endMs = 0;
         int sourceIndex = 0;

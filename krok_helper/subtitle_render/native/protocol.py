@@ -942,6 +942,52 @@ def track_to_ir(
     # 「真一组」正文侧拓宽闸门（样式级部分）：音量柱启用 + auto/role 档，
     # 且装饰源与正文第一角色同源（auto，或 role 档方案悬空回退）——
     # role 档解析到固定方案时正文渐变不参与（柱体画刷仍取并集跨度）。
+    lower_payload = []
+    lower_styles = []
+    lower_style_indices = {}
+    lower_baselines = {}
+    if style is not None and style.lower_ruby_enabled and not style.vertical:
+        from krok_helper.subtitle_render.engine.ruby.lower import lower_rubies_for_line, lower_style_snapshot
+        from krok_helper.subtitle_render.engine.ruby.selection import active_rubies_for_line
+        from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import resolve_display_baselines, lower_ruby_baseline_offset
+        from krok_helper.subtitle_render.engine.ruby.style import ruby_script_stroke_style, ruby_style_for_target_indices
+        from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+        for index, line in enumerate(render_lines):
+            for ruby in lower_rubies_for_line(
+                line, active_rubies_for_line(track.rubies, track.lines[index]),
+                resolved_intervals[index], animation_styles[index],
+            ):
+                payload = ruby_to_ir(ruby)
+                payload["target_line_index"] = int(line.track_line_index if line.track_line_index is not None else index)
+                payload["lower"] = True
+                payload["lower_line_index"] = index
+                resolved = ruby.render_style
+                payload["lower_baseline_offset_y"] = round(lower_ruby_baseline_offset(
+                    ruby_style_for_target_indices(animation_styles[index], line,
+                        list(range(ruby.target_char_start, ruby.target_char_end))),
+                    ruby_script_stroke_style(resolved, ruby.reading),
+                ))
+                lower_style_payload = ({
+                    key: getattr(resolved, key)
+                    for key in ("font_family", "font_weight", "font_size_px", "italic")
+                } | lower_style_snapshot(resolved) if not style.lower_ruby_follow_upper else {}) | {
+                    "ruby_gap_px": resolved.ruby_gap_px,
+                    "ruby_alignment": resolved.ruby_alignment,
+                    "ruby_interval_px": resolved.ruby_interval_px,
+                    "follow_upper": style.lower_ruby_follow_upper,
+                }
+                style_key = json.dumps(lower_style_payload, sort_keys=True, ensure_ascii=False)
+                if style_key not in lower_style_indices:
+                    lower_style_indices[style_key] = len(lower_styles)
+                    lower_styles.append(lower_style_payload)
+                payload["lower_style_index"] = lower_style_indices[style_key]
+                lower_payload.append(payload)
+            lane = authored_lanes.get(index, 0)
+            lower_baselines[index] = resolve_display_baselines(
+                layout_plan.logical_height or 1080, track,
+                [DisplayLine(line=line, lane=lane, display_start_ms=0, display_end_ms=1)],
+                layout_styles[index],
+            ).get(lane, 0)
     signal_band_style_joins = (
         style is not None
         and style.volume_enabled
@@ -962,7 +1008,7 @@ def track_to_ir(
             "custom": list(track.meta.custom),
         },
         "lines": [
-            timing_line_to_ir(
+            ({"annotation_baseline_y": lower_baselines[index]} if index in lower_baselines else {}) | timing_line_to_ir(
                 line,
                 render_line=(render_lines[index] if style is not None else None),
                 layout_style=(layout_styles[index] if style is not None else None),
@@ -1079,7 +1125,8 @@ def track_to_ir(
             )
             for index, line in enumerate(track.lines)
         ],
-        "rubies": [ruby_to_ir(ruby) for ruby in track.rubies],
+        "rubies": [ruby_to_ir(ruby) for ruby in track.rubies] + lower_payload,
+        **({"lower_styles": lower_styles} if lower_styles else {}),
     }
 
 

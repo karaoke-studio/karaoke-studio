@@ -11,6 +11,8 @@
 
 namespace krok::subtitle::native::protocol {
 
+ResolvedStyle resolvedRubyStyle(const ResolvedStyle &base, const QJsonObject &overrides);
+
 std::optional<RenderConfig> parseRenderConfig(
     const QJsonObject &ir,
     QString *error

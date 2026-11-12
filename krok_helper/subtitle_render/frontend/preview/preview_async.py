@@ -99,6 +99,10 @@ def style_patch_base_key(
     # none 性不变）不改窗口与几何 → 闸门保持命中，走 lines_style 差分
     # （行级动画字段随载荷下发）。布局签名保持严格：任何布局输入变化
     # 仍全量重配。
+    # Generated lower readings and their explicit baselines live in the full
+    # track IR. A layout-only patch cannot replace that render-only payload.
+    if style.lower_ruby_enabled:
+        include_layout_signature = True
     parts: list[object] = [track_signature_for_windows(track)]
     if include_layout_signature:
         # layout scope（P6）：布局签名刻意缺席——行级摆放字段随差分载荷

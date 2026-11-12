@@ -518,20 +518,25 @@ def _ruby_char_gaps_uncached(
     intervals: list[tuple[int, int]] | None = None,
 ) -> tuple[list[int], int, int]:
     zero = [0] * len(char_widths)
-    if not rubies or not line.chars or style.vertical or style.right_to_left:
+    if (not rubies and not style.lower_ruby_enabled) or not line.chars or style.vertical or style.right_to_left:
         return zero, 0, 0
     if intervals is None:
         intervals = compute_char_intervals(line, char_widths)
     spacing = letter_spacing(style)
     interval = ruby_interval_px(style)
 
+    lower_rubies = []
+    if style.lower_ruby_enabled:
+        from krok_helper.subtitle_render.engine.ruby.lower import lower_rubies_for_line
+        lower_rubies = lower_rubies_for_line(line, rubies, intervals, style)
     entries: list[tuple[int, int, RubyAnnotation, RubyAnnotation, Style]] = []
-    for ruby in rubies:
+    for ruby in [*rubies, *lower_rubies]:
         indices = ruby_target_indices(ruby, line, intervals)
         if not indices:
             continue
         paint_ruby = effective_ruby_for_target(ruby, indices, intervals)
-        target_style = ruby_style_for_target_indices(style, line, indices)
+        target_style = (ruby.render_style if ruby in lower_rubies
+                        else ruby_style_for_target_indices(style, line, indices))
         ruby_style = ruby_script_stroke_style(
             target_style,
             paint_ruby.reading,
@@ -547,7 +552,7 @@ def _ruby_char_gaps_uncached(
         )
     if not entries:
         return zero, 0, 0
-    entries.sort(key=lambda item: item[0])
+    entries.sort(key=lambda item: (item[3] in lower_rubies, item[0]))
 
     gaps = [0] * len(char_widths)
 
@@ -565,7 +570,12 @@ def _ruby_char_gaps_uncached(
     previous_right: float | None = None
     min_ruby_left = 0.0
     max_ruby_right = 0.0
+    previous_lower = False
     for first, last, paint_ruby, ruby, ruby_style in entries:
+        is_lower = ruby in lower_rubies
+        if is_lower != previous_lower:
+            previous_right = None
+        previous_lower = is_lower
         span_left, span_right = char_span(
             first,
             min(last, len(char_widths) - 1),

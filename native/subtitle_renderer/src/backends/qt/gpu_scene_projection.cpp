@@ -15,6 +15,7 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtGui/QColor>
 
 #include <algorithm>
@@ -882,6 +883,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         );
         scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
+        if (sourceLine.annotationBaselineY.has_value()) {
+            line.annotationBaselineY = static_cast<float>(*sourceLine.annotationBaselineY * scale);
+        }
         const int sourceTimingOffset = config.timingOffsetMs + sourceLine.sourceOffsetMs;
         line.startMs = lineStartMs(sourceLine) + sourceTimingOffset;
         line.endMs = lineEndMs(sourceLine) + sourceTimingOffset;
@@ -1166,6 +1170,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         const int sourceLineEnd = lineEndMs(sourceLine);
         std::vector<bool> rubyMainWipeAssigned(line.chars.size(), false);
         for (const RubyAnnotation &sourceRuby : config.rubies) {
+            if (sourceRuby.lower && sourceRuby.lowerLineIndex != sourceLine.sourceLineIndex) {
+                continue;
+            }
             const bool globalPosition = sourceRuby.posStartMs == 0 && sourceRuby.posEndMs == 0;
             if (!globalPosition && (
                 sourceRuby.posEndMs <= sourceLineStart || sourceRuby.posStartMs >= sourceLineEnd
@@ -1186,6 +1193,10 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sourceRuby, targetIndices, intervals
             );
             krok::subtitle::native::TextRuby sceneRuby;
+            sceneRuby.lower = sourceRuby.lower;
+            if (sourceRuby.lowerBaselineOffsetY.has_value()) {
+                sceneRuby.lowerBaselineOffsetY = static_cast<float>(*sourceRuby.lowerBaselineOffsetY * scale);
+            }
             sceneRuby.baseText = ruby.kanji.toStdWString();
             sceneRuby.reading = ruby.reading.toStdWString();
             sceneRuby.firstCharIndex = *minimum;
@@ -1200,7 +1211,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                         && rubyMainWipeAssigned[static_cast<std::size_t>(targetIndex)];
                 }
             );
-            if (!mainWipeAlreadyAssigned && applyRubyMainWipeProjection(
+            if (!sourceRuby.lower && !mainWipeAlreadyAssigned && applyRubyMainWipeProjection(
                 line,
                 sourceLine,
                 ruby,
@@ -1215,6 +1226,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     }
                 }
             }
+            int rubyRoleIndex = *minimum;
             for (int targetIndex : targetIndices) {
                 if (targetIndex < 0
                     || targetIndex >= static_cast<int>(sourceLine.chars.size())
@@ -1224,7 +1236,27 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sceneRuby.styleIndex = line.chars[
                     static_cast<std::size_t>(targetIndex)
                 ].styleIndex;
+                rubyRoleIndex = targetIndex;
                 break;
+            }
+            if (sourceRuby.lower) {
+                const QString key = QStringLiteral("lower:") + resolvedStyleKey(
+                    sourceLine.singerId, sourceLine.chars[static_cast<std::size_t>(rubyRoleIndex)].roleLabel
+                ) + QString::fromUtf8(
+                    QJsonDocument(sourceRuby.lowerStyle).toJson(QJsonDocument::Compact));
+                const auto existing = charStyleIndices.constFind(key);
+                if (existing != charStyleIndices.constEnd()) {
+                    sceneRuby.styleIndex = existing.value();
+                } else {
+                    TextStyle lowerStyle = scene.lineStyles.back();
+                    applyGpuResolvedStyle(lowerStyle, protocol::resolvedRubyStyle(
+                        resolvedStyleForCharacter(config, sourceLine,
+                            sourceLine.chars[static_cast<std::size_t>(rubyRoleIndex)]),
+                        sourceRuby.lowerStyle), scale);
+                    sceneRuby.styleIndex = static_cast<int>(scene.charStyles.size());
+                    scene.charStyles.push_back(std::move(lowerStyle));
+                    charStyleIndices.insert(key, sceneRuby.styleIndex);
+                }
             }
             for (const auto &unit : rubyUtopiaReadingUnitsAndIntervals(ruby)) {
                 sceneRuby.units.push_back(krok::subtitle::native::RubyUnit{

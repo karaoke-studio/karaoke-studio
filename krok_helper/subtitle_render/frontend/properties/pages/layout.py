@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import CheckBox
+from qfluentwidgets import CheckBox, PushButton
 
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import WheelFocusedComboBox
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
@@ -212,6 +212,28 @@ class LayoutPropertyPageBuilder:
         )
         grid.add_field("排布", host._ruby_alignment_combo)
         layout.addWidget(grid)
+        host._lower_ruby_enabled_check = CheckBox("生成下层罗马音注音", section)
+        host._lower_ruby_enabled_check.setToolTip(
+            "横排字幕：根据已有注音及正文假名生成下层罗马音，沿用原有分组与走字时间。"
+            "竖排暂不生成下层注音。"
+        )
+        host._lower_ruby_enabled_check.toggled.connect(
+            lambda checked: host._update_style(_force_global=True, lower_ruby_enabled=checked)
+        )
+        host._lower_ruby_follow_check = CheckBox("下层样式跟随上层注音", section)
+        host._lower_ruby_follow_check.toggled.connect(
+            lambda checked: host._update_style(_force_global=True, lower_ruby_follow_upper=checked)
+        )
+        host._lower_ruby_gap_spin = timing_spin(-200, 500)
+        host._lower_ruby_gap_spin.valueChanged.connect(
+            lambda value: host._update_style(_force_global=True, lower_ruby_gap_px=value)
+        )
+        host._lower_ruby_style_button = PushButton("编辑下层注音样式", section)
+        host._lower_ruby_style_button.clicked.connect(lambda: host._edit_lower_ruby_style())
+        layout.addWidget(host._lower_ruby_enabled_check)
+        layout.addWidget(host._lower_ruby_follow_check)
+        layout.addWidget(property_field("下层与正文间距", host._lower_ruby_gap_spin))
+        layout.addWidget(host._lower_ruby_style_button)
         return section
 
     def make_row_structure_section(self) -> QFrame:

@@ -187,6 +187,128 @@ def test_shared_frame_reader_close_gives_up_on_blocked_detach():
     assert native_backend.abandoned_shared_memory_count() == 0
 
 
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("animation", ["none", "utopia", "utopia_scanline"])
+@pytest.mark.parametrize("alignment", ["auto", "center", "equal_space"])
+def test_gpu_lower_ruby_matches_painter_position(monkeypatch, semantics, animation, alignment):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+
+    line = TimingLine(chars=[TimingChar(ch, index * 400, explicit_start=True)
+                             for index, ch in enumerate("殴るカッター")], end_ms=2400,
+                      track_line_index=0)
+    track = TimingTrack(lines=[line], rubies=[RubyAnnotation(
+        "殴", "なぐ", reading_parts=["な", "ぐ"], reading_part_ms=[200],
+        pos_start_ms=0, pos_end_ms=400, target_line_index=0,
+        target_char_start=0, target_char_end=1,
+    )])
+    state = KaraokeColorState(text=PaintFill(color="#00FF00"))
+    lower_state = KaraokeColorState(text=PaintFill(color="#0000FF"))
+    style = _g1_style(layout_semantics=semantics, font_family="Meiryo",
+        font_family_latin="Meiryo", ruby_font_family="Meiryo",
+        ruby_font_size_px=22, stroke_width_px=0, stroke2_enabled=False,
+        decoration_kind="none", ruby_colors_follow_main=False,
+        ruby_karaoke_colors=KaraokeColors(before=state, after=state),
+        ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_decoration_kind="none",
+        lower_ruby_enabled=True, lower_ruby_follow_upper=False,
+        lower_ruby_gap_px=8, dual_line_layout=False, title_overlays=[], karaoke_anim=animation,
+        ruby_alignment=alignment)
+    lower = replace(style, ruby_karaoke_colors=KaraokeColors(before=lower_state, after=lower_state))
+    style = replace(style, lower_ruby_style=lower_style_snapshot(lower))
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        _, frames = _render_g1_frames(renderer, style, (100, 350, 900), force_warp=True, track=track)
+    for t_ms, payload in zip((100, 350, 900), frames):
+        cpu = _render_painter_oracle(style, t_ms=t_ms, track=track)
+        def blue_bounds(data):
+            rgba = np.frombuffer(data, dtype=np.uint8).reshape(360, 640, 4)
+            ys, xs = np.where((rgba[:, :, 2] > 150) & (rgba[:, :, 0] < 40)
+                              & (rgba[:, :, 1] < 40) & (rgba[:, :, 3] > 100))
+            assert len(xs) > 0
+            return np.array([xs.min(), ys.min(), xs.max(), ys.max()])
+        assert np.max(np.abs(blue_bounds(payload) - blue_bounds(cpu))) <= 4
+
+
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("position", ["top", "center", "bottom"])
+def test_gpu_lower_ruby_two_row_zero_gap_matches_painter(monkeypatch, semantics, position):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+
+    lines = [TimingLine(chars=[TimingChar("国", index * 1000)], end_ms=(index + 1) * 1000,
+                        track_line_index=index, display_start_override_ms=0,
+                        display_end_override_ms=2000) for index in range(2)]
+    track = TimingTrack(lines=lines, rubies=[RubyAnnotation(
+        "国", "に", pos_start_ms=index * 1000, pos_end_ms=(index + 1) * 1000,
+        target_line_index=index, target_char_start=0, target_char_end=1,
+    ) for index in range(2)], page_plan=TrackPagePlan([TrackSection([TrackPage(2)])]))
+    def colors(color):
+        state = KaraokeColorState(text=PaintFill(color=color))
+        return KaraokeColors(before=state, after=state)
+    style = _g1_style(layout_semantics=semantics, line_y_position=position,
+        font_family="Meiryo", font_family_latin="Meiryo", ruby_font_family="Meiryo",
+        ruby_font_family_latin="Comic Sans MS", ruby_font_follow_main=False,
+        font_size_px=64, ruby_font_size_px=24, stroke_width_px=0, stroke2_enabled=False,
+        decoration_kind="none", ruby_stroke_width_px=0, ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none", ruby_colors_follow_main=False,
+        karaoke_colors=colors("#FF0000"), ruby_karaoke_colors=colors("#00FF00"),
+        lower_ruby_enabled=True, lower_ruby_follow_upper=False, lower_ruby_gap_px=0,
+        ruby_gap_px=0, line_gap_px=0, dual_line_layout=True, line_y_margin_px=10,
+        line_alignments=["center", "center"], title_overlays=[])
+    style = replace(style, lower_ruby_style=lower_style_snapshot(
+        replace(style, ruby_karaoke_colors=colors("#0000FF"))))
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        _, frames = _render_g1_frames(renderer, style, (500,), force_warp=True, track=track)
+    cpu = _render_painter_oracle(style, t_ms=500, track=track)
+    for channel in range(3):
+        row_bounds = []
+        for payload in (cpu, frames[0]):
+            rgba = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+            mask = (rgba[:, :, channel] > 150) & (rgba[:, :, 3] > 100)
+            for other in set(range(3)) - {channel}:
+                mask &= rgba[:, :, other] < 40
+            rows = np.flatnonzero(mask.any(axis=1))
+            # The dot of Latin "i" is a separate ink island within one row.
+            breaks = np.flatnonzero(np.diff(rows) > 8)
+            assert len(breaks) == 1, (channel, rows)
+            row_bounds.append(rows[[0, breaks[0], breaks[0] + 1, -1]])
+        assert np.max(np.abs(row_bounds[0] - row_bounds[1])) <= 2
+
+
+def test_gpu_lower_ruby_follow_colors_survive_style_patch(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.render.render_ir import build_style_patch_ir
+
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("か", 0), TimingChar("な", 500)],
+                                        end_ms=1000, track_line_index=0)])
+    def colors(color):
+        state = KaraokeColorState(text=PaintFill(color=color))
+        return KaraokeColors(before=state, after=state)
+    style = _g1_style(font_family="Meiryo", font_family_latin="Meiryo",
+        lower_ruby_enabled=True, ruby_font_size_px=24, dual_line_layout=False,
+        ruby_colors_follow_main=False, ruby_karaoke_colors=colors("#00FF00"),
+        ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_decoration_kind="none")
+    changed = replace(style, ruby_karaoke_colors=colors("#0000FF"))
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        _, initial = _render_g1_frames(renderer, style, (250,), force_warp=True,
+                                      track=track, realization_enabled=False)
+        renderer.configure_style_gpu(build_style_patch_ir(
+            track, changed, width=640, height=360, fps=60), force_warp=True)
+        event = renderer.render_gpu_frame(250, force_warp=True)
+        reader = SharedFrameRingReader.from_event(event)
+        reader.attach()
+        try:
+            image = reader.read_qimage(event).convertToFormat(QImage.Format.Format_RGBA8888)
+            bits = image.constBits()
+            bits.setsize(image.sizeInBytes())
+            patched = bytes(bits)
+        finally:
+            reader.close()
+        _, fresh = _render_g1_frames(renderer, changed, (250,), force_warp=True,
+                                    track=track, realization_enabled=False)
+    assert patched == fresh[0]
+    assert initial[0] != patched
+
+
 def _renderer_path() -> Path:
     path = resolve_native_renderer_path(root=Path.cwd())
     if path is None:

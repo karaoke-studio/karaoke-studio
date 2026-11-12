@@ -72,6 +72,25 @@ def test_property_folder_tabs_keep_left_and_right_selection_independent(qapp) ->
     assert right_changes == ["latin"]
 
 
+def test_hidden_folder_tab_leaves_no_painted_outline(qapp) -> None:
+    panel = FolderTabPanel(
+        (("after", "走字后"), ("before", "走字前")),
+        (("main", "主文字"), ("ruby", "下层注音")),
+    )
+    panel.set_right("ruby")
+    hidden = panel._buttons[("right", "main")]
+    hidden.hide()
+    panel.resize(480, 180)
+    panel.show()
+    qapp.processEvents()
+    hidden.setGeometry(20, 0, 95, 32)
+    first = panel.grab().toImage()
+    hidden.move(200, 0)
+    assert panel.grab().toImage() == first
+    panel.close()
+    panel.deleteLater()
+
+
 def test_property_subgroup_preserves_heading_grid_and_collapse_contract(qapp) -> None:
     subgroup = SubGroup("字符排版", collapsed=True)
 

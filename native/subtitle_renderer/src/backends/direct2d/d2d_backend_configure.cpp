@@ -1578,6 +1578,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             style.rubyLatinFontHint
         );
         Impl::CachedLine cached;
+        cached.annotationBaselineY = sourceLine.annotationBaselineY;
         cached.style = style;
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
@@ -2667,6 +2668,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             rubyGlyphs.reserve(sourceRuby.units.size());
             float naturalWidth = 0.0f;
             float rubyBoxDescent = 0.0f;
+            float rubyBoxAscent = 0.0f;
             const int rubyEdgeSize = referenceInt(rubyStrokeWidthFx, 0);
             const int rubyAnchorEdgeSize = rubyEdgeSize;
 
@@ -2716,6 +2718,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         + static_cast<float>(rubyAnchorEdgeSize) * 0.5f)
                         * layoutScale
                 );
+                rubyBoxAscent = std::max(rubyBoxAscent,
+                    (static_cast<float>(drawingUnit) * static_cast<float>(fontMetrics.ascent)
+                     / boxMetricTotal + static_cast<float>(rubyAnchorEdgeSize) * 0.5f) * layoutScale);
 
                 std::vector<UINT16> glyphs;
                 float fallbackScale = 1.0f;
@@ -2960,6 +2965,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
 
             Impl::CachedRuby ruby;
+            ruby.lower = sourceRuby.lower;
             ruby.startMs = sourceRuby.startMs;
             ruby.endMs = sourceRuby.endMs;
             ruby.styleIndex = sourceRuby.styleIndex;
@@ -2968,6 +2974,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             ruby.firstCharIndex = sourceRuby.firstCharIndex;
             ruby.lastCharIndex = sourceRuby.lastCharIndex;
             ruby.baselineOffset = -cached.boxAscent - style.rubyGap - rubyBoxDescent;
+            if (sourceRuby.lower) {
+                ruby.baselineOffset = sourceRuby.lowerBaselineOffsetY.value_or(
+                    cached.n3CharDescent + rubyStyle.rubyGap + rubyBoxAscent);
+            }
             DWRITE_FONT_METRICS rubyFillMetrics{};
             resolveMetricsFace(
                 rubyIsLatin
@@ -3297,7 +3307,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         std::stable_sort(
             cached.rubies.begin(), cached.rubies.end(),
             [](const Impl::CachedRuby &left, const Impl::CachedRuby &right) {
-                return left.firstCharIndex < right.firstCharIndex;
+                return left.lower != right.lower ? !left.lower : left.firstCharIndex < right.firstCharIndex;
             }
         );
         if (!style.vertical && !style.rightToLeft && cached.rubies.size() > 1) {
@@ -3391,6 +3401,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             for (std::size_t rubyIndex = 1; rubyIndex < cached.rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &previous = cached.rubies[rubyIndex - 1];
                 Impl::CachedRuby &current = cached.rubies[rubyIndex];
+                if (previous.lower != current.lower) {
+                    continue;
+                }
                 if (previous.chars.empty() || current.chars.empty()) {
                     continue;
                 }
@@ -3409,9 +3422,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                      charIndex < cached.chars.size(); ++charIndex) {
                     translateCharX(cached.chars[charIndex], push);
                 }
-                for (std::size_t followingIndex = rubyIndex;
+                for (std::size_t followingIndex = cached.annotationBaselineY.has_value() ? 0 : rubyIndex;
                      followingIndex < cached.rubies.size(); ++followingIndex) {
-                    translateRubyX(cached.rubies[followingIndex], push);
+                    if (!cached.annotationBaselineY.has_value()
+                        || cached.rubies[followingIndex].firstCharIndex >= current.firstCharIndex) {
+                        translateRubyX(cached.rubies[followingIndex], push);
+                    }
                 }
                 cursor += push;
             }
@@ -3498,7 +3514,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 adjustWipeEnd(cached.chars[index], cached.chars[index + 1], rtl);
             }
             Impl::CachedChar *previousRubyChar = nullptr;
+            bool previousRubyLower = false;
             for (Impl::CachedRuby &ruby : cached.rubies) {
+                if (previousRubyLower != ruby.lower) {
+                    previousRubyChar = nullptr;
+                }
+                previousRubyLower = ruby.lower;
                 if (previousRubyChar != nullptr && !ruby.chars.empty()) {
                     adjustWipeEnd(*previousRubyChar, ruby.chars.front(), rtl);
                 }

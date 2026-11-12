@@ -129,6 +129,16 @@ def _for_legacy_style() -> list[LyricsLayout]:
     return default_page_layouts()
 
 
+def test_new_project_disables_lower_readings_from_remembered_style() -> None:
+    remembered = Style(lower_ruby_enabled=True, lower_ruby_gap_px=8,
+                       lower_ruby_style={"ruby_latin_font_size_px": 31})
+    style = style_for_new_project(remembered, default_layout_presets())
+    assert style.lower_ruby_enabled is False
+    assert style.lower_ruby_gap_px == 8
+    assert style.lower_ruby_style == remembered.lower_ruby_style
+    assert remembered.lower_ruby_enabled is True
+
+
 def test_style_for_new_project_filters_by_default_load_and_hides_builtins() -> None:
     app_style = ensure_page_layout_defaults(Style())
     presets = [

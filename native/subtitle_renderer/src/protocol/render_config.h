@@ -73,6 +73,7 @@ struct PaintFillSpec {
 };
 
 struct TimingLine {
+    std::optional<double> annotationBaselineY;
     std::vector<TimingChar> chars;
     int endMs = 0;
     QString singerLabel;
@@ -183,6 +184,10 @@ struct TimingLine {
 };
 
 struct RubyAnnotation {
+    bool lower = false;
+    std::optional<double> lowerBaselineOffsetY;
+    int lowerLineIndex = -1;
+    QJsonObject lowerStyle;
     QString kanji;
     QString reading;
     std::vector<int> readingPartMs;

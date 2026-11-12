@@ -987,6 +987,11 @@ class Style:
     """
 
     # ふりがな / ruby（B1）
+    lower_ruby_enabled: bool = False
+    lower_ruby_follow_upper: bool = True
+    lower_ruby_gap_px: int = 0
+    lower_ruby_style: dict = field(default_factory=dict)
+    """Render-only lower reading overrides; source ruby and clocks stay untouched."""
     ruby_font_size_px: int = 45
     ruby_font_family: Optional[str] = None
     ruby_font_family_latin: Optional[str] = None
@@ -2584,7 +2589,13 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             continue
         if key not in style_fields:
             continue
-        if key in {"karaoke_colors", "ruby_karaoke_colors"}:
+        if key == "lower_ruby_style":
+            changes[key] = dict(value) if isinstance(value, dict) else {}
+        elif key in {"lower_ruby_enabled", "lower_ruby_follow_upper"}:
+            changes[key] = _bool_value(value)
+        elif key == "lower_ruby_gap_px":
+            changes[key] = _int_value(value, 0)
+        elif key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
         elif key == "layouts":
             changes[key] = _layouts_from_payload(value)
@@ -3514,6 +3525,7 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
         letter_spacing_px=scaled(style.letter_spacing_px),
         ruby_interval_px=scaled(style.ruby_interval_px),
         ruby_gap_px=scaled(style.ruby_gap_px),
+        lower_ruby_gap_px=scaled(style.lower_ruby_gap_px),
         upper_line_left_margin_px=margin,
         lower_line_right_margin_px=margin,
         layouts=layouts,
@@ -3754,6 +3766,10 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
         custom_style_schemes=custom_schemes,
         singer_style_overrides=singer_overrides,
         title_overlays=title_overlays,
+        lower_ruby_style={
+            key: scaled(value) if key in _FONT_VISUAL_SIZE_FIELDS else value
+            for key, value in style.lower_ruby_style.items()
+        },
         font_reference_height=new_height,
     )
 

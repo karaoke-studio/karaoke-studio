@@ -971,6 +971,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     static_cast<float>(scene.height) - totalHeight
                 ) * 0.5f + ascent + style.centerOffsetY;
             }
+            if (line.annotationBaselineY.has_value()) {
+                firstBaseline = *line.annotationBaselineY - step * static_cast<float>(line.lane);
+            }
             const float dy = firstBaseline
                 + step * static_cast<float>(line.lane)
                 + animation.dy + style.layoutOffsetY + placementOffsetY;
@@ -3171,6 +3174,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         if (style.verticalPosition == "center") {
             firstBaseline += style.centerOffsetY;
+        }
+        if (line->annotationBaselineY.has_value()) {
+            firstBaseline = *line->annotationBaselineY - step * static_cast<float>(line->lane);
         }
         float dy = firstBaseline + step * static_cast<float>(line->lane)
             + animation.dy;

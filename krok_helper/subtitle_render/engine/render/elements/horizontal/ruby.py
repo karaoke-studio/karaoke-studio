@@ -50,6 +50,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
     apply_signal_band_left,
+    lower_ruby_baseline_offset,
     n3_main_fill_rect,
     role_main_fill_rects,
 )
@@ -609,7 +610,11 @@ def layout_rubies(
     渐变与主文字/柱体保持同一条带（仅横向渐变消费，见
     ``apply_signal_band_left``）。
     """
-    if not rubies:
+    lower_rubies = []
+    if style.lower_ruby_enabled:
+        from krok_helper.subtitle_render.engine.ruby.lower import lower_rubies_for_line
+        lower_rubies = lower_rubies_for_line(line, rubies, intervals, style)
+    if not rubies and not lower_rubies:
         return []
     main_box_ascent: Optional[float] = None
     if main_ascent_px is not None and text_layout is not None and text_layout.glyphs:
@@ -646,7 +651,7 @@ def layout_rubies(
             style.stroke_width_px,
         )
     layouts: list[RubyLayout] = []
-    for ruby in rubies:
+    for ruby in [*rubies, *lower_rubies]:
         indices = ruby_target_indices(ruby, line, intervals)
         if not indices:
             continue
@@ -659,7 +664,10 @@ def layout_rubies(
         )
         if target_range is None:
             continue
-        ruby_brush_style = ruby_style_for_target_indices(style, line, indices)
+        ruby_brush_style = (
+            ruby.render_style if ruby in lower_rubies
+            else ruby_style_for_target_indices(style, line, indices)
+        )
         ruby_style = ruby_script_stroke_style(
             ruby_brush_style,
             paint_ruby.reading,
@@ -696,6 +704,10 @@ def layout_rubies(
                 font_size_px=target_ruby_size,
             )
         )
+        if ruby in lower_rubies:
+            baseline_y = int(round(main_baseline_y + lower_ruby_baseline_offset(
+                ruby_style_for_target_indices(style, line, indices), ruby_style,
+            )))
         unit_font_signature = tuple(
             (
                 unit_font.family(),

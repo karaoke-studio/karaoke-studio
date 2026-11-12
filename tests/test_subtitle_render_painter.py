@@ -14902,7 +14902,8 @@ def test_cross_page_line_ink_height_includes_ruby_and_static_effects(qapp):
     assert glow_bounds[1] > plain_bounds[1]
 
 
-def test_collision_bands_ignore_glow_extent(qapp):
+@pytest.mark.parametrize("lower_enabled", [False, True])
+def test_collision_bands_ignore_glow_extent(qapp, lower_enabled):
     line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
     ruby = RubyAnnotation(
         kanji="歌",
@@ -14921,6 +14922,7 @@ def test_collision_bands_ignore_glow_extent(qapp):
     ]
     plain = Style(
         dual_line_layout=False,
+        lower_ruby_enabled=lower_enabled,
         font_size_px=80,
         stroke_width_px=8,
         stroke2_enabled=True,
@@ -14963,7 +14965,8 @@ def test_collision_bands_ignore_glow_extent(qapp):
     assert glow_band.cross_max == plain_band.cross_max
 
 
-def test_legacy_collision_box_uses_only_main_glyph_ink(qapp):
+@pytest.mark.parametrize("lower_enabled", [False, True])
+def test_legacy_collision_box_uses_only_main_glyph_ink(qapp, lower_enabled):
     line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
     ruby = RubyAnnotation(
         kanji="歌",
@@ -14981,6 +14984,7 @@ def test_legacy_collision_box_uses_only_main_glyph_ink(qapp):
     ]
     plain = Style(
         layout_semantics="legacy",
+        lower_ruby_enabled=lower_enabled,
         dual_line_layout=False,
         font_family="Arial",
         font_family_latin="Arial",

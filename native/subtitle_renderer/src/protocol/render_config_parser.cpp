@@ -2488,6 +2488,9 @@ static void parseSourceTracks(
         for (int sourceLineIndex = 0; sourceLineIndex < lines.size(); ++sourceLineIndex) {
             const QJsonObject lineObject = lines.at(sourceLineIndex).toObject();
             TimingLine line;
+            if (lineObject.value(QStringLiteral("annotation_baseline_y")).isDouble()) {
+                line.annotationBaselineY = lineObject.value(QStringLiteral("annotation_baseline_y")).toDouble();
+            }
             line.endMs = intValue(lineObject, QStringLiteral("end_ms"), 0);
             line.singerLabel = stringValue(lineObject, QStringLiteral("singer_label"));
             line.singerId = intValue(lineObject, QStringLiteral("singer_id"), -1);
@@ -2630,6 +2633,17 @@ static void parseSourceTracks(
         for (const auto &rubyValue : rubies) {
             const QJsonObject rubyObject = rubyValue.toObject();
             RubyAnnotation ruby;
+            ruby.lower = rubyObject.value(QStringLiteral("lower")).toBool(false);
+            if (rubyObject.value(QStringLiteral("lower_baseline_offset_y")).isDouble()) {
+                ruby.lowerBaselineOffsetY = rubyObject.value(QStringLiteral("lower_baseline_offset_y")).toDouble();
+            }
+            ruby.lowerLineIndex = intValue(rubyObject, QStringLiteral("lower_line_index"), -1);
+            ruby.lowerStyle = rubyObject.value(QStringLiteral("lower_style")).toObject();
+            const int lowerStyleIndex = intValue(rubyObject, QStringLiteral("lower_style_index"), -1);
+            const QJsonArray lowerStyles = track.value(QStringLiteral("lower_styles")).toArray();
+            if (lowerStyleIndex >= 0 && lowerStyleIndex < lowerStyles.size()) {
+                ruby.lowerStyle = lowerStyles.at(lowerStyleIndex).toObject();
+            }
             ruby.kanji = stringValue(rubyObject, QStringLiteral("kanji"));
             ruby.reading = stringValue(rubyObject, QStringLiteral("reading"));
             ruby.readingPartMs = parseIntArray(
@@ -2720,6 +2734,13 @@ std::optional<RenderConfig> parseRenderConfig(const QJsonObject &ir, QString *er
 
     buildResolvedStyleCache(cfg);
     return cfg;
+}
+
+ResolvedStyle resolvedRubyStyle(const ResolvedStyle &base, const QJsonObject &overrides) {
+    ResolvedStyle style = styleWithOverrides(base, overrides);
+    style.rubyAlignment = stringValue(overrides, QStringLiteral("ruby_alignment"), style.rubyAlignment);
+    style.rubyIntervalPx = intValue(overrides, QStringLiteral("ruby_interval_px"), style.rubyIntervalPx);
+    return style;
 }
 
 QString resolvedStyleKey(int singerId, const QString &roleLabel) {

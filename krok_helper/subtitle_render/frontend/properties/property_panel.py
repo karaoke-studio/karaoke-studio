@@ -928,9 +928,13 @@ class PropertyPanel(QWidget):
     ``{"__follow_main__": bool}`` 标记。主轴（scope 0）不走本信号，仍走
     ``styleChanged``。"""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, parent: Optional[QWidget] = None, *,
+        appearance_only: bool = False, initial_style: Optional[Style] = None,
+    ) -> None:
         super().__init__(parent)
-        self._style = Style()
+        self._appearance_only = appearance_only
+        self._style = replace(initial_style) if initial_style is not None else Style()
         self._syncing = False
         # 粒子设置对象（药丸切换）：anim / sing / scanline。三类粒子的
         # 颜色/尺寸/数量独立保存，这里只是当前编辑目标，不写进样式。
@@ -1087,6 +1091,16 @@ class PropertyPanel(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+
+        if self._appearance_only:
+            self._lower_ruby_editor_mode = True
+            self._singer_combo = FluentComboBox(self)
+            self._singer_combo.addItem("全局默认", _GLOBAL_SCHEME_KEY)
+            self._singer_combo.hide()
+            self._font_color_section = self._make_font_color_section()
+            root.addWidget(self._font_color_section)
+            self.set_style(self._style, emit=False)
+            return
 
         navigation_row = QWidget(self)
         navigation_row.setObjectName("PropertyNavigationRow")
@@ -1434,6 +1448,13 @@ class PropertyPanel(QWidget):
         self._n3_template_lyrics_dir = Path(path) if path is not None else None
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
+        if self._appearance_only:
+            self._style = replace(style)
+            self._sync_subtitle_scheme_controls()
+            self._style_synced = True
+            if emit:
+                self.styleChanged.emit(self._style)
+            return
         # 与 style_from_dict 同口径补齐出厂布局（含「タイトル左上」）：直连
         # 构造、未走 from_dict 的样式进面板后，布局页也能看到并编辑它，
         # 悬空标题引用的下拉回退才能选中真实条目。幂等，放等值快路径之前
@@ -2647,6 +2668,8 @@ class PropertyPanel(QWidget):
     def _set_ruby_color_controls_visible(self, visible: bool) -> None:
         if not hasattr(self, "_ruby_color_actions_row"):
             return
+        if getattr(self, "_lower_ruby_editor_mode", False):
+            visible = False
         self._ruby_color_actions_row.setVisible(visible)
         self._ruby_colors_follow_main_check.setVisible(visible)
         self._ruby_apply_main_btn.setVisible(visible)
@@ -4105,6 +4128,7 @@ class PropertyPanel(QWidget):
         self._layout_combo.setFixedWidth(max(80, min(120, text_width + 32)))
 
     def _sync_layout_editor_controls(self) -> None:
+        self._sync_lower_ruby_controls()
         values = self._current_layout_values()
         was_syncing = self._syncing
         self._syncing = True
@@ -6754,9 +6778,83 @@ class PropertyPanel(QWidget):
             groups.add("color")
         return groups or None
 
+    def _sync_lower_ruby_controls(self) -> None:
+        if not hasattr(self, "_lower_ruby_enabled_check"):
+            return
+        syncing = self._syncing
+        self._syncing = True
+        try:
+            enabled = self._style.lower_ruby_enabled and not self._style.vertical
+            follows = self._style.lower_ruby_follow_upper
+            self._lower_ruby_enabled_check.setChecked(enabled)
+            self._lower_ruby_enabled_check.setEnabled(not self._style.vertical)
+            self._lower_ruby_follow_check.setChecked(follows)
+            self._lower_ruby_gap_spin.setValue(self._style.lower_ruby_gap_px)
+            self._lower_ruby_follow_check.setEnabled(enabled)
+            self._lower_ruby_gap_spin.setEnabled(enabled)
+            self._lower_ruby_style_button.setEnabled(enabled and not follows)
+        finally:
+            self._syncing = syncing
+
+    def _edit_lower_ruby_style(self) -> None:
+        from krok_helper.qfluent_compat import ModelessDialog
+        from krok_helper.subtitle_render.engine.ruby.lower import lower_style, lower_style_snapshot
+        from krok_helper.subtitle_render.domain.models import style_from_dict, style_to_dict
+        from PyQt6.QtWidgets import QVBoxLayout
+
+        generation = self._project_generation
+        dialog = ModelessDialog(self)
+        dialog.setWindowTitle("下层注音样式")
+        dialog.resize(940, 720)
+        root = QVBoxLayout(dialog)
+        independent = style_from_dict({**style_to_dict(self._style),
+                                       **lower_style_snapshot(lower_style(self._style))})
+        editor = PropertyPanel(dialog, appearance_only=True, initial_style=replace(
+            independent, lower_ruby_enabled=False, custom_style_schemes={}, singer_style_overrides={},
+        ))
+        section = editor._font_color_section
+        section.setParent(dialog)
+        editor._ruby_anchor_check.hide()
+        editor._apply_font_to_roles_button.hide()
+        editor._font_tab_panel.set_right("ruby")
+        editor._font_tab_panel.set_left("latin")
+        editor._sync_font_settings_page()
+        editor._color_subject_combo.setCurrentIndex(1)
+        editor._color_tab_panel.set_right("ruby")
+        editor._ruby_color_actions_row.hide()
+        for panel in (editor._font_tab_panel, editor._color_tab_panel):
+            panel._buttons[("right", "main")].hide()
+            panel._buttons[("right", "ruby")].setText("下层注音")
+        root.addWidget(section, 1)
+        editor.hide()
+
+        def update_lower_style(style: Style) -> None:
+            if generation == self._project_generation:
+                snapshot = lower_style_snapshot(style)
+                if snapshot == self._style.lower_ruby_style:
+                    return
+                self._update_style(_force_global=True,
+                    lower_ruby_style=snapshot)
+
+        editor.styleChanged.connect(update_lower_style)
+        try:
+            dialog.exec()
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
     def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:
             return
+        if self._appearance_only:
+            result = self._style_controller.update(self._style, changes, force_global=True)
+            self._style = result.style
+            self._sync_subtitle_scheme_controls(self._scheme_sync_groups_for_changes(result.changed_fields))
+            self.styleChanged.emit(self._style)
+            return
+        if changes.get("lower_ruby_follow_upper") is False and not self._style.lower_ruby_style:
+            from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+            changes["lower_ruby_style"] = lower_style_snapshot(self._style)
         if self._route_timing_scope_changes(changes):
             return
         # 切到「复用配色方案」时补一个默认来源：优先第一个角色（多数项目
@@ -6826,6 +6924,8 @@ class PropertyPanel(QWidget):
         )
         self._style = result.style
         changes = result.changed_fields
+        if "vertical" in changes or any(field.startswith("lower_ruby_") for field in changes):
+            self._sync_lower_ruby_controls()
         scheme_names_changed = previous_scheme_names != set(
             self._style.custom_style_schemes
         )

@@ -38,12 +38,13 @@ class RolePropertyPageBuilder:
         host = self._host
         section, layout = self._plain_card_factory()
         host._scheme_section = section
-        host._role_header = self._role_header_factory(section)
-        role_navigation = host._make_scheme_navigation(host._role_header)
-        host._font_preview_requested = True
-        host._font_preview_widget = self._font_preview_factory(host._role_header)
-        host._role_header.set_widgets(role_navigation, host._font_preview_widget)
-        layout.addWidget(host._role_header)
+        if not getattr(host, "_appearance_only", False):
+            host._role_header = self._role_header_factory(section)
+            role_navigation = host._make_scheme_navigation(host._role_header)
+            host._font_preview_requested = True
+            host._font_preview_widget = self._font_preview_factory(host._role_header)
+            host._role_header.set_widgets(role_navigation, host._font_preview_widget)
+            layout.addWidget(host._role_header)
 
         row = self._property_pair_factory(section)
         row.set_spacing(6)

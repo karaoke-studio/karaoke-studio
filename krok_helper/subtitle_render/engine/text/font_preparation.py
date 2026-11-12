@@ -126,6 +126,10 @@ def _iter_prewarm_font_fallback(
                 role_key = (id(track_style), getattr(char, "role_label", None))
                 if role_key not in prepared_roles:
                     _prepare_one(lambda: apply_resolved_font_faces(style_to_dict(char_style)), "角色样式")
+                    if char_style.lower_ruby_enabled:
+                        from krok_helper.subtitle_render.engine.ruby.lower import lower_style
+                        _prepare_one(lambda: apply_resolved_font_faces(
+                            style_to_dict(lower_style(char_style))), "下层注音样式")
                     prepared_roles.add(role_key)
                     yield
                 slot = font_slot_for_text(char_style, text)

@@ -348,6 +348,8 @@ def style_for_new_project(
         )
     style = replace(
         app_default_style,
+        # 新工程始终由用户主动开启，不沿用上个工程记住的生成开关。
+        lower_ruby_enabled=False,
         layouts=loaded,
         hidden_builtin_layout_ids=hidden,
         title_overlays=titles,

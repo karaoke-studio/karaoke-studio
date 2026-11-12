@@ -118,6 +118,17 @@ def line_content_rect(
     ))
 
 
+def annotated_content_rect(rect: QRectF, rubies: tuple[RubyLayout, ...], style: Style) -> QRectF:
+    if not style.lower_ruby_enabled:
+        return rect
+    from krok_helper.subtitle_render.engine.render.effects import ruby_visual_padding
+    rect = QRectF(rect)
+    for ruby in rubies:
+        pad = max(ruby_visual_padding(ruby.style, after=after) for after in (False, True))
+        rect = rect.united(ruby.gradient_rect.adjusted(-pad, -pad, pad, pad))
+    return rect
+
+
 def signal_band_left_local(
     track: TimingTrack, line: TimingLine, style: Style
 ) -> float | None:
@@ -444,6 +455,81 @@ def fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
     return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra
 
 
+def _reference_ink(font, text: str) -> tuple[float, float]:
+    """Stable font reference, sharing the existing glyph-metric cache."""
+    from krok_helper.subtitle_render.engine.text import char_glyph_ink_box
+    metrics = QFontMetrics(font)
+    bounds = char_glyph_ink_box(text, font, metrics, metrics, None)
+    if bounds is None:
+        return -float(metrics.ascent()), float(metrics.descent())
+    return float(bounds[1]), float(bounds[3])
+
+
+def lower_ruby_baseline_offset(upper_style: Style, lower_style: Style) -> float:
+    """Match the upper ruby's zero-gap visual allowance using font references.
+
+    Latin cap height replaces the em ascent; the main CJK ink bottom replaces
+    its unused descent. No lyric content, glow or shadow enters this anchor.
+    """
+    from krok_helper.subtitle_render.engine.ruby.style import build_ruby_font_for_text, ruby_stroke_width
+    from krok_helper.subtitle_render.engine.text import n3_char_box_ascent, n3_char_box_descent
+    main_font = build_font(upper_style)
+    main_metrics = QFontMetrics(main_font)
+    main_top, main_bottom = _reference_ink(main_font, "国")
+    upper_font = build_ruby_font_for_text(upper_style, "あ")
+    upper_metrics = QFontMetrics(upper_font)
+    _, upper_bottom = _reference_ink(upper_font, "あいうえおアイウエオ")
+    upper_baseline = -n3_char_box_ascent(main_metrics, upper_style.font_size_px,
+                                         upper_style.stroke_width_px) - n3_char_box_descent(
+        upper_metrics, max(upper_font.pixelSize(), 1), ruby_stroke_width(upper_style),
+    )
+    zero_gap = main_top - upper_baseline - upper_bottom
+    lower_metrics = QFontMetrics(build_ruby_font_for_text(lower_style, "a"))
+    return main_bottom + zero_gap + lower_metrics.capHeight() + lower_style.ruby_gap_px
+
+
+def _ruby_reference_box(style: Style, text: str, baseline: float) -> tuple[int, int]:
+    """The same font-and-outline envelope for either side of the main text."""
+    from krok_helper.subtitle_render.engine.render.effects import ruby_stroke_extent
+    from krok_helper.subtitle_render.engine.ruby.style import build_ruby_font_for_text
+    top, bottom = _reference_ink(build_ruby_font_for_text(style, text), text)
+    edge = ruby_stroke_extent(style)
+    return math.floor(baseline + top - edge), math.ceil(baseline + bottom + edge)
+
+
+def annotated_line_geometry(style: Style) -> tuple[int, int, int, int]:
+    """Union the page style's main/upper/lower layout boxes, without FX pads."""
+    main_h, ascent, descent, extra = fixed_line_geometry(style)
+    if not style.lower_ruby_enabled or style.vertical:
+        return main_h, ascent, descent, extra
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style
+    from krok_helper.subtitle_render.engine.ruby.style import (
+        build_ruby_font_for_text, ruby_script_stroke_style, ruby_stroke_width,
+    )
+    from krok_helper.subtitle_render.engine.text import n3_char_box_ascent, n3_char_box_descent
+    font = build_font(style)
+    metrics = QFontMetrics(font)
+    upper_font = build_ruby_font_for_text(style, "あ")
+    upper_metrics = QFontMetrics(upper_font)
+    upper_baseline = -n3_char_box_ascent(metrics, style.font_size_px, style.stroke_width_px) - style.ruby_gap_px - n3_char_box_descent(
+        upper_metrics, max(upper_font.pixelSize(), 1), ruby_stroke_width(style),
+    )
+    upper_top, _ = _ruby_reference_box(style, "あいうえおアイウエオ", upper_baseline)
+    below = ruby_script_stroke_style(lower_style(style), "a")
+    _, lower_bottom = _ruby_reference_box(
+        below, "abcdefghijklmnopqrstuvwxyz", lower_ruby_baseline_offset(style, below),
+    )
+    top = min(-ascent, upper_top)
+    bottom = max(descent, lower_bottom)
+    return bottom - top, -top, bottom, 0
+
+
+def lower_ruby_reserve(style: Style) -> int:
+    if not style.lower_ruby_enabled or style.vertical:
+        return 0
+    return annotated_line_geometry(style)[2] - fixed_line_geometry(style)[2]
+
+
 def resolve_baseline_y(
     metrics: QFontMetrics,
     img_h: int,
@@ -452,6 +538,13 @@ def resolve_baseline_y(
 ) -> int:
     pos = style.line_y_position
     margin = style.line_y_margin_px
+    if style.lower_ruby_enabled and not style.vertical:
+        main_h, ascent, descent, _ = annotated_line_geometry(style)
+        if pos == "top":
+            return margin + ascent
+        if pos == "center":
+            return (img_h - main_h) // 2 + ascent
+        return img_h - margin - descent
     if style.layout_semantics == "n3_1074":
         main_h, main_ascent, main_descent, ruby_extra = fixed_line_geometry(style)
         if pos == "top":
@@ -491,7 +584,7 @@ def resolve_display_baselines(
             baseline += style.row1_offset_y
         return {0: baseline}
 
-    main_h, main_ascent, main_descent, ruby_extra = fixed_line_geometry(style)
+    main_h, main_ascent, main_descent, ruby_extra = annotated_line_geometry(style)
     gap = int(style.line_gap_px)
     margin = style.line_y_margin_px
     lanes = lane_count(style)
@@ -1006,7 +1099,7 @@ def layout_plain_line(
     source_line = source_line or line
     active_rubies = active_rubies_for_line(track.rubies, source_line)
     ruby_font = build_ruby_font(style)
-    ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
+    ruby_metrics = QFontMetrics(ruby_font) if active_rubies or style.lower_ruby_enabled else None
 
     char_widths = [
         (
@@ -1169,7 +1262,9 @@ def layout_plain_line(
         char_x_ranges=char_x_ranges,
         fill_segments=fill_segments,
         line_rect=line_rect,
-        content_rect=line_content_rect(track, source_line, style, line_rect, y, metrics),
+        content_rect=annotated_content_rect(
+            line_content_rect(track, source_line, style, line_rect, y, metrics), ruby_layouts, style,
+        ),
         colors=colors,
         rtl=text_rtl != line.wipe_reverse,
         has_inline_styles=False,
@@ -1203,7 +1298,7 @@ def layout_role_line(
     source_line = source_line or line
     active_rubies = active_rubies_for_line(track.rubies, source_line)
     ruby_font = build_ruby_font(style)
-    ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
+    ruby_metrics = QFontMetrics(ruby_font) if active_rubies or style.lower_ruby_enabled else None
     measure_layout = build_role_text_layout(line, style, x0=0, baseline_y=0)
     if not measure_layout.glyphs:
         return None
@@ -1355,9 +1450,9 @@ def layout_role_line(
         char_x_ranges=char_x_ranges,
         fill_segments=fill_segments,
         line_rect=text_layout.line_rect,
-        content_rect=line_content_rect(
-            track, source_line, style, text_layout.line_rect, y,
-            text_layout.glyphs[0].metrics,
+        content_rect=annotated_content_rect(
+            line_content_rect(track, source_line, style, text_layout.line_rect, y,
+                              text_layout.glyphs[0].metrics), ruby_layouts, style,
         ),
         colors=effective_karaoke_colors(style),
         rtl=style.right_to_left != line.wipe_reverse,

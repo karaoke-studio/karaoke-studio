@@ -274,6 +274,8 @@ struct RubyUnit {
 };
 
 struct TextRuby {
+    bool lower = false;
+    std::optional<float> lowerBaselineOffsetY;
     std::wstring baseText;
     std::wstring reading;
     std::vector<RubyUnit> units;
@@ -365,6 +367,7 @@ struct PlacementWindow {
 inline constexpr int kTitleCompositeOrder = -1;
 
 struct TextLine {
+    std::optional<float> annotationBaselineY;
     std::vector<TextChar> chars;
     std::vector<TextRuby> rubies;
     int startMs = 0;

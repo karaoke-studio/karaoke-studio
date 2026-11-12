@@ -364,6 +364,8 @@ class FolderTabPanel(QWidget):
             painter.drawRoundedRect(content, self._RADIUS, self._RADIUS)
 
             for (side, key), btn in self._buttons.items():
+                if btn.isHidden():
+                    continue
                 selected = key == self._current[side]
                 rect = QRectF(btn.geometry()).adjusted(
                     0.5, 0.5, -0.5, 0.0 if selected else -1.0
