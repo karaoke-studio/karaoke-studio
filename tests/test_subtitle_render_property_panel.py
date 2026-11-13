@@ -11645,11 +11645,30 @@ def test_role_navigation_selects_target_without_card_header(qapp):
             panel._singer_combo.setCurrentIndex(i)
             break
     assert "主唱" in panel._singer_combo.currentText()
+    assert not hasattr(panel, "_role_target_label")
+    assert panel._singer_combo.accessibleName() == "正在编辑：主唱"
+    assert "正在编辑：主唱" in panel._singer_combo.toolTip()
+    assert panel._singer_combo.font().weight() >= QFont.Weight.DemiBold
     assert panel._font_color_section.objectName() == "SubtitlePropertyCard"
     assert not hasattr(panel._font_color_section, "header")
 
+    schemes = dict(panel.subtitle_style.custom_style_schemes)
+    schemes["主唱"] = replace(schemes["主唱"], fill_color="#39C5BB", karaoke_colors=None)
+    panel.set_style(replace(panel.subtitle_style, custom_style_schemes=schemes))
+    assert panel._singer_combo._identity_color == QColor("#39C5BB")
+    menu = panel._singer_combo._createComboMenu()
+    for index in range(panel._singer_combo.count()):
+        assert not panel._singer_combo.itemIcon(index).isNull()
+    role_index = panel._singer_combo.findData("custom:主唱")
+    color = panel._singer_combo.itemIcon(role_index).pixmap(24, 24).toImage().pixelColor(12, 12)
+    assert color == QColor("#39C5BB")
+    menu.deleteLater()
+
     panel._singer_combo.setCurrentIndex(0)  # 回全局默认
     assert panel._singer_combo.currentText() == "全局默认"
+    assert panel._singer_combo.accessibleName() == "正在编辑：全局默认"
+    assert panel._singer_combo._global_target is True
+    assert panel._singer_combo._identity_color is None
 
 
 def test_save_button_confirms_builtin_defaults_without_touching_preset_library(
@@ -11730,6 +11749,8 @@ def test_role_combo_width_tracks_longest_option_with_cap(qapp):
     assert panel._singer_combo.width() == 120
     panel.set_roles(["这是一个非常非常长的角色名称用于测试"])
     assert 120 < panel._singer_combo.width() <= 280
+    panel.set_current_scheme_key("custom:这是一个非常非常长的角色名称用于测试")
+    assert "这是一个非常非常长的角色名称用于测试" in panel._singer_combo.toolTip()
     panel.close()
     panel.deleteLater()
     qapp.processEvents()

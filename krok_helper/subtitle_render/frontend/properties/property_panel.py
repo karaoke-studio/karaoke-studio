@@ -68,6 +68,8 @@ from qfluentwidgets import (
     TransparentToolButton as FluentTransparentToolButton,
 )
 from krok_helper.qfluent_compat import install_fluent_tooltip
+from krok_helper.subtitle_render.frontend.properties.controls.role_target import RoleTargetComboBox
+from krok_helper.subtitle_render.frontend.widgets.role_colors import role_swatch_icon, scheme_swatch_color
 from krok_helper.subtitle_render.frontend.properties.controls.page_navigation import (
     PropertyPageNavigation,
     PropertyNavigationScrollArea,
@@ -3093,7 +3095,8 @@ class PropertyPanel(QWidget):
 
         # 单行排布：角色下拉吸收剩余宽度，操作收成紧凑图标按钮。
         # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
-        self._singer_combo = _WheelFocusedComboBox(nav)
+        self._singer_combo = RoleTargetComboBox(nav)
+        self._singer_combo.menuAboutToShow.connect(self._sync_role_menu_icons)
         _compact_control(self._singer_combo)
         self._singer_combo.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
@@ -5694,7 +5697,7 @@ class PropertyPanel(QWidget):
             index = self._singer_combo.findData(selected_key)
             if index >= 0:
                 self._singer_combo.setCurrentIndex(index)
-        self._singer_combo.setToolTip(
+        self._singer_combo.setAccessibleDescription(
             "选择要编辑哪一套样式。\n"
             "「全局默认」：所有字幕的基础样式，角色方案里没单独设置的属性都沿用它。\n"
             "「标题」：标题文字专用的样式（在「标题」页开启标题后生效），"
@@ -5703,6 +5706,7 @@ class PropertyPanel(QWidget):
             "「自动识别和声」把角色分给文字后，这些文字就按对应方案渲染。"
         )
         self._sync_scheme_combo_width()
+        self._sync_role_target_identity()
         # 扫字线「复用角色配色」按名字引用角色：角色注册表变化的每个
         # 入口（加载/合并/新建/改名/删除）都会走到这里，下拉跟着重建。
         self._refresh_scanline_role_combo()
@@ -5719,9 +5723,33 @@ class PropertyPanel(QWidget):
             ),
             default=0,
         )
-        # 为文字左右留白和下拉箭头预留 48px；超长角色名交给
+        # 为色点、文字左右留白和下拉箭头预留 60px；超长角色名交给
         # ComboBox 内部省略，不让导航条再次铺满整张卡片。
-        self._singer_combo.setFixedWidth(max(120, min(280, text_width + 48)))
+        self._singer_combo.setFixedWidth(max(120, min(280, text_width + 60)))
+
+    def _sync_role_target_identity(self) -> None:
+        if not isinstance(self._singer_combo, RoleTargetComboBox):
+            return
+        name = self._current_custom_scheme_name()
+        self._singer_combo.set_identity(
+            scheme_swatch_color(self._style, name) if name else None,
+            global_target=name is None,
+        )
+        target = f"正在编辑：{self._current_target_label()}"
+        self._singer_combo.setAccessibleName(target)
+        self._singer_combo.setToolTip(f"{target}\n\n{self._singer_combo.accessibleDescription()}")
+
+    def _sync_role_menu_icons(self) -> None:
+        # Refresh only when opening the menu: many-role projects must not
+        # rebuild every icon on each live color-picker update.
+        neutral = QColor(palette().text_hint)
+        for index in range(self._singer_combo.count()):
+            key = self._singer_combo.itemData(index)
+            name = key.removeprefix(_CUSTOM_SCHEME_PREFIX) if isinstance(key, str) else ""
+            color = scheme_swatch_color(self._style, name) if key != _GLOBAL_SCHEME_KEY else neutral
+            self._singer_combo.setItemIcon(index, role_swatch_icon(
+                color if color is not None and color.isValid() else neutral,
+            ))
 
     def _add_custom_scheme(self, name: Optional[str] = None) -> None:
         if name is None or isinstance(name, bool):
@@ -6250,6 +6278,7 @@ class PropertyPanel(QWidget):
         """
         if not hasattr(self, "_singer_combo"):
             return
+        self._sync_role_target_identity()
         if groups is None:
             groups = {"font", "stroke", "color"}
         was_syncing = self._syncing

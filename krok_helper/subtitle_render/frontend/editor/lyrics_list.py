@@ -71,6 +71,10 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
 from krok_helper.qfluent_compat import ModelessDialog, hide_fluent_tooltip, show_fluent_tooltip
+from krok_helper.subtitle_render.frontend.widgets.role_colors import (
+    role_swatch_icon as _swatch_icon_uncached,
+    scheme_swatch_color as _scheme_swatch_color,
+)
 from krok_helper.subtitle_render.engine.layout.display.section_edges import (
     apply_section_edge_animation,
     section_edge_line_flags,
@@ -607,40 +611,6 @@ def _cached_icon(key: tuple, build) -> QIcon:
 def _swatch_icon(color: Optional[QColor]) -> QIcon:
     """圆形配色色点；``None``（未定义方案）画空心灰圈。"""
     return _cached_icon(("solid", *_swatch_cache_key(color)), lambda: _swatch_icon_uncached(color))
-
-
-def _swatch_icon_uncached(color: Optional[QColor]) -> QIcon:
-    pixmap = QPixmap(24, 24)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    if color is None:
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(148, 163, 184, 200), 2))
-    else:
-        painter.setBrush(color)
-        # 描一圈半透明深边，浅色（白）色点在白底上也能看清
-        painter.setPen(QPen(QColor(0, 0, 0, 64), 1.5))
-    painter.drawEllipse(5, 5, 14, 14)
-    painter.end()
-    return QIcon(pixmap)
-
-
-def _scheme_swatch_color(style: Style, role: str) -> Optional[QColor]:
-    """角色名 → 该配色方案的代表色（已唱填充色）；无方案返回 None。"""
-    if not role:
-        # 全局默认方案
-        if style.karaoke_colors is not None:
-            return QColor(style.karaoke_colors.after.text.color)
-        return QColor(style.fill_color)
-    scheme = style.custom_style_schemes.get(role)
-    if scheme is None:
-        return None
-    if scheme.karaoke_colors is not None:
-        return QColor(scheme.karaoke_colors.after.text.color)
-    if scheme.fill_color:
-        return QColor(scheme.fill_color)
-    return None
 
 
 def _mixed_swatch_icon(colors: list[Optional[QColor]]) -> QIcon:
