@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import json
 from pathlib import Path
 import sys
 
@@ -17,11 +18,16 @@ def main() -> int:
     parser.add_argument("--case", action="append", help="限定场景，可重复指定；默认全部")
     parser.add_argument("--include-real", action="store_true", help="额外加载本地真实 N3 样本，缺失即失败")
     parser.add_argument("--inventory-only", action="store_true")
+    parser.add_argument("--verify-only", action="store_true", help="仅校验已有基线文件完整性，不改变采集/回访判定")
     parser.add_argument("--renderer", type=Path, default=ROOT / "build/native-renderer/krok_subtitle_renderer.exe")
     parser.add_argument("--fps", type=int, choices=(60, 120), default=60)
     parser.add_argument("--sequence-seconds", type=float, default=0)
     args = parser.parse_args()
     output = args.output_dir.resolve()
+    if args.verify_only:
+        from scripts.subtitle_gpu_baseline.verify import verify_baseline
+        print(json.dumps(verify_baseline(output), ensure_ascii=False))
+        return 0
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         parser.error("输出目录必须为空，禁止覆盖已有参考基线。")
     if not math.isfinite(args.sequence_seconds) or args.sequence_seconds < 0 or (args.sequence_seconds and len(args.case or []) != 1):

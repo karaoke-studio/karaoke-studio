@@ -66,6 +66,7 @@ def test_inventory_links_product_suites_without_claiming_overlay_coverage(cases)
 
 @pytest.mark.parametrize("fps,count", [(60, 360), (120, 720)])
 def test_sequence_and_seek_sampling_is_explicit_and_repeatable(fps, count):
+    from krok_helper.subtitle_render.domain.frame_rate import frame_timestamp
     times = sequence_times(start_ms=0, duration_ms=6000, fps=fps)
     assert len(times) == count
     assert times[0] == 0 and times[-1] < 6000
@@ -73,6 +74,7 @@ def test_sequence_and_seek_sampling_is_explicit_and_repeatable(fps, count):
     assert seek_order(times) == seek_order(times)
     assert set(seek_order(times)) == set(times)
     assert seek_order(times) != times
+    assert times == tuple(frame_timestamp(i, fps) for i in range(count))
 
 
 @pytest.mark.parametrize("changes", [{"available": False}, {"hardware": False},
@@ -198,3 +200,32 @@ def test_observed_d2d_differences_are_evidence_not_threshold_waivers():
     assert record["reference_backend"] == "direct2d"
     assert record["observations"]
     assert all(m["expected_path"] == m["actual_path"] for m in record["observations"])
+
+
+def test_artifact_verification_detects_corruption_and_preserves_failed_capture_status(tmp_path):
+    from PyQt6.QtGui import QImage
+    from scripts.subtitle_gpu_baseline.artifacts import write_json
+    from scripts.subtitle_gpu_baseline.verify import verify_baseline
+    directory = tmp_path / "cases/example"
+    image = QImage(8, 6, QImage.Format.Format_RGBA8888_Premultiplied)
+    image.fill(0)
+    frame = {"t_ms": 0, **save_frame(directory, "sample", image)}
+    evidence = save_frame(directory / "seek-differences", "sample", image)
+    for filename in ("sent-ir.json", "scene-ir.json", "semantics.json", "result.json"):
+        write_json(directory / filename, {})
+    write_json(tmp_path / "manifest.json", {"schema": 1, "status": "failed", "resources": {},
+        "cases": [{"id": "example", "frames": [frame], "seek_mismatches": [{"t_ms": 0, "evidence": evidence}]}]})
+    result = verify_baseline(tmp_path)
+    assert result["integrity"] == "passed"
+    assert result["capture_status"] == "failed"
+    assert result["seek_differences"] == 1
+    (directory / frame["raw_file"]).write_bytes(b"damaged")
+    with pytest.raises(ValueError):
+        verify_baseline(tmp_path)
+
+
+def test_product_suite_uses_actual_export_and_background_contracts(cases):
+    from krok_helper.subtitle_render.engine.export.render_job import OUTPUT_FORMATS
+    result = inventory(cases)
+    assert result["suites"]["export"]["formats"] == list(OUTPUT_FORMATS)
+    assert {"BackgroundSource", "RenderJob", "ScreenSettings", "RollSegmentConfig"} <= result["models"].keys()

@@ -2,14 +2,35 @@
   "schema": 1,
   "status": "observed_not_waived",
   "reference_backend": "direct2d",
-  "reference_revision": "a6ed9ac7be5b183d80a95823675bbb7091379f9a",
-  "renderer_sha256": "8e8ef0360fda82a8a5c6a1f71f005a62118709892ac0416fefce00bc5dad2d30",
-  "adapter": "NVIDIA GeForce RTX 3070 Ti Laptop GPU",
-  "qt_runtime": "6.11.0",
-  "classification": "Existing D2D same-path byte differences; no Skia implementation exists yet; root cause not established.",
-  "gate_policy": "Strict capture still fails; entries do not relax same-backend or cross-backend acceptance.",
+  "classification": "Existing D2D reference pipeline same-path byte differences; no Skia implementation exists yet; root cause not established.",
+  "gate_policy": "Strict capture still fails; observations never relax same-backend or cross-backend acceptance.",
+  "reference_suites": [
+    {
+      "id": "stills",
+      "manifest": "build/subtitle-gpu-reference-p00-final/manifest.json",
+      "manifest_sha256": "f6685cb0b8b695268f5db8ce83c907d3961ee1798f0e0a1710e036c3d865e376",
+      "reference_revision": "8ebfb5c054426ca80a7abd739b960dce38f8d0c1",
+      "capture_status": "failed",
+      "renderer_sha256": "8e8ef0360fda82a8a5c6a1f71f005a62118709892ac0416fefce00bc5dad2d30",
+      "adapter": "NVIDIA GeForce RTX 3070 Ti Laptop GPU",
+      "fps": 60,
+      "frames": 600
+    },
+    {
+      "id": "sequence_120",
+      "manifest": "build/subtitle-gpu-sequence-p00-120/manifest.json",
+      "manifest_sha256": "f3cec316b676d1b5c1c121f95582394d67997022e540c095aef3b688086f06fe",
+      "reference_revision": "8ebfb5c054426ca80a7abd739b960dce38f8d0c1",
+      "capture_status": "failed",
+      "renderer_sha256": "8e8ef0360fda82a8a5c6a1f71f005a62118709892ac0416fefce00bc5dad2d30",
+      "adapter": "NVIDIA GeForce RTX 3070 Ti Laptop GPU",
+      "fps": 120,
+      "frames": 720
+    }
+  ],
   "observations": [
     {
+      "suite": "stills",
       "case_id": "volume",
       "t_ms": 4400,
       "difference": {
@@ -27,6 +48,7 @@
       "actual_path": true
     },
     {
+      "suite": "stills",
       "case_id": "volume",
       "t_ms": 1500,
       "difference": {
@@ -44,6 +66,79 @@
       "actual_path": true
     },
     {
+      "suite": "stills",
+      "case_id": "volume",
+      "t_ms": 4400,
+      "difference": {
+        "changed_bbox": [
+          699,
+          577,
+          703,
+          580
+        ],
+        "changed_channel_mae": 0.5,
+        "changed_pixels": 6,
+        "max_channel_delta": 1
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "suite": "stills",
+      "case_id": "lamp_shape_volume",
+      "t_ms": 1500,
+      "difference": {
+        "changed_bbox": [
+          671,
+          582,
+          672,
+          583
+        ],
+        "changed_channel_mae": 0.25,
+        "changed_pixels": 1,
+        "max_channel_delta": 1
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "suite": "stills",
+      "case_id": "lamp_shape_volume",
+      "t_ms": 1500,
+      "difference": {
+        "changed_bbox": [
+          671,
+          582,
+          672,
+          583
+        ],
+        "changed_channel_mae": 0.25,
+        "changed_pixels": 1,
+        "max_channel_delta": 1
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "suite": "stills",
+      "case_id": "volume_appearance_role",
+      "t_ms": 1500,
+      "difference": {
+        "changed_bbox": [
+          671,
+          582,
+          672,
+          583
+        ],
+        "changed_channel_mae": 0.25,
+        "changed_pixels": 1,
+        "max_channel_delta": 1
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "suite": "stills",
       "case_id": "combined_effects",
       "t_ms": 3700,
       "difference": {
@@ -56,6 +151,42 @@
         "changed_channel_mae": 1.5,
         "changed_pixels": 1,
         "max_channel_delta": 2
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "suite": "sequence_120",
+      "case_id": "combined_effects",
+      "t_ms": 3767,
+      "difference": {
+        "changed_bbox": [
+          1117,
+          587,
+          1118,
+          588
+        ],
+        "changed_channel_mae": 7.75,
+        "changed_pixels": 1,
+        "max_channel_delta": 11
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "suite": "sequence_120",
+      "case_id": "combined_effects",
+      "t_ms": 3767,
+      "difference": {
+        "changed_bbox": [
+          1117,
+          587,
+          1118,
+          588
+        ],
+        "changed_channel_mae": 7.75,
+        "changed_pixels": 1,
+        "max_channel_delta": 11
       },
       "expected_path": true,
       "actual_path": true

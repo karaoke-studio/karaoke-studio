@@ -126,7 +126,7 @@ def capture_cases(*, root: Path, output: Path, executable: Path, cases,
                     frame = {"t_ms": t, "frame_index": index, "native_event": event,
                              **save_frame(case_dir, f"{index:06d}-{t}", image)}
                     record["frames"].append(frame)
-                    expected[t] = (frame["pixel_sha256"], event.get("realization_path_ready"), frame["raw_file"])
+                    expected[t] = (frame["pixel_sha256"], event.get("realization_path_ready"), frame["raw_file"], event.get("checksum"))
                 if case.require_visible and not any(f["alpha_sum"] for f in record["frames"]):
                     raise RuntimeError(f"正向样例输出全为空帧：{case.case_id}")
                 if verify_seek:
@@ -139,6 +139,7 @@ def capture_cases(*, root: Path, output: Path, executable: Path, cases,
                             record["seek_mismatches"].append({"t_ms": t, "expected": expected[t][0],
                                 "actual": actual, "expected_path": expected[t][1],
                                 "actual_path": event.get("realization_path_ready"), "evidence": evidence,
+                                "expected_native_checksum": expected[t][3], "actual_native_checksum": event.get("checksum"),
                                 "difference": pixel_difference(original, canonical_bytes(image), width, height)})
                     record["seek_checks"] = len(expected) * 2
                 record["diagnostics"] = renderer.gpu_diagnostics()

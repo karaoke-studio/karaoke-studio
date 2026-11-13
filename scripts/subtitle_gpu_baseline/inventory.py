@@ -9,21 +9,30 @@ from dataclasses import fields
 import inspect
 from pathlib import Path
 import re
-from typing import get_args
+from typing import get_args, get_type_hints
 
 from krok_helper.subtitle_render.domain import models, timing, paint
+from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.roll import RollSegmentConfig
+from krok_helper.subtitle_render.settings.screen import ScreenSettings, SCREEN_FPS_OPTIONS
+from krok_helper.subtitle_render.engine.export.render_job import RenderJob, OUTPUT_FORMATS
 from .policy import COMPARISON_BUDGETS, budget_categories
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = (models.Style, models.SubtitleStyleScheme, models.TitleOverlay, paint.PaintFill,
     timing.TimingChar, timing.TimingLine, timing.TimingTrackMeta, timing.GuideSymbol,
     timing.RubyAnnotation, timing.LineAnimationOverride, timing.TrackPage,
-    timing.TrackPagePlan, timing.TrackSection, timing.TrackDisplayTiming)
+    timing.TrackPagePlan, timing.TrackSection, timing.TrackDisplayTiming,
+    BackgroundSource, ScreenSettings, RenderJob, RollSegmentConfig)
 VARIANTS = {name: tuple(get_args(getattr(timing, name))) for name in (
     "EntryAnimation", "ExitAnimation", "KaraokeAnimation", "SingFx", "LineSingFx")}
 VARIANTS["ColorFillMode"] = tuple(get_args(paint.ColorFillMode))
 for _name in ("ScanlineEffect", "ScanlineShape", "LitStyle", "LitAppearanceMode", "VolumeAppearanceMode"):
     VARIANTS[_name] = tuple(get_args(getattr(models, _name)))
+VARIANTS["BackgroundKind"] = tuple(get_args(get_type_hints(BackgroundSource)["kind"]))
+VARIANTS["ImageFit"] = tuple(get_args(get_type_hints(BackgroundSource)["image_fit"]))
+VARIANTS["OutputFormat"] = tuple(OUTPUT_FORMATS)
+VARIANTS["ScreenFps"] = tuple(SCREEN_FPS_OPTIONS)
 
 FEATURE_LABELS = (
     "字体与 face", "普通横排", "分页/lane/网格", "上下 ruby", "竖排/RTL",
@@ -75,6 +84,10 @@ FEATURE_SOURCES = {
 
 
 def primary_feature(model: str, field: str) -> str:
+    if model in ("BackgroundSource", "RollSegmentConfig"):
+        return "F26"
+    if model in ("RenderJob", "ScreenSettings"):
+        return "F27"
     if model == "TitleOverlay":
         return "F22"
     if model == "PaintFill":
@@ -181,7 +194,7 @@ def inventory(cases) -> dict:
         "continuous": {"cases": ["combined_effects"], "duration_ms": 6000, "fps": [60, 120]},
         "random_seek": {"cases": [case.case_id for case in cases], "seed": 20261114},
         "export": {"cases": ["combined_effects", "g3_heavy_roles_fills_title_multisource"],
-            "fps": [60, 120], "formats": ["mp4", "png_overlay", "png_composite", "prores4444", "qtrle"],
+            "fps": list(SCREEN_FPS_OPTIONS), "formats": list(OUTPUT_FORMATS),
             "backgrounds": ["video_contain", "image_cover", "image_contain", "sequence", "solid"],
             "status": "specified_not_executed_by_overlay_capture"},
         "long_run": {"cases": ["combined_effects", "g3_heavy_roles_fills_title_multisource"],

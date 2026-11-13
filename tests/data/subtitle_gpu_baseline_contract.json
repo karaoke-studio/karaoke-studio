@@ -1977,6 +1977,238 @@
         "feature": "F25",
         "render_metadata": true
       }
+    },
+    "BackgroundSource": {
+      "kind": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "path": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "color": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "source_fps": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "sequence_start_number": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "video_offset_ms": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "image_fit": {
+        "feature": "F26",
+        "render_metadata": true
+      }
+    },
+    "ScreenSettings": {
+      "preset_key": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "par": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "width": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "height": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "fps": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "resolution_mode": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "fps_mode": {
+        "feature": "F27",
+        "render_metadata": true
+      }
+    },
+    "RenderJob": {
+      "track": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "style": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "background_video_path": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "output_path": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "background_source": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "audio_path": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "width": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "height": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "fps": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "duration_ms": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "include_audio": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "encoder_mode": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "crf": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "preset": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "codec": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "output_format": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "native_export_enabled": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "gpu_export_enabled": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "render_workers": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "extra_tracks": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "bitrate_mbps": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "pre_roll": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "post_roll": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "main_media_end_ms": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "main_audio_end_ms": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "main_background_has_audio": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "roll_shift_ms": {
+        "feature": "F27",
+        "render_metadata": true
+      },
+      "title_duration_ms": {
+        "feature": "F27",
+        "render_metadata": true
+      }
+    },
+    "RollSegmentConfig": {
+      "enabled": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "source": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "source_has_audio": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "source_width": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "source_height": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "source_duration_ms": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "audio_path": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "duration_ms": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "fill": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "auto_offset_subtitles": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "main_transition_ms": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "main_transition_style": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "self_transition_ms": {
+        "feature": "F26",
+        "render_metadata": true
+      },
+      "self_transition_style": {
+        "feature": "F26",
+        "render_metadata": true
+      }
     }
   },
   "variants": {
@@ -2113,6 +2345,27 @@
       "custom",
       "auto",
       "role"
+    ],
+    "BackgroundKind": [
+      "video",
+      "image",
+      "image_sequence",
+      "solid"
+    ],
+    "ImageFit": [
+      "cover",
+      "contain"
+    ],
+    "OutputFormat": [
+      "mp4",
+      "png_transparent",
+      "png_composited",
+      "mov_transparent",
+      "mov_qtrle"
+    ],
+    "ScreenFps": [
+      60,
+      120
     ]
   },
   "comparison_budgets": {

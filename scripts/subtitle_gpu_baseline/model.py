@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from krok_helper.subtitle_render.domain.models import Style, TimingTrack
+from krok_helper.subtitle_render.domain.frame_rate import frame_count, frame_timestamp
 
 
 @dataclass(frozen=True)
@@ -23,8 +24,7 @@ class BaselineCase:
 def sequence_times(*, start_ms: int, duration_ms: int, fps: int) -> tuple[int, ...]:
     if start_ms < 0 or duration_ms <= 0 or fps not in (60, 120):
         raise ValueError("时间窗口必须有效，帧率仅支持 60/120。")
-    count = max(1, (duration_ms * fps + 999) // 1000)
-    return tuple(start_ms + round(i * 1000 / fps) for i in range(count))
+    return tuple(start_ms + frame_timestamp(i, fps) for i in range(frame_count(duration_ms, fps)))
 
 
 def seek_order(timestamps: tuple[int, ...], *, seed: int = 20261114) -> tuple[int, ...]:

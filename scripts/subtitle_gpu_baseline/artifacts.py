@@ -73,11 +73,13 @@ def source_identity(root: Path, renderer: Path | None) -> dict:
     files = {}
     for tree in trees:
         for path in sorted((root / tree).rglob("*")):
-            if path.suffix in (".py", ".h", ".cpp") or path.name == "CMakeLists.txt":
+            if path.suffix in (".py", ".h", ".hpp", ".c", ".cc", ".cpp", ".m", ".mm",
+                               ".sksl", ".cmake", ".gn", ".gni", ".qrc") or path.name == "CMakeLists.txt":
                 files[path.relative_to(root).as_posix()] = digest(path.read_bytes())
     result = {"revision": git("rev-parse", "HEAD"), "worktree_status": git("status", "--porcelain"),
         "source_files": files, "source_tree_sha256": digest(json.dumps(files, sort_keys=True).encode()),
         "native_source_revision": git("log", "-1", "--format=%H", "--", "native/subtitle_renderer"),
+        "submodules": git("submodule", "status"),
         "platform": platform.platform(), "python": platform.python_version()}
     from PyQt6.QtCore import qVersion
     result["qt_runtime"] = qVersion()
