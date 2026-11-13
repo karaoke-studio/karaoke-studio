@@ -1,0 +1,2082 @@
+{
+  "schema": 1,
+  "models": {
+    "Style": {
+      "layout_semantics": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "font_family": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "font_family_latin": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "letter_spacing_px": {
+        "feature": "F02",
+        "render_metadata": true
+      },
+      "space_width_percent": {
+        "feature": "F02",
+        "render_metadata": true
+      },
+      "latin_font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_font_stretch_pct": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_stroke_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "latin_stroke2_enabled": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "latin_stroke2_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "allow_biting": {
+        "feature": "F02",
+        "render_metadata": true
+      },
+      "allow_inter_page_line_overlap": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "overlap_fallback_mode": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "affects_ruby_anchor": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "base_color": {
+        "feature": "F06",
+        "render_metadata": true
+      },
+      "fill_color": {
+        "feature": "F06",
+        "render_metadata": true
+      },
+      "fill_gradient_enabled": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "fill_gradient_start_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "fill_gradient_end_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "fill_gradient_angle_deg": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "stroke_color": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "stroke_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "stroke2_enabled": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "stroke2_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "decoration_kind": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "decoration_kind_before": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "decoration_before_sync": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_radius_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_before_radius_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_after_radius_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_concentration_level": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_before_concentration_level": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_color": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_offset_x": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_offset_y": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_before_offset_x": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_before_offset_y": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "karaoke_colors": {
+        "feature": "F06",
+        "render_metadata": true
+      },
+      "singer_style_overrides": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "custom_style_schemes": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "font_reference_height": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "lower_ruby_enabled": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "lower_ruby_follow_upper": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "lower_ruby_gap_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "lower_ruby_style": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "_lower_romaji_options": {
+        "feature": "F04",
+        "render_metadata": true,
+        "note": "派生的假名转写快照；不是新的用户样式字段"
+      },
+      "ruby_font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_family": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_family_latin": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_font_stretch_pct": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_follow_main": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_color": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_gap_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_interval_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_alignment": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_stroke_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_stroke2_enabled": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_stroke2_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_latin_stroke_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_latin_stroke2_enabled": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_latin_stroke2_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_decoration_kind": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_decoration_kind_before": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_radius_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_before_radius_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_after_radius_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_concentration_level": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_before_concentration_level": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_offset_x": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_offset_y": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_before_offset_x": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_before_offset_y": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_colors_follow_main": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_horizontal_gradient_with_main": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_karaoke_colors": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "viewport_align": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "viewport_offset_x": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "viewport_offset_y": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "viewport_scale_pct": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "viewport_rotation_deg": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "line_y_position": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_y_margin_px": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "dual_line_layout": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_horizontal_layout": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_gap_px": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_alignments": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_offsets_x": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "horizontal_margin_px": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "upper_line_left_margin_px": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "lower_line_right_margin_px": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "smart_horizontal": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "force_top_bottom_n3": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "layouts": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "default_layout_by_row_count": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "layout_reference_height": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "row1_align": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "row1_offset_x": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "row1_offset_y": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "row2_align": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "row2_offset_x": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "row2_offset_y": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "right_to_left": {
+        "feature": "F05",
+        "render_metadata": true
+      },
+      "vertical": {
+        "feature": "F05",
+        "render_metadata": true
+      },
+      "line_lead_in_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_tail_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "line_protect_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "entry_anim_protect_ms": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "exit_anim_protect_ms": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "timing_offset_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "ruby_main_progress_mode": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "line_lane_gap_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "section_gap_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "sync_entry": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "sync_ending": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "allow_entry_exit_animation_overlap": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "sync_each_page": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "auto_fill_section_time": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "section_ending_mode": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "entry_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "entry_lead_ms": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "exit_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "exit_fade_ms": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "karaoke_anim": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "reverse_karaoke_anim": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "scanline_enabled": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_reverse_enabled": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_forward_enabled": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_legacy_global": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_width_px": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_mode": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_color": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_role_name": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_brightness_pct": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_glow_px": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_effect": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_size_pct": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_count": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_speed_pct": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_color_mode": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_color": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_color2": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_role_name": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_effect_color_layers": {
+        "feature": "F20",
+        "render_metadata": true
+      },
+      "scanline_shape": {
+        "feature": "F17",
+        "render_metadata": true
+      },
+      "scanline_image_path": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "scanline_image_band_enabled": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "scanline_image_offset_x_px": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "scanline_image_offset_y_px": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "scanline_image_scale_pct": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "scanline_image_tint_strength_pct": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "scanline_image_color_layers": {
+        "feature": "F19",
+        "render_metadata": true
+      },
+      "zoom_pulse_curve_level": {
+        "feature": "F13",
+        "render_metadata": true
+      },
+      "zoom_pulse_peak_pct": {
+        "feature": "F13",
+        "render_metadata": true
+      },
+      "karaoke_stroke_flash": {
+        "feature": "F13",
+        "render_metadata": true
+      },
+      "entry_fx": {
+        "feature": "F10",
+        "render_metadata": true,
+        "note": "兼容持久字段；现有 burst 规划不消费，UI 已合入动画档"
+      },
+      "exit_fx": {
+        "feature": "F10",
+        "render_metadata": true,
+        "note": "兼容持久字段；现有 burst 规划不消费，UI 已合入动画档"
+      },
+      "sing_fx": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_size_em": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_count": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_speed_pct": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_color": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_color2": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_color_mode": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_role_name": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_particle_color_layers": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_size_em": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_speed_pct": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_color": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_color2": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_color_mode": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_role_name": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "anim_fx_color_layers": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "fx_apply_to_entry_exit": {
+        "feature": "F16",
+        "render_metadata": true
+      },
+      "section_edge_anim_enabled": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "section_edge_both_animations": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "section_head_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "section_tail_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "line_band_enabled": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_image": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_dynamic_notes_enabled": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_static_notes_enabled": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_fill_mode": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_cap_left_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_cap_right_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_mid_mode": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_pad_top_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_pad_bottom_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_pad_left_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_pad_right_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_include_ruby": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_offset_y_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_opacity_pct": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_tint": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_tint_strength_pct": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_line_color": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_clef_color": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_shadow_enabled": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_shadow_color": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_shadow_size_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_shadow_spread_pct": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_shadow_distance_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_shadow_angle_deg": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_stroke_enabled": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_stroke_color": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_stroke_size_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_stroke_position": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_glow_enabled": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_glow_color": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_glow_size_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_glow_spread_pct": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_glow_range_pct": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_edge_kind": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_edge_color": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_edge_size_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_edge_offset_x_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_edge_offset_y_px": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "line_band_edge_opacity_pct": {
+        "feature": "F24",
+        "render_metadata": true
+      },
+      "lit_enabled": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_enabled": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_appearance_mode": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_role_name": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_auto_size_ratio_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_appearance_mode": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_role_name": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_auto_size_ratio_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_auto_column_ratio_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_style": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_image_path": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_number": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_size": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_offset_x": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_offset_y": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_tracking": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_fill_color": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_stroke_color": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_stroke_width": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_stroke_soften": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_opacity_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_edge_brightness_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_shadow": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_time_offset_ms": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_waiting_time_ms": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_transition_mode": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_transition_ratio_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_transition_angle_deg": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "lit_transition_distance": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "signals_duration_ms": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_duration_ms": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_waiting_time_ms": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_time_offset_ms": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_stroke_width": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_opacity_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_size": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_offset_x": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_offset_y": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_column_width": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_column_count": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_column_spacing": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_align": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_ratio": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_fill_color": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_stroke_color": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_overlay_fill_color": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_overlay_stroke_color": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_flash_times": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_flash_duration_ratio": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "volume_transition_ratio_pct": {
+        "feature": "F23",
+        "render_metadata": true
+      },
+      "title_overlays": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "hidden_builtin_layout_ids": {
+        "feature": "F03",
+        "render_metadata": true,
+        "note": "布局编辑器显示状态，不直接改变字幕像素"
+      }
+    },
+    "SubtitleStyleScheme": {
+      "font_family": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "font_family_latin": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "letter_spacing_px": {
+        "feature": "F02",
+        "render_metadata": true
+      },
+      "space_width_percent": {
+        "feature": "F02",
+        "render_metadata": true
+      },
+      "latin_font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_font_stretch_pct": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_stroke_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "latin_stroke2_enabled": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "latin_stroke2_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "allow_biting": {
+        "feature": "F02",
+        "render_metadata": true
+      },
+      "font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "latin_italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_italic": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "affects_ruby_anchor": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "base_color": {
+        "feature": "F06",
+        "render_metadata": true
+      },
+      "fill_color": {
+        "feature": "F06",
+        "render_metadata": true
+      },
+      "fill_gradient_enabled": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "fill_gradient_start_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "fill_gradient_end_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "fill_gradient_angle_deg": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "stroke_color": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "stroke_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "stroke2_enabled": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "stroke2_width_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "decoration_kind": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "decoration_kind_before": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "decoration_before_sync": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_radius_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_before_radius_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_after_radius_px": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_concentration_level": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "glow_before_concentration_level": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_color": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_offset_x": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_offset_y": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_before_offset_x": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "shadow_before_offset_y": {
+        "feature": "F08",
+        "render_metadata": true
+      },
+      "ruby_font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_family": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_family_latin": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_font_size_px": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_font_weight": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_latin_font_stretch_pct": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_font_follow_main": {
+        "feature": "F01",
+        "render_metadata": true
+      },
+      "ruby_color": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_gap_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_stroke_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_stroke2_enabled": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_stroke2_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_latin_stroke_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_latin_stroke2_enabled": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_latin_stroke2_width_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_decoration_kind": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_decoration_kind_before": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_radius_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_before_radius_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_after_radius_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_concentration_level": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_glow_before_concentration_level": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_offset_x": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_offset_y": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_before_offset_x": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_shadow_before_offset_y": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "karaoke_colors": {
+        "feature": "F06",
+        "render_metadata": true
+      },
+      "ruby_colors_follow_main": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_horizontal_gradient_with_main": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "ruby_karaoke_colors": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "n3_font_inheritance": {
+        "feature": "F01",
+        "render_metadata": true
+      }
+    },
+    "TitleOverlay": {
+      "name": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "enabled": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "text_template": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "char_role_labels": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "guide_symbols": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "inline_guide_symbols": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "font_family": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "font_family_latin": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "font_size_px": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "font_weight": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "latin_font_stretch_pct": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "italic": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "letter_spacing_px": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "line_gap_px": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "fill": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "stroke": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "stroke_width_px": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "stroke2": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "stroke2_width_px": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "decoration_kind": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "glow_radius_px": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "glow_concentration_level": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "shadow": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "shadow_offset_x": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "shadow_offset_y": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "anchor": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "align": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "offset_x": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "offset_y": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "scheme_name": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "layout_index": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "show_mode": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "head_offset_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "duration_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "tail_offset_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "fade_in_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "fade_out_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "tail_duration_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "tail_fade_in_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "tail_fade_out_ms": {
+        "feature": "F22",
+        "render_metadata": true
+      },
+      "custom_windows": {
+        "feature": "F22",
+        "render_metadata": true
+      }
+    },
+    "PaintFill": {
+      "mode": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "start_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "end_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "gradient_stops": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "split_top_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "split_bottom_color": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "split_position_pct": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "split_stops": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "image_path": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "image_scale_pct": {
+        "feature": "F07",
+        "render_metadata": true
+      },
+      "gradient_path": {
+        "feature": "F07",
+        "render_metadata": false,
+        "note": "编辑器 HSV 路径；渲染消费已烘焙 stops，metadata render=False"
+      }
+    },
+    "TimingChar": {
+      "text": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "start_ms": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "pause_release_ms": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "role_label": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "source_span_start_ms": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "source_span_end_ms": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "source_span_index": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "source_span_count": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "explicit_start": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "explicit_end": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "checkpoint_ms": {
+        "feature": "F09",
+        "render_metadata": true
+      },
+      "vector_glyph": {
+        "feature": "F09",
+        "render_metadata": true
+      }
+    },
+    "TimingLine": {
+      "chars": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "end_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "singer_label": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "singer_id": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "is_blank": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "track_line_index": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "layout_index": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "break_before": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "display_start_override_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "display_end_override_ms": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "animation_override": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "guide_symbol": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "inline_guide_symbols": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "wipe_reverse": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "wipe_reverse_override": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "volume_head_override": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "lit_head_override": {
+        "feature": "F03",
+        "render_metadata": true
+      }
+    },
+    "TimingTrackMeta": {
+      "title": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "artist": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "album": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "tagging_by": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "silence_ms": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "offset_ms": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "head_offset_ms": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "custom": {
+        "feature": "F25",
+        "render_metadata": true
+      }
+    },
+    "GuideSymbol": {
+      "name": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "path_commands": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "units_per_em": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "advance_width": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "duration_ms": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "count": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "role_label": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "role_labels": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "replacement_prefix": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "replacement_anchor": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "kind": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_before_path": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_after_path": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_zoom_percent": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_fix_size": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_no_decor": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_force_wipe_decor": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_margin_left_px": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_margin_right_px": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "bitmap_margin_bottom_px": {
+        "feature": "F21",
+        "render_metadata": true
+      },
+      "prefix_timing": {
+        "feature": "F21",
+        "render_metadata": true
+      }
+    },
+    "RubyAnnotation": {
+      "kanji": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "reading": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "reading_part_ms": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "pos_start_ms": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "pos_end_ms": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "reading_parts": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "target_line_index": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "target_char_start": {
+        "feature": "F04",
+        "render_metadata": true
+      },
+      "target_char_end": {
+        "feature": "F04",
+        "render_metadata": true
+      }
+    },
+    "LineAnimationOverride": {
+      "entry_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "entry_duration_ms": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "exit_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "exit_duration_ms": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "karaoke_anim": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "sing_fx": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "scanline_enabled": {
+        "feature": "F10",
+        "render_metadata": true
+      },
+      "scanline_legacy": {
+        "feature": "F10",
+        "render_metadata": true
+      }
+    },
+    "TrackPage": {
+      "line_count": {
+        "feature": "F03",
+        "render_metadata": true
+      },
+      "layout_id": {
+        "feature": "F03",
+        "render_metadata": true
+      }
+    },
+    "TrackPagePlan": {
+      "sections": {
+        "feature": "F03",
+        "render_metadata": true
+      }
+    },
+    "TrackSection": {
+      "pages": {
+        "feature": "F03",
+        "render_metadata": true
+      }
+    },
+    "TrackDisplayTiming": {
+      "follow_main": {
+        "feature": "F25",
+        "render_metadata": true
+      },
+      "overrides": {
+        "feature": "F25",
+        "render_metadata": true
+      }
+    }
+  },
+  "variants": {
+    "EntryAnimation": [
+      "none",
+      "fade",
+      "slide_in",
+      "rise",
+      "char_fade",
+      "char_drip",
+      "spin_flip",
+      "utopia",
+      "noise",
+      "tracking_in",
+      "wave_in",
+      "stretch_in",
+      "glow_in",
+      "assemble_in",
+      "sparkle",
+      "ripple",
+      "note",
+      "heart",
+      "petal",
+      "snow",
+      "snow_solid",
+      "flame",
+      "feather",
+      "lightning"
+    ],
+    "ExitAnimation": [
+      "none",
+      "fade",
+      "slide_out",
+      "rise",
+      "char_fade",
+      "char_drip",
+      "spin_flip",
+      "utopia",
+      "noise",
+      "scatter_out",
+      "converge_out",
+      "stretch_out",
+      "glow_out",
+      "dissolve_out",
+      "sparkle",
+      "ripple",
+      "note",
+      "heart",
+      "petal",
+      "snow",
+      "snow_solid",
+      "flame",
+      "feather",
+      "lightning"
+    ],
+    "KaraokeAnimation": [
+      "inherit",
+      "none",
+      "no_wipe",
+      "utopia",
+      "scanline",
+      "utopia_scanline",
+      "zoom_pulse",
+      "zoom_pulse_scanline"
+    ],
+    "SingFx": [
+      "none",
+      "twinkle",
+      "twinkle_classic",
+      "note",
+      "heart",
+      "ripple",
+      "petal",
+      "snow",
+      "snow_solid",
+      "flame",
+      "feather",
+      "lightning"
+    ],
+    "LineSingFx": [
+      "inherit",
+      "none",
+      "twinkle",
+      "twinkle_classic",
+      "note",
+      "heart",
+      "ripple",
+      "petal",
+      "snow",
+      "snow_solid",
+      "flame",
+      "feather",
+      "lightning"
+    ],
+    "ColorFillMode": [
+      "solid",
+      "gradient_horizontal",
+      "gradient_vertical",
+      "split_vertical",
+      "image"
+    ]
+  }
+}
