@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 import shutil
 from typing import get_args
+from krok_helper.subtitle_render.domain.models import ScanlineEffect
 
 from krok_helper.subtitle_render.domain.timing import (
     EntryAnimation, ExitAnimation, KaraokeAnimation, SingFx, LineAnimationOverride,
@@ -39,20 +40,24 @@ def effect_cases(track, base, asset_dir: Path) -> list[BaselineCase]:
             replace(base, karaoke_anim="utopia_scanline", scanline_enabled=True,
                 scanline_shape=shape, scanline_image_path=image,
                 scanline_image_color_layers="stroke,decor"), (1300, 1500, 1580, 2600, 3700)))
-    for mode in ("color", "brighten", "role"):
+    for mode in ("color", "brighten", "follow_before", "follow_after", "role"):
         cases.append(BaselineCase(f"scanline_mode_{mode}", ("F17",), track,
-            replace(base, karaoke_anim="scanline", scanline_mode=mode), (1500, 2600)))
+            replace(base, karaoke_anim="scanline", scanline_mode=mode,
+                scanline_role_name="__global__"), (1500, 2600)))
+    for effect in get_args(ScanlineEffect):
+        cases.append(BaselineCase(f"scanline_particles_{effect}", ("F20",), track,
+            replace(base, karaoke_anim="scanline", scanline_effect=effect), (1300, 1750, 2600, 4700)))
     for speed in (50, 200):
         cases.append(BaselineCase(f"particles_speed_{speed}", ("F16", "F20"), track,
             replace(base, entry_anim="petal", exit_anim="note", sing_fx="flame",
                 anim_fx_speed_pct=speed, fx_particle_speed_pct=speed,
-                karaoke_anim="utopia_scanline", scanline_effect="sparkle"),
+                karaoke_anim="utopia_scanline", scanline_effect="star"),
             (100, 600, 1500, 2600, 5300, 5900)))
     combined = replace(base, entry_anim="petal", exit_anim="note", sing_fx="flame",
         karaoke_anim="utopia_scanline", scanline_enabled=True, scanline_shape="image",
         scanline_image_path=str(gif.resolve()), line_band_enabled=True,
         line_band_image="preset:staff_scroll", fx_particle_count=36)
-    cases.append(BaselineCase("combined_effects", ("F04", "F12", "F15", "F16", "F19", "F20", "F24"),
+    cases.append(BaselineCase("combined_effects", ("F04", "F12", "F15", "F16", "F19", "F24"),
         track, combined, (100, 400, 1500, 2600, 3700, 5300, 5900)))
     overridden = replace(track, lines=[replace(track.lines[0], animation_override=LineAnimationOverride(
         entry_anim="wave_in", exit_anim="scatter_out", entry_duration_ms=600, exit_duration_ms=600))])

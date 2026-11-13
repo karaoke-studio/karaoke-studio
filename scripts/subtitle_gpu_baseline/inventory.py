@@ -12,6 +12,7 @@ import re
 from typing import get_args
 
 from krok_helper.subtitle_render.domain import models, timing, paint
+from .policy import COMPARISON_BUDGETS, budget_categories
 
 ROOT = Path(__file__).resolve().parents[2]
 MODELS = (models.Style, models.SubtitleStyleScheme, models.TitleOverlay, paint.PaintFill,
@@ -21,6 +22,8 @@ MODELS = (models.Style, models.SubtitleStyleScheme, models.TitleOverlay, paint.P
 VARIANTS = {name: tuple(get_args(getattr(timing, name))) for name in (
     "EntryAnimation", "ExitAnimation", "KaraokeAnimation", "SingFx", "LineSingFx")}
 VARIANTS["ColorFillMode"] = tuple(get_args(paint.ColorFillMode))
+for _name in ("ScanlineEffect", "ScanlineShape", "LitStyle", "LitAppearanceMode", "VolumeAppearanceMode"):
+    VARIANTS[_name] = tuple(get_args(getattr(models, _name)))
 
 FEATURE_LABELS = (
     "字体与 face", "普通横排", "分页/lane/网格", "上下 ruby", "竖排/RTL",
@@ -136,7 +139,8 @@ def contract() -> dict:
             **({"note": FIELD_NOTES[f"{model.__name__}.{field.name}"]}
                if f"{model.__name__}.{field.name}" in FIELD_NOTES else {}),
         } for field in fields(model)} for model in MODELS},
-        "variants": {name: list(values) for name, values in VARIANTS.items()}}
+        "variants": {name: list(values) for name, values in VARIANTS.items()},
+        "comparison_budgets": COMPARISON_BUDGETS}
 
 
 def reference_sites() -> dict[str, list[str]]:
@@ -157,8 +161,9 @@ def reference_sites() -> dict[str, list[str]]:
 def inventory(cases) -> dict:
     base = contract()
     sites = reference_sites()
-    for model in MODELS:
-        base["models"][model.__name__]["__source__"] = str(Path(inspect.getfile(model)).relative_to(ROOT).as_posix())
+    base["model_sources"] = {model.__name__: Path(inspect.getfile(model)).relative_to(ROOT).as_posix()
+                             for model in MODELS}
+    base["case_budget_categories"] = {case.case_id: budget_categories(case) for case in cases}
     base["field_reference_sites"] = sites
     base["features"] = {f"F{i:02d}": {"label": label,
         "overlay_cases": [case.case_id for case in cases if f"F{i:02d}" in case.features],

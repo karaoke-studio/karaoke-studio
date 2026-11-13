@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 import sys
 
@@ -21,9 +22,9 @@ def main() -> int:
     parser.add_argument("--sequence-seconds", type=float, default=0)
     args = parser.parse_args()
     output = args.output_dir.resolve()
-    if output.exists() and any(output.iterdir()):
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
         parser.error("输出目录必须为空，禁止覆盖已有参考基线。")
-    if args.sequence_seconds < 0 or (args.sequence_seconds and len(args.case or []) != 1):
+    if not math.isfinite(args.sequence_seconds) or args.sequence_seconds < 0 or (args.sequence_seconds and len(args.case or []) != 1):
         parser.error("连续片段时长必须非负，并且必须明确指定一个场景。")
     if not args.inventory_only and not args.renderer.is_file():
         parser.error("未找到用于生成基线的 native GPU renderer。")
@@ -32,7 +33,7 @@ def main() -> int:
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     # Make font discovery independent of the offscreen plugin and test order.
-    for name in ("meiryo.ttc", "times.ttf", "arial.ttf", "seguisym.ttf"):
+    for name in ("meiryo.ttc", "times.ttf", "arial.ttf", "seguisym.ttf", "bahnschrift.ttf", "seguiemj.ttf"):
         path = Path("C:/Windows/Fonts") / name
         if path.is_file() and QFontDatabase.addApplicationFont(str(path)) < 0:
             raise RuntimeError(f"无法注册基线字体：{path}")

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import get_args
 
 from krok_helper.subtitle_render.domain.models import (
-    GuideSymbol, KaraokeColors, PaintFill, RubyAnnotation, Style,
-    SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack,
+    GuideSymbol, LitStyle, LitAppearanceMode, VolumeAppearanceMode, PaintFill,
+    RubyAnnotation, Style, TimingChar, TimingLine, TimingTrack,
 )
 from scripts.subtitle_render_corpus import (
     _base_style, _colors, _ordinary_scenario, _tactic_scenario,
@@ -78,6 +79,16 @@ def build_cases(asset_dir: Path, *, include_real: bool = False) -> list[Baseline
         cases.append(BaselineCase(f"paint_{mode}", ("F07",), track,
             replace(base, karaoke_colors=colors), (1500, 2600)))
 
+    for shape in get_args(LitStyle):
+        cases.append(BaselineCase(f"lamp_shape_{shape}", ("F23",), track,
+            replace(base, lit_enabled=True, lit_style=shape, volume_enabled=shape == "volume",
+                lit_image_path=str(texture.resolve())), (600, 1500, 2600)))
+    for channel, annotation in (("lit", LitAppearanceMode), ("volume", VolumeAppearanceMode)):
+        for mode in get_args(annotation):
+            cases.append(BaselineCase(f"{channel}_appearance_{mode}", ("F23",), track,
+                replace(base, **{f"{channel}_enabled": True, f"{channel}_appearance_mode": mode,
+                    f"{channel}_role_name": "__global__"}), (600, 1500, 2600)))
+
     for glyph_kind in ("vector", "bitmap"):
         guide = GuideSymbol(kind=glyph_kind,
             path_commands=(("M", 0, -800), ("L", 800, -800), ("L", 400, 0), ("Z",)),
@@ -90,6 +101,15 @@ def build_cases(asset_dir: Path, *, include_real: bool = False) -> list[Baseline
         rubies=[RubyAnnotation(kanji="歌声", reading="うたごえ", reading_parts=["うた", "", "ごえ"],
             reading_part_ms=[2200, 2800], pos_start_ms=1200, pos_end_ms=4500)])
     cases.append(BaselineCase("ruby_pause_checkpoint", ("F04", "F09"), checkpoint, base, (1700, 2400, 3200)))
+
+    graphemes = replace(track, lines=[replace(track.lines[0], chars=[
+        TimingChar(text, 1200 + i * 550) for i, text in enumerate(("A\u0301", "e\u0308", "가", "한", "😀", "😄"))])], rubies=[])
+    cases.append(BaselineCase("grapheme_fallback", ("F01", "F02"), graphemes, base, (1500, 2600, 4400)))
+    variable = replace(track, lines=[replace(track.lines[0], chars=[
+        TimingChar(text, 1200 + i * 550) for i, text in enumerate("日Ab12語")])], rubies=[])
+    cases.append(BaselineCase("font_variable_latin", ("F01",), variable,
+        replace(base, font_family_latin="Bahnschrift", latin_font_weight=700,
+            latin_font_stretch_pct=140, latin_italic=True), (1500, 2600, 4400)))
 
     if include_real:
         original = _real_dark_spiral_scenario()

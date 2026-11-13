@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "status": "observed_not_waived",
+  "reference_backend": "direct2d",
+  "reference_revision": "a6ed9ac7be5b183d80a95823675bbb7091379f9a",
+  "renderer_sha256": "8e8ef0360fda82a8a5c6a1f71f005a62118709892ac0416fefce00bc5dad2d30",
+  "adapter": "NVIDIA GeForce RTX 3070 Ti Laptop GPU",
+  "qt_runtime": "6.11.0",
+  "classification": "Existing D2D same-path byte differences; no Skia implementation exists yet; root cause not established.",
+  "gate_policy": "Strict capture still fails; entries do not relax same-backend or cross-backend acceptance.",
+  "observations": [
+    {
+      "case_id": "volume",
+      "t_ms": 4400,
+      "difference": {
+        "changed_bbox": [
+          699,
+          577,
+          703,
+          580
+        ],
+        "changed_channel_mae": 0.5,
+        "changed_pixels": 6,
+        "max_channel_delta": 1
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "case_id": "volume",
+      "t_ms": 1500,
+      "difference": {
+        "changed_bbox": [
+          671,
+          582,
+          672,
+          583
+        ],
+        "changed_channel_mae": 0.25,
+        "changed_pixels": 1,
+        "max_channel_delta": 1
+      },
+      "expected_path": true,
+      "actual_path": true
+    },
+    {
+      "case_id": "combined_effects",
+      "t_ms": 3700,
+      "difference": {
+        "changed_bbox": [
+          1109,
+          580,
+          1110,
+          581
+        ],
+        "changed_channel_mae": 1.5,
+        "changed_pixels": 1,
+        "max_channel_delta": 2
+      },
+      "expected_path": true,
+      "actual_path": true
+    }
+  ]
+}

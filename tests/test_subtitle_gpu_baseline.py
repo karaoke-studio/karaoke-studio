@@ -30,7 +30,9 @@ def test_cases_cover_every_declared_animation_and_paint_variant(cases):
     variants = contract()["variants"]
     for family, prefix in (("EntryAnimation", "entry_"), ("ExitAnimation", "exit_"),
                            ("KaraokeAnimation", "karaoke_"), ("SingFx", "sing_"),
-                           ("ColorFillMode", "paint_")):
+                           ("ColorFillMode", "paint_"), ("ScanlineEffect", "scanline_particles_"),
+                           ("LitStyle", "lamp_shape_"), ("LitAppearanceMode", "lit_appearance_"),
+                           ("VolumeAppearanceMode", "volume_appearance_")):
         assert {prefix + name for name in variants[family]} <= identifiers
     assert {f"F{i:02d}" for i in range(1, 26)} <= {f for c in cases for f in c.features}
     for case in cases:
@@ -166,3 +168,33 @@ def test_capture_refuses_to_freeze_unfinished_resource_publication():
     renderer = SimpleNamespace(gpu_diagnostics=lambda: {"realization_prewarm_complete": False})
     with pytest.raises(TimeoutError):
         wait_for_prewarm(renderer, lambda: None, timeout_s=0)
+
+
+def test_comparison_budgets_never_relax_timing_or_same_gpu_determinism(cases):
+    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS, budget_categories
+    assert COMPARISON_BUDGETS["same_backend"]["byte_identical"] is True
+    assert COMPARISON_BUDGETS["semantic"]["time_ms_exact"] is True
+    assert COMPARISON_BUDGETS["low_alpha"]["never_ignore_missing_positive_frame"] is True
+    categories = set(COMPARISON_BUDGETS["image_categories"])
+    assert all(set(budget_categories(case)) <= categories for case in cases)
+
+
+def test_scanline_particle_cases_reach_actual_burst_planning(cases):
+    from scripts.subtitle_gpu_baseline.inventory import VARIANTS
+    from krok_helper.subtitle_render.engine.render.effects.particles import plan_line_bursts
+    selected = {case.case_id: case for case in cases}
+    for effect in VARIANTS["ScanlineEffect"]:
+        if effect == "none":
+            continue
+        case = selected[f"scanline_particles_{effect}"]
+        bursts = plan_line_bursts(case.style, 0, 300, 5500, 4500,
+                                 [(1200 + i * 550, 1750 + i * 550) for i in range(6)])
+        assert any(b["kind"] == "scanline" for b in bursts), effect
+
+
+def test_observed_d2d_differences_are_evidence_not_threshold_waivers():
+    record = json.loads((ROOT / "tests/data/subtitle_gpu_baseline_known_differences.json").read_text(encoding="utf8"))
+    assert record["status"] == "observed_not_waived"
+    assert record["reference_backend"] == "direct2d"
+    assert record["observations"]
+    assert all(m["expected_path"] == m["actual_path"] for m in record["observations"])
