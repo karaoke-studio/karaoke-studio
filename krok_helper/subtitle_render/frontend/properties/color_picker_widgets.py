@@ -28,6 +28,19 @@ def _draw_handle(painter: QPainter, center: QPointF) -> None:
     painter.drawEllipse(center, 6, 6)
 
 
+def _draw_slider_handle(painter: QPainter, center: QPointF) -> None:
+    """Slim rounded thumb with a white face and contrasting dark edge."""
+    rect = QRectF(center.x() - 2.5, center.y() - 10, 5, 20)
+    painter.save()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(0, 0, 0, 35))
+    painter.drawRoundedRect(rect.adjusted(-.5, 0, .5, 1.5), 2.5, 2.5)
+    painter.setPen(QPen(QColor("#46505F"), 1.1))
+    painter.setBrush(QColor("#FFFFFF"))
+    painter.drawRoundedRect(rect, 2, 2)
+    painter.restore()
+
+
 class HueSaturationPlane(QWidget):
     """N3-style hue (horizontal) / saturation (vertical) plane at full value."""
 
@@ -351,7 +364,7 @@ class ColorChannelSlider(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.surface_rect()
         path = QPainterPath()
-        path.addRoundedRect(rect, 6, 6)
+        path.addRoundedRect(rect, 3, 3)
         painter.setClipPath(path)
         start, end = QColor(self._color), QColor(self._color)
         end.setAlpha(255)
@@ -379,7 +392,7 @@ class ColorChannelSlider(QWidget):
         painter.setClipping(False)
         painter.setPen(QPen(QColor(palette().card_border), 1))
         painter.drawPath(path)
-        _draw_handle(painter, QPointF(rect.left() + self._value / self._maximum * rect.width(), rect.center().y()))
+        _draw_slider_handle(painter, QPointF(rect.left() + self._value / self._maximum * rect.width(), rect.center().y()))
         painter.end()
 
 
