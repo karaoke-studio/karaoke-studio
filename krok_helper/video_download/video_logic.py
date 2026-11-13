@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from .download_task import (
@@ -12,6 +13,14 @@ from .download_task import (
 
 
 ExistingTaskDecision = Literal["update", "keep"]
+
+
+def normalize_video_url(value: str) -> str:
+    """Expand a bare BV ID while preserving its case-sensitive payload."""
+    value = value.strip()
+    if re.fullmatch(r"(?i:BV)[0-9A-Za-z]{10}", value):
+        return f"https://www.bilibili.com/video/BV{value[2:]}/"
+    return value
 
 
 def video_identity_keys(*urls: str) -> set[str]:

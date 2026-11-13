@@ -40,6 +40,7 @@ from .download_task import (
     VideoInfo,
 )
 from .format_parser import FormatParser
+from .video_logic import normalize_video_url
 
 
 WINDOWS_INVALID_FILENAME_PATTERN = re.compile(r'[\\/:*?"<>|]+')
@@ -336,6 +337,7 @@ class YtDlpService:
         return infos[0]
 
     def extract_infos(self, url: str, cookie_file: str | None = None) -> list[VideoInfo]:
+        url = normalize_video_url(url)
         source = self.detect_source(url)
         raw_info, extractor_args_hint = self._extract_info_with_best_backend(
             url,
@@ -1195,7 +1197,7 @@ class YtDlpService:
         return next(reversed(meaningful_lines), "yt-dlp download failed")
 
     def detect_source(self, url: str, extractor_key: str | None = None) -> str:
-        normalized = url.lower()
+        normalized = normalize_video_url(url).lower()
         extractor_key = (extractor_key or "").lower()
         if "bilibili" in normalized or "bili" in extractor_key:
             return SOURCE_BILIBILI

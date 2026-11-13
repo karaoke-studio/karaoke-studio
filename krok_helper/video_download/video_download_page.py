@@ -845,7 +845,7 @@ class VideoDownloadPage(QWidget):
         input_title_row = QHBoxLayout()
         input_title_row.setContentsMargins(0, 0, 0, 0)
         input_title_row.setSpacing(8)
-        input_title_row.addWidget(self._create_panel_title("视频链接输入"), 1)
+        input_title_row.addWidget(self._create_panel_title("视频链接 / BV 号输入"), 1)
         input_collapse_button = self._create_panel_collapse_button("input")
         input_title_row.addWidget(input_collapse_button, 0)
         input_layout.addLayout(input_title_row)
@@ -854,7 +854,7 @@ class VideoDownloadPage(QWidget):
         input_row.setContentsMargins(0, 0, 0, 0)
         input_row.setSpacing(12)
         self.link_input = PlainTextEdit()
-        self.link_input.setPlaceholderText("粘贴 YouTube 或 Bilibili 视频链接，每行一个链接")
+        self.link_input.setPlaceholderText("输入 YouTube / Bilibili 视频链接或 BV 号，每行一个")
         self.link_input.setMinimumHeight(76)
         self.link_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         input_row.addWidget(self.link_input, 1)
@@ -1197,7 +1197,7 @@ class VideoDownloadPage(QWidget):
         icon.setStyleSheet(
             "background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 48px; color: #cbd5e1; font-size: 34pt;"
         )
-        title = BodyLabel("粘贴链接并点击解析")
+        title = BodyLabel("输入链接或 BV 号并点击解析")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("color: #334155; font-size: 13pt; font-weight: 700;")
         hint = CaptionLabel("解析后将在这里显示视频信息与每个视频独立的下载设置")
@@ -2152,7 +2152,7 @@ class VideoDownloadPage(QWidget):
 
         urls = [line.strip() for line in self.link_input.toPlainText().splitlines() if line.strip()]
         if not urls:
-            self.parse_status_label.setText("请输入至少一个视频链接。")
+            self.parse_status_label.setText("请输入至少一个视频链接或 BV 号。")
             return
 
         cookie_files_by_source = {
