@@ -9,7 +9,7 @@ from scripts.subtitle_gpu_baseline.cases import build_cases
 from scripts.subtitle_gpu_baseline.inventory import contract, inventory, FEATURE_SOURCES, ROOT
 from scripts.subtitle_gpu_baseline.model import sequence_times, seek_order
 from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
-from scripts.subtitle_gpu_baseline.capture import require_hardware, RecordingRenderer
+from scripts.subtitle_gpu_baseline.capture import require_hardware, RecordingRenderer, wait_for_prewarm
 from scripts.subtitle_gpu_baseline.artifacts import ResourceStore, canonical_bytes, save_frame, pixel_difference
 
 
@@ -131,3 +131,38 @@ def test_difference_reports_local_change_instead_of_diluting_transparent_backgro
     assert result["changed_bbox"] == [3, 2, 4, 3]
     assert result["max_channel_delta"] == 70
     assert result["changed_channel_mae"] == 17.5
+
+
+def test_real_fixture_selects_nonempty_line_and_its_actual_time_window(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts import subtitle_render_corpus as corpus
+    from krok_helper.subtitle_render.domain.models import Style, TimingTrack, TimingLine, TimingChar, style_to_dict
+    directory = tmp_path / "songs/Dark spiral journey"
+    directory.mkdir(parents=True)
+    (directory / "1.n3proj").touch()
+    (directory / "Dark spiral journey.lrc").touch()
+    monkeypatch.setattr(corpus, "REPO_ROOT", tmp_path / "repo")
+    monkeypatch.setattr(corpus, "load_n3proj", lambda path: SimpleNamespace(project_data={"style": style_to_dict(Style())}))
+    track = TimingTrack(lines=[TimingLine(chars=[], is_blank=True) for _ in range(5)] + [
+        TimingLine(chars=[TimingChar("A", 12000)], end_ms=15000)])
+    monkeypatch.setattr(corpus, "load_nicokara_lrc", lambda path: track)
+    result = corpus._real_dark_spiral_scenario()
+    assert result.track.lines[0].track_line_index == 5
+    assert all(12000 < t < 15000 for t in result.timestamps_ms)
+
+
+def test_capture_waits_for_actual_resource_publication(monkeypatch):
+    from types import SimpleNamespace
+    polls = iter([{"realization_prewarm_complete": False}, {"realization_prewarm_complete": True}])
+    renders = []
+    monkeypatch.setattr("scripts.subtitle_gpu_baseline.capture.time.sleep", lambda seconds: None)
+    result = wait_for_prewarm(SimpleNamespace(gpu_diagnostics=lambda: next(polls)), lambda: renders.append(1))
+    assert result["realization_prewarm_complete"]
+    assert len(renders) == 2
+
+
+def test_capture_refuses_to_freeze_unfinished_resource_publication():
+    from types import SimpleNamespace
+    renderer = SimpleNamespace(gpu_diagnostics=lambda: {"realization_prewarm_complete": False})
+    with pytest.raises(TimeoutError):
+        wait_for_prewarm(renderer, lambda: None, timeout_s=0)

@@ -19,6 +19,26 @@ def require_hardware(caps: dict) -> None:
         raise RuntimeError(f"基线要求真实 D2D GPU，拒绝软件设备或 fallback：{caps}")
 
 
+def wait_for_prewarm(renderer, render_first, *, timeout_s: float = 90) -> dict:
+    """The production wait flag does not imply publication is already complete.
+
+    Render once to release deferred publication, then inspect actual diagnostics
+    instead of assuming one warm-up pass stabilized raw/baked path selection.
+    """
+    deadline = time.monotonic() + timeout_s
+    render_first()
+    while True:
+        diagnostics = renderer.gpu_diagnostics()
+        if (not diagnostics.get("realization_enabled", True)
+                or not diagnostics.get("realization_supported", True)
+                or diagnostics.get("realization_prewarm_complete") is True):
+            return diagnostics
+        if time.monotonic() >= deadline:
+            raise TimeoutError("GPU realization 预热/发布未在限定时间内完成，不能冻结不稳定参考帧。")
+        render_first()
+        time.sleep(0.01)
+
+
 class RecordingRenderer(NativeRendererProcess):
     """One protocol interception point records exactly what production sends.
 
@@ -95,6 +115,9 @@ def capture_cases(*, root: Path, output: Path, executable: Path, cases,
 
                 # Stabilize resource creation before recording; capture every
                 # returned path flag so raw/baked changes cannot be hidden.
+                warm_started = time.perf_counter()
+                record["prewarm_diagnostics"] = wait_for_prewarm(renderer, lambda: render(times[0], 0))
+                record["prewarm_wait_ms"] = (time.perf_counter() - warm_started) * 1000
                 for index, t in enumerate(times):
                     render(t, index)
                 expected = {}

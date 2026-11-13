@@ -310,9 +310,13 @@ def _real_dark_spiral_scenario() -> CorpusScenario | None:
         return None
     imported = load_n3proj(project_path)
     source_track = load_nicokara_lrc(lrc_path)
-    if len(source_track.lines) <= 3:
+    candidates = [(index, item) for index, item in enumerate(source_track.lines)
+                  if item.chars and not item.is_blank and item.end_ms is not None
+                  and item.end_ms > item.chars[0].start_ms]
+    if not candidates:
         return None
-    line = replace(source_track.lines[3], layout_index=0)
+    source_index, source_line = candidates[min(3, len(candidates) - 1)]
+    line = replace(source_line, layout_index=0, track_line_index=source_index)
     start_ms = line.chars[0].start_ms
     end_ms = line.end_ms or start_ms
     track = TimingTrack(
@@ -354,7 +358,8 @@ def _real_dark_spiral_scenario() -> CorpusScenario | None:
         name="dark_spiral_real_n3_common_slice",
         track=track,
         style=style,
-        timestamps_ms=(24_300, 24_900, 25_500),
+        timestamps_ms=tuple(start_ms + round((end_ms - start_ms) * ratio)
+                            for ratio in (0.2, 0.5, 0.8)),
         source=str(project_path),
         min_alpha_iou=0.38,
         max_bbox_edge_delta_px=20,
