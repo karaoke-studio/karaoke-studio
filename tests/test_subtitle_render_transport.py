@@ -4484,7 +4484,8 @@ def test_preview_graphics_backend_label_follows_gpu_failure_and_recovery(
         qapp.processEvents()
 
 
-def test_preview_player_window_backend_indicator(qapp, monkeypatch):
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_preview_player_window_backend_indicator(qapp, monkeypatch, confirmed):
     """预览窗口标题栏的实际渲染后端指示：位于标题与预览质量之间并联动。"""
     from PyQt6.QtWidgets import QWidget
 
@@ -4492,6 +4493,18 @@ def test_preview_player_window_backend_indicator(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend.preview.player_window import (
         PreviewPlayerWindow,
     )
+    from krok_helper.subtitle_render.frontend.dialogs import fluent_dialogs as fd
+
+    confirmations = []
+    def confirm(dialog):
+        assert dialog.isWindow()
+        assert not dialog.isModal()
+        assert dialog.windowModality() == Qt.WindowModality.NonModal
+        assert dialog.yesButton.text() == "是"
+        assert dialog.cancelButton.text() == "否"
+        confirmations.append(dialog.contentLabel.text())
+        return int(confirmed)
+    monkeypatch.setattr(fd.FluentMessageDialog, "exec", confirm)
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
     monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
@@ -4506,9 +4519,18 @@ def test_preview_player_window_backend_indicator(qapp, monkeypatch):
         assert title_idx < backend_idx < quality_idx
 
         # offscreen 下画布是 Painter 异步渲染器 → 初始即 CPU。
-        assert window._backend_label.text() == "CPU渲染中"
+        assert window._backend_label.text() == "CPU渲染中\n建议开启 GPU 渲染"
+        assert "先关闭再开启" in window._backend_label.toolTip()
+        requests = []
+        window.gpuPreviewRequested.connect(lambda: requests.append(True))
+        window._backend_label.click()
+        assert confirmations == ["是否尝试开启GPU渲染？"]
+        assert requests == ([True] if confirmed else [])
+        assert window._backend_label.isEnabled()
         window._set_render_backend_label("GPU")
         assert window._backend_label.text() == "GPU渲染中"
+        window._backend_label.click()
+        assert len(confirmations) == 1
 
         window._collapse_window()
         assert window._backend_label.isHidden()

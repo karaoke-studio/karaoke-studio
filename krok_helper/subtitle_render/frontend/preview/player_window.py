@@ -29,6 +29,7 @@ from krok_helper.subtitle_render.frontend.preview.preview_view import (
     TransportBar,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import themed
+from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import FluentMessageDialog
 
 def fit_size_to_aspect(box: QSize, aspect_ratio: float) -> QSize:
     """把 ``box`` 缩到给定宽高比的最大内接尺寸（用于跟随画布形状的下限/建议值）。"""
@@ -162,6 +163,7 @@ class PreviewPlayerWindow(QWidget):
     """独立预览窗口：只承载视频预览画面，形状跟随当前输出画布。"""
 
     userClosed = Signal()
+    gpuPreviewRequested = Signal()
     _TITLE_BAR_HEIGHT = 42
     _MIN_VIDEO_BOX = QSize(426, 240)
     _COLLAPSED_SIZE = QSize(220, 44)
@@ -178,6 +180,7 @@ class PreviewPlayerWindow(QWidget):
         # 视频区唤出去重：记录最近一次触发 show_controls 的 move 全局坐标。
         self._last_control_move_pos: Optional[QPoint] = None
         self._collapsed = False
+        self._gpu_preview_confirmation_open = False
         self._output_aspect = 16 / 9
         self._media_title = "字幕视频预览"
         self.setWindowTitle("字幕视频预览")
@@ -199,6 +202,7 @@ class PreviewPlayerWindow(QWidget):
         top_layout.setSpacing(8)
         self._title_label = QLabel("字幕视频预览", self._top_controls)
         self._title_label.setObjectName("PreviewTitleLabel")
+        self._title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         top_layout.addWidget(self._title_label, 1)
 
         self._transport_bar = TransportBar(self)
@@ -216,14 +220,9 @@ class PreviewPlayerWindow(QWidget):
         )
         # 实际渲染后端指示（GPU / CPU）：跟随最近一次真实出帧后端翻转，
         # 而不是用户/环境选择的渲染器——GPU 故障或能力回退时如实际显示 CPU。
-        self._backend_label = QLabel("GPU渲染中", self._top_controls)
+        self._backend_label = QPushButton(self._top_controls)
         self._backend_label.setObjectName("PreviewBackendLabel")
-        self._backend_label.setToolTip(
-            "当前实际渲染后端：GPU 渲染器故障或工程包含暂不支持的功能时，"
-            "预览自动回退 CPU（Painter）绘制"
-        )
-        self._backend_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._backend_label.setFixedSize(76, 28)
+        self._backend_label.clicked.connect(self._confirm_gpu_preview)
         top_layout.addWidget(self._backend_label)
         top_layout.addWidget(self._transport_bar._preview_quality_label)
         top_layout.addWidget(self._transport_bar._preview_quality_combo)
@@ -300,12 +299,26 @@ class PreviewPlayerWindow(QWidget):
                 #PreviewTopControls QPushButton:pressed {
                     background: rgba(255, 255, 255, 72);
                 }
-                #PreviewTopControls QLabel#PreviewBackendLabel {
+                #PreviewTopControls QPushButton#PreviewBackendLabel {
                     color: rgba(255, 255, 255, 210);
                     border: 1px solid rgba(255, 255, 255, 36);
                     border-radius: 4px;
                     font-size: 9pt;
                     font-family: "Microsoft YaHei UI";
+                }
+                #PreviewTopControls QPushButton#PreviewBackendLabel[renderBackend="CPU"] {
+                    color: #653600;
+                    background: #FFE2A8;
+                    border: 1px solid #E4A33C;
+                    font-size: 8.5pt;
+                    font-weight: 600;
+                }
+                #PreviewTopControls QPushButton#PreviewBackendLabel[renderBackend="CPU"]:hover {
+                    background: #FFD58A;
+                    border-color: #F0B34A;
+                }
+                #PreviewTopControls QPushButton#PreviewBackendLabel[renderBackend="CPU"]:pressed {
+                    background: #F5C06A;
                 }
                 #PreviewTopControls QComboBox#PreviewQualityCombo {
                     background: transparent;
@@ -509,8 +522,63 @@ class PreviewPlayerWindow(QWidget):
             self._title_label.setText(self._media_title)
 
     def _set_render_backend_label(self, label: str) -> None:
-        """刷新标题栏的实际渲染后端指示（GPU渲染中 / CPU渲染中，来自画布真实出帧状态）。"""
-        self._backend_label.setText(f"{label}渲染中")
+        """跟随真实出帧后端更新指示，并突出 CPU 状态及 GPU 恢复建议。"""
+        is_cpu = label == "CPU"
+        self._backend_label.setEnabled(is_cpu and not self._gpu_preview_confirmation_open)
+        self._backend_label.setCursor(
+            Qt.CursorShape.PointingHandCursor if is_cpu else Qt.CursorShape.ArrowCursor
+        )
+        self._backend_label.setFocusPolicy(
+            Qt.FocusPolicy.StrongFocus if is_cpu else Qt.FocusPolicy.NoFocus
+        )
+        self._backend_label.setText(
+            "CPU渲染中\n建议开启 GPU 渲染" if is_cpu else f"{label}渲染中"
+        )
+        self._backend_label.setFixedSize(144 if is_cpu else 76, 34 if is_cpu else 28)
+        self._backend_label.setToolTip(
+            "当前使用 CPU 渲染，建议在「导出」页开启「使用 GPU 渲染字幕预览」，"
+            "以提升预览流畅度。\n"
+            "如果是从 GPU 渲染回退到 CPU 渲染，可以尝试先关闭再开启该选项。\n"
+            "也可以点击此处，确认后重新尝试开启 GPU 渲染。"
+            if is_cpu else
+            "当前实际渲染后端：GPU 渲染器故障或工程包含暂不支持的功能时，"
+            "预览自动回退 CPU（Painter）绘制"
+        )
+        if self._backend_label.property("renderBackend") != label:
+            self._backend_label.setProperty("renderBackend", label)
+            style = self._backend_label.style()
+            style.unpolish(self._backend_label)
+            style.polish(self._backend_label)
+            self._backend_label.update()
+        self._update_quality_label_visibility()
+
+    def _confirm_gpu_preview(self) -> None:
+        if (self._backend_label.property("renderBackend") != "CPU"
+                or self._gpu_preview_confirmation_open):
+            return
+        # 无蒙版、非模态确认期间避免重复点击打开多个确认框。
+        self._gpu_preview_confirmation_open = True
+        self._backend_label.setEnabled(False)
+        dialog = FluentMessageDialog("GPU 渲染", "是否尝试开启GPU渲染？", self)
+        dialog.yesButton.setText("是")
+        dialog.cancelButton.setText("否")
+        try:
+            confirmed = bool(dialog.exec())
+        finally:
+            dialog.deleteLater()
+            self._gpu_preview_confirmation_open = False
+            self._backend_label.setEnabled(
+                self._backend_label.property("renderBackend") == "CPU"
+            )
+        if confirmed:
+            self.gpuPreviewRequested.emit()
+
+    def _update_quality_label_visibility(self) -> None:
+        """窄窗口优先保留后端提示、质量选项和窗口按钮。"""
+        caption = self._transport_bar._preview_quality_label
+        caption.setVisible(not self._collapsed)
+        if not self._collapsed and self.width() < self._top_controls.layout().minimumSize().width():
+            caption.hide()
 
     def _init_playback_shortcuts(self) -> None:
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
@@ -610,6 +678,7 @@ class PreviewPlayerWindow(QWidget):
             max(0, self.height() - video_top),
         )
         self._top_controls.setGeometry(0, 0, self.width(), top_height)
+        self._update_quality_label_visibility()
         self._bottom_controls.setGeometry(0, max(0, self.height() - 58), self.width(), 58)
         self._top_controls.raise_()
         self._bottom_controls.raise_()

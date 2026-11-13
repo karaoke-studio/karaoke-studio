@@ -135,6 +135,34 @@ def test_preview_preferences_revert_unsupported_gpu_request_without_signal() -> 
     assert events == ["unavailable", "save"]
 
 
+def test_preview_preferences_retry_restarts_gpu_and_synchronizes_toggle() -> None:
+    controller, panel, checkbox, _preferences, events = _preference_controller()
+    checkbox.checked = False
+
+    controller.retry_gpu_enabled()
+
+    assert panel.gpu_requests == [False, True]
+    assert checkbox.checked is True
+    assert checkbox.signals_blocked is False
+    assert events == ["save"]
+
+    # A checked switch can still represent a failed GPU worker using CPU.
+    controller.retry_gpu_enabled()
+    assert panel.gpu_requests == [False, True, False, True]
+    assert checkbox.checked is True
+
+
+def test_preview_preferences_retry_failure_reverts_toggle() -> None:
+    controller, panel, checkbox, _preferences, events = _preference_controller(gpu_supported=False)
+
+    controller.retry_gpu_enabled()
+
+    assert panel.gpu_requests == [False, True]
+    assert checkbox.checked is False
+    assert checkbox.signals_blocked is False
+    assert events == ["unavailable", "save"]
+
+
 def test_preview_preferences_normalize_quality_and_keep_it_local() -> None:
     controller, panel, _checkbox, preferences, events = _preference_controller()
 

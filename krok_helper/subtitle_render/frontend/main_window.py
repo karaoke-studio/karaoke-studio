@@ -1766,6 +1766,9 @@ class SubtitleRenderWindow(QWidget):
             self._on_render_workers_changed
         )
         self._gpu_preview_check.toggled.connect(self._on_gpu_preview_changed)
+        self._preview_window.gpuPreviewRequested.connect(
+            self._preview_preference_controller.retry_gpu_enabled
+        )
         self._gpu_direct_check.toggled.connect(self._on_gpu_direct_present_changed)
         self._gpu_export_check.toggled.connect(self._on_gpu_export_changed)
 

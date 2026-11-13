@@ -94,6 +94,16 @@ class PreviewPreferenceController:
         self._save_persisted_state()
         return normalized
 
+    def retry_gpu_enabled(self) -> None:
+        """Recreate a failed GPU worker and enable the persisted preview toggle."""
+        self._preview_panel.set_gpu_preview_enabled(False)
+        blocked = self._gpu_checkbox.blockSignals(True)
+        try:
+            self._gpu_checkbox.setChecked(True)
+        finally:
+            self._gpu_checkbox.blockSignals(blocked)
+        self.apply_gpu_enabled(True)
+
     def report_gpu_fallback(self, message: object) -> None:
         """Forward a runtime GPU fallback through the host notification boundary."""
         self._warn_gpu_fallback(str(message))
