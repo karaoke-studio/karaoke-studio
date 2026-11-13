@@ -21,6 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QPushButton,
     QSizePolicy,
@@ -33,6 +34,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     FluentTitleBar,
     CaptionLabel,
+    DoubleSpinBox,
     LineEdit as FluentLineEdit,
     RoundMenu,
     PrimaryPushButton,
@@ -642,21 +644,23 @@ class _RecentColorList(FluentScrollArea):
         self.setWidget(content)
         self.tiles: list[ColorTile] = []
         self._selected_color = QColor()
-        rows = QVBoxLayout(content)
+        rows = QGridLayout(content)
         rows.setContentsMargins(0, 0, 12, 0)
         rows.setSpacing(8)
         rows.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._empty_hint = CaptionLabel("暂无最近颜色", content)
         self._empty_hint.setWordWrap(True)
-        rows.addWidget(self._empty_hint)
+        rows.addWidget(self._empty_hint, 0, 0, 1, 4)
+        for column in range(4):
+            rows.setColumnStretch(column, 1)
         for _index in range(RECENT_COLOR_LIMIT):
             tile = ColorTile(parent=content)
-            tile.setFixedHeight(30)
+            tile.setFixedHeight(36)
             tile.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             tile.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             tile.setCheckable(True)
             tile.clicked.connect(lambda checked=False, tile=tile: self._pick_color(tile.color))
-            rows.addWidget(tile)
+            rows.addWidget(tile, _index // 4 + 1, _index % 4)
             self.tiles.append(tile)
 
     def set_colors(self, colors: list[QColor]) -> None:
@@ -711,6 +715,78 @@ class _RecentColorList(FluentScrollArea):
             event.ignore()
 
 
+class _ChannelSpinBox(DoubleSpinBox):
+    def wheelEvent(self, event):  # noqa: N802
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class _ProColorChannels(QWidget):
+    """RGBA and HSV controls editing the dialog's single authoritative color."""
+
+    channelChanged = Signal(str, float)
+    editFinished = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QGridLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(2)
+        self.sliders, self.spins = {}, {}
+        self._active_channel = None
+        specs = (("red", "R", 255, 0), ("green", "G", 255, 0), ("blue", "B", 255, 0),
+                 ("pro_alpha", "A", 100, 1), ("hue", "H", 359.9, 1),
+                 ("saturation", "S", 100, 1), ("pro_value", "V", 100, 1))
+        for index, (channel, label, maximum, decimals) in enumerate(specs):
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            row.addWidget(CaptionLabel(label, self))
+            slider = ColorChannelSlider(channel, self)
+            slider.setMinimumWidth(40)
+            spin = _ChannelSpinBox(self)
+            spin.setSymbolVisible(False)
+            spin.setRange(0, maximum)
+            spin.setDecimals(decimals)
+            spin.setSingleStep(1)
+            spin.setSuffix("°" if channel == "hue" else " %" if maximum == 100 else "")
+            spin.setFixedWidth(88)
+            spin.setAccessibleName(slider.accessibleName())
+            scale = 10 if decimals else 1
+            slider.valueChanged.connect(lambda value, c=channel, scale=scale: self.channelChanged.emit(c, value / scale))
+            spin.valueChanged.connect(lambda value, c=channel: self._edit_channel(c, value))
+            spin.editingFinished.connect(self.editFinished.emit)
+            row.addWidget(slider, 1)
+            row.addWidget(spin)
+            layout.addLayout(row, index if index < 4 else index - 4, 0 if index < 4 else 1)
+            self.sliders[channel], self.spins[channel] = slider, spin
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+
+    def _edit_channel(self, channel: str, value: float) -> None:
+        self._active_channel = channel
+        try:
+            self.channelChanged.emit(channel, value)
+        finally:
+            self._active_channel = None
+
+    def sync(self, color: QColor, hue: float, saturation: float, value: float) -> None:
+        values = {"red": color.red(), "green": color.green(), "blue": color.blue(),
+                  "hue": hue, "saturation": saturation * 100, "pro_value": value * 100,
+                  "pro_alpha": color.alphaF() * 100}
+        full_value = QColor.fromHsvF(hue / 360, saturation, 1)
+        for channel, actual in values.items():
+            spin, slider = self.spins[channel], self.sliders[channel]
+            with QSignalBlocker(spin):
+                rounded = round(actual, spin.decimals())
+                if spin.value() != rounded and not (self._active_channel == channel and spin.hasFocus()):
+                    spin.setValue(rounded)
+            slider.set_color(full_value if channel == "pro_value" else color,
+                             round(actual * (10 if spin.decimals() else 1)))
+
+
 class _ColorDialog(FramelessDialog):
     """Fluent color editor with an HSV wheel, value and alpha surfaces.
 
@@ -743,6 +819,12 @@ class _ColorDialog(FramelessDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, self.titleBar.height() + 12, 16, 16)
         root.setSpacing(12)
+        self._detail_mode_switch = WorkspaceSwitcher(self)
+        self._detail_mode_switch.setAccessibleName("调色器功能模式")
+        for mode, label in (("simple", "简约"), ("pro", "专业")):
+            self._detail_mode_switch.addItem(mode, label).setAccessibleName(label)
+        mode_row = QHBoxLayout()
+        root.addLayout(mode_row)
         body = QHBoxLayout()
         body.setSpacing(20)
         left = QVBoxLayout()
@@ -751,10 +833,17 @@ class _ColorDialog(FramelessDialog):
         self._picker_mode_switch.setAccessibleName("调色模式")
         for mode, label in (("wheel", "色盘"), ("palette", "调色板")):
             self._picker_mode_switch.addItem(mode, label).setAccessibleName(label)
-        left.addWidget(self._picker_mode_switch, 0, Qt.AlignmentFlag.AlignHCenter)
+        mode_row.addWidget(self._picker_mode_switch)
+        mode_row.addStretch(1)
+        mode_row.addWidget(self._detail_mode_switch)
         self._picker_stack = QStackedWidget(self)
         self._color_wheel = HueSaturationWheel(self)
         self._color_plane = HueSaturationPlane(self)
+        for surface in (self._color_wheel, self._color_plane):
+            surface.setMinimumSize(130, 130)
+            surface.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._picker_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._picker_stack.setMinimumHeight(130)
         self._picker_stack.addWidget(self._color_wheel)
         self._picker_stack.addWidget(self._color_plane)
         left.addWidget(self._picker_stack, 1)
@@ -768,8 +857,15 @@ class _ColorDialog(FramelessDialog):
         left.addWidget(self._alpha_slider)
         self._value_slider.valueChanged.connect(self._set_value)
         self._alpha_slider.valueChanged.connect(self._set_current_alpha)
+        self._pro_channels = _ProColorChannels(self)
+        self._pro_channels.channelChanged.connect(self._set_pro_channel)
+        self._pro_channels.editFinished.connect(lambda: self._pro_channels.sync(
+            self._current, self._hue, self._saturation, self._value))
+        self._pro_channels.hide()
+        self._detail_mode_switch.currentItemChanged.connect(self._switch_detail_mode)
 
         hex_row = QHBoxLayout()
+        hex_row.setSpacing(20)
         self._hex_edit = FluentLineEdit(self)
         self._hex_edit.setMaxLength(9)
         self._hex_edit.setAccessibleName("十六进制色号")
@@ -778,10 +874,8 @@ class _ColorDialog(FramelessDialog):
         self._hex_edit.textEdited.connect(self._edit_hex)
         self._hex_edit.editingFinished.connect(self._finish_hex)
         hex_row.addWidget(self._hex_edit, 1)
-        left.addLayout(hex_row)
         self._hex_hint = CaptionLabel("请输入有效色号：#RRGGBB 或 #AARRGGBB", self)
         self._hex_hint.hide()
-        left.addWidget(self._hex_hint)
         body.addLayout(left, 1)
 
         right = QVBoxLayout()
@@ -812,13 +906,19 @@ class _ColorDialog(FramelessDialog):
         self._recent_list.selectionChanged.connect(
             lambda color: self._delete_recent_button.setEnabled(color.isValid())
         )
-        right.addWidget(self._delete_recent_button)
         right_container = QWidget(self)
-        right_container.setFixedWidth(240)
+        right_container.setFixedWidth(200)
         right_container.setLayout(right)
         right.setContentsMargins(0, 0, 0, 0)
         body.addWidget(right_container)
         root.addLayout(body, 1)
+        # Channel controls span the complete dialog below both the color
+        # surface and history. Neither column borrows space from the other.
+        root.addWidget(self._pro_channels)
+        hex_row.addWidget(self._delete_recent_button)
+        self._delete_recent_button.setFixedWidth(200)
+        root.addLayout(hex_row)
+        root.addWidget(self._hex_hint)
 
         footer = QHBoxLayout()
         self._screen_button = FluentPushButton(_eyedropper_icon(), "从屏幕取色", self)
@@ -842,6 +942,8 @@ class _ColorDialog(FramelessDialog):
         themed(self, self._theme_stylesheet)
         self.set_initial_color(current)
         self.set_recent_colors(recent_colors())
+        available = self.screen().availableGeometry().height() if self.screen() else 800
+        self.resize(760, min(640, max(480, available - 60)))
 
     def _theme_stylesheet(self) -> str:
         self._screen_button.setIcon(_eyedropper_icon())
@@ -855,6 +957,7 @@ class _ColorDialog(FramelessDialog):
 
     def set_initial_color(self, color: QColor) -> None:
         self._restore_picker_mode()
+        self._restore_detail_mode()
         color = QColor(color) if color.isValid() else QColor("#FFFFFF")
         self._selected = QColor()
         self._deleted_recent_rgba: set[int] = set()
@@ -888,6 +991,7 @@ class _ColorDialog(FramelessDialog):
         self._alpha_slider.set_color(self._current)
         self._current_swatch.set_color(self._current)
         self._recent_list.set_selected_color(self._current)
+        self._pro_channels.sync(self._current, self._hue, self._saturation, self._value)
         self._hex_edit.setText(_normalize_hex(self._current.name(QColor.NameFormat.HexArgb)))
         self._hex_hint.hide()
         self._ok_button.setEnabled(True)
@@ -907,6 +1011,51 @@ class _ColorDialog(FramelessDialog):
                 self._picker_settings.save(data)
         except Exception:
             logging.getLogger(__name__).warning("保存调色模式失败", exc_info=True)
+
+    def _show_detail_mode(self, mode: str) -> None:
+        self._pro_channels.setVisible(mode == "pro")
+        self._value_slider.setVisible(mode != "pro")
+        self._alpha_slider.setVisible(mode != "pro")
+        # History may scroll within the upper pane on shorter screens; it must
+        # not establish the minimum height of the channel area below it.
+        self._recent_list.setMinimumHeight(40 if mode == "pro" else 100)
+
+    def _switch_detail_mode(self, mode: str) -> None:
+        self._show_detail_mode(mode)
+        try:
+            data = self._picker_settings.load()
+            data["color_picker_detail_mode"] = mode
+            self._picker_settings.save(data)
+        except Exception:
+            logging.getLogger(__name__).warning("保存调色器功能模式失败", exc_info=True)
+
+    def _restore_detail_mode(self) -> None:
+        try:
+            mode = self._picker_settings.load().get("color_picker_detail_mode", "simple")
+        except Exception:
+            logging.getLogger(__name__).warning("读取调色器功能模式失败", exc_info=True)
+            mode = "simple"
+        if mode not in ("simple", "pro"):
+            mode = "simple"
+        with QSignalBlocker(self._detail_mode_switch):
+            self._detail_mode_switch.setCurrentItem(mode)
+        self._show_detail_mode(mode)
+
+    def _set_pro_channel(self, channel: str, value: float) -> None:
+        if channel in ("red", "green", "blue"):
+            color = self.currentColor()
+            getattr(color, {"red": "setRed", "green": "setGreen", "blue": "setBlue"}[channel])(round(value))
+            self.setCurrentColor(color)
+        elif channel == "pro_alpha":
+            self._set_current_alpha(round(value / 100 * 255))
+        else:
+            if channel == "hue":
+                self._hue = value % 360
+            elif channel == "saturation":
+                self._saturation = value / 100
+            elif channel == "pro_value":
+                self._value = value / 100
+            self._apply_hsv()
 
     def _restore_picker_mode(self) -> None:
         try:

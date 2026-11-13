@@ -1844,14 +1844,17 @@ def test_gpu_legacy_fill_gradient_renders_gradient_not_solid(
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("mode", ["gradient_horizontal", "gradient_vertical"])
 @pytest.mark.parametrize("force_warp", [False, True])
-def test_gpu_drawn_gradient_uses_baked_stops_in_cpu_gpu_and_cached_frames(monkeypatch, mode, force_warp):
-    from krok_helper.subtitle_render.domain.gradient_path import hue_route, replace_path_stops
+@pytest.mark.parametrize("waypoints", [False, True])
+def test_gpu_drawn_gradient_uses_baked_stops_in_cpu_gpu_and_cached_frames(monkeypatch, mode, force_warp, waypoints):
+    from krok_helper.subtitle_render.domain.gradient_path import anchor_route, hue_route, replace_path_stops
     from krok_helper.subtitle_render.domain.paint import GradientPath
     from krok_helper.subtitle_render.domain.models import style_to_dict
 
     monkeypatch.delenv("KROK_GPU_RESOURCE_CACHE", raising=False)
     start, end = "#9383CA", "#F6E9BF"
     route = GradientPath(hue_route(start, end))
+    if waypoints:
+        route = anchor_route([start, "#FF8899", "#804080FF", end])
     fill = PaintFill(mode=mode, start_color=start, end_color=end,
                      gradient_stops=replace_path_stops([(0, start), (100, end)], route),
                      gradient_path=route)

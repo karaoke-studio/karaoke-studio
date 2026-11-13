@@ -10,7 +10,7 @@ from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from krok_helper.subtitle_render.domain.gradient_path import (
-    bake_path, disk_point, hue_route, path_samples, replace_path_stops, rgba,
+    anchor_route, anchored_samples, bake_path, disk_point, hue_route, path_samples, replace_path_stops, rgba,
     smooth_points,
 )
 from krok_helper.subtitle_render.domain.paint import GradientPath, PaintFill
@@ -223,7 +223,7 @@ def test_small_dialog_shrinks_wheel_and_keeps_all_controls_visible_without_scrol
     assert dialog.findChild(QScrollArea) is None
     for widget in (dialog.mode_switch, dialog.wheel, dialog.short_button, dialog.long_button,
                    dialog.undo_button, dialog.reverse_button, dialog.preview, dialog.apply_button,
-                   dialog.close_button, *(editor.hex_edit for editor in dialog.endpoint_editors)):
+                   dialog.close_button, dialog.point_editor.hex_edit, dialog.point_editor.point_combo):
         assert widget.visibleRegion().boundingRect().height() == widget.height(), widget.accessibleName()
     assert dialog.height() <= size[1]
     dialog.reject()
@@ -293,14 +293,14 @@ def test_modes_use_workspace_switcher_and_all_gradients_edit_whole_range(qapp):
     whole = GradientPathDialog(_fill())
     assert isinstance(whole.mode_switch, WorkspaceSwitcher)
     assert [item.accessibleName() for item in whole.mode_switch._items.values()] == ["调整模式", "绘制模式"]
-    assert not whole.findChildren(ComboBox)
+    assert whole.findChildren(ComboBox) == [whole.point_editor.point_combo]
     whole.mode_switch.setCurrentItem("adjust")
     assert whole.wheel.adjusting
     whole.mode_switch.setCurrentItem("draw")
     assert not whole.wheel.adjusting
     segmented = GradientPathDialog(replace(_fill(), gradient_stops=[
         (0, "#FF0000"), (50, "#00FF00"), (100, "#0000FF")]))
-    assert not segmented.findChildren(ComboBox)
+    assert segmented.findChildren(ComboBox) == [segmented.point_editor.point_combo]
     assert (segmented.route().start_pct, segmented.route().end_pct) == (0, 100)
     whole.reject()
     segmented.reject()
@@ -313,7 +313,7 @@ def test_hex_typing_preserves_alpha_and_commits_exact_rgb_without_replacing_inpu
     dialog = GradientPathDialog(fill)
     dialog.show()
     qapp.processEvents()
-    entry = dialog.endpoint_editors[0].hex_edit
+    entry = dialog.point_editor.hex_edit
     entry.setFocus()
     entry.selectAll()
     QTest.keyClicks(entry, "123456")
@@ -334,7 +334,8 @@ def test_invalid_hex_keeps_draft_but_blocks_apply_until_repaired(qapp):
     saved = dialog.stops()
     dialog.show()
     qapp.processEvents()
-    entry = dialog.endpoint_editors[1].hex_edit
+    dialog._select_anchor(1)
+    entry = dialog.point_editor.hex_edit
     entry.setFocus()
     entry.selectAll()
     QTest.keyClicks(entry, "oops")
@@ -371,7 +372,7 @@ def test_endpoints_are_directly_draggable_in_adjust_mode(qapp, endpoint):
     assert colors_after[1 - endpoint] == colors_before[1 - endpoint]
     assert dialog.wheel.points != points_before
     dialog.stops()
-    assert QColor(dialog.endpoint_editors[endpoint].hex_edit.text()) == QColor(colors_after[endpoint])
+    assert QColor(dialog.point_editor.hex_edit.text()) == QColor(colors_after[endpoint])
     dialog.undo_button.click()
     assert dialog.wheel.points == points_before
     assert dialog._colors() == colors_before
@@ -389,7 +390,7 @@ def test_coincident_endpoint_handles_can_be_dragged_independently(qapp):
     QApplication.sendEvent(wheel, event)
     _mouse(wheel, QEvent.Type.MouseMove, (1., 0.))
     _mouse(wheel, QEvent.Type.MouseButtonRelease, (1., 0.), pressed=False)
-    assert rgba(dialog.stops()[0][1]) == (255, 0, 0, 255)
+    assert rgba(dialog.stops()[0][1]) == (0, 0, 0, 255)
     assert rgba(dialog.stops()[-1][1]) == (255, 255, 255, 255)
     dialog.reject()
 
@@ -400,7 +401,8 @@ def test_hex_reanchors_hand_drawn_path_without_replacing_middle_and_saves(qapp):
     middle = [(0.2, -0.1), (.7, .1), (.2, .3)]
     dialog.wheel.set_points([dialog.wheel.points[0]] + middle + [dialog.wheel.points[-1]])
     dialog._schedule_refresh()
-    entry = dialog.endpoint_editors[1].hex_edit
+    dialog._select_anchor(1)
+    entry = dialog.point_editor.hex_edit
     entry.setText("#800080")
     entry.textEdited.emit(entry.text())
     assert dialog.wheel.points[1:-1] == middle
@@ -536,7 +538,8 @@ def test_endpoint_eyedroppers_reuse_screen_picker_and_update_only_picked_endpoin
     monkeypatch.setattr(ScreenColorPicker, "start", lambda self: None)
     dialog = GradientPathDialog(_fill("#80112233", "#20445566"))
     original = dialog._colors()
-    editor = dialog.endpoint_editors[endpoint]
+    dialog._select_anchor(endpoint)
+    editor = dialog.point_editor
     assert not editor.screen_picker_button.icon().isNull()
     assert editor.layout().indexOf(editor.screen_picker_button) > editor.layout().indexOf(editor.hex_edit)
     editor.screen_picker_button.click()
@@ -566,7 +569,7 @@ def test_cancelled_endpoint_screen_pick_restores_unfinished_hex_without_editing_
     monkeypatch.setattr(ScreenColorPicker, "start", lambda self: None)
     dialog = GradientPathDialog(_fill())
     colors, points = dialog._colors(), list(dialog.wheel.points)
-    editor = dialog.endpoint_editors[0]
+    editor = dialog.point_editor
     editor.hex_edit.setText("#12")
     editor.screen_picker_button.click()
     picker = dialog._screen_picker
@@ -588,7 +591,7 @@ def test_closing_gradient_dialog_cancels_active_screen_picker(qapp, monkeypatch)
     dialog = GradientPathDialog(_fill())
     dialog.show()
     qapp.processEvents()
-    dialog.endpoint_editors[1].screen_picker_button.click()
+    dialog.point_editor.screen_picker_button.click()
     picker = dialog._screen_picker
     assert picker._active
     dialog.close()
@@ -602,8 +605,309 @@ def test_destroying_gradient_dialog_releases_parentless_screen_picker(qapp, monk
     from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
     monkeypatch.setattr(ScreenColorPicker, "start", lambda self: None)
     dialog = GradientPathDialog(_fill())
-    dialog.endpoint_editors[0].screen_picker_button.click()
+    dialog.point_editor.screen_picker_button.click()
     picker = dialog._screen_picker
     dialog.deleteLater()
     QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
     assert not picker._active
+
+
+@pytest.mark.parametrize("long", [False, True])
+@pytest.mark.parametrize("colors", [
+    ["#FF0000", "#FF00FF", "#00FFFF"],
+    ["#80CC1122", "#10101010", "#E010A0C0", "#FFFEDC"],
+    ["#000000", "#FFFFFF", "#00000000", "#80444444"],
+    ["#123456", "#123456", "#123456"],
+    ["#9383CA", "#F6E9BF", "#80FF55", "#4400FF"]])
+def test_generated_waypoints_keep_exact_rgba_and_baking_error_bounded(colors, long):
+    from krok_helper.subtitle_render.domain.gradient_path import MAX_BAKED_STOPS
+    route = anchor_route(colors, long=long)
+    assert [color for _, color in route.anchors] == colors
+    assert all(math.hypot(*point) <= 1.000001 for point in route.points)
+    for index, color in route.anchors:
+        assert route.points[index] == pytest.approx(disk_point(color), abs=1e-9)
+    stops = bake_path(route, colors[0], colors[-1])
+    assert len(stops) <= MAX_BAKED_STOPS
+    samples, positions, mandatory = anchored_samples(route)
+    for i in mandatory:
+        position = round(positions[i] * 100, 6)
+        assert rgba(next(c for p, c in stops if p == position)) == samples[i]
+    assert [rgba(next(c for p, c in stops if p == round(positions[i] * 100, 6))) for i in sorted(mandatory)] == [rgba(c) for c in colors]
+    cursor = 0
+    for color, position in zip(samples, positions):
+        p = position * 100
+        while cursor < len(stops) - 2 and stops[cursor + 1][0] < p:
+            cursor += 1
+        a, b = stops[cursor:cursor + 2]
+        t = (p - a[0]) / (b[0] - a[0])
+        assert max(abs(c - (x + (y - x)*t)) for c, x, y in zip(color, rgba(a[1]), rgba(b[1]))) < 2.02
+
+
+def test_waypoint_metadata_round_trip_preserves_generated_route_and_exact_colors(tmp_path):
+    from krok_helper.subtitle_render.domain.models import Style, style_from_dict, style_to_dict
+    from krok_helper.subtitle_render.domain.paint import KaraokeColors
+    from krok_helper.subtitle_render.project.store import load_render_project, save_render_project
+    route = anchor_route(["#FF0000", "#804080C0", "#00FFFF"], long=True)
+    colors = KaraokeColors()
+    colors.after.text = replace(_fill(), gradient_path=route, gradient_stops=bake_path(route, "#FF0000", "#00FFFF"))
+    project = tmp_path / "waypoints.yurika"
+    save_render_project(project, {"style": style_to_dict(Style(karaoke_colors=colors))})
+    fill = style_from_dict(load_render_project(project)["style"]).karaoke_colors.after.text
+    assert fill.gradient_path == route
+    assert fill.gradient_stops == colors.after.text.gradient_stops
+
+
+@pytest.mark.parametrize("anchors", [[[0, "#FF0000"]], [[0, "bad"], [1, "#FFFFFF"]],
+    [[0, "#000000"], [0, "#FFFFFF"]], [[0, "#000000"], [999, "#FFFFFF"]],
+    [[False, "#000000"], [1, "#FFFFFF"]], "invalid"])
+def test_invalid_waypoint_metadata_falls_back_to_baked_stops(anchors):
+    payload = paint_fill_to_dict(replace(_fill(), gradient_path=GradientPath([(1., 0.), (0., 1.)])))
+    payload["gradient_path"]["anchors"] = anchors
+    fill = paint_fill_from_dict(payload)
+    assert fill.gradient_path is None
+    assert fill.gradient_stops == _fill().gradient_stops
+
+
+def _add_waypoint(dialog, fraction=.5):
+    dialog.mode_switch.setCurrentItem("adjust")
+    segment = max(0, min(len(dialog.wheel.points) - 2, int((len(dialog.wheel.points) - 1)*fraction)))
+    a, b = dialog.wheel.points[segment:segment + 2]
+    point = ((a[0] + b[0])/2, (a[1] + b[1])/2)
+    _mouse(dialog.wheel, QEvent.Type.MouseButtonDblClick, point)
+    return dialog._selected
+
+
+def test_double_click_adds_selects_drags_and_deletes_waypoint(qapp):
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    index = _add_waypoint(dialog)
+    assert index == 1
+    assert len(dialog.route().anchors) == 3
+    assert dialog.point_editor.point_combo.currentText() == "途经点 1"
+    assert not dialog.point_editor.delete_button.isHidden()
+    before = dialog.route()
+    vertex, color = before.anchors[index]
+    _mouse(dialog.wheel, QEvent.Type.MouseButtonPress, before.points[vertex])
+    _mouse(dialog.wheel, QEvent.Type.MouseMove, (.7, .2))
+    _mouse(dialog.wheel, QEvent.Type.MouseButtonRelease, (.7, .2), pressed=False)
+    assert dialog._selected == index
+    assert dialog.route() != before
+    assert rgba(dialog.route().anchors[index][1])[3] == rgba(color)[3]
+    # The route is regenerated from the picked 8-bit RGB color.
+    assert dialog.route().points[dialog.route().anchors[index][0]] == pytest.approx((.7, .2), abs=.004)
+    dialog.point_editor.delete_button.click()
+    assert len(dialog.route().anchors) == 2
+    assert dialog.point_editor.delete_button.isHidden()
+    dialog.undo_button.click()
+    assert len(dialog.route().anchors) == 3
+    dialog.close()
+
+
+def test_waypoint_hex_and_eyedropper_update_same_anchor_and_route(qapp, monkeypatch):
+    from PyQt6.QtGui import QColor
+    from PyQt6.QtTest import QTest
+    from krok_helper.subtitle_render.frontend.properties.color_controls import ScreenColorPicker
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    monkeypatch.setattr(ScreenColorPicker, "start", lambda self: None)
+    dialog = GradientPathDialog(_fill())
+    dialog.long_button.click()
+    index = _add_waypoint(dialog)
+    dialog.show()
+    qapp.processEvents()
+    entry = dialog.point_editor.hex_edit
+    entry.setFocus()
+    entry.selectAll()
+    QTest.keyClicks(entry, "#804080C0")
+    QTest.keyClick(entry, Qt.Key.Key_Tab)
+    assert rgba(dialog.route().anchors[index][1]) == (64, 128, 192, 128)
+    before = dialog.route()
+    ends = dialog._colors()
+    dialog.point_editor.screen_picker_button.click()
+    picker = dialog._screen_picker
+    picker.colorPicked.emit(QColor("#FF8899"))
+    picker._finish()
+    assert rgba(dialog.route().anchors[index][1]) == (255, 136, 153, 128)
+    assert dialog._colors() == ends
+    assert dialog.point_editor.point_combo.currentText() == "途经点 1"
+    assert dialog.route() != before
+    dialog.undo_button.click()
+    assert dialog.route() == before
+    dialog.close()
+
+
+def test_regenerate_and_reverse_keep_all_waypoints_and_freehand_clears_them(qapp):
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    _add_waypoint(dialog, .3)
+    _add_waypoint(dialog, .7)
+    colors = [c for _, c in dialog.route().anchors]
+    assert len(colors) == 4
+    dialog.long_button.click()
+    long = dialog.route()
+    assert [c for _, c in long.anchors] == colors
+    dialog.short_button.click()
+    assert [c for _, c in dialog.route().anchors] == colors
+    assert dialog.route().points != long.points
+    dialog.reverse_button.click()
+    assert [c for _, c in dialog.route().anchors] == list(reversed(colors))
+    dialog.mode_switch.setCurrentItem("draw")
+    _mouse(dialog.wheel, QEvent.Type.MouseButtonPress, (.8, 0.))
+    _mouse(dialog.wheel, QEvent.Type.MouseMove, (.4, .4))
+    _mouse(dialog.wheel, QEvent.Type.MouseButtonRelease, (0., .8), pressed=False)
+    assert len(dialog.route().anchors) == 2
+    dialog.undo_button.click()
+    assert [c for _, c in dialog.route().anchors] == list(reversed(colors))
+    dialog.close()
+
+
+def test_waypoint_apply_reopen_delete_and_undo_update_live_panel(qapp):
+    from krok_helper.subtitle_render.frontend.properties.property_panel import PropertyPanel
+    panel = PropertyPanel()
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("gradient_horizontal"))
+    panel._gradient_path_btn.click()
+    dialog = panel._gradient_path_dialog
+    dialog.short_button.click()
+    index = _add_waypoint(dialog)
+    dialog.point_editor.hex_edit.setText("#804080C0")
+    dialog.point_editor.hex_edit.textEdited.emit("#804080C0")
+    dialog.apply_button.click()
+    saved = panel._current_paint_fill().gradient_path
+    assert len(saved.anchors) == 3
+    assert dialog.isVisible()
+    dialog.close()
+    panel._gradient_path_btn.click()
+    reopened = panel._gradient_path_dialog
+    assert reopened.route() == saved
+    reopened.mode_switch.setCurrentItem("adjust")
+    reopened.point_editor.point_combo.setCurrentIndex(index)
+    assert reopened.point_editor.hex_edit.text() == "#804080C0"
+    reopened.point_editor.delete_button.click()
+    reopened.apply_button.click()
+    assert len(panel._current_paint_fill().gradient_path.anchors) == 2
+    reopened.undo_button.click()
+    assert panel._current_paint_fill().gradient_path == saved
+    reopened.close()
+
+
+def test_click_selects_waypoint_without_editing_or_creating_undo_history(qapp):
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    _add_waypoint(dialog)
+    saved = dialog.route()
+    history_length = len(dialog._history)
+    dialog.point_editor.point_combo.setCurrentIndex(0)
+    position = dialog.wheel.endpoint_position(1)
+    for event_type in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+        event = QMouseEvent(event_type, position, Qt.MouseButton.LeftButton,
+                            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(dialog.wheel, event)
+    assert dialog._selected == 1
+    assert dialog.route() == saved
+    assert len(dialog._history) == history_length
+    dialog.close()
+
+
+def test_maximum_waypoints_keep_bounded_points_and_baked_stops(qapp):
+    from krok_helper.subtitle_render.domain.gradient_path import MAX_ANCHORS, MAX_BAKED_STOPS, MAX_PATH_POINTS
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    while len(dialog.route().anchors) < MAX_ANCHORS:
+        _add_waypoint(dialog, .5)
+    saved = dialog.route()
+    assert len(saved.points) <= MAX_PATH_POINTS
+    assert len(dialog.stops()) <= MAX_BAKED_STOPS
+    _add_waypoint(dialog, .5)
+    assert dialog.route() == saved
+    dialog.close()
+
+
+def test_gray_value_and_alpha_waypoints_get_visible_gradient_space():
+    for colors in (["#000000", "#FFFFFF", "#000000"],
+                   ["#00FFFFFF", "#FFFFFFFF", "#00FFFFFF"]):
+        route = anchor_route(colors)
+        samples, positions, mandatory = anchored_samples(route)
+        assert positions[sorted(mandatory)[1]] == pytest.approx(.5)
+        stops = bake_path(route, colors[0], colors[-1])
+        assert rgba(next(c for p, c in stops if p == 50)) == rgba(colors[1])
+
+
+def test_waypoint_numbers_follow_creation_order_when_inserted_before_existing_point(qapp):
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    _add_waypoint(dialog, .75)
+    assert dialog.point_editor.point_combo.currentText() == "途经点 1"
+    first_color = dialog.route().anchors[1][1]
+    _add_waypoint(dialog, .15)
+    assert dialog.point_editor.point_combo.currentText() == "途经点 2"
+    assert dialog.route().waypoint_ids == [2, 1]
+    assert dialog.wheel.anchor_labels == ["起", "2", "1", "终"]
+    assert dialog.route().anchors[2][1] == first_color
+    dialog.long_button.click()
+    assert dialog.route().waypoint_ids == [2, 1]
+    dialog.reverse_button.click()
+    assert dialog.route().waypoint_ids == [1, 2]
+    dialog.undo_button.click()
+    assert dialog.route().waypoint_ids == [2, 1]
+    dialog.close()
+
+
+def test_waypoint_creation_numbers_survive_save_delete_and_reopen(qapp):
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    _add_waypoint(dialog, .75)
+    _add_waypoint(dialog, .15)
+    baked, route = dialog.stops(), dialog.route()
+    payload = json.loads(json.dumps(paint_fill_to_dict(replace(_fill(), gradient_stops=baked, gradient_path=route))))
+    restored = GradientPathDialog(paint_fill_from_dict(payload))
+    assert restored.route().waypoint_ids == [2, 1]
+    restored.mode_switch.setCurrentItem("adjust")
+    restored.point_editor.point_combo.setCurrentIndex(1)
+    assert restored.point_editor.point_combo.currentText() == "途经点 2"
+    restored.point_editor.delete_button.click()
+    assert restored.route().waypoint_ids == [1]
+    _add_waypoint(restored, .15)
+    assert restored.point_editor.point_combo.currentText() == "途经点 2"
+    restored.undo_button.click()
+    assert restored.route().waypoint_ids == [1]
+    restored.undo_button.click()
+    assert restored.route().waypoint_ids == [2, 1]
+    for _ in range(2):
+        restored.point_editor.point_combo.setCurrentIndex(1)
+        restored.point_editor.delete_button.click()
+    assert restored.route().waypoint_ids == []
+    _add_waypoint(restored)
+    assert restored.point_editor.point_combo.currentText() == "途经点 1"
+    dialog.close()
+    restored.close()
+
+
+def test_reverse_flips_colors_geometry_numbers_and_selection_together(qapp):
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill())
+    dialog.short_button.click()
+    _add_waypoint(dialog, .25)
+    _add_waypoint(dialog, .85)
+    assert dialog.route().waypoint_ids == [1, 2]
+    dialog.point_editor.point_combo.setCurrentIndex(1)
+    before = dialog.route()
+    selected_color = dialog.point_editor.hex_edit.text()
+    dialog.reverse_button.click()
+    after = dialog.route()
+    assert after.points == list(reversed(before.points))
+    assert [color for _, color in after.anchors] == list(reversed([color for _, color in before.anchors]))
+    assert after.waypoint_ids == [2, 1]
+    assert dialog.wheel.anchor_labels == ["起", "2", "1", "终"]
+    assert [dialog.point_editor.point_combo.itemText(i) for i in range(4)] == ["起点", "途经点 2", "途经点 1", "终点"]
+    assert dialog.point_editor.point_combo.currentText() == "途经点 1"
+    assert dialog.point_editor.hex_edit.text() == selected_color
+    dialog.reverse_button.click()
+    assert dialog.route() == before
+    dialog.undo_button.click()
+    assert dialog.route() == after
+    dialog.close()

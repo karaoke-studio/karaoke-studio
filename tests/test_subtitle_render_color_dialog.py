@@ -53,6 +53,153 @@ def test_picker_defaults_to_wheel_and_reuses_workspace_tab_style(dialog):
     assert isinstance(dialog._color_plane, HueSaturationPlane)
 
 
+def test_detail_modes_default_simple_and_remember_choice_independently(dialog, qapp):
+    assert isinstance(dialog._detail_mode_switch, WorkspaceSwitcher)
+    assert dialog._detail_mode_switch.currentRouteKey() == "simple"
+    assert [i.accessibleName() for i in dialog._detail_mode_switch._items.values()] == ["简约", "专业"]
+    assert dialog._pro_channels.isHidden()
+    switch_picker(dialog, "palette")
+    before = rgba(dialog.currentColor())
+    changes = []
+    dialog.currentColorChanged.connect(changes.append)
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    assert dialog._pro_channels.isVisible()
+    assert dialog._value_slider.isHidden() and dialog._alpha_slider.isHidden()
+    assert rgba(dialog.currentColor()) == before
+    assert changes == []
+    saved = SubtitleRenderSettingsStore().load()
+    assert saved["color_picker_mode"] == "palette"
+    assert saved["color_picker_detail_mode"] == "pro"
+    dialog.reject()
+    reopened = colors._ColorDialog(QColor(before))
+    reopened.show()
+    qapp.processEvents()
+    assert reopened._pro_channels.isVisible()
+    assert reopened._picker_stack.currentWidget() is reopened._color_plane
+    reopened.close()
+
+
+@pytest.mark.parametrize("channel,value", [("red", 128), ("green", 17), ("blue", 249)])
+def test_pro_rgb_channels_change_only_requested_byte_and_sync_other_controls(dialog, channel, value):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    before = dialog.currentColor().getRgb()
+    dialog._pro_channels.spins[channel].setValue(value)
+    expected = list(before)
+    expected[{"red": 0, "green": 1, "blue": 2}[channel]] = value
+    assert dialog.currentColor().getRgb() == tuple(expected)
+    assert dialog._hex_edit.text() == rgba(dialog.currentColor())
+    assert dialog._color_wheel.hue == pytest.approx(dialog._hue)
+    for c, byte in zip(("red", "green", "blue"), expected):
+        assert dialog._pro_channels.spins[c].value() == byte
+
+
+def test_pro_hsv_sliders_and_numbers_share_latent_black_state(dialog):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    controls = dialog._pro_channels
+    controls.spins["hue"].setValue(213.4)
+    controls.spins["saturation"].setValue(71)
+    controls.spins["pro_value"].setValue(0)
+    assert dialog.currentColor().value() == 0
+    assert dialog._hue == pytest.approx(213.4)
+    assert controls.spins["saturation"].value() == 71
+    dialog._detail_mode_switch.setCurrentItem("simple")
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    controls.sliders["pro_value"]._set_value(1000)
+    assert dialog.currentColor().value() == 255
+    assert dialog.currentColor().alpha() == 128
+    assert dialog._hue == pytest.approx(213.4)
+    assert dialog._saturation == pytest.approx(.71)
+    controls.sliders["hue"]._set_value(3599)
+    assert dialog._hue == pytest.approx(359.9)
+
+
+def test_pro_alpha_preserves_rgb_and_typing_does_not_move_cursor(dialog):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    spin = dialog._pro_channels.spins["pro_alpha"]
+    before = dialog.currentColor().getRgb()[:3]
+    spin.setFocus()
+    spin.selectAll()
+    QTest.keyClicks(spin, "50.0")
+    assert spin.value() == 50
+    assert dialog.currentColor().alpha() == 128
+    assert dialog.currentColor().getRgb()[:3] == before
+    QTest.keyClick(spin, Qt.Key.Key_Tab)
+    assert spin.value() == 50.2
+    dialog._pro_channels.sliders["pro_alpha"]._set_value(0)
+    assert dialog.currentColor().alpha() == 0
+    assert dialog.currentColor().getRgb()[:3] == before
+
+
+def test_switching_detail_mode_keeps_invalid_hex_and_exact_transparent_rgb(dialog, qapp):
+    dialog.setCurrentColor(QColor("#00123456"))
+    dialog._hex_edit.setFocus()
+    dialog._hex_edit.selectAll()
+    QTest.keyClicks(dialog._hex_edit, "#12ZZ")
+    for mode in ("pro", "simple", "pro"):
+        dialog._detail_mode_switch.setCurrentItem(mode)
+        qapp.processEvents()
+        assert dialog._hex_edit.text() == "#12ZZ"
+        assert rgba(dialog.currentColor()) == "#00123456"
+        assert not dialog._ok_button.isEnabled()
+
+
+def test_pro_mode_saves_without_overwriting_other_preferences(dialog):
+    store = SubtitleRenderSettingsStore()
+    initial = {"color_picker_mode": "palette", "recent_colors": ["#80112233"], "future": {"k": 3}}
+    store.save(initial)
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    saved = store.load()
+    assert saved.pop("color_picker_detail_mode") == "pro"
+    assert saved == initial
+
+
+@pytest.mark.parametrize("saved", [None, [], "invalid"])
+def test_invalid_detail_mode_defaults_to_simple(dialog, saved):
+    SubtitleRenderSettingsStore().save({"color_picker_detail_mode": saved})
+    dialog.set_initial_color(QColor("#123456"))
+    assert dialog._detail_mode_switch.currentRouteKey() == "simple"
+
+
+@pytest.mark.parametrize("mode", ["wheel", "palette"])
+def test_pro_controls_fit_small_window_and_rgb_can_be_typed(dialog, qapp, mode):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    switch_picker(dialog, mode)
+    dialog.resize(700, 480)
+    qapp.processEvents()
+    for control in (dialog._picker_stack, dialog._hex_edit, dialog._screen_button,
+                    dialog._ok_button, *dialog._pro_channels.spins.values()):
+        assert control.visibleRegion().boundingRect().height() == control.height()
+    spin = dialog._pro_channels.spins["red"]
+    assert spin.lineEdit().width() > 50
+    spin.setFocus()
+    spin.selectAll()
+    QTest.keyClicks(spin, "128")
+    assert spin.value() == 128
+    assert dialog.currentColor().red() == 128
+    assert dialog.currentColor().alpha() == 128
+
+
+def test_pro_rgba_and_hsv_span_full_width_below_picker_and_history(dialog, qapp):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    qapp.processEvents()
+    channels = dialog._pro_channels
+    empty_geometry = channels.geometry()
+    dialog.set_recent_colors([QColor(index * 12, 80, 200) for index in range(20)])
+    qapp.processEvents()
+    assert channels.geometry() == empty_geometry
+    assert channels.width() == dialog.width() - 32
+    top = channels.mapTo(dialog, QPoint()).y()
+    for upper in (dialog._picker_stack, dialog._recent_list):
+        assert upper.mapTo(dialog, QPoint(0, upper.height())).y() <= top
+    red, hue = channels.sliders["red"], channels.sliders["hue"]
+    assert abs(red.width() - hue.width()) <= 1
+    assert red.mapTo(dialog, QPoint()).x() < dialog.width() / 2
+    assert hue.mapTo(dialog, QPoint()).x() > dialog.width() / 2
+    for channel in ("red", "green", "blue", "pro_alpha"):
+        assert channels.spins[channel].mapTo(dialog, QPoint()).x() < dialog.width() / 2
+    assert channels.spins["hue"].mapTo(dialog, QPoint()).x() > dialog._recent_list.mapTo(dialog, QPoint()).x()
+
+
 @pytest.mark.parametrize("value", ["#00000000", "#00123456", "#FFFFFFFF", "#804093E9", "#01010203", "#FEFEDCBA"])
 def test_switching_picker_preserves_exact_rgba_and_emits_no_color_change(dialog, value):
     dialog.setCurrentColor(QColor(value))
@@ -143,6 +290,7 @@ def test_picker_mode_is_saved_immediately_and_restored_after_cancel_and_reopen(d
 
 def test_picker_mode_survives_a_new_application_process(dialog):
     switch_picker(dialog, "palette")
+    dialog._detail_mode_switch.setCurrentItem("pro")
     child = subprocess.run([sys.executable, "-c", """
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QColor
@@ -150,12 +298,14 @@ app = QApplication([])
 from krok_helper.subtitle_render.frontend.properties.color_controls import _ColorDialog
 dialog = _ColorDialog(QColor('#123456'))
 print('picker_mode=' + dialog._picker_mode_switch.currentRouteKey())
+print('detail_mode=' + dialog._detail_mode_switch.currentRouteKey())
 dialog.close()
 dialog.deleteLater()
 app.processEvents()
 """], capture_output=True, text=True, timeout=30)
     assert child.returncode == 0, child.stderr
     assert "picker_mode=palette" in child.stdout
+    assert "detail_mode=pro" in child.stdout
 
 
 def test_picker_mode_save_preserves_recent_colors_presets_and_output(dialog):
@@ -201,7 +351,7 @@ def test_dialog_uses_painted_surfaces_and_chinese_fluent_controls(dialog):
     assert dialog.findChildren(QSpinBox) == []
     assert not any(label.text().endswith("%") for label in dialog.findChildren(QLabel))
     assert dialog._original_swatch.height() == dialog._current_swatch.height() == 24
-    assert dialog._original_swatch.width() > dialog._original_swatch.height() * 4
+    assert dialog._original_swatch.width() >= dialog._original_swatch.height() * 4
     assert dialog._original_swatch.mapTo(dialog, QPoint()).y() == dialog._current_swatch.mapTo(dialog, QPoint()).y()
     assert dialog._original_swatch.mapTo(dialog, QPoint()).x() < dialog._current_swatch.mapTo(dialog, QPoint()).x()
     for caption, swatch in (("原色", dialog._original_swatch), ("新色", dialog._current_swatch)):
@@ -619,7 +769,7 @@ def test_focusing_color_handles_does_not_add_a_colored_outer_ring(dialog, qapp, 
     assert widget.grab().toImage() == unfocused
 
 
-def test_recent_history_scrolls_to_clickable_full_width_bars_and_caps_at_20(dialog, qapp):
+def test_recent_history_uses_compact_grid_and_caps_at_20(dialog, qapp):
     for index in range(24):
         colors.record_recent_color(QColor(index, index, index, 128))
     dialog.set_recent_colors(colors.recent_colors())
@@ -629,10 +779,12 @@ def test_recent_history_scrolls_to_clickable_full_width_bars_and_caps_at_20(dial
     qapp.processEvents()
     recent = dialog._recent_list
     scrollbar = recent.verticalScrollBar()
-    assert scrollbar.maximum() > 0
+    assert scrollbar.maximum() == 0
     last = recent.tiles[-1]
-    assert last.width() > 150 and last.height() == 30
-    assert not recent.viewport().rect().contains(last.mapTo(recent.viewport(), last.rect().center()))
+    assert 24 <= last.width() < 80 and last.height() == 36
+    assert recent.viewport().rect().contains(last.mapTo(recent.viewport(), last.rect().center()))
+    assert recent.tiles[0].y() == recent.tiles[3].y()
+    assert recent.tiles[4].y() > recent.tiles[0].y()
     recent.ensureWidgetVisible(last)
     qapp.processEvents()
     assert recent.viewport().rect().contains(last.mapTo(recent.viewport(), last.rect().center()))

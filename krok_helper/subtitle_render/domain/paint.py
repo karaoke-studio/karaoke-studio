@@ -24,6 +24,11 @@ class GradientPath:
     points: list[tuple[float, float]] = field(default_factory=list)
     start_pct: float = 0
     end_pct: float = 100
+    # Ordered (polyline vertex index, exact RGBA color), including both ends.
+    anchors: list[tuple[int, str]] = field(default_factory=list)
+    route_mode: Optional[str] = None
+    # Stable creation numbers for interior anchors, independent of route order.
+    waypoint_ids: list[int] = field(default_factory=list)
 
 
 @dataclass

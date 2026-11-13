@@ -5303,7 +5303,8 @@ def test_yurika_sug_ipa_roundtrip_keeps_graphemes_and_checkpoints(qapp, monkeypa
     assert win._timing_track.rubies[0].reading_parts == ["ɛ̃", "t͡ʃ"]
 
 
-def test_gradient_window_apply_and_undo_reach_live_subtitle_preview(qapp, monkeypatch):
+@pytest.mark.parametrize("waypoints", [False, True])
+def test_gradient_window_apply_and_undo_reach_live_subtitle_preview(qapp, monkeypatch, waypoints):
     from PyQt6.QtGui import QImage
     from PyQt6.QtTest import QTest
     from krok_helper.subtitle_render.engine.painter import paint_frame
@@ -5345,6 +5346,10 @@ def test_gradient_window_apply_and_undo_reach_live_subtitle_preview(qapp, monkey
         panel._gradient_path_btn.click()
         dialog = panel._gradient_path_dialog
         dialog.short_button.click()
+        if waypoints:
+            dialog._insert_anchor(len(dialog.wheel.points) // 2, .5)
+            dialog.point_editor.hex_edit.setText("#FF8899")
+            dialog.point_editor.hex_edit.textEdited.emit("#FF8899")
         dialog.apply_button.click()
         wait_for_preview()
         first = rendered_subtitle()

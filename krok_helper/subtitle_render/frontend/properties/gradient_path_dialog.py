@@ -7,14 +7,14 @@ from copy import deepcopy
 from dataclasses import replace
 
 from PyQt6 import sip
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal as Signal
+from PyQt6.QtCore import QPointF, QRectF, QSignalBlocker, Qt, QTimer, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, LineEdit, PushButton, ToolButton
+from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon as FIF, LineEdit, PushButton, ToolButton
 
 from krok_helper.qfluent_compat import ModelessDialog
 from krok_helper.subtitle_render.domain.gradient_path import (
-    MAX_PATH_POINTS, clamp_point, disk_point, hue_route, path_segment_indices, replace_path_stops,
+    MAX_ANCHORS, MAX_PATH_POINTS, anchor_route, clamp_point, disk_point, path_segment_indices, replace_path_stops,
     simplify_points, smooth_points,
 )
 from krok_helper.subtitle_render.domain.paint import GradientPath, PaintFill
@@ -28,15 +28,20 @@ from krok_helper.workspace_switcher import WorkspaceSwitcher
 
 
 class GradientPathWheel(HueSaturationWheel):
-    """Cached HSV disk with route drawing and endpoint color picking."""
+    """Cached HSV disk with ordered color anchors and freehand drawing."""
 
     pathChanged = Signal()
     editStarted = Signal()
-    endpointPicked = Signal(int, float, float)
+    anchorMoved = Signal(int, float, float)
+    anchorSelected = Signal(int)
+    insertRequested = Signal(int, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.points = [(1.0, 0.0), (0.0, 1.0)]
+        self.anchor_indices = [0, 1]
+        self.selected_anchor = 0
+        self.anchor_labels = ["起", "终"]
         self.adjusting = False
         self.endpoint_index = None
         self._gesture = False
@@ -73,13 +78,36 @@ class GradientPathWheel(HueSaturationWheel):
         self.update()
 
     def endpoint_position(self, index):
-        first, last = self.to_screen(self.points[0]), self.to_screen(self.points[-1])
-        position = first if index == 0 else last
-        if math.hypot(first.x() - last.x(), first.y() - last.y()) < 24:
-            # Coincident HSV coordinates (e.g. two grays) must remain draggable.
-            position += QPointF(0, -13 if index == 0 else 13)
+        position = self.to_screen(self.points[self.anchor_indices[index]])
+        overlapping = [i for i, vertex in enumerate(self.anchor_indices)
+                       if math.dist(self.points[vertex], self.points[self.anchor_indices[index]])
+                       * self.surface_rect().width() / 2 < 24]
+        if len(overlapping) > 1:
+            position += QPointF(0, (overlapping.index(index) - (len(overlapping) - 1) / 2) * 26)
             position.setY(max(12, min(self.height() - 12, position.y())))
         return position
+
+    def nearest_segment(self, position):
+        best = (float("inf"), 0, 0.0)
+        for i, (a, b) in enumerate(zip(self.points, self.points[1:])):
+            first, last = self.to_screen(a), self.to_screen(b)
+            dx, dy = last.x() - first.x(), last.y() - first.y()
+            length_sq = dx * dx + dy * dy
+            t = min(1, max(0, ((position.x() - first.x()) * dx + (position.y() - first.y()) * dy) / length_sq)) if length_sq else 0
+            distance = math.hypot(position.x() - first.x() - t * dx, position.y() - first.y() - t * dy)
+            if distance < best[0]:
+                best = distance, i, t
+        return best
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802
+        if self.adjusting and event.button() == Qt.MouseButton.LeftButton:
+            self._gesture = False
+            distance, segment, t = self.nearest_segment(event.position())
+            if distance <= 14:
+                self.insertRequested.emit(segment, t)
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
 
     def _changed(self):
         self.update()
@@ -89,11 +117,13 @@ class GradientPathWheel(HueSaturationWheel):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         endpoint_distances = []
-        for i in (0, 1) if self.adjusting else ():
+        for i in range(len(self.anchor_indices)) if self.adjusting else ():
             delta = event.position() - self.endpoint_position(i)
             endpoint_distances.append((math.hypot(delta.x(), delta.y()), i))
         distance, index = min(endpoint_distances, default=(float("inf"), 0))
         self.endpoint_index = index if distance <= 14 else None
+        if self.endpoint_index is not None:
+            self.anchorSelected.emit(self.endpoint_index)
         rect = self.surface_rect()
         delta = event.position() - rect.center()
         if self.endpoint_index is None and math.hypot(delta.x(), delta.y()) > rect.width() / 2 + .5:
@@ -103,13 +133,15 @@ class GradientPathWheel(HueSaturationWheel):
             candidates = [(math.dist((event.position().x(), event.position().y()),
                                     (self.to_screen(p).x(), self.to_screen(p).y())), i)
                           for i, p in enumerate(self.points[1:-1], 1)]
-            if not candidates or min(candidates)[0] > 12:
+            if len(self.anchor_indices) > 2 or not candidates or min(candidates)[0] > 12:
                 return
             self._handle = min(candidates)[1]
-        self.editStarted.emit()
+        self._edit_saved = False
         self._gesture = True
         self._last_position = event.position()
         if self.endpoint_index is None and not self.adjusting:
+            self.editStarted.emit()
+            self._edit_saved = True
             point = self.from_screen(event.position())
             self._raw = [point]
             self.points = [point, point]
@@ -120,11 +152,16 @@ class GradientPathWheel(HueSaturationWheel):
         if not self._gesture:
             return
         point = self.from_screen(event.position())
+        if self.adjusting and event.position() == self._last_position:
+            return
+        if not self._edit_saved:
+            self.editStarted.emit()
+            self._edit_saved = True
         if self.endpoint_index is not None:
             if event.position() == self._last_position:
                 return
             self._last_position = event.position()
-            self.endpointPicked.emit(self.endpoint_index, *point)
+            self.anchorMoved.emit(self.endpoint_index, *point)
             event.accept()
             return
         elif self.adjusting:
@@ -184,12 +221,13 @@ class GradientPathWheel(HueSaturationWheel):
         if self.adjusting:
             painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
             painter.setBrush(QColor("#242424"))
-            for point in self.points[1:-1]:
+            for point in self.points[1:-1] if len(self.anchor_indices) == 2 else ():
                 painter.drawEllipse(self.to_screen(point), 3.5, 3.5)
         if self.adjusting:
-            for index, label in enumerate(("起", "终")):
+            for index in range(len(self.anchor_indices)):
+                label = self.anchor_labels[index]
                 position = self.endpoint_position(index)
-                painter.setBrush(QColor(palette().accent_primary if self.endpoint_index == index else "#242424"))
+                painter.setBrush(QColor(palette().accent_primary if self.selected_anchor == index else "#242424"))
                 painter.setPen(QPen(QColor("#FFFFFF"), 2))
                 painter.drawEllipse(position, 11, 11)
                 painter.drawText(QRectF(position.x() - 10, position.y() - 10, 20, 20),
@@ -197,8 +235,8 @@ class GradientPathWheel(HueSaturationWheel):
         painter.end()
 
 
-class _EndpointColorEditor(QWidget):
-    """Compact hexadecimal entry for one draggable endpoint."""
+class _PointColorEditor(QWidget):
+    """Compact selected-anchor editor shared by endpoints and waypoints."""
 
     colorChanged = Signal(str)
     entryChanged = Signal()
@@ -212,7 +250,10 @@ class _EndpointColorEditor(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(CaptionLabel(label, self))
+        self.point_combo = ComboBox(self)
+        self.point_combo.setMinimumWidth(104)
+        self.point_combo.setAccessibleName("选中颜色点")
+        layout.addWidget(self.point_combo)
         self.hex_edit = LineEdit(self)
         self.hex_edit.setMinimumWidth(90)
         self.hex_edit.setMaxLength(9)
@@ -228,6 +269,11 @@ class _EndpointColorEditor(QWidget):
         self.screen_picker_button.setAccessibleName(f"从屏幕拾取{label}颜色")
         self.screen_picker_button.clicked.connect(self.screenPickRequested.emit)
         layout.addWidget(self.screen_picker_button)
+        self.delete_button = ToolButton(FIF.DELETE, self)
+        self.delete_button.setFixedSize(30, 30)
+        self.delete_button.setToolTip("删除所选途经点")
+        self.delete_button.setAccessibleName("删除所选途经点")
+        layout.addWidget(self.delete_button)
 
     def set_color(self, color: str):
         self._color = QColor(color)
@@ -300,6 +346,9 @@ class GradientPathDialog(ModelessDialog):
         self._dirty = False
         self._route_mode = None
         self._history = []
+        self._anchors = []
+        self._selected = 0
+        self._waypoint_ids = []
         self._saved_route = deepcopy(fill.gradient_path)
         if self._saved_route and (self._saved_route.start_pct, self._saved_route.end_pct) != (0, 100):
             # Older editing metadata may describe a segment. Its baked colors
@@ -323,17 +372,13 @@ class GradientPathDialog(ModelessDialog):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        self.endpoint_editors = []
-        endpoint_row = QHBoxLayout()
-        endpoint_row.setSpacing(12)
-        for i, label in enumerate(("起点", "终点")):
-            editor = _EndpointColorEditor(label, self)
-            editor.colorChanged.connect(lambda color, index=i: self._set_endpoint_color(index, color))
-            editor.entryChanged.connect(self._validate_color_entries)
-            editor.screenPickRequested.connect(lambda index=i: self._begin_screen_color_pick(index))
-            endpoint_row.addWidget(editor, 1)
-            self.endpoint_editors.append(editor)
-        layout.addLayout(endpoint_row)
+        self.point_editor = _PointColorEditor("选中点", self)
+        self.point_editor.colorChanged.connect(lambda color: self._set_anchor_color(self._selected, color))
+        self.point_editor.entryChanged.connect(self._validate_color_entries)
+        self.point_editor.screenPickRequested.connect(lambda: self._begin_screen_color_pick(self._selected))
+        self.point_editor.point_combo.currentIndexChanged.connect(self._select_anchor)
+        self.point_editor.delete_button.clicked.connect(self._delete_anchor)
+        layout.addWidget(self.point_editor)
         self.hint_label = CaptionLabel("按住鼠标自由画线，新线会完整替换当前路径。", self)
         self.hint_label.setWordWrap(True)
         layout.addWidget(self.hint_label)
@@ -371,7 +416,9 @@ class GradientPathDialog(ModelessDialog):
         footer_layout.addLayout(row)
         self.wheel.editStarted.connect(self._remember)
         self.wheel.pathChanged.connect(self._schedule_refresh)
-        self.wheel.endpointPicked.connect(self._pick_endpoint)
+        self.wheel.anchorMoved.connect(self._pick_anchor)
+        self.wheel.anchorSelected.connect(self._select_anchor)
+        self.wheel.insertRequested.connect(self._insert_anchor)
         self.mode_switch.currentItemChanged.connect(self._change_edit_mode)
         self.mode_switch.setCurrentItem("draw")
         self._load_initial()
@@ -395,17 +442,28 @@ class GradientPathDialog(ModelessDialog):
         else:
             first, last = path_segment_indices(self._base, left, right)
             self.wheel.set_points([disk_point(c) for p, c in self._base[first:last + 1]])
+        self._anchors = list(route.anchors) if route and route.anchors else [
+            (0, self._colors()[0]), (len(self.wheel.points) - 1, self._colors()[1])]
+        self._route_mode = route.route_mode if route else None
+        self._waypoint_ids = (list(route.waypoint_ids) if route and route.waypoint_ids
+                              else list(range(1, len(self._anchors) - 1)))
+        self._sync_anchor_handles()
         self._refresh()
 
     def _remember(self):
-        self._history.append((list(self.wheel.points), list(self._base), self._dirty, self._route_mode))
+        self._history.append((list(self.wheel.points), list(self._base), self._dirty, self._route_mode,
+                              list(self._anchors), self._selected, list(self._waypoint_ids)))
         self._history = self._history[-20:]
         self.undo_button.setEnabled(True)
 
     def _undo(self):
         if self._history:
-            points, self._base, self._dirty, self._route_mode = self._history.pop()
+            self._cancel_screen_picker()
+            self.point_editor._editing = False
+            (points, self._base, self._dirty, self._route_mode, self._anchors, self._selected,
+             self._waypoint_ids) = self._history.pop()
             self.wheel.set_points(points)
+            self._sync_anchor_handles()
             self._refresh()
             if self._applied_once and not self._apply_error and self._validate_color_entries():
                 self.applyRequested.emit(self._draft_fill())
@@ -423,71 +481,179 @@ class GradientPathDialog(ModelessDialog):
                 hue = math.atan2(point[1], point[0]) / math.tau % 1
                 picked = QColor.fromHsvF(hue, min(1, math.hypot(*point)), 1, color.alphaF())
                 self._base[stop_index] = (self._base[stop_index][0], picked.name(QColor.NameFormat.HexArgb).upper())
+            self._anchors = [(0, self._colors()[0]), (len(self.wheel.points) - 1, self._colors()[1])]
+            self._selected = 0
+            self._waypoint_ids = []
+        elif len(self._anchors) == 2:
+            self._anchors = [(0, self._colors()[0]), (len(self.wheel.points) - 1, self._colors()[1])]
+        self._sync_anchor_handles()
         if not self._timer.isActive():
             self._timer.start()
 
     def _generate(self, long):
         self._remember()
         self._route_mode = "long" if long else "short"
-        self.wheel.set_points(simplify_points(hue_route(*self._colors(), long=long), .006))
+        self._regenerate()
         self.mode_switch.setCurrentItem("adjust")
         self._dirty = True
         self._refresh()
 
     def _reverse(self):
+        self._cancel_screen_picker()
+        self.point_editor._editing = False
         self._remember()
         left, right = 0, 100
         first, last = path_segment_indices(self._base, left, right)
         self._base[first:last + 1] = [(left if p == right else right if p == left else round(left + right - p, 6), c)
                                        for p, c in reversed(self._base[first:last + 1])]
         self.wheel.set_points(list(reversed(self.wheel.points)))
+        last_vertex = len(self.wheel.points) - 1
+        self._anchors = [(last_vertex - index, color) for index, color in reversed(self._anchors)]
+        self._waypoint_ids.reverse()
+        self._selected = len(self._anchors) - 1 - self._selected
+        self._sync_anchor_handles()
         self._dirty = True
         self._refresh()
 
     def route(self) -> GradientPath:
-        return GradientPath(list(self.wheel.points))
+        return GradientPath(list(self.wheel.points), anchors=list(self._anchors), route_mode=self._route_mode,
+                            waypoint_ids=list(self._waypoint_ids))
 
     def _change_edit_mode(self, mode):
         self.wheel.set_adjusting(mode == "adjust")
-        self.hint_label.setText("拖动起点、终点改色，拖动中间控制点修整路径。" if mode == "adjust"
+        self.hint_label.setText("双击路径添加途经点；选中点后可拖动、输入色号或取色。" if mode == "adjust"
                                 else "按住鼠标自由画线，新线会完整替换当前路径。")
 
-    def _pick_endpoint(self, index, x, y):
-        previous = QColor(self._colors()[index])
+    def _pick_anchor(self, index, x, y):
+        previous = QColor(self._anchors[index][1])
         hue = math.atan2(y, x) / math.tau % 1
         color = QColor.fromHsvF(hue, min(1, math.hypot(x, y)),
-                               previous.valueF() or 1.0, previous.alphaF())
-        self._set_endpoint_color(index, color.name(QColor.NameFormat.HexArgb),
+                               previous.valueF(), previous.alphaF())
+        self._set_anchor_color(index, color.name(QColor.NameFormat.HexArgb),
                                  remember=False, point=(x, y))
 
-    def _set_endpoint_color(self, index, color, *, remember=True, point=None):
-        old = QColor(self._colors()[index])
+    def _set_anchor_color(self, index, color, *, remember=True, point=None):
+        old = QColor(self._anchors[index][1])
         current = QColor(color)
         if current == old and point is None:
             return
         if remember:
             self._remember()
-        first, last = path_segment_indices(self._base, 0, 100)
-        position = first if index == 0 else last
-        self._base[position] = (self._base[position][0], current.name(QColor.NameFormat.HexArgb).upper())
+        vertex = self._anchors[index][0]
+        self._anchors[index] = (vertex, current.name(QColor.NameFormat.HexArgb).upper())
+        self._update_base_ends()
         points = list(self.wheel.points)
-        points[0 if index == 0 else -1] = point if point is not None else disk_point(color)
-        if self._route_mode is not None:
-            points = simplify_points(hue_route(*self._colors(), long=self._route_mode == "long"), .006)
+        points[vertex] = point if point is not None else disk_point(color)
         self.wheel.set_points(points)
+        if self._route_mode is not None or len(self._anchors) > 2:
+            self._regenerate()
+        self._sync_anchor_handles()
         if remember:
             self.mode_switch.setCurrentItem("adjust")
-            self._refresh_endpoint_controls()
+            self._refresh_point_editor()
         self._schedule_refresh(preserve_route_mode=True)
 
-    def _refresh_endpoint_controls(self):
-        for editor, color in zip(self.endpoint_editors, self._colors()):
-            editor.set_color(color)
+    def _refresh_point_editor(self):
+        self.point_editor.set_color(self._anchors[self._selected][1])
+
+    def _sync_anchor_handles(self):
+        self._selected = max(0, min(self._selected, len(self._anchors) - 1))
+        self.wheel.anchor_indices = [index for index, _ in self._anchors]
+        self.wheel.selected_anchor = self._selected
+        self.wheel.anchor_labels = ["起"] + [str(i) for i in self._waypoint_ids] + ["终"]
+        combo = self.point_editor.point_combo
+        labels = ["起点"] + [f"途经点 {i}" for i in self._waypoint_ids] + ["终点"]
+        blocker = QSignalBlocker(combo)
+        if [combo.itemText(i) for i in range(combo.count())] != labels:
+            combo.clear()
+            combo.addItems(labels)
+        combo.setCurrentIndex(self._selected)
+        del blocker
+        deletable = 0 < self._selected < len(self._anchors) - 1
+        self.point_editor.delete_button.setVisible(deletable)
+        label = labels[self._selected]
+        self.point_editor.hex_edit.setAccessibleName(f"{label}十六进制色号")
+        self.point_editor.screen_picker_button.setAccessibleName(f"从屏幕拾取{label}颜色")
+        self.point_editor.screen_picker_button.setToolTip(f"从屏幕拾取{label}颜色")
+        self.wheel.update()
+
+    def _select_anchor(self, index: int):
+        if not 0 <= index < len(self._anchors):
+            return
+        self._cancel_screen_picker()
+        self._selected = index
+        self.point_editor._editing = False
+        self._sync_anchor_handles()
+        self._refresh()
+
+    def _update_base_ends(self):
+        first, last = path_segment_indices(self._base, 0, 100)
+        self._base[first] = (0, self._anchors[0][1])
+        self._base[last] = (100, self._anchors[-1][1])
+
+    def _regenerate(self):
+        generated = anchor_route([color for _, color in self._anchors], long=self._route_mode == "long")
+        self._anchors = generated.anchors
+        self.wheel.set_points(generated.points)
+        self._sync_anchor_handles()
+
+    def _insert_anchor(self, segment: int, t: float):
+        if len(self._anchors) >= MAX_ANCHORS:
+            self.status_label.setText(f"最多支持 {MAX_ANCHORS - 2} 个途经点。")
+            self.status_label.show()
+            return
+        self._refresh()
+        a, b = self.wheel.points[segment:segment + 2]
+        point = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        lengths = [0.0]
+        for p, q in zip(self.wheel.points, self.wheel.points[1:]):
+            lengths.append(lengths[-1] + math.dist(p, q))
+        distance = lengths[segment] + math.dist(a, b) * t
+        progress = distance / lengths[-1] if lengths[-1] > 1e-9 else .5
+        # Read value/opacity from the current ramp while HS comes from the
+        # clicked disk coordinate. Thus adding a point starts at its own color.
+        position = progress * 100
+        left, right = self._stops[0], self._stops[-1]
+        for stop in self._stops:
+            if stop[0] <= position:
+                left = stop
+            if stop[0] >= position:
+                right = stop
+                break
+        ratio = (position - left[0]) / (right[0] - left[0]) if right[0] > left[0] else 0
+        first, last = QColor(left[1]), QColor(right[1])
+        value = first.valueF() + (last.valueF() - first.valueF()) * ratio
+        alpha = first.alphaF() + (last.alphaF() - first.alphaF()) * ratio
+        color = QColor.fromHsvF(math.atan2(point[1], point[0]) / math.tau % 1,
+                               min(1, math.hypot(*point)), value, alpha)
+        insert_at = next((i for i, (vertex, _) in enumerate(self._anchors) if vertex > segment), len(self._anchors) - 1)
+        self._remember()
+        self._anchors.insert(insert_at, (segment, color.name(QColor.NameFormat.HexArgb).upper()))
+        self._waypoint_ids.insert(insert_at - 1, max(self._waypoint_ids, default=0) + 1)
+        self._selected = insert_at
+        self._route_mode = self._route_mode or "short"
+        self.point_editor._editing = False
+        self._regenerate()
+        self._dirty = True
+        self._refresh()
+
+    def _delete_anchor(self):
+        if not 0 < self._selected < len(self._anchors) - 1:
+            return
+        self._cancel_screen_picker()
+        self._remember()
+        del self._anchors[self._selected]
+        del self._waypoint_ids[self._selected - 1]
+        self._selected = min(self._selected, len(self._anchors) - 1)
+        self.point_editor._editing = False
+        self._regenerate()
+        self._dirty = True
+        self._refresh()
 
     def _begin_screen_color_pick(self, index: int) -> None:
         self._cancel_screen_picker()
-        editor = self.endpoint_editors[index]
-        original = QColor(self._colors()[index])
+        editor = self.point_editor
+        original = QColor(self._anchors[index][1])
         original_text = editor.hex_edit.text()
         accepted = False
         picker = ScreenColorPicker()
@@ -509,7 +675,7 @@ class GradientPathDialog(ModelessDialog):
             accepted = True
             chosen = picked_color(color).name(QColor.NameFormat.HexArgb)
             editor.set_color(chosen)
-            self._set_endpoint_color(index, chosen)
+            self._set_anchor_color(index, chosen)
 
         def finish() -> None:
             if self._screen_picker is picker:
@@ -538,7 +704,7 @@ class GradientPathDialog(ModelessDialog):
         super().closeEvent(event)
 
     def _validate_color_entries(self):
-        valid = all(editor.is_valid() for editor in self.endpoint_editors)
+        valid = self.point_editor.is_valid()
         self.apply_button.setEnabled(self._dirty and valid and not self._apply_error
                                      and self._draft_fill() != self._applied_fill)
         if self._apply_error:
@@ -557,7 +723,7 @@ class GradientPathDialog(ModelessDialog):
         self._stops = replace_path_stops(self._base, self.route()) if self._dirty else list(self._original)
         self.preview.stops = self._stops
         self.preview.update()
-        self._refresh_endpoint_controls()
+        self._refresh_point_editor()
         self.apply_button.setEnabled(self._dirty)
         self.undo_button.setEnabled(bool(self._history))
         self.status_label.setText("已应用到字幕，可继续调整或撤销。" if self._applied_once and self._draft_fill() == self._applied_fill

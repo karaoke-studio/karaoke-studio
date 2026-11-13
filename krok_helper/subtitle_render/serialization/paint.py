@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from krok_helper.subtitle_render.domain.gradient_path import MAX_PATH_POINTS
+from krok_helper.subtitle_render.domain.gradient_path import MAX_ANCHORS, MAX_PATH_POINTS, rgba
 from krok_helper.subtitle_render.domain.paint import (
     GradientPath,
     KaraokeColors,
@@ -73,6 +73,12 @@ def paint_fill_to_dict(fill: PaintFill) -> dict:
             "start_pct": route.start_pct,
             "end_pct": route.end_pct,
         }
+        if route.anchors:
+            result["gradient_path"]["anchors"] = list(route.anchors)
+        if route.route_mode is not None:
+            result["gradient_path"]["route_mode"] = route.route_mode
+        if route.waypoint_ids:
+            result["gradient_path"]["waypoint_ids"] = list(route.waypoint_ids)
     return result
 
 
@@ -97,7 +103,34 @@ def gradient_path_from_dict(payload: object) -> Optional[GradientPath]:
             clean.append((x, y))
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
-    return GradientPath(clean, start, end)
+    anchors = []
+    raw_anchors = payload.get("anchors", [])
+    try:
+        if not isinstance(raw_anchors, list) or len(raw_anchors) > MAX_ANCHORS:
+            return None
+        for item in raw_anchors:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                return None
+            index, color = item
+            if (type(index) is not int or not 0 <= index < len(clean)
+                    or not isinstance(color, str) or not color.startswith("#")):
+                return None
+            rgba(color)
+            if anchors and index <= anchors[-1][0]:
+                return None
+            anchors.append((index, color))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if anchors and (len(anchors) < 2 or anchors[0][0] != 0 or anchors[-1][0] != len(clean) - 1):
+        return None
+    mode = payload.get("route_mode")
+    if mode not in (None, "short", "long"):
+        return None
+    ids = payload.get("waypoint_ids", [])
+    if (not isinstance(ids, list) or any(type(i) is not int or i < 1 for i in ids)
+            or len(set(ids)) != len(ids) or (ids and len(ids) != len(anchors) - 2)):
+        return None
+    return GradientPath(clean, start, end, anchors, mode, ids)
 
 
 def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> PaintFill:

@@ -267,13 +267,16 @@ class ColorChannelSlider(QWidget):
     def __init__(self, channel: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.channel = channel
+        self._maximum = 3599 if channel == "hue" else 1000 if channel in {"saturation", "pro_value", "pro_alpha"} else 255
         self._color = QColor("#FFFFFF")
         self._value = 255
         self.setFixedHeight(30)
         self.setMinimumWidth(150)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAccessibleName("不透明度" if channel == "alpha" else "明度")
+        self.setAccessibleName({"red": "红色通道", "green": "绿色通道", "blue": "蓝色通道",
+                               "hue": "色相", "saturation": "饱和度", "pro_alpha": "不透明度"}.get(channel,
+                               "不透明度" if channel == "alpha" else "明度"))
 
     @property
     def alpha(self) -> int:
@@ -286,14 +289,17 @@ class ColorChannelSlider(QWidget):
     def set_color(self, color: QColor, value: int | None = None) -> None:
         self._color = QColor(color)
         self._value = (color.alpha() if self.channel == "alpha" else color.value()) if value is None else value
-        self.setToolTip(f"{self.accessibleName()}：{round(self._value / 255 * 100)}%")
+        value_text = (f"{self._value / 10:.1f}°" if self.channel == "hue"
+                      else str(self._value) if self.channel in {"red", "green", "blue"}
+                      else f"{round(self._value / self._maximum * 100)}%")
+        self.setToolTip(f"{self.accessibleName()}：{value_text}")
         self.update()
 
     def surface_rect(self) -> QRectF:
         return QRectF(self.rect()).adjusted(9, 9, -9, -9)
 
     def _set_value(self, value: int) -> None:
-        value = max(0, min(255, value))
+        value = max(0, min(self._maximum, value))
         if value != self._value:
             self._value = value
             self.update()
@@ -301,7 +307,7 @@ class ColorChannelSlider(QWidget):
 
     def _pick(self, x: float) -> None:
         rect = self.surface_rect()
-        self._set_value(round((x - rect.left()) / rect.width() * 255))
+        self._set_value(round((x - rect.left()) / rect.width() * self._maximum))
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -326,7 +332,7 @@ class ColorChannelSlider(QWidget):
         elif key in (Qt.Key.Key_Left, Qt.Key.Key_Down, Qt.Key.Key_PageDown):
             self._set_value(self._value - (16 if key == Qt.Key.Key_PageDown else step))
         elif key in (Qt.Key.Key_Home, Qt.Key.Key_End):
-            self._set_value(0 if key == Qt.Key.Key_Home else 255)
+            self._set_value(0 if key == Qt.Key.Key_Home else self._maximum)
         else:
             super().keyPressEvent(event)
             return
@@ -349,19 +355,31 @@ class ColorChannelSlider(QWidget):
         painter.setClipPath(path)
         start, end = QColor(self._color), QColor(self._color)
         end.setAlpha(255)
-        if self.channel == "alpha":
+        if self.channel in {"alpha", "pro_alpha"}:
             paint_checkerboard(painter, rect, 6)
             start.setAlpha(0)
+        elif self.channel in {"red", "green", "blue"}:
+            setter = {"red": "setRed", "green": "setGreen", "blue": "setBlue"}[self.channel]
+            start.setAlpha(255)
+            getattr(start, setter)(0)
+            getattr(end, setter)(255)
+        elif self.channel == "saturation":
+            hue = max(0, self._color.hsvHueF())
+            start = QColor.fromHsvF(hue, 0, self._color.valueF())
+            end = QColor.fromHsvF(hue, 1, self._color.valueF())
         else:
             start = QColor("#000000")
         gradient = QLinearGradient(rect.topLeft(), rect.topRight())
         gradient.setColorAt(0, start)
         gradient.setColorAt(1, end)
+        if self.channel == "hue":
+            for index in range(7):
+                gradient.setColorAt(index / 6, QColor.fromHsvF((index % 6) / 6, 1, 1))
         painter.fillRect(rect, gradient)
         painter.setClipping(False)
         painter.setPen(QPen(QColor(palette().card_border), 1))
         painter.drawPath(path)
-        _draw_handle(painter, QPointF(rect.left() + self._value / 255 * rect.width(), rect.center().y()))
+        _draw_handle(painter, QPointF(rect.left() + self._value / self._maximum * rect.width(), rect.center().y()))
         painter.end()
 
 
