@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 
 from PyQt6 import sip
-from PyQt6.QtCore import QPoint, QPointF, QRect, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QPoint, QPointF, QRect, QSignalBlocker, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import (
     QColor,
     QCursor,
@@ -44,8 +44,10 @@ from qframelesswindow import FramelessDialog
 from qframelesswindow.titlebar.title_bar_buttons import TitleBarButtonState
 
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
+from krok_helper.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.settings.recent_colors import RECENT_COLOR_LIMIT, RecentColorStore
-from .color_picker_widgets import ColorChannelSlider, ColorTile, HueSaturationPlane
+from krok_helper.subtitle_render.settings.store import SubtitleRenderSettingsStore
+from .color_picker_widgets import ColorChannelSlider, ColorTile, HueSaturationPlane, HueSaturationWheel
 
 
 COLOR_COMMIT_DEBOUNCE_MS = 250
@@ -710,7 +712,7 @@ class _RecentColorList(FluentScrollArea):
 
 
 class _ColorDialog(FramelessDialog):
-    """Fluent color editor with N3-style HS, value and alpha surfaces.
+    """Fluent color editor with an HSV wheel, value and alpha surfaces.
 
     RGB remains exact when a color is loaded or only alpha changes. Hue and
     saturation are retained while the color is gray/black so moving value back
@@ -735,6 +737,7 @@ class _ColorDialog(FramelessDialog):
         self._current = QColor("#FFFFFF")
         self._selected = QColor()
         self._hue, self._saturation, self._value = 0.0, 0.0, 1.0
+        self._picker_settings = SubtitleRenderSettingsStore()
         self._screen_picker: Optional[ScreenColorPicker] = None
 
         root = QVBoxLayout(self)
@@ -744,10 +747,20 @@ class _ColorDialog(FramelessDialog):
         body.setSpacing(20)
         left = QVBoxLayout()
         left.setSpacing(8)
+        self._picker_mode_switch = WorkspaceSwitcher(self)
+        self._picker_mode_switch.setAccessibleName("调色模式")
+        for mode, label in (("wheel", "色盘"), ("palette", "调色板")):
+            self._picker_mode_switch.addItem(mode, label).setAccessibleName(label)
+        left.addWidget(self._picker_mode_switch, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._picker_stack = QStackedWidget(self)
+        self._color_wheel = HueSaturationWheel(self)
         self._color_plane = HueSaturationPlane(self)
-        self._color_plane.setMinimumSize(340, 250)
-        left.addWidget(self._color_plane, 1)
+        self._picker_stack.addWidget(self._color_wheel)
+        self._picker_stack.addWidget(self._color_plane)
+        left.addWidget(self._picker_stack, 1)
+        self._color_wheel.colorChanged.connect(self._set_hue_saturation)
         self._color_plane.colorChanged.connect(self._set_hue_saturation)
+        self._picker_mode_switch.currentItemChanged.connect(self._switch_color_mode)
 
         self._value_slider = ColorChannelSlider("value", self)
         self._alpha_slider = ColorChannelSlider("alpha", self)
@@ -841,6 +854,7 @@ class _ColorDialog(FramelessDialog):
         return QColor(self._selected)
 
     def set_initial_color(self, color: QColor) -> None:
+        self._restore_picker_mode()
         color = QColor(color) if color.isValid() else QColor("#FFFFFF")
         self._selected = QColor()
         self._deleted_recent_rgba: set[int] = set()
@@ -867,6 +881,7 @@ class _ColorDialog(FramelessDialog):
             self.currentColorChanged.emit(QColor(color))
 
     def _sync_controls(self) -> None:
+        self._color_wheel.set_color(self._hue, self._saturation)
         self._color_plane.set_color(self._hue, self._saturation)
         full_value = QColor.fromHsvF(self._hue / 360, self._saturation, 1)
         self._value_slider.set_color(full_value, round(self._value * 255))
@@ -876,6 +891,36 @@ class _ColorDialog(FramelessDialog):
         self._hex_edit.setText(_normalize_hex(self._current.name(QColor.NameFormat.HexArgb)))
         self._hex_hint.hide()
         self._ok_button.setEnabled(True)
+
+    def _switch_color_mode(self, mode: str) -> None:
+        # Both surfaces share HS state; switching presentation must never
+        # round RGB, reset latent hue, or commit an unfinished hex edit.
+        self._picker_stack.setCurrentWidget(
+            self._color_plane if mode == "palette" else self._color_wheel
+        )
+        try:
+            # Read fresh settings so this preference cannot overwrite recent
+            # colors, preset libraries or output settings edited elsewhere.
+            data = self._picker_settings.load()
+            if data.get("color_picker_mode") != mode:
+                data["color_picker_mode"] = mode
+                self._picker_settings.save(data)
+        except Exception:
+            logging.getLogger(__name__).warning("保存调色模式失败", exc_info=True)
+
+    def _restore_picker_mode(self) -> None:
+        try:
+            mode = self._picker_settings.load().get("color_picker_mode", "wheel")
+        except Exception:
+            logging.getLogger(__name__).warning("读取调色模式失败", exc_info=True)
+            mode = "wheel"
+        if mode not in ("wheel", "palette"):
+            mode = "wheel"
+        with QSignalBlocker(self._picker_mode_switch):
+            self._picker_mode_switch.setCurrentItem(mode)
+        self._picker_stack.setCurrentWidget(
+            self._color_plane if mode == "palette" else self._color_wheel
+        )
 
     def _set_hue_saturation(self, hue: float, saturation: float) -> None:
         self._hue, self._saturation = hue, saturation

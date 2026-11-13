@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QColor, QConicalGradient, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PyQt6.QtWidgets import QAbstractButton, QWidget
 
 from krok_helper.subtitle_render.frontend.widgets.theme import palette
@@ -112,6 +114,148 @@ class HueSaturationPlane(QWidget):
         painter.drawPath(path)
         _draw_handle(painter, QPointF(rect.left() + self.hue / 359 * rect.width(),
                                     rect.top() + (1 - self.saturation) * rect.height()))
+        painter.end()
+
+
+class HueSaturationWheel(QWidget):
+    """HSV disk at V=1: hue counterclockwise from red/right, saturation radial.
+
+    The six RGB/CMY hues are equally spaced by 60 degrees. Mixing white into
+    the full-saturation hue is exactly HSV at V=1, not a perceptual/RYB wheel.
+    """
+
+    colorChanged = Signal(float, float)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.hue = 0.0
+        self.saturation = 1.0
+        self._dragging = False
+        self._surface_key: tuple[float, float] | None = None
+        self._surface = QImage()
+        self.setMinimumSize(320, 320)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setAccessibleName("HSV 色相与饱和度色盘")
+        self.setToolTip("HSV 色盘：沿圆周选择色相，从圆心向外增加饱和度；"
+                        "左右键调整色相，上下键调整饱和度，Shift 加速；明度由下方滑条调整")
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(340, 340)
+
+    def surface_rect(self) -> QRectF:
+        side = max(min(self.width(), self.height()) - 18, 1)
+        return QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+
+    def handle_position(self) -> QPointF:
+        rect = self.surface_rect()
+        angle = math.radians(self.hue)
+        radius = rect.width() / 2 * self.saturation
+        return rect.center() + QPointF(math.cos(angle) * radius, -math.sin(angle) * radius)
+
+    def set_color(self, hue: float, saturation: float) -> None:
+        self.hue = hue % 360.0
+        self.saturation = max(0.0, min(1.0, saturation))
+        self.update()
+
+    def _pick(self, position: QPointF) -> None:
+        rect = self.surface_rect()
+        dx, dy = position.x() - rect.center().x(), rect.center().y() - position.y()
+        distance = math.hypot(dx, dy)
+        # White has no hue: reaching the center must not erase the selected hue.
+        hue = math.degrees(math.atan2(dy, dx)) % 360 if distance > 1e-9 else self.hue
+        saturation = min(distance / (rect.width() / 2), 1.0)
+        self.set_color(hue, saturation)
+        self.colorChanged.emit(self.hue, self.saturation)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            rect = self.surface_rect()
+            delta = event.position() - rect.center()
+            if math.hypot(delta.x(), delta.y()) > rect.width() / 2 + 0.5:
+                event.ignore()
+                return
+            self._dragging = True
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self._pick(event.position())
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
+            self._pick(event.position())
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._pick(event.position())
+            self._dragging = False
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        step = 10 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
+        key = event.key()
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self.set_color(self.hue + (step if key == Qt.Key.Key_Right else -step), self.saturation)
+        elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.set_color(self.hue, self.saturation + (step if key == Qt.Key.Key_Up else -step) / 100)
+        else:
+            super().keyPressEvent(event)
+            return
+        self.colorChanged.emit(self.hue, self.saturation)
+        event.accept()
+
+    def focusInEvent(self, event) -> None:  # noqa: N802
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        self.update()
+
+    def surface_image(self) -> QImage:
+        """Cache the static disk at device resolution; dragging only moves a handle."""
+        side = self.surface_rect().width()
+        dpr = self.devicePixelRatioF()
+        key = (side, dpr)
+        if self._surface_key == key:
+            return self._surface
+        pixels = max(int(math.ceil(side * dpr)), 1)
+        image = QImage(pixels, pixels, QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
+        image.fill(0)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(0, 0, side, side)
+        path = QPainterPath()
+        path.addEllipse(rect)
+        painter.setClipPath(path)
+        hue = QConicalGradient(rect.center(), 0)
+        for index in range(7):
+            hue.setColorAt(index / 6, QColor.fromHsvF((index % 6) / 6, 1, 1))
+        painter.fillRect(rect, hue)
+        saturation = QRadialGradient(rect.center(), side / 2)
+        saturation.setColorAt(0, QColor("#FFFFFF"))
+        saturation.setColorAt(1, QColor(255, 255, 255, 0))
+        painter.fillRect(rect, saturation)
+        painter.end()
+        self._surface_key, self._surface = key, image
+        return image
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.surface_rect()
+        painter.drawImage(rect.topLeft(), self.surface_image())
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(palette().card_border), 1))
+        painter.drawEllipse(rect)
+        _draw_handle(painter, self.handle_position())
         painter.end()
 
 
