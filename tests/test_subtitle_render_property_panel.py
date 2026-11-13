@@ -4392,11 +4392,23 @@ def test_property_panel_uses_scrollable_icon_tabs_in_expected_order(qapp):
     assert panel._navigation.currentRouteKey() == "effects"
 
     for expected_index, (route_key, _label) in enumerate(panel._PAGE_SPECS):
-        panel._navigation.widget(route_key).click()
-        qapp.processEvents()
-        assert panel.currentIndex() == expected_index
-        assert panel._navigation.currentRouteKey() == route_key
         item = panel._navigation.widget(route_key)
+        # Real mouse input must cover the same full target as the hover state;
+        # .click() bypasses QPushButton.hitButton and misses dead edge strips.
+        for point in (
+            QPoint(item.width() // 2, 1),
+            QPoint(item.width() // 2, item.height() - 2),
+            QPoint(1, item.height() // 2),
+            QPoint(item.width() - 2, item.height() // 2),
+            QPoint(4, item.height() - 3),
+        ):
+            panel.setCurrentIndex((expected_index + 1) % panel.count())
+            panel._navigation_scroll.ensureWidgetVisible(item, 8, 0)
+            qapp.processEvents()
+            QTest.mouseClick(item, Qt.MouseButton.LeftButton, pos=point)
+            qapp.processEvents()
+            assert panel.currentIndex() == expected_index, (route_key, point)
+            assert panel._navigation.currentRouteKey() == route_key
         viewport = panel._navigation_scroll.viewport()
         assert viewport.rect().contains(QRect(item.mapTo(viewport, QPoint()), item.size()))
 

@@ -26,6 +26,11 @@ class _PropertyNavigationItem(SegmentedItem):
     def sizeHint(self):  # noqa: N802
         return QSize(self.fontMetrics().horizontalAdvance(self.text()) + 38, 32)
 
+    def hitButton(self, pos):  # noqa: N802
+        # The inherited Fluent style excludes 3px above/below its bevel, but
+        # our custom tab and hover cover the full widget rectangle.
+        return self.rect().contains(pos)
+
     def paintEvent(self, event):  # noqa: N802
         p = palette()
         selected = self.isSelected
