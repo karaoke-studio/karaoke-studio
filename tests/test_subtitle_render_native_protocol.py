@@ -795,6 +795,7 @@ def test_native_direct2d_paint_resources_hide_wic_and_brush_construction():
 
     for contract in (
         "createPaintBrush(",
+        "createNoiseMaskBrush(",
         "rubyPaintBounds(",
         "updatePaintBrush(",
         "loadWicBitmap(",

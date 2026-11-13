@@ -44,6 +44,25 @@ D2D1_COLOR_F d2dColor(const RgbaColor &color) {
 
 }  // namespace
 
+Microsoft::WRL::ComPtr<ID2D1BitmapBrush> createNoiseMaskBrush(
+    ID2D1DeviceContext *context,
+    ID2D1Bitmap1 *mask,
+    float cell,
+    const D2DDevice &device
+) {
+    Microsoft::WRL::ComPtr<ID2D1BitmapBrush> brush;
+    const auto properties = D2D1::BitmapBrushProperties(
+        D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP,
+        D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+    );
+    const auto brushProperties = D2D1::BrushProperties(
+        1.0f, D2D1::Matrix3x2F::Scale(cell, cell)
+    );
+    checkHr(context->CreateBitmapBrush(mask, properties, brushProperties,
+        brush.ReleaseAndGetAddressOf()), "CreateBitmapBrush(noise)", device);
+    return brush;
+}
+
 Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     ID2D1DeviceContext *context,
     const PaintStyle &paint,

@@ -31,6 +31,9 @@ class _Host:
     def _update_gradient_stops(self, _stops):
         pass
 
+    def _edit_gradient_path(self):
+        self.requests.append("gradient_path")
+
     def _update_split_stops(self, _stops):
         pass
 
@@ -120,6 +123,8 @@ def test_gradient_fill_page_preserves_editor_and_control_contracts(qapp) -> None
     assert host._gradient_stop_delete_btn.toolTip() == "删除关键点"
     assert host._ruby_horizontal_gradient_with_main_check.isChecked()
     assert page.layout() is host._gradient_editor_layout
+    host._gradient_path_btn.click()
+    assert host.requests[-1] == "gradient_path"
     assert host.arrangements[0][1] == {
         "vertical": False,
         "footer": host._ruby_horizontal_gradient_with_main_check,

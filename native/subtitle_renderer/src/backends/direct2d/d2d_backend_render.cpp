@@ -32,6 +32,7 @@ using Clock = direct2d::RuntimeClock;
 using direct2d::burstParticlesAt;
 using direct2d::checkHr;
 using direct2d::createPaintBrush;
+using direct2d::createNoiseMaskBrush;
 using direct2d::createScanlineColumnBitmap;
 using direct2d::createScanlineMaskBrush;
 using direct2d::createScanlinePillarBrush;
@@ -10554,13 +10555,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float cell = static_cast<float>(std::max(1, static_cast<int>(scene.height / 1080.0f + 0.5f)));
             const auto rect = D2D1::RectF(0, 0, static_cast<float>(scene.width), static_cast<float>(scene.height));
             const auto composite = [&](ID2D1Bitmap1 *mask, float opacity, float offset) {
-                Microsoft::WRL::ComPtr<ID2D1BitmapBrush> brush;
-                const auto properties = D2D1::BitmapBrushProperties(
-                    D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
-                const auto transform = D2D1::Matrix3x2F::Scale(cell, cell);
-                const auto brushProperties = D2D1::BrushProperties(1.0f, transform);
-                checkHr(context->CreateBitmapBrush(mask, properties, brushProperties,
-                    brush.ReleaseAndGetAddressOf()), "CreateBitmapBrush(noise)", device_);
+                const auto brush = createNoiseMaskBrush(context, mask, cell, device_);
                 context->PushLayer(D2D1::LayerParameters(rect, nullptr,
                     D2D1_ANTIALIAS_MODE_ALIASED, D2D1::IdentityMatrix(), opacity, brush.Get()), nullptr);
                 count(frameDiagnostics.layerPush);
