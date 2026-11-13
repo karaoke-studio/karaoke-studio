@@ -5301,3 +5301,71 @@ def test_yurika_sug_ipa_roundtrip_keeps_graphemes_and_checkpoints(qapp, monkeypa
     assert track_to_ir(win._timing_track) == before
     assert win._timing_track.lines[0].chars[0].text == "t͡ʃ"
     assert win._timing_track.rubies[0].reading_parts == ["ɛ̃", "t͡ʃ"]
+
+
+def test_gradient_window_apply_and_undo_reach_live_subtitle_preview(qapp, monkeypatch):
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtTest import QTest
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_PREVIEW", "0")
+    win = _make_window(qapp, monkeypatch)
+    panel = win._property_panel
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("gradient_horizontal"))
+    original = deepcopy(panel._current_paint_fill())
+    win._clear_undo_history()
+    win._timing_track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar(ch, 1000 + i * 150) for i, ch in enumerate("GRADIENT")],
+        end_ms=4000,
+    )])
+    win._preview_panel.set_track(win._timing_track)
+    win._apply_preview_style_now()
+
+    def preview_style():
+        canvas = win._preview_panel._canvas
+        return getattr(canvas, "_subtitle_item", canvas)._style
+
+    def wait_for_preview():
+        for _ in range(100):
+            if style_to_dict(preview_style()) == style_to_dict(win._style):
+                return
+            QTest.qWait(20)
+        pytest.fail("Gradient application did not reach the live preview")
+
+    def rendered_subtitle():
+        image = QImage(640, 360, QImage.Format.Format_RGBA8888)
+        image.fill(0)
+        paint_frame(image, win._timing_track, 3000, preview_style())
+        bits = image.constBits()
+        bits.setsize(image.sizeInBytes())
+        return bytes(bits)
+
+    try:
+        before = rendered_subtitle()
+        panel._gradient_path_btn.click()
+        dialog = panel._gradient_path_dialog
+        dialog.short_button.click()
+        dialog.apply_button.click()
+        wait_for_preview()
+        first = rendered_subtitle()
+        assert first != before
+        assert dialog.isVisible()
+        dialog.long_button.click()
+        dialog.apply_button.click()
+        wait_for_preview()
+        assert rendered_subtitle() != first
+        dialog.undo_button.click()
+        wait_for_preview()
+        assert rendered_subtitle() == first
+        assert dialog.isVisible()
+        assert win._project_dirty
+        dialog.close()
+        # Applying through the dialog also participates in the app's own undo.
+        win._undo_edit()
+        wait_for_preview()
+        assert win._style.karaoke_colors.after.text.gradient_stops == original.gradient_stops
+        assert rendered_subtitle() == before
+    finally:
+        if panel._gradient_path_dialog is not None:
+            panel._gradient_path_dialog.close()
+        win.close()

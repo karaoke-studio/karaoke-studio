@@ -326,7 +326,9 @@ def _value_signature_impl(value) -> Hashable:
         value_type = type(value)
         names = _SIG_FIELD_NAMES_BY_TYPE.get(value_type)
         if names is None:
-            names = tuple(field.name for field in dataclass_fields(value))
+            # Editing routes are persisted but only their baked stops render.
+            names = tuple(field.name for field in dataclass_fields(value)
+                          if field.metadata.get("render", True))
             _SIG_FIELD_NAMES_BY_TYPE[value_type] = names
         return (value_type.__name__,) + tuple(
             value_signature(getattr(value, name)) for name in names

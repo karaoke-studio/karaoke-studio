@@ -1841,6 +1841,60 @@ def test_gpu_legacy_fill_gradient_renders_gradient_not_solid(
     assert ramp_pixels(solid_gpu[0]) == 0
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("mode", ["gradient_horizontal", "gradient_vertical"])
+@pytest.mark.parametrize("force_warp", [False, True])
+def test_gpu_drawn_gradient_uses_baked_stops_in_cpu_gpu_and_cached_frames(monkeypatch, mode, force_warp):
+    from krok_helper.subtitle_render.domain.gradient_path import hue_route, replace_path_stops
+    from krok_helper.subtitle_render.domain.paint import GradientPath
+    from krok_helper.subtitle_render.domain.models import style_to_dict
+
+    monkeypatch.delenv("KROK_GPU_RESOURCE_CACHE", raising=False)
+    start, end = "#9383CA", "#F6E9BF"
+    route = GradientPath(hue_route(start, end))
+    fill = PaintFill(mode=mode, start_color=start, end_color=end,
+                     gradient_stops=replace_path_stops([(0, start), (100, end)], route),
+                     gradient_path=route)
+
+    def style_for(paint):
+        state = KaraokeColorState(text=paint)
+        return _g1_style(karaoke_colors=KaraokeColors(before=state, after=state))
+
+    style = style_for(fill)
+    # Real project serialization, not a manually assembled native-only payload.
+    restored = style_from_dict(json.loads(json.dumps(style_to_dict(style))))
+    baked_only = style_for(replace(fill, gradient_path=None))
+    assert _render_painter_oracle(restored) == _render_painter_oracle(baked_only)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(renderer, restored, (750, 750), force_warp=force_warp,
+                                     wait_realizations=not force_warp)
+        event = renderer.render_gpu_frame(750, force_warp=force_warp, readback_bands=True)
+        with SharedFrameRingReader.from_event(event) as reader:
+            image = reader.read_qimage(event).convertToFormat(QImage.Format.Format_RGBA8888)
+            bits = image.constBits()
+            bits.setsize(image.sizeInBytes())
+            assert bytes(bits) == frames[0], "G5 compact readback must use the same gradient"
+        before = renderer.gpu_diagnostics(force_warp=force_warp)
+        # Export and preview share this render core; repeat it without readback.
+        for i in range(4):
+            renderer.render_gpu_frame_direct(750, force_warp=force_warp, frame_index=i)
+        diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+        assert diagnostics["realization_miss"] == before["realization_miss"]
+        if not force_warp:
+            assert diagnostics["realization_hit"] > before["realization_hit"]
+        _, baked = _render_g1_frames(renderer, baked_only, (750,), force_warp=force_warp,
+                                    wait_realizations=not force_warp)
+        long_route = GradientPath(hue_route(start, end, long=True))
+        alternate = style_for(replace(fill, gradient_stops=replace_path_stops([(0, start), (100, end)], long_route),
+                                      gradient_path=long_route))
+        _, other = _render_g1_frames(renderer, alternate, (750,), force_warp=force_warp,
+                                    wait_realizations=not force_warp)
+    assert frames[0] == frames[1] == baked[0]
+    assert frames[0] != other[0]
+    assert diagnostics["brush_cache_hits"] > 0
+    assert diagnostics["brush_cache_size"] <= diagnostics["brush_cache_capacity"]
+
+
 def test_gpu_horizontal_ruby_gradient_uses_main_line_bounds_by_default(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

@@ -18,6 +18,15 @@ ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
 
 
 @dataclass
+class GradientPath:
+    """Editable HSV disk route; renderers consume only the baked stops."""
+
+    points: list[tuple[float, float]] = field(default_factory=list)
+    start_pct: float = 0
+    end_pct: float = 100
+
+
+@dataclass
 class PaintFill:
     """One fill definition shared by text, stroke, second stroke and shadow."""
 
@@ -34,6 +43,7 @@ class PaintFill:
     split_stops: list[tuple[float, str]] = field(default_factory=list)
     image_path: str = ""
     image_scale_pct: int = 100
+    gradient_path: Optional[GradientPath] = field(default=None, metadata={"render": False})
 
 
 def _paint_fill(

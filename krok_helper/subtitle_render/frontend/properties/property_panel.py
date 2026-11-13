@@ -5508,6 +5508,56 @@ class PropertyPanel(QWidget):
             end_color=normalized[-1][1],
         )
 
+    def _edit_gradient_path(self) -> None:
+        from krok_helper.qfluent_compat import show_modeless_dialog
+        from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+
+        fill = deepcopy(self._current_paint_fill())
+        if fill.mode not in {"gradient_horizontal", "gradient_vertical"}:
+            return
+        def target():
+            return (self._current_scheme_key(), self._current_color_subject_key(),
+                    self._current_color_state_key(), self._current_color_layer_key())
+
+        original_target = target()
+        existing = getattr(self, "_gradient_path_dialog", None)
+        if existing is not None:
+            if getattr(self, "_gradient_path_target", None) == original_target:
+                existing.raise_()
+                existing.activateWindow()
+                return
+            existing.close()
+        dialog = GradientPathDialog(fill, parent=self)
+        self._gradient_path_dialog = dialog
+        self._gradient_path_target = original_target
+        expected_fill = fill
+
+        def apply_fill(requested: PaintFill) -> None:
+            nonlocal expected_fill
+            # Keep the workbench usable without publishing to another layer or
+            # overwriting external edits, including the main window's undo.
+            if target() != original_target or self._current_paint_fill() != expected_fill:
+                dialog.set_apply_error("当前配色或编辑对象已变化，请关闭后重新打开勾勒渐变。")
+                return
+            if requested != expected_fill:
+                self._update_current_fill(
+                    gradient_stops=requested.gradient_stops,
+                    start_color=requested.start_color,
+                    end_color=requested.end_color,
+                    gradient_path=requested.gradient_path,
+                )
+            expected_fill = deepcopy(self._current_paint_fill())
+            dialog.confirm_applied(expected_fill)
+
+        def finished(_result: int) -> None:
+            if getattr(self, "_gradient_path_dialog", None) is dialog:
+                self._gradient_path_dialog = None
+
+        dialog.applyRequested.connect(apply_fill)
+        dialog.finished.connect(finished)
+        self.destroyed.connect(dialog.close)
+        show_modeless_dialog(dialog)
+
     def _sync_gradient_stop_controls(self) -> None:
         if not hasattr(self, "_gradient_stop_color_btn"):
             return
@@ -7049,6 +7099,9 @@ def _fill_stack_index(mode: str) -> int:
 
 
 def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
+    if set(changes).intersection({"gradient_stops", "start_color", "end_color", "color"}):
+        # Manual edits leave the baked result authoritative, never a stale route.
+        changes.setdefault("gradient_path", None)
     if "start_color" in changes or "end_color" in changes:
         stops = _gradient_stops(fill)
         if "start_color" in changes:

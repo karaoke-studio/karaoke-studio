@@ -827,6 +827,11 @@ class RoleFillPagesBuilder:
         gradient_actions_layout = QHBoxLayout(host._gradient_actions_row)
         gradient_actions_layout.setContentsMargins(0, 0, 0, 0)
         gradient_actions_layout.setSpacing(4)
+        host._gradient_path_btn = FluentPushButton("勾勒渐变", host._gradient_actions_row)
+        host._gradient_path_btn.setAccessibleName("勾勒渐变")
+        host._gradient_path_btn.setToolTip("在色盘上绘制颜色路线，自动生成渐变关键点")
+        host._gradient_path_btn.clicked.connect(host._edit_gradient_path)
+        gradient_actions_layout.addWidget(host._gradient_path_btn)
         for name, icon, label, callback in (
             ("_gradient_copy_btn", FIF.COPY, "复制渐变信息", host._gradient_editor.copy_gradient_info),
             ("_gradient_paste_btn", FIF.PASTE, "粘贴渐变信息", host._gradient_editor.paste_clipboard_info),

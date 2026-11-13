@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+from krok_helper.subtitle_render.domain.gradient_path import MAX_PATH_POINTS
 from krok_helper.subtitle_render.domain.paint import (
+    GradientPath,
     KaraokeColors,
     KaraokeColorState,
     PaintFill,
@@ -50,7 +52,7 @@ def karaoke_color_state_from_dict(payload: object) -> KaraokeColorState:
 
 
 def paint_fill_to_dict(fill: PaintFill) -> dict:
-    return {
+    result = {
         "mode": fill.mode,
         "color": fill.color,
         "start_color": fill.start_color,
@@ -63,6 +65,39 @@ def paint_fill_to_dict(fill: PaintFill) -> dict:
         "image_path": fill.image_path,
         "image_scale_pct": fill.image_scale_pct,
     }
+    if fill.gradient_path is not None:
+        route = fill.gradient_path
+        result["gradient_path"] = {
+            "version": 1,
+            "points": list(route.points),
+            "start_pct": route.start_pct,
+            "end_pct": route.end_pct,
+        }
+    return result
+
+
+def gradient_path_from_dict(payload: object) -> Optional[GradientPath]:
+    """Reject invalid editing metadata without losing its rendered gradient."""
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return None
+    points = payload.get("points")
+    if not isinstance(points, list) or not 2 <= len(points) <= MAX_PATH_POINTS:
+        return None
+    try:
+        start, end = float(payload["start_pct"]), float(payload["end_pct"])
+        if not (0 <= start < end <= 100):
+            return None
+        clean = []
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                return None
+            x, y = float(point[0]), float(point[1])
+            if not math.isfinite(x) or not math.isfinite(y) or math.hypot(x, y) > 1.000001:
+                return None
+            clean.append((x, y))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    return GradientPath(clean, start, end)
 
 
 def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> PaintFill:
@@ -100,6 +135,7 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
         start_color=start_color,
         end_color=end_color,
         gradient_stops=_gradient_stops_from_payload(stops, start_color, end_color),
+        gradient_path=gradient_path_from_dict(payload.get("gradient_path")),
         split_top_color=split_top_color,
         split_bottom_color=split_bottom_color,
         split_position_pct=split_position_pct,
