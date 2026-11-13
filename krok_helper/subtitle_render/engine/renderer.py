@@ -836,6 +836,23 @@ def _paint_overlay_strip(
     于是只有 ``[strip_top, strip_top + buffer 高)`` 这条会落进 buffer。``strip_top=0``
     且 buffer 高=全高时即等价于整帧渲染。
     """
+    # Noise is anchored in canvas pixels and its downward echoes can sample
+    # source pixels above the strip. Render then crop, as the packed-band path
+    # does, so changing export strip boundaries never changes the effect.
+    noise_enabled = "noise" in {
+        style.entry_anim, style.exit_anim, style.section_head_anim, style.section_tail_anim,
+    } or any(
+        line.animation_override is not None
+        and "noise" in {line.animation_override.entry_anim, line.animation_override.exit_anim}
+        for source in (track, *extra_tracks) for line in source.lines
+    )
+    if noise_enabled:
+        _paint_overlay_bands(
+            buffer, track, style, t_ms, logical_w=logical_w, logical_h=logical_h,
+            bands=[(strip_top, buffer.height())], transparent=transparent,
+            extra_tracks=extra_tracks, duration_ms=duration_ms, roll_shift_ms=roll_shift_ms,
+        )
+        return
     buffer.fill(transparent)
     painter = QPainter(buffer)
     try:

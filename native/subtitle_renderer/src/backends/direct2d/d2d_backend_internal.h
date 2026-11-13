@@ -11,6 +11,7 @@
 #include <dwrite_2.h>
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -522,6 +523,10 @@ struct Direct2DGpuBackend::Impl {
     int frameSurfaceHeight = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTargetTexture;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> frameTargetBitmap;
+    // Bounded immutable 128x128 noise tiles, shared by every line on this
+    // worker. No per-frame mask uploads once a coverage level has been seen.
+    std::array<Microsoft::WRL::ComPtr<ID2D1Bitmap1>, 66> noiseMasks;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> noiseSource;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameStagingTexture;
     // G6 直画帧仓（2026-10 用户拍板与 G5 帧缓存同口径 24+1+1 = 25 槽，
     // 60fps 语义 ~417ms 窗口）：

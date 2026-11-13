@@ -378,6 +378,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         return impl_->glowEffectPool.back().Get();
     };
 
+    auto noiseMask = [&](int level, bool streaks) -> ID2D1Bitmap1 * {
+        auto &bitmap = impl_->noiseMasks[streaks ? 65 : level];
+        if (!bitmap) {
+            const auto pixels = direct2d::noiseMaskPixels(level, streaks);
+            const auto properties = D2D1::BitmapProperties1(
+                D2D1_BITMAP_OPTIONS_NONE,
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+            );
+            checkHr(context->CreateBitmap(D2D1::SizeU(128, 128), pixels.data(),
+                128 * 4, properties, bitmap.ReleaseAndGetAddressOf()),
+                "CreateBitmap(noise tile)", device_);
+        }
+        return bitmap.Get();
+    };
+
     const bool hasViewportTransform = scene.viewportScale != 1.0f
         || scene.viewportRotation != 0.0f
         || scene.viewportOffsetX != 0.0f
@@ -1616,6 +1631,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         const float globalOpacity = overlayOpacityAt(*line) * lineAnimationOpacity;
         const TextStyle &style = line->style;
+        int noiseCoverage = 64;
+        if (!line->staticOverlay && !line->displayWindows.empty()) {
+            const auto window = std::find_if(line->displayWindows.begin(), line->displayWindows.end(),
+                [&](const DisplayWindow &w) { return tMs >= w.startMs && tMs < w.endMs; });
+            if (window != line->displayWindows.end()) {
+                noiseCoverage = direct2d::noiseLevel(line->entryAnimation, line->exitAnimation,
+                    line->entryDurationMs, line->exitDurationMs, window->startMs,
+                    window->endMs, line->endMs, tMs);
+            }
+        }
+        if (noiseCoverage == 0) {
+            continue;
+        }
         // Painter restores the viewport transform before drawing the title
         // overlay, so static title lines stay in screen coordinates.
         const D2D1_MATRIX_3X2_F lineViewportTransform = line->staticOverlay
@@ -3522,6 +3550,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 0,
                 scene.height
             );
+        }
+        if (noiseCoverage < 64) {
+            intervalBottom = std::min(scene.height, intervalBottom
+                + static_cast<int>(std::ceil(style.fontSize * 0.23f)) + 1);
         }
         if (intervalBottom > intervalTop) {
             readbackIntervals.emplace_back(intervalTop, intervalBottom);
@@ -7358,11 +7390,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             context->SetTransform(previousTransform);
         };
-        context->SetTarget(targetBitmap);
+        ID2D1Bitmap1 *noiseSource = nullptr;
+        if (noiseCoverage < 64) {
+            const auto size = impl_->noiseSource ? impl_->noiseSource->GetPixelSize() : D2D1::SizeU();
+            if (size.width != static_cast<UINT32>(scene.width)
+                || size.height != static_cast<UINT32>(scene.height)) {
+                checkHr(context->CreateBitmap(D2D1::SizeU(scene.width, scene.height), nullptr,
+                    0, bitmapProperties, impl_->noiseSource.ReleaseAndGetAddressOf()),
+                    "CreateBitmap(noise source)", device_);
+            }
+            noiseSource = impl_->noiseSource.Get();
+            if (!renderedAnyLine && !frameCleared) {
+                context->SetTarget(targetBitmap);
+                context->SetTransform(D2D1::Matrix3x2F::Identity());
+                context->BeginDraw();
+                context->Clear(D2D1::ColorF(0.0f, 0.0f));
+                checkHr(context->EndDraw(), "EndDraw(noise frame clear)", device_);
+                frameCleared = true;
+            }
+        }
+        context->SetTarget(noiseSource ? noiseSource : targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
-        if (!renderedAnyLine && !frameCleared) {
-            // 行背景带已在帧首清过底：这里再清会把带子一起擦掉。
+        if (noiseSource || (!renderedAnyLine && !frameCleared)) {
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             frameCleared = true;
         }
@@ -10481,6 +10531,38 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             frameDiagnostics.endDrawFrameLayersMs,
             frameDiagnostics.endDrawFrameLayersCount
         );
+        if (noiseSource) {
+            context->SetTarget(targetBitmap);
+            context->SetTransform(D2D1::Matrix3x2F::Identity());
+            context->BeginDraw();
+            const float cell = static_cast<float>(std::max(1, static_cast<int>(scene.height / 1080.0f + 0.5f)));
+            const auto rect = D2D1::RectF(0, 0, static_cast<float>(scene.width), static_cast<float>(scene.height));
+            const auto composite = [&](ID2D1Bitmap1 *mask, float opacity, float offset) {
+                Microsoft::WRL::ComPtr<ID2D1BitmapBrush> brush;
+                const auto properties = D2D1::BitmapBrushProperties(
+                    D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+                const auto transform = D2D1::Matrix3x2F::Scale(cell, cell);
+                const auto brushProperties = D2D1::BrushProperties(1.0f, transform);
+                checkHr(context->CreateBitmapBrush(mask, properties, brushProperties,
+                    brush.ReleaseAndGetAddressOf()), "CreateBitmapBrush(noise)", device_);
+                context->PushLayer(D2D1::LayerParameters(rect, nullptr,
+                    D2D1_ANTIALIAS_MODE_ALIASED, D2D1::IdentityMatrix(), opacity, brush.Get()), nullptr);
+                count(frameDiagnostics.layerPush);
+                context->DrawBitmap(noiseSource, D2D1::RectF(0, offset, rect.right, rect.bottom + offset),
+                    1.0f, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, rect);
+                context->PopLayer();
+            };
+            const float coverage = noiseCoverage / 64.0f;
+            const float envelope = 4 * coverage * (1 - coverage);
+            constexpr float distances[] = {0.05f, 0.10f, 0.16f, 0.23f};
+            constexpr float alphas[] = {0.50f, 0.30f, 0.18f, 0.10f};
+            for (int index = 0; index < 4; ++index) {
+                const float offset = std::floor(style.fontSize * distances[index] + 0.5f);
+                composite(noiseMask(0, true), envelope * alphas[index], offset);
+            }
+            composite(noiseMask(noiseCoverage, false), 1.0f, 0.0f);
+            checkHr(context->EndDraw(), "EndDraw(noise composite)", device_);
+        }
         renderedAnyLine = true;
         for (MainGlowLayer &layer : mainGlowLayers) {
             layer.blur->SetInput(0, nullptr);

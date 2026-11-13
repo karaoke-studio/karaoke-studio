@@ -27,6 +27,11 @@ namespace krok::subtitle::native::direct2d {
 /// 与 transitions.fx_unit_hash 逐位一致的整数哈希 → [0,1)。
 float fxUnitHash(std::uint32_t index, std::uint32_t salt);
 
+// Mirror engine/render/effects/noise.py. Pure integer coverage and tile data.
+int noiseLevel(const std::string &entry, const std::string &exit,
+    int entryMs, int exitMs, int start, int end, int lineEnd, int t);
+std::vector<std::uint32_t> noiseMaskPixels(int level, bool streaks);
+
 struct GeoCharState {
     float opacity = 1.0f;
     float dx = 0.0f;

@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
     LayerContext,
     SCOPE_LINE,
 )
+from krok_helper.subtitle_render.engine.render.effects.noise import noise_level, paint_noise_layer
 from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature,
 )
@@ -114,6 +115,8 @@ class SignalLitGroup:
     # 到柱左缘，见 horizontal/layout 的 signal_band_left）。None = 不参与
     # （非音量柱 / 无 band 布局），横向渐变回落柱组自身外接框。
     fill_band_rect: QRectF | None = None
+    noise_coverage: int = 64
+    noise_font_px: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -769,6 +772,10 @@ class SignalLitsLayer:
         ctx: LayerContext,
         layout: object,
     ) -> None:
+        paint_noise_layer(painter, self._paint_content, self.group.noise_coverage,
+                          self.group.noise_font_px, ctx.logical_h)
+
+    def _paint_content(self, painter: QPainter) -> None:
         if self.group_opacity <= 0.0 or self.group.anim_opacity <= 0.0:
             return
         painter.save()
@@ -793,6 +800,12 @@ class SignalLitsLayer:
         ctx: LayerContext,
         layout: object,
     ) -> tuple[int, int] | None:
+        bounds = self._content_vertical_bounds(ctx)
+        if bounds is not None and self.group.noise_coverage < 64:
+            return bounds[0], bounds[1] + int(math.ceil(self.group.noise_font_px * 0.23)) + 1
+        return bounds
+
+    def _content_vertical_bounds(self, ctx: LayerContext) -> tuple[int, int] | None:
         if (
             self.group_opacity <= 0.0
             or self.group.opacity <= 0.0
@@ -2172,6 +2185,13 @@ def resolve_signal_lit_groups(
                 entry_animations=entry_animations,
                 entry_glows=entry_glows,
                 fill_band_rect=fill_band_rect,
+                noise_coverage=noise_level(
+                    line_style.entry_anim,
+                    line_style.exit_anim if style.lit_style == "volume" else "none",
+                    line_style.entry_lead_ms, line_style.exit_fade_ms,
+                    display_start, display_end, line_end_ms(line), t_ms,
+                ),
+                noise_font_px=line_style.font_size_px,
             )
         )
     return groups

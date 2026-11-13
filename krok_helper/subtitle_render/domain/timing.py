@@ -9,13 +9,13 @@ from typing import Literal, Optional
 
 LineBreakKind = Literal["none", "page", "paragraph"]
 EntryAnimation = Literal[
-    "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
+    "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia", "noise",
     "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
     "flame", "feather", "lightning",
 ]
 ExitAnimation = Literal[
-    "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
+    "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia", "noise",
     "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
     "flame", "feather", "lightning",

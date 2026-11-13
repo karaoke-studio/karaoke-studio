@@ -147,6 +147,8 @@ def max_line_animation_excursion(
         0.0,
     )
     excursion = 0.0
+    if "noise" in anims:
+        excursion = max(excursion, math.ceil(font_px * 0.23) + 1)
     if "rise" in anims:
         excursion = max(excursion, max(font_px * 0.35, 18.0))
     if "wave_in" in anims:

@@ -386,6 +386,9 @@ from krok_helper.subtitle_render.engine.layout.page.assignment import (
     auto_assign_layouts_by_page,
 )
 from krok_helper.subtitle_render.engine.render.core.animator import line_animation_state
+from krok_helper.subtitle_render.engine.render.effects.noise import (
+    noise_level, paint_noise_layer,
+)
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _main_text_ruby_progress_ratio,
     _main_text_ruby_progress_time_at_ratio,
@@ -1614,7 +1617,11 @@ def _display_line_vertical_bounds(
     if line_bounds is None:
         return None
     dy = int(math.floor(animation.dy)) if animation.dy < 0 else int(math.ceil(animation.dy))
-    return line_bounds[0] + dy, line_bounds[1] + dy
+    noise_pad = (
+        int(math.ceil(line_style.font_size_px * 0.23)) + 1
+        if "noise" in {line_style.entry_anim, line_style.exit_anim} else 0
+    )
+    return line_bounds[0] + dy, line_bounds[1] + dy + noise_pad
 
 
 def resolved_page_offset_windows_for_style(
@@ -3416,7 +3423,7 @@ def _paint_line(
     if animation.opacity <= 0.0:
         return
 
-    def draw(target: QPainter) -> None:
+    def draw_content(target: QPainter) -> None:
         target.save()
         try:
             if animation.dx or animation.dy:
@@ -3439,6 +3446,16 @@ def _paint_line(
             )
         finally:
             target.restore()
+
+    level = noise_level(
+        style.entry_anim, style.exit_anim, style.entry_lead_ms, style.exit_fade_ms,
+        display_start_ms if display_start_ms is not None else _line_start_ms(line),
+        display_end_ms if display_end_ms is not None else _line_end_ms(line),
+        _line_end_ms(line), t_ms,
+    )
+
+    def draw(target: QPainter) -> None:
+        paint_noise_layer(target, draw_content, level, style.font_size_px, img_h)
 
     if animation.opacity < 1.0:
         _paint_through_opacity_layer(painter, animation.opacity, draw)

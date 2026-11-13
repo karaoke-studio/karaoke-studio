@@ -1552,6 +1552,94 @@ def test_gpu_shared_realizations_preserve_mefisto_pixels(animation, monkeypatch)
         assert intersection / max(union, 1) >= 0.98
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("force_warp", [True, False])
+@pytest.mark.parametrize("vertical", [False, True])
+@pytest.mark.parametrize("volume", [False, True])
+def test_gpu_noise_matches_cpu_composite_of_same_cached_source(force_warp, vertical, volume):
+    from PyQt6.QtGui import QPainter
+    from krok_helper.subtitle_render.engine.render.effects.noise import paint_noise
+
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("A", 2000), TimingChar("B", 2500)], end_ms=3000,
+        display_start_override_ms=0, display_end_override_ms=4000,
+    )], rubies=[RubyAnnotation(kanji="A", reading="a", pos_start_ms=2000, pos_end_ms=2500)])
+    style = _g1_style(entry_anim="noise", exit_anim="noise", entry_lead_ms=600,
+                      exit_fade_ms=600, karaoke_anim="none", vertical=vertical,
+                      line_tail_ms=1000, volume_enabled=volume, lit_enabled=False,
+                      volume_appearance_mode="auto", volume_duration_ms=2000)
+    times = (150, 300, 450, 3550, 3700, 3850)
+    levels = (16, 32, 48, 48, 32, 16)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, animated = _render_g1_frames(renderer, style, times, force_warp=force_warp, track=track)
+        _, static = _render_g1_frames(renderer, replace(style, entry_anim="none", exit_anim="none"),
+                                       times, force_warp=force_warp, track=track)
+    for raw, source_raw, level in zip(animated, static, levels):
+        source = QImage(source_raw, 640, 360, 640 * 4, QImage.Format.Format_RGBA8888).convertToFormat(
+            QImage.Format.Format_ARGB32_Premultiplied)
+        expected = QImage(source.size(), source.format())
+        expected.fill(0)
+        scratch = QImage(source.size(), source.format())
+        painter = QPainter(expected)
+        paint_noise(painter, source, scratch, level, 64, 1)
+        painter.end()
+        expected = expected.convertToFormat(QImage.Format.Format_RGBA8888)
+        ptr = expected.constBits()
+        ptr.setsize(expected.sizeInBytes())
+        gpu = np.frombuffer(raw, np.uint8).reshape(360, 640, 4)
+        cpu = np.frombuffer(bytes(ptr), np.uint8).reshape(360, 640, 4)
+        # Premultiplication and unpremultiplication may round weak edges. The
+        # coverage and streak locations must still agree across the image.
+        delta = np.abs(gpu.astype(np.int16) - cpu.astype(np.int16))
+        assert np.mean(delta[:, :, 3]) < 0.2
+        assert np.mean((gpu[:, :, 3] > 20) != (cpu[:, :, 3] > 20)) < 0.002
+        assert np.any(gpu[:, :, 3]), "noise must keep visible glyph pixels"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("force_warp", [False, True])
+def test_noise_g5_bands_export_and_direct_render_keep_realization_cache(monkeypatch, force_warp):
+    monkeypatch.setenv("KROK_GPU_REALIZATION_WARP", "1")
+    monkeypatch.setenv("KROK_GPU_COUNTERS", "1")
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar(ch, 2000 + i * 200) for i, ch in enumerate("NOISE")],
+        end_ms=3500, display_start_override_ms=0, display_end_override_ms=4500,
+    )])
+    style = _g1_style(entry_anim="noise", exit_anim="noise", entry_lead_ms=600,
+                      exit_fade_ms=600, karaoke_anim="none", line_tail_ms=1000,
+                      stroke_width_px=12, stroke2_width_px=4,
+                      volume_enabled=False, lit_enabled=False)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        _render_g1_frames(renderer, style, (300,), force_warp=force_warp, track=track,
+                          wait_realizations=not force_warp)
+
+        def image_bytes(**kwargs):
+            event = renderer.render_gpu_frame(300, force_warp=force_warp,
+                shm_key=f"noise-{uuid.uuid4().hex}", **kwargs)
+            with SharedFrameRingReader.from_event(event) as reader:
+                image = reader.read_qimage(event).convertToFormat(QImage.Format.Format_RGBA8888)
+                data = image.constBits()
+                data.setsize(image.sizeInBytes())
+                return bytes(data), event
+
+        full, event = image_bytes()
+        bands, band_event = image_bytes(readback_bands=True)
+        assert full == bands, "G5 compact bands must keep every downward streak"
+        assert band_event["payload_bytes"] < event["payload_bytes"]
+        before = renderer.gpu_diagnostics(force_warp=force_warp)
+        for i in range(12):
+            # This is the same render-only core the disabled G6 presenter uses.
+            direct = renderer.render_gpu_frame_direct(300, force_warp=force_warp, frame_index=i)
+            assert direct["event"] == "gpu_frame_rendered_direct"
+            if not force_warp:
+                assert direct["realization_path_ready"]
+        after = renderer.gpu_diagnostics(force_warp=force_warp)
+        if not force_warp:
+            assert after["realization_hit"] > before["realization_hit"]
+        assert after["realization_miss"] == before["realization_miss"]
+        assert after["glyph_geometry_cache_misses"] == before["glyph_geometry_cache_misses"]
+
+
 def _render_painter_oracle(
     style: Style,
     *,

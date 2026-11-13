@@ -499,13 +499,13 @@ def gpu_unsupported_features(
     # 不触发整帧 Painter 回退。
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-        "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
+        "tracking_in", "wave_in", "stretch_in", "glow_in", "noise", "assemble_in",
         "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
         "feather", "lightning",
     } or (
         style.exit_anim not in {
             "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-            "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
+            "scatter_out", "converge_out", "stretch_out", "glow_out", "noise", "dissolve_out",
             "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
             "feather", "lightning",
         }
@@ -543,6 +543,7 @@ def gpu_unsupported_features(
                     "wave_in",
                     "glow_in",
                     "stretch_in",
+                    "noise",
                     "assemble_in",
                     "sparkle",
                     "ripple",
@@ -567,6 +568,7 @@ def gpu_unsupported_features(
                     "converge_out",
                     "glow_out",
                     "stretch_out",
+                    "noise",
                     "dissolve_out",
                     "sparkle",
                     "ripple",
