@@ -103,15 +103,16 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     assert host._animation_grid._max_columns == 2
     assert host._entry_anim_combo.count() == 24
     assert host._entry_anim_combo.itemData(5) == "char_drip"
-    assert host._entry_anim_combo.itemData(8) == "tracking_in"
+    assert host._entry_anim_combo.itemData(9) == "tracking_in"
     assert host._exit_anim_combo.count() == 24
     for combo in (host._entry_anim_combo, host._exit_anim_combo):
         assert combo.itemText(combo.findData("noise")) == "噪点溶解"
+        assert combo.findData("noise") == combo.findData("utopia") + 1
         assert [combo.itemData(i) for i in range(21, 24)] == [
             "petal", "snow", "snow_solid"
         ]
     assert host._exit_anim_combo.itemData(2) == "slide_out"
-    assert host._exit_anim_combo.itemData(8) == "scatter_out"
+    assert host._exit_anim_combo.itemData(9) == "scatter_out"
     assert host._entry_lead_spin.maximum() == 3000
     assert host._exit_fade_spin.maximum() == 3000
     assert host._entry_lead_spin.toolTip() == "入场动画时长"
