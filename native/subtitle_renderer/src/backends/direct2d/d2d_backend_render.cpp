@@ -7596,6 +7596,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         charStyle.shadowOffsetXForState(after);
                     const float charShadowOffsetY =
                         charStyle.shadowOffsetYForState(after);
+                    // Zero displacement disables shadow, including its expanded
+                    // stroke silhouette. Clipping it later can expose a rim.
+                    if (charShadowOffsetX == 0.0f && charShadowOffsetY == 0.0f) {
+                        continue;
+                    }
+                    // Match the body/ruby unit phase gate: the expanded outline
+                    // extends past an unstarted character's resting wipe edge.
+                    if (after && useUtopiaTransition
+                        && wipePhaseAt(line->chars, charIndex) == N3WipePhase::Before) {
+                        continue;
+                    }
                     Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
                         after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
                         mainPaintBounds(
@@ -7683,7 +7694,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         context->PopAxisAlignedClip();
                     }
                 }
-            } else if (style.decorationKindForState(after) == "shadow") {
+            } else if (style.decorationKindForState(after) == "shadow"
+                       && (style.shadowOffsetXForState(after) != 0.0f
+                           || style.shadowOffsetYForState(after) != 0.0f)) {
                 const float shadowOffsetX =
                     style.shadowOffsetXForState(after);
                 const float shadowOffsetY =
@@ -7756,6 +7769,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (rubyStyle.rubyDecorationKindForState(after) != "shadow") {
                     return;
                 }
+                const float shadowOffsetX =
+                    rubyStyle.rubyShadowOffsetXForState(after);
+                const float shadowOffsetY =
+                    rubyStyle.rubyShadowOffsetYForState(after);
+                if (shadowOffsetX == 0.0f && shadowOffsetY == 0.0f) {
+                    return;
+                }
                 const bool beforeOnlyShadow =
                     rubyStyle.rubyDecorationKindForState(false) == "shadow"
                     && rubyStyle.rubyDecorationKindForState(true) != "shadow";
@@ -7778,10 +7798,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     );
                     pushedBeforeShadowClip = true;
                 }
-                const float shadowOffsetX =
-                    rubyStyle.rubyShadowOffsetXForState(after);
-                const float shadowOffsetY =
-                    rubyStyle.rubyShadowOffsetYForState(after);
                 Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
                     after
                         ? rubyStyle.rubyAfterDecorPaint

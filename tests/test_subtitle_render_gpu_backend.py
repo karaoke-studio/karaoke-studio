@@ -13247,6 +13247,109 @@ def test_gpu_g3_role_main_and_ruby_shadows_match_painter_direction(monkeypatch) 
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("target", ["main", "inline", "ruby"])
+@pytest.mark.parametrize("animation", ["none", "utopia"])
+@pytest.mark.parametrize("force_warp,baked", [(False, False), (False, True), (True, False)])
+def test_gpu_zero_offset_shadow_does_not_leak_during_karaoke(
+    monkeypatch, target, animation, force_warp, baked,
+) -> None:
+    """Disabled after shadow must equal none before/during/after each wipe."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    before = KaraokeColorState(
+        text=PaintFill(color="#F5F5F5"), stroke=PaintFill(color="#171717"),
+        stroke2=PaintFill(color="#00FFFFFF"), shadow=PaintFill(color="#171717"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(color="#00A6FF"), stroke=PaintFill(color="#FFFFFF"),
+        stroke2=PaintFill(color="#00A6FF"), shadow=PaintFill(color="#E1E196"),
+    )
+    style = _g1_style(
+        font_family="Meiryo", font_size_px=100, stroke_width_px=15,
+        stroke2_enabled=True, stroke2_width_px=8,
+        decoration_kind="shadow", decoration_kind_before="glow", decoration_before_sync=False,
+        glow_before_radius_px=8, glow_before_concentration_level=0,
+        shadow_offset_x=0, shadow_offset_y=0,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        karaoke_anim=animation, entry_anim="none", exit_anim="none",
+        dual_line_layout=False,
+    )
+    chars = [TimingChar(text, start) for text, start in zip("ABCD", (1000, 1250, 2400, 2700))]
+    track = TimingTrack(lines=[TimingLine(
+        chars=chars, end_ms=3000,
+        display_start_override_ms=0, display_end_override_ms=3500,
+    )])
+    if target == "inline":
+        for char in chars:
+            char.role_label = "mio"
+        style = replace(style, custom_style_schemes={"mio": SubtitleStyleScheme(
+            decoration_kind="shadow", decoration_kind_before="glow",
+            decoration_before_sync=False, shadow_offset_x=0, shadow_offset_y=0,
+            karaoke_colors=style.karaoke_colors,
+        )})
+    elif target == "ruby":
+        track.rubies = [RubyAnnotation(kanji="ABCD", reading="abcd",
+            reading_parts=list("abcd"), reading_part_ms=[1250, 2400, 2700],
+            pos_start_ms=1000, pos_end_ms=3000)]
+        style = replace(style, decoration_kind="none", decoration_kind_before="none",
+            ruby_decoration_kind="shadow", ruby_decoration_kind_before="glow",
+            ruby_glow_before_radius_px=8, ruby_shadow_offset_x=0, ruby_shadow_offset_y=0)
+
+    if target == "inline":
+        disabled = replace(style, custom_style_schemes={
+            "mio": replace(style.custom_style_schemes["mio"], decoration_kind="none")})
+    else:
+        disabled = replace(style, **{"ruby_decoration_kind" if target == "ruby" else "decoration_kind": "none"})
+    timestamps = (500, 1100, 1800, 2900, 3200)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        _, shadow = _render_g1_frames(
+            renderer, style, timestamps, force_warp=force_warp, track=track,
+            realization_enabled=baked, wait_realizations=baked,
+        )
+        _, none = _render_g1_frames(
+            renderer, disabled, timestamps, force_warp=force_warp, track=track,
+            realization_enabled=baked, wait_realizations=baked,
+        )
+    for timestamp, actual, expected in zip(timestamps, shadow, none):
+        assert actual == expected, f"zero-offset {target} shadow leaked at {timestamp} ms"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_utopia_after_shadow_skips_unstarted_characters(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    # At 1.5 s A is wiping, B is still before. Its thick outline must not
+    # leak the after shadow past B's resting wipe edge, even with real offsets.
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("A", 1000), TimingChar("B", 4000)], end_ms=5000,
+        display_start_override_ms=0, display_end_override_ms=5500,
+    )])
+    colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+        after=KaraokeColorState(
+            text=PaintFill(color="#FFFFFF"), shadow=PaintFill(color="#E1E196"),
+        ),
+    )
+    style = _g1_style(
+        font_family="Meiryo", font_family_latin="Meiryo", font_size_px=100,
+        stroke_width_px=15, stroke2_enabled=True, stroke2_width_px=8,
+        decoration_before_sync=False, decoration_kind_before="none",
+        decoration_kind="shadow", shadow_offset_x=2, shadow_offset_y=2,
+        karaoke_anim="utopia", karaoke_colors=colors, dual_line_layout=False,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1500, 5000), force_warp=True, track=track,
+        )
+    def yellow_mask(payload):
+        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4).astype(int)
+        return ((rgba[:, :, 0] > rgba[:, :, 2] + 25)
+                & (rgba[:, :, 1] > rgba[:, :, 2] + 25) & (rgba[:, :, 3] > 10))
+    active, complete = map(yellow_mask, frames)
+    assert active[:, :320].any(), "The started character must retain its shadow"
+    assert not active[:, 320:].any(), "An unstarted character leaked its after shadow"
+    assert complete[:, 320:].any(), "The later character must gain its shadow after singing"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_shadow_wipe_splits_source_before_offset(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     before = KaraokeColorState(
