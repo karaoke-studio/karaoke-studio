@@ -5,8 +5,18 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '恢复发布的现有标签；留空只构建当前提交'
+        type: string
+        default: ''
+      reuse_windows_run_id:
+        description: '复用同一提交的 Windows 产物所在运行 ID；留空重新构建'
+        type: string
+        default: ''
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -19,8 +29,34 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - name: Verify reusable Windows build
+        if: inputs.reuse_windows_run_id != ''
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.reuse_windows_run_id }}
+        run: |
+          if ($env:SOURCE_RUN_ID -notmatch '^\d+$') { throw 'Invalid source run ID.' }
+          $sourceRun = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read source run.' }
+          $sourceSha = git rev-parse HEAD
+          if ($sourceRun.status -ne 'completed' -or $sourceRun.head_sha -ne $sourceSha) {
+            throw 'Reusable Windows artifacts must come from a completed run of the exact same commit.'
+          }
+
+      - name: Reuse Windows artifact
+        if: inputs.reuse_windows_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: KaraokeStudio-windows
+          path: dist/windows
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_windows_run_id }}
 
       - name: Setup Python
+        if: inputs.reuse_windows_run_id == ''
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -32,6 +68,7 @@ jobs:
       # runtime 必重打，全量更新用户多下一次 runtime zip。等某次发版本就
       # 要改 runtime 内容（依赖真变/收集规则调整）时顺带移除。
       - name: Install dependencies
+        if: inputs.reuse_windows_run_id == ''
         shell: powershell
         run: |
           python -m pip install --upgrade pip
@@ -42,6 +79,7 @@ jobs:
       # 上一版没有 manifest 资产（首次分包发布）时静默跳过；有 manifest 但
       # runtime zip 下载失败则让任务失败，避免静默重打。
       - name: Fetch previous release runtime for reuse
+        if: inputs.reuse_windows_run_id == ''
         shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,6 +95,7 @@ jobs:
           Write-Host 'Previous manifest + runtime zip ready for reuse check.'
 
       - name: Build Windows package
+        if: inputs.reuse_windows_run_id == ''
         shell: cmd
         env:
           CI: "1"
@@ -77,18 +116,24 @@ jobs:
 
   build-macos:
     name: Build macOS
-    runs-on: macos-latest
+    # Keep Apple Silicon while avoiding the macOS 26 runner allocation failures.
+    runs-on: macos-15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: arm64
+
+      - name: Verify Apple Silicon runner
+        run: test "$(uname -m)" = "arm64"
 
       - name: Configure macOS auto-update
         env:
@@ -150,16 +195,20 @@ jobs:
       - build-windows
       - build-macos
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Generate Chinese release notes
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           python3 scripts/release.py notes "$version" --output release-notes.md
 
       # 自 4.4.0 起（首个无旧名副本版本）的 release body 必须带「手动下载完整包」
@@ -167,8 +216,10 @@ jobs:
       # body 来源）让提示与包内容错位；口径与 scripts/release.py / build_parts.py 同源。
       - name: Verify manual-update notice policy
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           python3 scripts/release.py check-notes "$version" release-notes.md
 
       - name: Download Windows artifact
@@ -186,6 +237,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           body_path: release-notes.md
           files: |
             release-assets/windows/KaraokeStudio-windows.zip
