@@ -1,5 +1,4 @@
 """The migration reference is GPU-only, explicit and complete as an input inventory."""
-from dataclasses import fields
 import ast
 import json
 from pathlib import Path
@@ -10,6 +9,8 @@ from scripts.subtitle_gpu_baseline.cases import build_cases
 from scripts.subtitle_gpu_baseline.inventory import contract, inventory, FEATURE_SOURCES, ROOT
 from scripts.subtitle_gpu_baseline.model import sequence_times, seek_order
 from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
+from scripts.subtitle_gpu_baseline.capture import require_hardware, RecordingRenderer
+from scripts.subtitle_gpu_baseline.artifacts import ResourceStore, canonical_bytes, save_frame, pixel_difference
 
 
 @pytest.fixture(scope="module")
@@ -70,3 +71,63 @@ def test_sequence_and_seek_sampling_is_explicit_and_repeatable(fps, count):
     assert seek_order(times) == seek_order(times)
     assert set(seek_order(times)) == set(times)
     assert seek_order(times) != times
+
+
+@pytest.mark.parametrize("changes", [{"available": False}, {"hardware": False},
+    {"warp": True}, {"backend": "qt"}, {"backend": "skia"}])
+def test_reference_rejects_software_or_unexpected_backend(changes):
+    caps = {"available": True, "hardware": True, "warp": False, "backend": "direct2d"}
+    require_hardware(caps)
+    with pytest.raises(RuntimeError):
+        require_hardware({**caps, **changes})
+
+
+def test_lossless_reference_preserves_premultiplied_bytes(tmp_path):
+    import zlib
+    from PyQt6.QtGui import QImage, QColor
+    image = QImage(12, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    image.setPixelColor(4, 3, QColor(120, 40, 200, 91))
+    result = save_frame(tmp_path, "frame", image)
+    assert zlib.decompress((tmp_path / result["raw_file"]).read_bytes()) == canonical_bytes(image)
+    assert result["bbox_alpha_gt_16"] == [4, 3, 5, 4]
+    assert result["occupied_pixels"] == 1
+    assert result["alpha_sum"] == 91
+
+
+def test_portable_identity_uses_content_not_path_or_file_timestamp(tmp_path):
+    stores = []
+    for name in ("first", "second"):
+        root = tmp_path / name
+        root.mkdir()
+        source = root / "font.otf"
+        source.write_bytes(b"fixed-test-content")
+        stores.append(ResourceStore(root).portable_ir({"font": {"resource_path": str(source)},
+            "image_modified_ms": 11 if name == "first" else 99, "start_ms": 1234}))
+    assert stores[0] == stores[1]
+    assert stores[0]["start_ms"] == 1234
+
+
+def test_recording_expands_production_vector_dedup_without_changing_sent_ir(monkeypatch):
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcess
+    sent = []
+    monkeypatch.setattr(NativeRendererProcess, "_send", lambda self, payload: sent.append(payload))
+    renderer = object.__new__(RecordingRenderer)
+    renderer.vector_table = None
+    renderer._send({"cmd": "configure", "ir": {"vector_glyphs": {"a": {"path": []}}, "track": {}}})
+    second = {"cmd": "configure", "ir": {"track": {"lines": []}}}
+    renderer._send(second)
+    assert "vector_glyphs" not in renderer.sent_ir
+    assert renderer.expanded_ir["vector_glyphs"] == {"a": {"path": []}}
+    assert sent[-1] == second
+
+
+def test_difference_reports_local_change_instead_of_diluting_transparent_background():
+    expected = bytes(8 * 6 * 4)
+    actual = bytearray(expected)
+    actual[(2 * 8 + 3) * 4 + 3] = 70
+    result = pixel_difference(expected, bytes(actual), 8, 6)
+    assert result["changed_pixels"] == 1
+    assert result["changed_bbox"] == [3, 2, 4, 3]
+    assert result["max_channel_delta"] == 70
+    assert result["changed_channel_mae"] == 17.5
