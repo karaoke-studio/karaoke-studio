@@ -71,6 +71,14 @@ def make_window(settings):
     app.processEvents()
 
 
+@pytest.mark.parametrize("saved", [None, False, True])
+def test_gpu_direct_toggle_defaults_on_and_preserves_saved_choice(settings, make_window, saved):
+    if saved is not None:
+        settings.data = {"output": {"gpu_direct_present": saved}}
+    window = make_window()
+    assert window._gpu_direct_check.isChecked() is (True if saved is None else saved)
+
+
 @pytest.fixture
 def confirm(monkeypatch):
     """替身确认弹窗；传入 False 模拟用户取消。"""

@@ -257,10 +257,11 @@ git submodule status
 ### 关键约束
 
 - **引擎选型已定**：离屏栅格化 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
-- **GPU（Direct2D）是主渲染口径**：Windows 交互会话默认使用 G5 shared-memory 预览并默认
+- **GPU（Direct2D）是主渲染口径**：Windows 交互会话默认开启 GPU 直画上屏（G6 DirectComposition），
+  不可用时回退 G5 shared-memory 预览，并默认
   启用 GPU 字幕导出，改动以 GPU 表现为准。CPU QPainter 保留为 fallback（无 GPU / 非 Windows /
-  GPU 初始化失败）与离线校验路径，**不再是判定正确性的 oracle**。G6 DirectComposition 已按用户
-  决定停止且产品入口硬关闭，后续不得继续或重新开放。
+  GPU 初始化失败）与离线校验路径，**不再是判定正确性的 oracle**。2026-11-13 用户明确要求
+  G6 开关默认开启；保留用户手动关闭的偏好和环境变量覆盖。
 - **两条后端必须给出同一布局结果**，出现分歧时按 `layout_semantics` 对应的语义判对错
   （`n3_1074` 以 N3 10.74 逆向结论为准，`legacy` 以旧工程既有画面为准），不要因为"GPU 是主口径"
   就直接把 GPU 的现状当成正确答案——行网格属于页级量，任何依赖行内容的实现都要先存疑。

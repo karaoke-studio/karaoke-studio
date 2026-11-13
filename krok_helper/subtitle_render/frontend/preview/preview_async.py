@@ -319,13 +319,13 @@ def native_preview_enabled() -> bool:
 
 
 def _gpu_preview_default_enabled() -> bool:
-    """Enable G5 by default only for interactive Windows sessions."""
+    """Enable GPU preview by default only for interactive Windows sessions."""
     qpa_platform = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
     return os.name == "nt" and qpa_platform not in {"offscreen", "minimal"}
 
 
 def gpu_preview_enabled() -> bool:
-    """Enable the stable G5 shared-memory preview by default on Windows."""
+    """Enable GPU preview by default on Windows (direct present or G5 fallback)."""
     default = "1" if _gpu_preview_default_enabled() else "0"
     return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", default)
 
@@ -347,7 +347,8 @@ def native_due_queue_capacity(
 
 
 def _gpu_direct_present_preference() -> bool:
-    """Read the persisted G6 preference (set by the export-page toggle)."""
+    """Read the G6 preference; default on for interactive Windows sessions."""
+    default = _gpu_preview_default_enabled()
     try:
         from krok_helper.subtitle_render.settings.store import (
             SubtitleRenderSettingsStore,
@@ -357,9 +358,9 @@ def _gpu_direct_present_preference() -> bool:
         store = SubtitleRenderSettingsStore(load_app_settings)
         data = store.load()
         output = data.get("output") if isinstance(data.get("output"), dict) else {}
-        return bool(output.get("gpu_direct_present", False))
-    except Exception:  # noqa: BLE001 - 设置读取失败按关处理
-        return False
+        return bool(output.get("gpu_direct_present", default))
+    except Exception:  # noqa: BLE001 - 设置读取失败沿用平台默认值
+        return default
 
 
 from krok_helper.subtitle_render.engine.text.font_preparation import (
@@ -369,7 +370,7 @@ from krok_helper.subtitle_render.engine.text.font_preparation import (
 
 
 def gpu_native_preview_enabled() -> bool:
-    """G6 DirectComposition 直画上屏（2026-10 用户决定重开，默认关）。
+    """G6 DirectComposition 直画上屏（Windows 交互会话默认开启）。
 
     开启后 sidecar 在预览 viewport 下创建 DirectComposition 子窗口，
     字幕层直接上屏（零回读/零共享内存/零 QImage），roundtrip 从 ~55ms

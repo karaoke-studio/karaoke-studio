@@ -612,7 +612,7 @@ class ExportWorkspaceView(QWidget):
         render_worker_options: Sequence[int],
         gpu_preview_checked: bool,
         gpu_controls_visible: bool,
-        gpu_direct_present_checked: bool = False,
+        gpu_direct_present_checked: bool = True,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)

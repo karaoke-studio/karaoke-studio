@@ -626,7 +626,7 @@ def test_gpu_native_preview_env_gate(monkeypatch):
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     monkeypatch.delenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", raising=False)
-    # 偏好也关（默认）→ 关
+    # 离屏测试未设置偏好，不默认拉起 DirectComposition。
     assert pa.gpu_native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "1")
@@ -643,6 +643,21 @@ def test_gpu_native_preview_env_gate(monkeypatch):
     assert pa.gpu_native_preview_enabled() is False
     monkeypatch.delenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", raising=False)
     assert pa.gpu_native_preview_enabled() is True  # env 缺省时磁盘说了算
+
+
+@pytest.mark.parametrize("interactive_windows", [False, True])
+@pytest.mark.parametrize("saved", [None, False, True])
+def test_gpu_direct_preview_default_preserves_explicit_choice(
+    monkeypatch, interactive_windows, saved,
+):
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+    from krok_helper.subtitle_render.settings.store import SubtitleRenderSettingsStore
+
+    payload = {} if saved is None else {"output": {"gpu_direct_present": saved}}
+    monkeypatch.setattr(SubtitleRenderSettingsStore, "load", lambda self: payload)
+    monkeypatch.setattr(pa, "_gpu_preview_default_enabled", lambda: interactive_windows)
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", raising=False)
+    assert pa.gpu_native_preview_enabled() is (interactive_windows if saved is None else saved)
 
 
 def test_gpu_renderer_enters_g6_with_env_opt_in(qapp, monkeypatch):

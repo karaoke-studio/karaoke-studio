@@ -254,7 +254,7 @@ class AppOutputPreferenceValues:
     render_workers: object
     allowed_render_workers: tuple[int, ...]
     output_format: str = "mp4"
-    gpu_direct_present: bool = False
+    gpu_direct_present: bool = True
     bitrate_mbps: object = DEFAULT_VIDEO_BITRATE_MBPS
 
 
@@ -705,7 +705,7 @@ def update_app_output_preferences(
     preview_quality: str,
     gpu_export_enabled: bool,
     gpu_export_default_version: int,
-    gpu_direct_present: bool = False,
+    gpu_direct_present: bool = True,
     directory_mode: str,
     custom_directory: str,
     name_template: str,

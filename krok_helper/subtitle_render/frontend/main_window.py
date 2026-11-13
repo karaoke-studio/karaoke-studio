@@ -2857,7 +2857,7 @@ class SubtitleRenderWindow(QWidget):
             blocked_direct = self._gpu_direct_check.blockSignals(True)
             try:
                 self._gpu_direct_check.setChecked(bool(
-                    output.get("gpu_direct_present", False)))
+                    output.get("gpu_direct_present", True)))
             finally:
                 self._gpu_direct_check.blockSignals(blocked_direct)
         if self._loading_project:
@@ -9651,13 +9651,13 @@ class SubtitleRenderWindow(QWidget):
         self._preview_preference_controller.apply_gpu_enabled(enabled)
 
     def _load_direct_present_preference(self) -> bool:
-        """从持久化设置读 G6 直画偏好（加载失败按关）。"""
+        """读取 G6 直画偏好；尚未设置时默认开启。"""
         try:
             data = self._settings_store.load()
             output = data.get("output") if isinstance(data.get("output"), dict) else {}
-            return bool(output.get("gpu_direct_present", False))
+            return bool(output.get("gpu_direct_present", True))
         except Exception:
-            return False
+            return True
 
     def _on_gpu_direct_present_changed(self, enabled: bool) -> None:
         """GPU 直画上屏（G6）：立即生效 + 持久化 + 控制台提示。"""
