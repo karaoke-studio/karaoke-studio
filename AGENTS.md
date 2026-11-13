@@ -251,6 +251,13 @@ git submodule status
 5. 若任务涉及 GIL、GPU、Direct2D 或 native 预览，读
    [`docs/字幕渲染-GPU后端逆向与实施计划.md`](docs/字幕渲染-GPU后端逆向与实施计划.md)：
    N3 10.74.80.0 逆向证据、Windows C++ Direct2D 决策、G0-G6 实施与验收门槛。
+6. 若任务涉及 Skia 或跨平台 GPU 后端，读
+   [`docs/字幕渲染-Skia跨平台后端架构与迁移实施计划.md`](docs/字幕渲染-Skia跨平台后端架构与迁移实施计划.md)：
+   公共核心与平台适配边界、Vulkan/Metal、完整功能迁移、P00-P12 任务与验收。
+   该文档是待实施计划，不代表已切换生产后端；当前 GPU 默认与 G6 状态仍以下方关键约束为准。
+   Skia 迁移最终目标（2026-11-14 用户明确）：Windows/Linux Vulkan、macOS Metal，
+   CPU fallback 也使用同核心的 Skia Raster；不以 QPainter 做迁移画面对照，
+   只做 D2D GPU–Skia GPU 与 Skia CPU–Skia GPU 对照。验收后退役旧字幕绘制路径。
 
 文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 
