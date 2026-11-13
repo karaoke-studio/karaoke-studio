@@ -915,7 +915,7 @@ class ExportWorkspaceView(QWidget):
             "使用稳定的 G5 shared-memory/QImage 路径加速字幕透明层；"
             "不可用或失败时自动回退 Painter。"
         )
-        gpu_direct_present_check = CheckBox("GPU 直画上屏（实验）", settings_col)
+        gpu_direct_present_check = CheckBox("GPU 直画上屏（建议开启）", settings_col)
         gpu_direct_present_check.setChecked(gpu_direct_present_checked)
         gpu_direct_present_check.setVisible(gpu_controls_visible)
         gpu_direct_present_check.setToolTip(
