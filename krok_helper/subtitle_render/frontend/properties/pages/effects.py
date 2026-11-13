@@ -25,6 +25,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     CanvasSliderSpinBox,
     WheelFocusedComboBox,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.page_navigation import PropertyPageNavigation
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     ResponsiveControlPair,
     ResponsiveFieldGrid,
@@ -635,7 +636,7 @@ class EffectsPropertyPageBuilder:
         )
         host._animation_grid.add_field("唱字 / 反向唱字特效", host._karaoke_pair_row)
 
-        host._scanline_scope_pill = SegmentedWidget(host._scanline_section)
+        host._scanline_scope_pill = PropertyPageNavigation(host._scanline_section, compact=True)
         for label, scope in (
             ("仅正向", "forward"),
             ("仅反向", "reverse"),
@@ -643,7 +644,6 @@ class EffectsPropertyPageBuilder:
         ):
             host._scanline_scope_pill.addItem(scope, label)
         host._scanline_scope_pill.setCurrentItem("forward")
-        host._scanline_scope_pill.setFixedWidth(270)
         host._scanline_scope_pill.setToolTip(
             "扫字线应用范围：仅正向=普通唱字行；仅反向=只给反向唱字行；"
             "全部=两者都应用"
@@ -830,7 +830,7 @@ class EffectsPropertyPageBuilder:
             "位置冒星、音符飘出=自字框升起、涟漪光环=每字两圈细环扩散"
             "（随机位置/大小/时机）"
         )
-        host._fx_target_pill = SegmentedWidget(section)
+        host._fx_target_pill = PropertyPageNavigation(section, compact=True)
         for label, target_key in PARTICLE_TARGET_OPTIONS:
             host._fx_target_pill.addItem(target_key, label)
         host._fx_target_pill.setCurrentItem("sing")
@@ -1044,7 +1044,6 @@ class EffectsPropertyPageBuilder:
         fx_target_layout = QHBoxLayout(host._fx_target_row)
         fx_target_layout.setContentsMargins(0, 0, 0, 0)
         fx_target_layout.setSpacing(6)
-        host._fx_target_pill.setFixedWidth(300)
         fx_target_layout.addWidget(host._fx_target_pill)
         fx_target_layout.addStretch(1)
         host._particle_layout.addWidget(

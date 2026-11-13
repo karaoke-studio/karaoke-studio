@@ -153,6 +153,11 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
         for key in host._fx_target_pill.items
     ] == ["入退场动画", "唱字装饰粒子", "扫字线特效"]
     assert host._fx_target_pill.currentRouteKey() == "sing"
+    for selector in (host._fx_target_pill, host._scanline_scope_pill):
+        assert selector.width() <= 300
+        for item in selector.items.values():
+            assert item.height() == 28
+            assert item.icon().isNull()
     # 扫字线形态：普通高亮/烈焰棒/水泡/自定义图片（独立形态替换高亮带）。
     assert [
         host._scanline_shape_combo.itemData(index)

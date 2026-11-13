@@ -7209,10 +7209,13 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert not panel._scanline_color_btn.isHidden()
     assert panel._scanline_brightness_spin.isHidden()
     # 三态应用范围：仅正向 / 仅反向 / 全部。
-    panel._scanline_scope_pill.setCurrentItem("reverse")
+    scope_item = panel._scanline_scope_pill.widget("reverse")
+    QTest.mouseClick(scope_item, Qt.MouseButton.LeftButton, pos=QPoint(scope_item.width() // 2, 1))
     assert emitted[-1].scanline_forward_enabled is False
     assert emitted[-1].scanline_reverse_enabled is True
-    panel._scanline_scope_pill.setCurrentItem("both")
+    scope_item = panel._scanline_scope_pill.widget("both")
+    QTest.mouseClick(scope_item, Qt.MouseButton.LeftButton,
+                     pos=QPoint(scope_item.width() // 2, scope_item.height() - 2))
     assert emitted[-1].scanline_forward_enabled is True
     assert emitted[-1].scanline_reverse_enabled is True
     panel._reverse_karaoke_anim_combo.setCurrentIndex(
@@ -7222,7 +7225,9 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert panel._scanline_width_spin.isEnabled()
     # 粒子设置对象药丸：切到扫字线后颜色/尺寸/数量编辑扫字线独立字段。
     assert panel._fx_target_pill.currentRouteKey() == "sing"
-    panel._fx_target_pill.setCurrentItem("scanline")
+    target_item = panel._fx_target_pill.widget("scanline")
+    QTest.mouseClick(target_item, Qt.MouseButton.LeftButton,
+                     pos=QPoint(target_item.width() // 2, target_item.height() - 2))
     assert panel._fx_particle_mode_combo.currentData() == "theme"
     assert panel._fx_count_spin.isEnabled()
     assert panel._scanline_effect_combo.currentData() == "none"
