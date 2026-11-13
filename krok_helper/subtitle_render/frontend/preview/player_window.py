@@ -611,13 +611,15 @@ class PreviewPlayerWindow(QWidget):
             return
         if self._suppress_control_show:
             return
+        controls_hidden = self._top_controls.isHidden() or self._bottom_controls.isHidden()
         self._top_controls.show()
         self._bottom_controls.show()
-        self._top_controls.raise_()
-        self._bottom_controls.raise_()
-        # 控制栏覆盖窗口上下沿；若最后提升的是控制栏，四个角的透明 resize
-        # grip 就收不到鼠标事件。始终让边角手柄位于控制栏之上。
-        self._raise_edge_grips()
+        if controls_hidden:
+            self._top_controls.raise_()
+            self._bottom_controls.raise_()
+            # 控制栏重新出现时恢复叠放顺序，缩放手柄必须在控制栏之上。
+            # 已可见时不反复 raise，避免每次鼠标移动都使视频区失效重绘。
+            self._raise_edge_grips()
         self._hide_controls_timer.start()
 
     def _on_controls_idle_timeout(self) -> None:
@@ -727,7 +729,9 @@ class PreviewPlayerWindow(QWidget):
         super().mouseMoveEvent(event)
         if self._drag_origin is not None:
             self.move(event.globalPosition().toPoint() - self._drag_origin)
-        self.show_controls()
+            event.accept()
+        elif not event.buttons() & Qt.MouseButton.LeftButton:
+            self.show_controls()
 
     def mousePressEvent(self, event):  # noqa: N802
         if (
@@ -741,6 +745,14 @@ class PreviewPlayerWindow(QWidget):
                 return
             if self._is_expanded():
                 # 最大化状态下不允许手动拖动（会把窗口拖成"假最大化"状态）。
+                event.accept()
+                return
+            self.show_controls()
+            handle = self.windowHandle()
+            # 由系统跟随鼠标移动窗口，避免播放/绘制繁忙时 Python move 事件
+            # 排队导致窗口拖动滞后。不支持系统拖动的平台保留手动移动兜底。
+            if handle is not None and handle.startSystemMove():
+                self._drag_origin = None
                 event.accept()
                 return
             self._drag_origin = event.globalPosition().toPoint() - self.frameGeometry().topLeft()

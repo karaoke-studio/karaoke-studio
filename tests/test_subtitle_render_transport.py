@@ -4544,6 +4544,66 @@ def test_preview_player_window_backend_indicator(qapp, monkeypatch, confirmed):
         qapp.processEvents()
 
 
+@pytest.mark.parametrize("system_move_supported", [False, True])
+def test_preview_window_drag_uses_system_move_with_manual_fallback(
+    qapp, monkeypatch, system_move_supported,
+):
+    from types import SimpleNamespace
+    from PyQt6.QtCore import QEvent, QPoint, QPointF
+    from PyQt6.QtGui import QMouseEvent
+    from PyQt6.QtWidgets import QWidget
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.player_window import PreviewPlayerWindow
+
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    owner = QWidget()
+    window = PreviewPlayerWindow(owner)
+    system_moves, manual_moves, controls = [], [], []
+    def start_system_move():
+        system_moves.append(True)
+        return system_move_supported
+    monkeypatch.setattr(window, "windowHandle", lambda: SimpleNamespace(startSystemMove=start_system_move))
+    monkeypatch.setattr(window, "move", manual_moves.append)
+    monkeypatch.setattr(window, "show_controls", lambda: controls.append(True))
+    try:
+        local = QPointF(40, 20)
+        origin = window.frameGeometry().topLeft()
+        global_pos = QPointF(origin) + local
+        press = QMouseEvent(
+            QEvent.Type.MouseButtonPress, local, global_pos,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        window.mousePressEvent(press)
+        assert system_moves == [True]
+        assert controls == [True]
+        assert (window._drag_origin is None) == system_move_supported
+        for delta in (QPoint(20, 10), QPoint(80, 35)):
+            move = QMouseEvent(
+                QEvent.Type.MouseMove, local, global_pos + QPointF(delta),
+                Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            window.mouseMoveEvent(move)
+        assert manual_moves == ([] if system_move_supported else [
+            origin + QPoint(20, 10), origin + QPoint(80, 35),
+        ])
+        assert controls == [True], "Dragging must not repeatedly raise the controls"
+        release = QMouseEvent(
+            QEvent.Type.MouseButtonRelease, local, global_pos,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        window.mouseReleaseEvent(release)
+        assert window._drag_origin is None
+    finally:
+        window.preview_panel.canvas.close()
+        window.close()
+        window.deleteLater()
+        owner.deleteLater()
+        qapp.processEvents()
+
+
 def test_preview_graphics_pause_re_requests_current_frame(qapp, monkeypatch):
     """回归：暂停必须补发当前位帧请求。
 
