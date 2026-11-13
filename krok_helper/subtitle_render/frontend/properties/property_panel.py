@@ -63,12 +63,15 @@ from qfluentwidgets import (
     PushButton as FluentPushButton,
     RadioButton,
     ScrollArea as FluentScrollArea,
-    SegmentedWidget,
     SpinBox as FluentSpinBox,
     ToolButton as FluentToolButton,
     TransparentToolButton as FluentTransparentToolButton,
 )
 from krok_helper.qfluent_compat import install_fluent_tooltip
+from krok_helper.subtitle_render.frontend.properties.controls.page_navigation import (
+    PropertyPageNavigation,
+    PropertyNavigationScrollArea,
+)
 
 from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.domain.band_presets import (
@@ -1106,18 +1109,35 @@ class PropertyPanel(QWidget):
         navigation_row.setObjectName("PropertyNavigationRow")
         navigation_layout = QHBoxLayout(navigation_row)
         navigation_layout.setContentsMargins(8, 4, 8, 4)
-        navigation_layout.setSpacing(0)
+        navigation_layout.setSpacing(4)
         self._navigation_row = navigation_row
         self._navigation_layout = navigation_layout
         self._navigation_action: Optional[QWidget] = None
         self._navigation_actions: list[QWidget] = []
 
-        self._navigation = SegmentedWidget(navigation_row)
+        self._navigation = PropertyPageNavigation(navigation_row)
         self._navigation.setObjectName("PropertyNavigation")
         self._navigation.setAccessibleName("字幕属性分类")
         self._navigation.currentItemChanged.connect(self._on_navigation_changed)
-        navigation_layout.addWidget(self._navigation, 0)
-        navigation_layout.addStretch(1)
+        self._navigation_scroll = PropertyNavigationScrollArea(navigation_row)
+        self._navigation_scroll.setWidget(self._navigation)
+        self._navigation_previous = FluentTransparentToolButton(navigation_row)
+        self._navigation_next = FluentTransparentToolButton(navigation_row)
+        for button, text in ((self._navigation_previous, "‹"), (self._navigation_next, "›")):
+            button.setText(text)
+            button.setFixedSize(24, 32)
+            button.setStyleSheet("QToolButton { font-size: 22px; }")
+            button.setAccessibleName("向左滚动标签" if text == "‹" else "向右滚动标签")
+            button.setToolTip(button.accessibleName())
+            button.hide()
+        navigation_layout.addWidget(self._navigation_previous)
+        navigation_layout.addWidget(self._navigation_scroll, 1)
+        navigation_layout.addWidget(self._navigation_next)
+        scroll_bar = self._navigation_scroll.horizontalScrollBar()
+        scroll_bar.rangeChanged.connect(self._update_navigation_overflow)
+        scroll_bar.valueChanged.connect(self._update_navigation_overflow)
+        self._navigation_previous.clicked.connect(lambda: scroll_bar.setValue(scroll_bar.value() - 160))
+        self._navigation_next.clicked.connect(lambda: scroll_bar.setValue(scroll_bar.value() + 160))
         root.addWidget(navigation_row, 0)
 
         self._stack = QStackedWidget(self)
@@ -1194,6 +1214,11 @@ class PropertyPanel(QWidget):
         self._navigation.addItem(
             route_key,
             label,
+            icon={
+                "font": FIF.PEOPLE, "layout": FIF.LAYOUT, "timing": FIF.STOP_WATCH,
+                "effects": FIF.BRUSH, "title": FIF.FONT, "background": FIF.PHOTO,
+                "rolls": FIF.CONSTRACT,
+            }[route_key],
         )
         item = self._navigation.widget(route_key)
         item.setAccessibleName(label)
@@ -1203,6 +1228,14 @@ class PropertyPanel(QWidget):
         index = property_page_index(route_key)
         if index is not None:
             self._stack.setCurrentIndex(index)
+            self._navigation_scroll.ensureWidgetVisible(self._navigation.widget(route_key), 8, 0)
+
+    def _update_navigation_overflow(self, *_args) -> None:
+        bar = self._navigation_scroll.horizontalScrollBar()
+        for button in (self._navigation_previous, self._navigation_next):
+            button.setVisible(bar.maximum() > 0)
+        self._navigation_previous.setEnabled(bar.value() > bar.minimum())
+        self._navigation_next.setEnabled(bar.value() < bar.maximum())
 
     def _on_page_changed(self, index: int) -> None:
         if hasattr(self, "_font_preview_widget"):

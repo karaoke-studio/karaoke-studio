@@ -4366,8 +4366,11 @@ def test_layout_navigation_is_merged_above_row_structure(qapp):
     )
 
 
-def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
+def test_property_panel_uses_scrollable_icon_tabs_in_expected_order(qapp):
     panel = PropertyPanel()
+    panel.resize(480, 700)
+    panel.show()
+    qapp.processEvents()
 
     assert isinstance(panel._navigation, SegmentedWidget)
     assert panel.count() == 7
@@ -4378,6 +4381,11 @@ def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
         item = panel._navigation.widget(route_key)
         assert item.text() == label
         assert item.accessibleName() == label
+        assert not item.icon().isNull()
+        assert item.height() == 32
+
+    assert panel._navigation_scroll.horizontalScrollBar().maximum() > 0
+    assert panel._navigation_next.isVisible()
 
     panel.setCurrentIndex(3)
     assert panel.currentIndex() == 3
@@ -4388,6 +4396,9 @@ def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
         qapp.processEvents()
         assert panel.currentIndex() == expected_index
         assert panel._navigation.currentRouteKey() == route_key
+        item = panel._navigation.widget(route_key)
+        viewport = panel._navigation_scroll.viewport()
+        assert viewport.rect().contains(QRect(item.mapTo(viewport, QPoint()), item.size()))
 
 
 def test_property_panel_reports_role_page_and_font_script_changes(qapp):
