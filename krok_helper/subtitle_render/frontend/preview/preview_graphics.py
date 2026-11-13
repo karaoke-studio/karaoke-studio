@@ -1054,6 +1054,10 @@ class PreviewGraphicsView(QGraphicsView):
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
         )
 
+    def current_subtitle_frame(self) -> QImage | None:
+        """Return the already rendered transparent layer; never request a new frame."""
+        return self._subtitle_item._async_image
+
     def _display_device_scale(self) -> float:
         """DPR × scene→viewport 缩放，即视频矩形在屏幕上的物理口径。
 

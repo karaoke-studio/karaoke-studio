@@ -4604,6 +4604,60 @@ def test_preview_window_drag_uses_system_move_with_manual_fallback(
         qapp.processEvents()
 
 
+def test_preview_floating_controls_avoid_cached_subtitles_without_resizing(qapp, monkeypatch):
+    from PyQt6.QtCore import QRect, QSize
+    from PyQt6.QtWidgets import QWidget
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.player_window import PreviewPlayerWindow
+
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    owner = QWidget()
+    owner.resize(1600, 900)
+    window = PreviewPlayerWindow(owner)
+    window.show()
+    qapp.processEvents()
+    monkeypatch.setattr(window, "_cursor_over_bottom_controls", lambda: False)
+    try:
+        assert window.size() == QSize(800, 492)  # no extra footer/black border
+        frame = window._preview_frame.geometry()
+        assert frame == QRect(0, 42, 800, 450)
+        image = QImage(800, 450, QImage.Format.Format_RGBA8888)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.fillRect(QRect(30, 320, 740, 130), QColor("white"))
+        painter.fillRect(QRect(30, 20, 500, 20), QColor("white"))
+        painter.end()
+        # Both CPU and GPU workers deliver this same transparent-layer surface.
+        window.preview_panel.canvas._subtitle_item.set_async_image(image)
+        window._position_transport_controls()
+        bar = window._bottom_controls.geometry()
+        assert frame.contains(bar)
+        assert bar.bottom() < frame.y() + 320
+        assert bar.top() > frame.y() + 40
+        assert window._preview_frame.geometry() == frame
+
+        # User interaction pins the bar even if a new frame changes text bands.
+        monkeypatch.setattr(window, "_cursor_over_bottom_controls", lambda: True)
+        image = image.copy()
+        image.fill(Qt.GlobalColor.transparent)
+        window.preview_panel.canvas._subtitle_item.set_async_image(image)
+        window._position_transport_controls()
+        assert window._bottom_controls.geometry() == bar
+        monkeypatch.setattr(window, "_cursor_over_bottom_controls", lambda: False)
+        window._position_transport_controls()
+        assert window._bottom_controls.geometry().bottom() == window.height() - 1
+
+        window.hide_controls(force=True)
+        window.show_controls()
+        assert window._preview_frame.geometry() == frame
+    finally:
+        window.preview_panel.canvas.close()
+        window.close()
+        window.deleteLater()
+        owner.deleteLater()
+        qapp.processEvents()
+
+
 def test_preview_graphics_pause_re_requests_current_frame(qapp, monkeypatch):
     """回归：暂停必须补发当前位帧请求。
 

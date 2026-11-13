@@ -798,6 +798,10 @@ class PreviewPanel(DropPanel):
         setter(bool(enabled))
         return True
 
+    def current_subtitle_frame(self) -> QImage | None:
+        getter = getattr(self._canvas, "current_subtitle_frame", None)
+        return getter() if getter is not None else None
+
     def set_native_preview_mode(self, enabled: bool) -> bool:
         """G6↔G5 热切换转发（canvas 实现）；画布不支持时返回 False。"""
         setter = getattr(self._canvas, "set_native_preview_mode", None)

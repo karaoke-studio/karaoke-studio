@@ -15,7 +15,7 @@ from PyQt6.QtCore import (
     Qt,
     pyqtSignal as Signal,
 )
-from PyQt6.QtGui import QCursor, QKeySequence, QShortcut
+from PyQt6.QtGui import QCursor, QImage, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -181,6 +181,8 @@ class PreviewPlayerWindow(QWidget):
         self._last_control_move_pos: Optional[QPoint] = None
         self._collapsed = False
         self._gpu_preview_confirmation_open = False
+        self._subtitle_bands_key = None
+        self._subtitle_bands: list[tuple[float, float]] = []
         self._output_aspect = 16 / 9
         self._media_title = "字幕视频预览"
         self.setWindowTitle("字幕视频预览")
@@ -242,6 +244,11 @@ class PreviewPlayerWindow(QWidget):
         self._init_playback_shortcuts()
 
         canvas = self._preview_panel.canvas
+        self._controls_position_timer = QTimer(self)
+        self._controls_position_timer.setSingleShot(True)
+        self._controls_position_timer.setInterval(150)
+        self._controls_position_timer.timeout.connect(self._position_transport_controls)
+        canvas.framePainted.connect(self._schedule_transport_position)
         backend_changed = getattr(canvas, "renderBackendChanged", None)
         if backend_changed is not None:
             backend_changed.connect(self._set_render_backend_label)
@@ -605,6 +612,7 @@ class PreviewPlayerWindow(QWidget):
     def show_controls(self) -> None:
         if self._collapsed:
             self._hide_controls_timer.stop()
+            self._controls_position_timer.stop()
             self._top_controls.show()
             self._bottom_controls.hide()
             self._top_controls.raise_()
@@ -620,7 +628,77 @@ class PreviewPlayerWindow(QWidget):
             # 控制栏重新出现时恢复叠放顺序，缩放手柄必须在控制栏之上。
             # 已可见时不反复 raise，避免每次鼠标移动都使视频区失效重绘。
             self._raise_edge_grips()
+            # 在首次重绘前利用现有字幕帧定位，避免先闪现在字幕上再挪开。
+            self._position_transport_controls()
+        else:
+            self._schedule_transport_position()
         self._hide_controls_timer.start()
+
+    def _schedule_transport_position(self) -> None:
+        if (not self._collapsed and self._bottom_controls.isVisible()
+                and not self._controls_position_timer.isActive()):
+            self._controls_position_timer.start()
+
+    def _cursor_over_bottom_controls(self) -> bool:
+        return (self.isVisible() and self._bottom_controls.isVisible()
+                and self._bottom_controls.geometry().contains(self.mapFromGlobal(QCursor.pos())))
+
+    def _position_transport_controls(self) -> None:
+        """Keep the floating bar clear of rendered text without relayout/rendering."""
+        if self._collapsed or not self._bottom_controls.isVisible():
+            return
+        # 操作进度/音量时位置固定；移开鼠标后才重新避让。
+        if self._cursor_over_bottom_controls():
+            return
+        image = self._preview_panel.current_subtitle_frame()
+        if image is None or image.isNull():
+            return
+        if image.cacheKey() != self._subtitle_bands_key:
+            # Smooth downsampling retains thin ruby/stroke coverage. Sampling
+            # runs only while controls are visible, at most once per 150 ms.
+            small = image.scaled(
+                160, 160, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ).convertToFormat(QImage.Format.Format_RGBA8888)
+            bits = small.constBits()
+            bits.setsize(small.sizeInBytes())
+            pixels = memoryview(bits)
+            bands = []
+            start = None
+            for row in range(small.height() + 1):
+                offset = row * small.bytesPerLine()
+                occupied = row < small.height() and any(
+                    alpha > 4 for alpha in pixels[offset + 3:offset + small.width() * 4:4]
+                )
+                if occupied and start is None:
+                    start = row
+                elif not occupied and start is not None:
+                    bands.append((start / small.height(), row / small.height()))
+                    start = None
+            self._subtitle_bands = bands
+            self._subtitle_bands_key = image.cacheKey()
+        frame = self._preview_frame.geometry()
+        bar_height = self._bottom_controls.height()
+        bottom_y = self.height() - bar_height
+        blocked = [(frame.y() + top * frame.height() - 12,
+                    frame.y() + bottom * frame.height() + 12)
+                   for top, bottom in self._subtitle_bands]
+        def clear(y):
+            return all(y + bar_height <= top or y >= bottom for top, bottom in blocked)
+        y = bottom_y
+        if not clear(y):
+            current_y = self._bottom_controls.y()
+            if clear(current_y):
+                return  # Keep a safe position stable as the wipe/particles advance.
+            for top, bottom in reversed(blocked):
+                if y + bar_height > top and y < bottom:
+                    y = int(top) - bar_height
+            if y < self._TITLE_BAR_HEIGHT + 4:
+                # No full-width empty band: preserve access to playback controls;
+                # the existing idle timeout still removes the overlay.
+                y = bottom_y
+        if y != self._bottom_controls.y():
+            self._bottom_controls.move(0, y)
 
     def _on_controls_idle_timeout(self) -> None:
         if self._collapsed:
@@ -648,7 +726,8 @@ class PreviewPlayerWindow(QWidget):
             return False
         return (
             pos.y() < self._TITLE_BAR_HEIGHT
-            or pos.y() >= self.height() - self._bottom_controls.height()
+            or (self._bottom_controls.isVisible()
+                and self._bottom_controls.geometry().contains(pos))
         )
 
     def hide_controls(self, *, force: bool = False) -> None:
@@ -661,6 +740,7 @@ class PreviewPlayerWindow(QWidget):
             self._hide_controls_timer.start()
             return
         self._hide_controls_timer.stop()
+        self._controls_position_timer.stop()
         self._suppress_control_show = True
         try:
             self._top_controls.setVisible(True)
@@ -682,6 +762,7 @@ class PreviewPlayerWindow(QWidget):
         self._top_controls.setGeometry(0, 0, self.width(), top_height)
         self._update_quality_label_visibility()
         self._bottom_controls.setGeometry(0, max(0, self.height() - 58), self.width(), 58)
+        self._schedule_transport_position()
         self._top_controls.raise_()
         self._bottom_controls.raise_()
         self._layout_edge_grips()
@@ -794,6 +875,7 @@ class PreviewPlayerWindow(QWidget):
 
     def closeEvent(self, event):  # noqa: N802
         self._hide_controls_timer.stop()
+        self._controls_position_timer.stop()
         # Pause rather than stop: stopping resets the shared playhead to 0, so
         # reopening the preview window would restart from the beginning.  The
         # remembered position is restored by PreviewWindowController.
