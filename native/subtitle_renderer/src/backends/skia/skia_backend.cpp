@@ -18,9 +18,8 @@ struct SkiaBackend::Impl {
 SkiaBackend::SkiaBackend(const SkiaOptions& options) : impl_(std::make_unique<Impl>()) {
     auto& caps = impl_->caps;
     caps.backend = "skia";
-    caps.supportsTransparentSurface = true;
-    caps.supportsStagingReadback = true;
-    // Glyph/scene/probe protocol support is deliberately not advertised in P02.
+    // Nothing can be rendered or read back until P04 wires the scene IR, so no frame,
+    // surface, glyph or preview capability is advertised yet.
     if (options.target == SkiaTarget::Raster) {
         impl_->raster = ::subtitle::skia::makeRasterSurface(1, 1);
         caps.adapterName = "Skia Raster CPU";

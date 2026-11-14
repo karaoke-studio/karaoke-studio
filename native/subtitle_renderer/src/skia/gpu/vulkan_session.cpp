@@ -103,6 +103,8 @@ void VulkanSession::initialize(bool requireHardware) {
         selected.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? "cpu" : "virtual_or_other", bestScore >= 2};
     VkPhysicalDeviceFeatures features{};
     instanceProc<PFN_vkGetPhysicalDeviceFeatures>("vkGetPhysicalDeviceFeatures")(physical_, &features);
+    // Bounds-checked buffer access costs throughput on some drivers and Ganesh never relies on it.
+    features.robustBufferAccess = VK_FALSE;
     float priority = 1;
     VkDeviceQueueCreateInfo queueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     queueInfo.queueFamilyIndex = queueIndex;
