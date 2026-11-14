@@ -518,7 +518,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；完整槽位/fallback 绘制与字体校准尚未完成，见 §14.10/§14.11。
 - [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
-- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行及多行固定网格已接通，复用共享计划并校验最终几何/区间；完整避让布局和 D2D 画质验收仍未完成，见 §14.11/§14.13/§14.15。
+- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格及跨页碰撞/填充已接通，见 §14.11/§14.13/§14.15/§14.16；智能水平避让、ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 4d7837ad
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43617970560 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout bcb0ea9e
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43629757622 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1371,6 +1371,31 @@ native 源码身份：`0588887388e7f062fbdfbf9c2292c12cf66e6c6a9d5225c96c16acc72
 **严格画质预算仍按 §14.13 保留，不以网格几何通过代替全部画质通过。** 本批不是完整 N3 布局兼容，也不宣布 Skia 可以替代当前 D2D；下一块需接入规范碰撞几何，再按共享求解器完成避让/段内填充与 ruby。
 
 native 源码身份：`a78a07f84c779d0f7910c934c4c5afbcf5fc966d2e7e8b81857ffd3a4bb5c025`。本机证据在 `build/p05-grid-*`；未做 4K 或 QPainter 画面对照，Linux 仍是 llvmpipe，Mac 新功能真机门槛继续保留。
+
+### 14.16 P05 跨页碰撞首批：规范墨迹、时间压缩、整页平移与段内填充（2026-11-15）
+
+**本批解除 §14.15 的跨页避让和段内填充门禁，仍不关闭整个 P05。** 实现提交 `bcb0ea9e`。legacy / n3_1074 横排多行现可选择允许跨页重叠或按正文墨迹避让，消费共享 show-time 的时间压缩、ForceBottom、页内同步、段内填充/段末收口、`lift` 整页平移和 `displace` 接管结果；保留手工显示窗口的既有优先级。智能水平避让、ruby、竖排/RTL、完整 fallback 和全部复杂外观/特效仍未接入，严格画质预算继续开放；生产 D2D 默认和原生实现未变。
+
+实现与所有权：
+
+- `engine/layout/line/skia_geometry.py` 从原 `skia_ir.py` 提取同一份整数单元推进、墨迹并集和最终坐标投影；最终 IR 与碰撞测量共用它，不能让碰撞用另一套 advance 或字体度量。`display/skia_collision.py` 只提供正文二维墨迹包络、基线、行距与页身份，不计描边、ruby、装饰或动画轨迹；包络按共享契约向外取整。几何在配置期按画布/源行/lane/短页行数缓存，行位变化后重新测该位置，纯时间变化复用静态几何。
+- `display/skia_schedule.py` 补齐共享 `DisplayResolutionPorts` / `AnimationGuardPorts` 的碰撞发现、次级位移发现、同步守卫、retime、段内填充和页内退出顺序端口。`plan/page_offsets.py` 继续调用原整页位移求解器。没有复制一份分页器、时间压缩阶梯或页面碰撞算法；native 仍不重分配 resolved intervals。
+- 共享显示解析与页面偏移缓存新增可选 `metrics_identity`。Skia 传入 `('skia', 规范字体度量身份)`，使同 family、同项目样式甚至同字体路径但内容已改变时，显示窗口/页面偏移重新求解，也与 Qt/D2D 的旧缓存隔离；未传参数的旧调用者维持原缓存键。只改最终 IR 的缓存而漏掉显示/偏移缓存，会把旧墨迹碰撞结果带回来。
+- `ResolvedLine` 持有已解析的物理位移窗口；绘制核心仅按 `[start_ms,end_ms)` 选位移并对整行 canvas 平移，路径与 before/after wipe clip 同时移动，不在帧循环排字、查字体或求碰撞。Qt/IR 边界统一应用时间偏移和 DPR，一次性物化到公共值类型；Vulkan/Metal/Raster 使用同一核心。
+- 新能力 `p05_page_collisions` 要求客户端在选择后端前验证。位移窗口限制数量、整数时间、先后顺序/不重叠与有限偏移；小数/反向时间、NaN/Infinity、字符串和缺字段明确拒绝，失败保留原场景。旧 P04 原始输入继续拒绝页面位移。
+
+本机验证：
+
+- Windows Skia/架构/进度组合 **197 通过**，Linux X11/Wayland 各 **167 通过、17 跳过**。新碰撞文件 **25 项**，覆盖自动时间压缩/填充、手工窗口、真实非零页面位移、半开窗口边界、稳定 seek、DPR 1.5、GPU/Raster 和媒体/样式/前黑偏移组合；同一字体路径替换内容时，规范身份与实际页面位移均改变，未调用 Qt 字体测量。
+- legacy/N3 × lift/displace 四组 D2D GPU 对照，每组采样三个时刻，行带边缘均满足原有 **1px** 门槛。位移窗口边界的固定整数平移另要求 GPU 和 Raster 各自逐字节一致，路径和走字不分离。普通无位移场景的原网格、字体、角色和协议测试继续通过。
+- 显示缓存的默认/两个 Skia 度量命名空间及页面偏移缓存分别独立；显式字体字节改变而路径/样式不变的真实度量回归通过。七份规范字体/布局/碰撞 JSON 在 Windows/X11/Wayland 比较，身份、glyph/cluster、实例索引与时间区间一致，几何最大误差 **0**。
+- 相关显示/分页/放置/时间线/架构/渲染/传输/导出/构建回归 **706 通过**。首次运行有 **705 通过、1 失败**：旧架构断言仍只列两端口，未登记 P05.3 已有的 `char_intervals` 与 `metrics_identity`；已更新到实际四端口契约，并额外检查 orchestrator 不导入 Qt 几何、逐字区间确实经 resolver 调用。没有为通过测试放松生产布局语义。既有 D2D shared realization/G6 零回读另 **3 通过**。
+- Windows/Linux 的 Vulkan 与 CPU-only 因共享头变化均干净重建，各 CTest **3/3 通过**。Mac CI [43629757622](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43629757622)（`bcb0ea9e`）**5 项全部成功**：两架构 Metal/Raster 构建和产品组合、跨架构七份样例比较、两个干净环境验收包。产品各 **163 通过、21 跳过**，预览/原生能力各 **21 通过、1 跳过**；21 项跳过为 Vulkan 注入与 Windows D2D/实装字体等平台专用用例。
+- 验收包新增 `page_collisions=1` 标志，一键脚本的碰撞步骤在两种架构均退出 **0**，全部功能项通过、托管虚拟 Metal 的真硬件门槛正确保留。§14.6 的朋友说明已更新到本轮实现提交与验收包。下载的 arm64 七份样例与 Windows/X11/Wayland 再比较，几何最大误差也均为 **0**；两架构 Metal/Raster 指纹均核对为本节同一源码身份。
+
+**本轮没有修改覆盖策略或放宽 P00 画质预算。** 布局/碰撞通过不代替完整画质验收，仍不能宣布已替代 D2D。后续继续智能水平布局、ruby 与其余几何校准，再推进绘制外观和重点动画/粒子/走字线。
+
+native 源码身份：`fd9406a3e5e28f5db320b0d2cc4f19bbc0a63e4d22160ee9b73fcb1fd946c52a`。本机证据：`build/p05-collision-native.log`、`build/p05-collision-linux-{xcb,wayland}.log`、`build/p05-collision-regression{,-final}.log`、`build/p05-collision-d2d-regression.log`、`build/p05-collision-tests.log` 与四种构建日志。Linux 仍为 llvmpipe，新 Mac 功能真机门槛继续保留；未做 4K 或 QPainter 画面对照。
 
 ## 15. 前期探针清理范围
 
