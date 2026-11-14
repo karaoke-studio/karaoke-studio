@@ -259,6 +259,13 @@ git submodule status
    CPU fallback 也使用同核心的 Skia Raster；不以 QPainter 做迁移画面对照，
    只做 D2D GPU–Skia GPU 与 Skia CPU–Skia GPU 对照。验收后退役旧字幕绘制路径。
 
+   P01 的独立构建入口已实现：`scripts/build_skia_renderer.py`，锁文件为
+   `native/subtitle_renderer/skia.lock.json`。它构建 C++ Skia 基础层和 GPU/Raster
+   冒烟目标，尚未替换生产 sidecar。Windows 缓存路径必须为 ASCII，默认放在
+   `%LOCALAPPDATA%/krok-helper/skia-deps`；Linux/macOS 默认 `~/.cache/krok-helper/skia-deps`。
+   GPU 参数固定 Windows/Linux `--gpu-api vulkan`、macOS `--gpu-api metal`；
+   `--cpu-only` 与 GPU 参数互斥。阶段实测和剩余硬件门槛以该实施文档为准。
+
 文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 
 ### 关键约束

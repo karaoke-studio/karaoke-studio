@@ -1003,7 +1003,7 @@ C:\Python314\python.exe scripts/capture_subtitle_gpu_baseline.py --output-dir bu
 
 ### 14.3 下一阶段入口
 
-P00 输入和采集分类已具备，下一待实施任务是 **P01.1：锁定官方 Skia revision 和依赖参数**。现有 D2D 差异继续作为未豁免问题携带，不能因为开始依赖构建就将其改成通过。正式 Skia GPU / Raster 核心和 sidecar 均按 C++ 方案实施。
+P00 输入和采集分类已具备；P01 已进入实际实施，见下面的构建证据。现有 D2D 差异继续作为未豁免问题携带，不能因为开始依赖构建就将其改成通过。正式 Skia GPU / Raster 核心和 sidecar 均按 C++ 方案实施。下一代码主线为 P02，但 P01 未通过的硬件门槛仍保留。
 
 ### 14.4 实施顺序回顾
 
@@ -1013,6 +1013,31 @@ P00 输入和采集分类已具备，下一待实施任务是 **P01.1：锁定�
 4. P02 / P03：先落实实际边界并证明宿主纹理交接，再开始完整字体/效果迁移。
 
 任何接手者都不应从“复制 D2D render/configure 两个大文件，然后逐行替换 API”开始。
+
+### 14.5 P01 实施记录（2026-11-14，收口验证进行中）
+
+已推送 `dd8814eb`（依赖锁）、`6db4e1e3`（C++ 基础层/统一驱动）、`5a69ce8a`（跨平台 DEPS 校验）、`52be0b74`（来源指纹/能力测试）、`f7f75ef3`（虚拟 Metal 独立记录）。后续收口结果在此原地补充。
+
+源码分为 `src/skia/core`、`gpu`、`raster`、`validation`。core 当前是最小能力场景，**还不是完成字幕 IR/字体布局/效果迁移的生产核心**；GPU 平台代码不包含字幕公式，core/Raster 无 Qt 或原生 GPU 头。旧 D2D/Qt 源码未搬家、未复制，默认后端不变。
+
+锁定官方 m150 commit 与 12 个必要依赖仓库；没有恢复旧 Aseprite 预编译包。Windows 使用 LLVM 21.1.8（安装包、clang-cl、lld-link 分别锁 SHA256）与 MSVC 14.50.35717 / Windows SDK 10.0.26100.0 / `/MD`。Linux 使用 Clang 21.1.8；macOS 固定 Xcode 26.1.1 / SDK 26.1。GN/Ninja 四组宿主包均锁下载和实际二进制摘要。
+
+统一场景在 640×360 透明 RGBA8888 premul/sRGB 目标绘制路径、FreeType 字体与字形轮廓、PNG 图像、blur、SkSL RuntimeEffect，检查能力区域、预乘 alpha 和重复帧精确稳定。字体文件和输出路径可含空格/中文。场景不是 D2D 字幕兼容性或实时性能验收；该尺寸不是新增 4K 补测。
+
+| 环境 | 当前实际证据 | 尚未完成 |
+|---|---|---|
+| Windows x64 / RTX 3070 Ti Laptop | 原生 Vulkan owned session、绘制/回读、相同 core 的 Raster、CPU-only 构建已成功 | 最终指纹下的干净/缓存重建及 loader/Unicode 集成测试收口中 |
+| Ubuntu 26.04 x64 / WSL | Clang 21.1.8 编译；llvmpipe 软件 Vulkan 与 Raster 场景通过；`--require-hardware` 正确失败 | CPU-only 构建收口中；原生 Linux 硬件 Vulkan 未验证 |
+| macOS ARM64 / GitHub hosted | Xcode 26.1.1 / SDK 26.1，Metal 与 CPU-only 目标编译、Raster 场景通过 | 当前设备为虚拟 Metal，要求硬件时正确拒绝；虚拟执行补验中，真机硬件门槛未过 |
+| macOS x64 / GitHub hosted | 已启动同一工作流 | 编译/运行结果待返回，不能先记通过 |
+
+第一轮 macOS 任务：[43539927650](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43539927650)；最终场景/缓存/虚拟设备补验：[43541333354](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43541333354)。CI 的 job 成功只表示构建和 Raster 检查通过；硬件尝试的退出码、日志和 JSON 必须单独查看，不能据绿色 job 推断 Metal 真硬件已通过。
+
+构建产物 `build-fingerprint.json` 分别记录依赖身份和 native 源码身份、编译器/SDK/GN/Ninja 摘要、精确参数、可执行文件摘要。请求指纹在编译前写入，失败编译也不能隐去工具链变化；native 源码/共享头变化自动全清本项目对象。编译期间输入变化时拒绝发布证据。传 `--smoke-font` 的成功构建还记录场景 JSON、字体、PNG/RGBA 摘要；仅编译时不会虚报 GPU 运行。
+
+纯逻辑与 P00 工具回归目前为 **44 passed**（`tests/test_skia_build.py`、`tests/test_subtitle_gpu_baseline.py`）。`tests/test_subtitle_skia_native.py` 为显式选择已构建产物的 GPU/Raster 集成测试，不调用 QPainter。
+
+现有 D2D CMake 默认配置已重新通过，未改变生产路径。P00 的 D2D 严格回访差异仍未豁免。P01 小样例不关闭 P03 的 Qt 纹理互操作门槛，也不关闭后续字幕功能、30 分钟压力或正式打包门槛。
 
 ## 15. 前期探针清理范围
 
