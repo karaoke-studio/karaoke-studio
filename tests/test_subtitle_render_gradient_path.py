@@ -122,8 +122,9 @@ def test_manual_changes_discard_stale_route_but_orientation_keeps_it():
     from krok_helper.subtitle_render.frontend.properties.property_panel import _replace_fill
     fill = replace(_fill(), gradient_path=GradientPath(hue_route("#9383CA", "#F6E9BF")))
     assert _replace_fill(fill, mode="gradient_vertical").gradient_path == fill.gradient_path
-    for changes in ({"start_color": "#112233"}, {"gradient_stops": [(0, "#000000"), (100, "#FFFFFF")]},
-                    {"color": "#888888"}):
+    assert _replace_fill(fill, color="#888888").gradient_path == fill.gradient_path
+    for changes in ({"start_color": "#112233"}, {"end_color": "#445566"},
+                    {"gradient_stops": [(0, "#000000"), (100, "#FFFFFF")]}):
         assert _replace_fill(fill, **changes).gradient_path is None
 
 

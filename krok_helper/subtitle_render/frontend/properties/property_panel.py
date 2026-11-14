@@ -5487,20 +5487,8 @@ class PropertyPanel(QWidget):
                     split_top_color=preset_start,
                     split_bottom_color=preset_end,
                 )
-        if "color" in changes:
-            fill = _replace_fill(
-                fill,
-                start_color=changes["color"],
-                end_color=changes["color"],
-                gradient_stops=[(0, changes["color"]), (100, changes["color"])],
-                split_top_color=changes["color"],
-                split_bottom_color=changes["color"],
-                split_stops=[
-                    (0, changes["color"]),
-                    (50, changes["color"]),
-                    (100, changes["color"]),
-                ],
-            )
+        # Solid, gradient and split colors are independent settings. Editing the
+        # solid color must retain the inactive modes for later switching back.
         state = replace(state, **{layer_key: fill})
         colors = replace(colors, **{state_key: state})
         if self._current_color_subject_key() == "ruby":
@@ -7161,8 +7149,8 @@ def _fill_stack_index(mode: str) -> int:
 
 
 def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
-    if set(changes).intersection({"gradient_stops", "start_color", "end_color", "color"}):
-        # Manual edits leave the baked result authoritative, never a stale route.
+    if set(changes).intersection({"gradient_stops", "start_color", "end_color"}):
+        # Manual gradient edits leave the baked result authoritative, never a stale route.
         changes.setdefault("gradient_path", None)
     if "start_color" in changes or "end_color" in changes:
         stops = _gradient_stops(fill)

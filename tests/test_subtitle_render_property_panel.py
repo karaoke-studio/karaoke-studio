@@ -12170,6 +12170,50 @@ def test_switching_to_gradient_seeds_custom_legacy_preset(qapp):
     assert fill.end_color == "#445566"
 
 
+@pytest.mark.parametrize("mode", ["gradient_horizontal", "gradient_vertical"])
+@pytest.mark.parametrize(
+    "role,subject,state,layer",
+    [
+        (None, "main", "after", "text"),
+        (None, "ruby", "before", "stroke"),
+        ("B", "main", "before", "stroke2"),
+        ("B", "ruby", "after", "shadow"),
+    ],
+)
+def test_solid_color_edit_preserves_other_fill_modes(
+    qapp, monkeypatch, mode, role, subject, state, layer
+):
+    panel = PropertyPanel()
+    if role:
+        panel.set_roles([role])
+        panel._singer_combo.setCurrentIndex(panel._singer_combo.findData(f"custom:{role}"))
+    for combo, value in (
+        (panel._color_subject_combo, subject),
+        (panel._color_state_combo, state),
+        (panel._color_layer_combo, layer),
+    ):
+        combo.setCurrentIndex(combo.findData(value))
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData(mode))
+    panel._update_gradient_stops([(0, "#123456"), (37.5, "#66CC99"), (100, "#FEDCBA")])
+    panel._update_split_stops([(0, "#112233"), (60, "#445566"), (100, "#445566")])
+    original = panel._current_paint_fill()
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("solid"))
+    monkeypatch.setattr(pp, "_select_color", lambda *_args: QColor("#997755"))
+    panel._paint_solid_btn.palette_button.click()
+    solid = panel._current_paint_fill()
+    assert solid.color == "#997755"
+    assert solid.gradient_stops == original.gradient_stops
+    assert solid.split_stops == original.split_stops
+
+    # Save/reload while solid is active must retain the inactive fill settings.
+    panel.set_style(style_from_dict(style_to_dict(panel.subtitle_style)))
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData(mode))
+    assert panel._current_paint_fill() == replace(original, color="#997755")
+    assert panel._gradient_editor._stops == original.gradient_stops
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("split_vertical"))
+    assert panel._split_editor._stops == original.split_stops
+
+
 def test_switching_between_gradient_modes_keeps_real_stops(qapp):
     """已有真实渐变时横向/纵向互切，色标原样保留、不被预置覆盖。"""
     panel = PropertyPanel()
