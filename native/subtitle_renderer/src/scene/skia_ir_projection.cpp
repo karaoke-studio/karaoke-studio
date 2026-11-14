@@ -19,7 +19,8 @@ int integer(const QJsonObject& o, const char* key, int minimum, int maximum) {
 void validateEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     for (const auto& feature : ir.value("required_features").toArray()) {
-        if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal")
+        if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal"
+            && feature.toString() != "p05_single_line_placement")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -79,7 +80,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         style.laneCount = cfg.dualLineLayout ? std::max(int(cfg.lineAlignments.size()), 1) : 1;
         style.dualLineLayout = cfg.dualLineLayout;
         style.alignment = (cfg.lineHorizontalLayout == "center" || source.centerOverride)
-            ? "center" : (cfg.lineAlignments.empty() ? "center" : cfg.lineAlignments.front().toStdString());
+            ? "center" : (cfg.lineAlignments.empty() ? "left" : cfg.lineAlignments.front().toStdString());
+        style.horizontalMargin = float(cfg.horizontalMarginPx * cfg.dpr);
         style.smartHorizontal = cfg.lineHorizontalLayout == "asymmetric" ? cfg.smartHorizontal.toStdString() : "none";
         style.verticalPosition = cfg.lineYPosition.toStdString();
         style.bottomMargin = float(cfg.lineYMarginPx * cfg.dpr);

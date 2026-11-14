@@ -25,8 +25,12 @@ std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
 void supportedStyle(const TextStyle& s, bool canonical) {
-    if (s.layoutSemantics != "legacy" || s.vertical || s.rightToLeft || s.alignment != "center" || s.verticalPosition != "bottom"
-        || s.laneCount != 1 || s.smartHorizontal != "none" || (s.allowBiting && !canonical)
+    if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
+        || s.vertical || s.rightToLeft || s.dualLineLayout || s.laneCount != 1
+        || (s.alignment != "left" && s.alignment != "center" && s.alignment != "right")
+        || (s.verticalPosition != "top" && s.verticalPosition != "center" && s.verticalPosition != "bottom")
+        || (!canonical && (s.alignment != "center" || s.verticalPosition != "bottom" || s.smartHorizontal != "none"))
+        || (s.allowBiting && !canonical)
         || s.strokeWidth != 0 || s.stroke2Width != 0 || s.latinStrokeWidth != 0 || s.latinStroke2Width != 0
         || s.decorationKindForState(false) != "none" || s.decorationKindForState(true) != "none"
         || s.beforeFillPaint.mode != "solid" || s.afterFillPaint.mode != "solid"
@@ -38,7 +42,8 @@ void supportedStyle(const TextStyle& s, bool canonical) {
         || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
         || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight))
         || s.volumeEnabled || s.litEnabled)
-        throw BackendError("Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
+        throw BackendError(canonical ? "Skia 当前仅支持单行横排、实色填充与基础走字" :
+            "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }
 }
 void validateSkiaScene(const RenderScene& scene, bool canonical) {

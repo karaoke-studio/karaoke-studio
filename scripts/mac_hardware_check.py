@@ -159,6 +159,10 @@ def main(argv=None) -> int:
     if manifest.get("resolved_layout_schema", 0) >= 2:
         steps["font_slots"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                               "tests/test_subtitle_skia_font_slots.py", "--basetemp", logs / "font-slot-tests"]
+    if manifest.get("single_line_placement", 0) >= 1:
+        steps["single_line_placement"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                         "tests/test_subtitle_skia_placement.py", "tests/test_subtitle_skia_outline.py",
+                                         "--basetemp", logs / "placement-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

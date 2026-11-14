@@ -18,6 +18,9 @@ from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PAS
 from krok_helper.subtitle_render.engine.layout.line.geometry import (
     line_has_role_labels,
 )
+from krok_helper.subtitle_render.engine.layout.line.alignment import (
+    lane_slot, lane_alignment, lane_offset_x, row_layout_params,
+)
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.page.pagination import (
     line_center_override,
@@ -38,37 +41,6 @@ from krok_helper.subtitle_render.engine.text import (
     role_char_geometry_by_index,
     style_for_role_in_layout,
 )
-
-
-def lane_slot(
-    style: Style,
-    lane: int | None,
-    page_line_count: int | None = None,
-) -> int:
-    """Resolve the shared alignment/offset slot, including bottom short pages."""
-    alignments = style.line_alignments or ["left"]
-    count = len(alignments)
-    index = 0 if lane is None else max(int(lane), 0)
-    if (
-        page_line_count is not None
-        and style.line_y_position == "bottom"
-        and 0 < int(page_line_count) < count
-    ):
-        index = max(count - int(page_line_count) + index, 0)
-    return min(index, count - 1)
-
-
-def lane_alignment(
-    style: Style, lane: int | None, page_line_count: int | None = None,
-) -> str:
-    return (style.line_alignments or ["left"])[lane_slot(style, lane, page_line_count)]
-
-
-def lane_offset_x(
-    style: Style, lane: int | None, page_line_count: int | None = None,
-) -> int:
-    index = lane_slot(style, lane, page_line_count)
-    return int(style.line_offsets_x[index]) if index < len(style.line_offsets_x) else 0
 
 
 def line_lane_alignment(
@@ -141,12 +113,6 @@ def aligned_x0(img_w: int, total_w: int, align: str) -> int:
     if align == "right":
         return img_w - total_w
     return 0
-
-
-def row_layout_params(style: Style, lane: int | None) -> tuple[str, int, int]:
-    if lane == 1:
-        return style.row2_align, style.row2_offset_x, style.row2_offset_y
-    return style.row1_align, style.row1_offset_x, style.row1_offset_y
 
 
 def line_total_width(
