@@ -72,7 +72,10 @@ def tools(root: Path, lock: dict, host: str) -> dict[str, Path]:
 def fetch_sources(root: Path, lock: dict, cpu_only: bool) -> Path:
     source = root / "src" / "skia"
     checkout(source, lock["skia"])
-    if sha256(source / "DEPS") != lock["skia"]["deps_sha256"]:
+    # Hash the upstream Git blob, not checkout CRLF/LF presentation on the host OS.
+    deps = subprocess.check_output(["git", "-C", str(source), "show",
+                                    lock["skia"]["revision"] + ":DEPS"])
+    if hashlib.sha256(deps).hexdigest() != lock["skia"]["deps_sha256"]:
         raise RuntimeError("Upstream DEPS digest mismatch")
     dependencies = [d for d in lock["dependencies"] if not (
         cpu_only and d["path"].split("/")[-1] in {"vulkan-headers", "vulkanmemoryallocator"}

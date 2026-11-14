@@ -4,7 +4,7 @@
     "url": "https://skia.googlesource.com/skia.git",
     "revision": "29d30fe30aa2e86c44302297d063dd3190c2c880",
     "branch": "chrome/m150",
-    "deps_sha256": "4b1f3d75be065998bd6e993158f04dfbd4f738d9a0a4b3b537c8a8b2f545d69e"
+    "deps_sha256": "a50325e3a26b81e36d37fa96d3ed9a66442b553de9c7a4fcc3da83bbfb3953ad"
   },
   "dependencies": [
     {
