@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
 #endif
     ready.insert("execution_targets", targets);
     ready.insert("pixel_formats", QJsonArray{"rgba8888", "bgra8888_premultiplied"});
+    ready.insert("text_metrics_schema", 1);
     ready.insert("fingerprint", KROK_SKIA_FINGERPRINT);
     protocol::writeJson(ready);
     commands::SkiaCommandRouter router;

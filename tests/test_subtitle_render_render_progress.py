@@ -49,10 +49,12 @@ def _track(line_count: int = 3) -> TimingTrack:
 
 
 def _resolvers():
+    from krok_helper.subtitle_render.engine.layout.line.qt_geometry import resolved_char_intervals_for_line
     return LayoutPlanResolvers(
         display_lines=lambda track, style, *, logical_w=None, logical_h=None: [],
         # 返回非空 dict：页偏移收口边界只在实际做了解析工作时上报。
         page_offset_windows=lambda logical_w, logical_h, track, style: {0: ()},
+        char_intervals=resolved_char_intervals_for_line,
     )
 
 

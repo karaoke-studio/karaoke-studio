@@ -155,6 +155,8 @@ def main(argv=None) -> int:
     if renderer_digest(REPO) != native_identity["renderer_sources_sha256"] or sha256(LOCK) != identity["lock_sha256"]:
         raise RuntimeError("Build inputs changed during compilation; rerun before publishing evidence")
     artifacts = {}
+    if system == "windows":
+        artifacts["icudtl.dat"] = sha256(native_output / "icudtl.dat")
     smoke_evidence = {}
     suffix = ".exe" if system == "windows" else ""
     for name in ("krok_skia_raster_smoke", *(() if options.cpu_only else ("krok_skia_gpu_smoke",))):

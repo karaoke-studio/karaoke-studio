@@ -40,9 +40,9 @@ def check_closure(start: Path, *, adapter=False, public_runtime=False, core=Fals
                 if adapter:
                     allowed = ("model/", "scene/", "protocol/")
                 elif core:
-                    allowed = ("model/", "effects/", "skia/core/")
+                    allowed = ("model/", "effects/", "skia/core/", "skia/text/")
                 else:
-                    allowed = ("model/", "effects/", "skia/core/", "skia/raster/")
+                    allowed = ("model/", "effects/", "skia/core/", "skia/raster/", "skia/text/")
                 extra = {"backends/render_backend.h", "runtime/generation_cancellation.h",
                          "runtime/owner_backend_session.h", "runtime/work_admission.h"} if public_runtime else set()
                 assert relative.startswith(allowed) or relative in extra, (path, relative)
@@ -50,14 +50,14 @@ def check_closure(start: Path, *, adapter=False, public_runtime=False, core=Fals
 
 
 def test_shared_scene_effects_and_skia_core_have_no_transitive_platform_or_qt_dependency():
-    for directory in ("model", "effects", "skia/core", "skia/raster"):
+    for directory in ("model", "effects", "skia/core", "skia/raster", "skia/text"):
         for path in (SRC / directory).rglob("*"):
             if path.suffix in {".h", ".cpp"}:
                 check_closure(path, core=directory == "skia/core")
 
 
 def test_shared_numeric_and_drawing_code_uses_no_platform_sized_text():
-    for directory in ("effects", "skia/core", "skia/raster"):
+    for directory in ("effects", "skia/core", "skia/raster", "skia/text"):
         for path in (SRC / directory).rglob("*"):
             if path.suffix in {".h", ".cpp"}:
                 assert not WIDE_TEXT.search(path.read_text(encoding="utf-8")), path

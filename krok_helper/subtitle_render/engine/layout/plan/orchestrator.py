@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Hashable, Protocol
 
 from krok_helper.subtitle_render.engine.layout.display.schedule import (
     display_schedule_from_items,
@@ -39,9 +39,6 @@ from krok_helper.subtitle_render.engine.layout.display.section_edges import (
 from krok_helper.subtitle_render.engine.layout.display.signal import (
     display_style_for_signal_window,
 )
-from krok_helper.subtitle_render.engine.layout.line.qt_geometry import (
-    resolved_char_intervals_for_line,
-)
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.engine.value_signature import (
     lyric_layout_style_signature,
@@ -49,7 +46,7 @@ from krok_helper.subtitle_render.engine.value_signature import (
     value_signature,
 )
 from krok_helper.subtitle_render.domain.models import Style
-from krok_helper.subtitle_render.domain.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 
 class DisplayLinesResolver(Protocol):
@@ -79,6 +76,12 @@ class LayoutPlanResolvers:
 
     display_lines: DisplayLinesResolver
     page_offset_windows: PageOffsetWindowsResolver
+    char_intervals: "CharIntervalsResolver"
+    metrics_identity: Hashable | None = None
+
+
+class CharIntervalsResolver(Protocol):
+    def __call__(self, line: TimingLine, style: Style) -> list[tuple[int, int]]: ...
 
 
 def _rebind_plan_line_styles(
@@ -157,6 +160,8 @@ def resolve_track_layout_plan(
     永远是签名校验过的，调用方的 scope 只是性能提示而非正确性依据。
     """
     cache_key = (
+        resolvers.metrics_identity if resolvers.metrics_identity is not None else id(resolvers.char_intervals),
+        id(resolvers.display_lines), id(resolvers.page_offset_windows),
         logical_w,
         logical_h,
         id(track),
@@ -225,7 +230,7 @@ def resolve_track_layout_plan(
             rendered = render_line_with_guide_symbols(line)
             render_lines.append(rendered)
             layout_styles.append(style_for_line(style, line))
-            resolved_intervals.append(resolved_char_intervals_for_line(rendered, style))
+            resolved_intervals.append(resolvers.char_intervals(rendered, style))
             animation_styles.append(
                 style_for_line_display_window(
                     style,

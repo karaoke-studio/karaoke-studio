@@ -1,4 +1,5 @@
 #include "command_router.h"
+#include "text_commands.h"
 #include "../../backends/backend_factory.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../protocol/json_protocol.h"
@@ -66,7 +67,10 @@ bool SkiaCommandRouter::dispatch(const QJsonObject& request) {
     const auto cmd = request.value("cmd").toString();
     try {
         if (cmd == "shutdown") { close(); writeJson(response(true, "shutdown")); return false; }
-        if (cmd == "cancel_generation") {
+        if (cmd == "measure_text") {
+            if (session_) throw BackendError("字体度量必须使用独立的无 GPU session 连接");
+            writeJson(measureSkiaText(request));
+        } else if (cmd == "cancel_generation") {
             const int generation = request.value("generation").toInt();
             if (generation < 1) throw BackendError("Invalid cancellation generation");
             cancellation_->cancel(generation);

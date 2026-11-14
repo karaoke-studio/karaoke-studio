@@ -1,6 +1,7 @@
 add_executable(krok_skia_subtitle_renderer
     src/skia/sidecar_main.cpp
     src/commands/skia/command_router.cpp src/commands/skia/frame_commands.cpp
+    src/commands/skia/text_commands.cpp
     src/scene/skia_ir_projection.cpp
     src/protocol/render_config_parser.cpp src/protocol/json_value.cpp src/protocol/json_protocol.cpp
     src/runtime/shared_frame_ring.cpp src/runtime/checksum.cpp

@@ -13,11 +13,13 @@ from krok_helper.subtitle_render.engine.painter import (
 )
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
+from krok_helper.subtitle_render.engine.layout.line.qt_geometry import resolved_char_intervals_for_line
 
 
 _PAINTER_LAYOUT_RESOLVERS = LayoutPlanResolvers(
     display_lines=display_lines_for_style,
     page_offset_windows=resolved_page_offset_windows_for_style,
+    char_intervals=resolved_char_intervals_for_line,
 )
 
 

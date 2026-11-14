@@ -31,12 +31,16 @@ foreach(library skia skshaper skunicode_core skunicode_icu)
 endforeach()
 add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/skia/core/motion_probe.cpp
             src/skia/core/prepared_scene.cpp)
+target_sources(subtitle_skia_core PRIVATE src/skia/text/font_instance.cpp src/skia/text/shaped_cell.cpp)
 target_include_directories(subtitle_skia_core PUBLIC src/skia "${KROK_SKIA_SOURCE}")
-target_link_libraries(subtitle_skia_core PUBLIC krok_skia subtitle_scene)
+target_link_libraries(subtitle_skia_core PUBLIC krok_skshaper krok_skunicode_icu krok_skunicode_core krok_skia subtitle_scene)
 target_compile_definitions(subtitle_skia_core PUBLIC SK_RELEASE)
 krok_strict_float(subtitle_skia_core)
 if(WIN32)
     target_link_libraries(subtitle_skia_core PUBLIC ole32 uuid)
+    # Upstream's Windows ICU loader reads pinned data next to the executable.
+    # Other platforms embed the same data in the locked ICU archive.
+    configure_file("${KROK_SKIA_LIB_DIR}/icudtl.dat" "${CMAKE_CURRENT_BINARY_DIR}/icudtl.dat" COPYONLY)
 elseif(APPLE)
     target_link_libraries(subtitle_skia_core PUBLIC "-framework CoreFoundation" "-framework CoreGraphics")
 else()
