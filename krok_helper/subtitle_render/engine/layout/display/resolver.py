@@ -1195,6 +1195,7 @@ def resolve_display_lines_for_style(
     *,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    metrics_identity: Hashable | None = None,
 ) -> DisplayLines:
     """Resolve and cache one style's display lines on a normalized canvas.
 
@@ -1235,6 +1236,8 @@ def resolve_display_lines_for_style(
             # 前黑展示层偏移改变入场窗口钳制下界，必须参与缓存键。
             current_roll_shift_ms(),
         )
+        if metrics_identity is not None:
+            cache_key += (("metrics", metrics_identity),)
         cached = cached_display_line_resolution(cache_key)
         if cached is not None:
             return cached

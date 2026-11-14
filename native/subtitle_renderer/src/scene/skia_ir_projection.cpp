@@ -22,7 +22,7 @@ void validateEnvelope(const QJsonObject& ir) {
     for (const auto& feature : ir.value("required_features").toArray()) {
         if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal"
             && feature.toString() != "p05_single_line_placement" && feature.toString() != "p05_inline_roles"
-            && feature.toString() != "p05_fixed_row_grid")
+            && feature.toString() != "p05_fixed_row_grid" && feature.toString() != "p05_page_collisions")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -45,6 +45,25 @@ void validateEnvelope(const QJsonObject& ir) {
         if (!value.isObject()) throw BackendError("Skia IR: invalid line");
         const auto line = value.toObject();
         if (line.contains("lane")) integer(line, "lane", 0, 31);
+        if (line.contains("layout_offset_windows")) {
+            const auto windows = line.value("layout_offset_windows");
+            if (!windows.isArray() || windows.toArray().size() > 4096)
+                throw BackendError("Skia 页面位移窗口数量或类型无效");
+            int previousEnd = -86400000;
+            for (const auto& window : windows.toArray()) {
+                if (!window.isObject()) throw BackendError("Skia 页面位移窗口必须是对象");
+                const auto object = window.toObject();
+                const auto start = integer(object, "start_ms", -86400000, 86400000);
+                const auto end = integer(object, "end_ms", -86400000, 86400000);
+                if (end <= start || start < previousEnd) throw BackendError("Skia 页面位移窗口无效或重叠");
+                previousEnd = end;
+                for (const auto key : {"offset_x", "offset_y"}) {
+                    const auto value = object.value(QLatin1String(key));
+                    if (!value.isDouble() || !std::isfinite(value.toDouble()) || std::abs(value.toDouble()) > 1e6)
+                        throw BackendError("Skia 页面位移包含无效或非有限值");
+                }
+            }
+        }
         if (!line.value("chars").isArray()) throw BackendError("Skia IR: line.chars is required");
         for (const auto& cv : line.value("chars").toArray()) {
             if (!cv.isObject() || !cv.toObject().value("text").isString()) throw BackendError("Skia IR: invalid character");
@@ -77,7 +96,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || source.entryAnimation != "none" || source.exitAnimation != "none"
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
             || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled
-            || !source.fxBursts.empty() || !source.placementWindows.empty())
+            || !source.fxBursts.empty())
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
@@ -104,6 +123,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});
+        for (const auto& window : source.placementWindows)
+            line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
+                window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         for (const auto& cell : source.chars) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (cell.vectorGlyph || cell.bitmapGuide || !cell.fallbackFamily.isEmpty()

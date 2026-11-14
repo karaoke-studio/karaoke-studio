@@ -48,6 +48,7 @@ private:
     struct Line {
         std::vector<Cell> cells;
         int startMs, endMs;
+        std::vector<ResolvedLine::Translation> translations;
     };
     int width_, height_;
     std::vector<Line> lines_;

@@ -19,6 +19,14 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
+        if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
+        for (const auto& translation : source.translations) {
+            if (!std::isfinite(translation.x) || !std::isfinite(translation.y)
+                || translation.endMs <= translation.startMs
+                || (!line.translations.empty() && translation.startMs < line.translations.back().endMs))
+                throw std::runtime_error("Skia 页面位移窗口无效或重叠");
+            line.translations.push_back(translation);
+        }
         for (const auto& cell : source.cells) {
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
@@ -78,6 +86,13 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     paint.setAntiAlias(true);
     for (const auto& line : lines_) {
         if (tMs < line.startMs || tMs >= line.endMs) continue;
+        canvas.save();
+        for (const auto& translation : line.translations) {
+            if (translation.startMs <= tMs && tMs < translation.endMs) {
+                canvas.translate(translation.x, translation.y);
+                break;
+            }
+        }
         for (const auto& cell : line.cells) {
             const float progress = cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)
                 : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f);
@@ -98,6 +113,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 canvas.restore();
             }
         }
+        canvas.restore();
     }
 }
 }

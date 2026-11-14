@@ -12,7 +12,7 @@ int main(int argc, char** argv) {
     ready.insert("backend", "skia");
     ready.insert("schema", 3);
     ready.insert("selection_version", 1);
-    ready.insert("profiles", QJsonArray{"p04_ascii_solid_wipe", "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles", "p05_fixed_row_grid"});
+    ready.insert("profiles", QJsonArray{"p04_ascii_solid_wipe", "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles", "p05_fixed_row_grid", "p05_page_collisions"});
     QJsonArray targets{"raster"};
 #ifdef KROK_SKIA_SIDECAR_GPU
     targets.append("gpu");

@@ -1095,7 +1095,13 @@ def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
     assert resolver_fields == {
         "display_lines",
         "page_offset_windows",
+        "char_intervals",
+        "metrics_identity",
     }
+    assert f"{PACKAGE}.engine.layout.line.qt_geometry" not in targets
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and isinstance(node.func.value, ast.Name) and node.func.value.id == "resolvers"
+               and node.func.attr == "char_intervals" for node in ast.walk(tree))
 
 
 def test_text_metrics_have_one_engine_owner() -> None:

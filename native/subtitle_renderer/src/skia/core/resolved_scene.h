@@ -15,6 +15,8 @@ struct ResolvedCell {
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
     int startMs = 0, endMs = 0;
+    struct Translation { int startMs, endMs; float x, y; };
+    std::vector<Translation> translations;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

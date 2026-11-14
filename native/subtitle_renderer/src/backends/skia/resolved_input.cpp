@@ -77,6 +77,8 @@ std::uint32_t argb(const RgbaColor& c) {
         if (cells.size() != int(line.chars.size()) || intervals.size() != cells.size() || (totalCells += cells.size()) > 65536)
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
+        for (const auto& window : line.placementWindows)
+            prepared.translations.push_back({window.startMs, window.endMs, window.offsetX, window.offsetY});
         for (int j = 0; j < cells.size(); ++j) {
             const auto cell = cells[j].toObject();
             const auto runValue = cell.value("run_index");

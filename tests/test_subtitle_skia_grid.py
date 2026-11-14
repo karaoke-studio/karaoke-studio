@@ -52,7 +52,7 @@ def test_paging_and_display_windows_use_the_shared_resolver(binary,grid,semantic
     from krok_helper.subtitle_render.engine.text import metrics as qt_metrics
     monkeypatch.setattr(qt_metrics,'QFontMetrics',lambda *a:pytest.fail('Qt font measurement'))
     monkeypatch.setattr(qt_metrics,'QPainterPath',lambda *a:pytest.fail('Qt path measurement'))
-    expected=display_lines(track,style,logical_w=640,logical_h=480)
+    expected=display_lines(track,style,SimpleNamespace(identity=('grid-timing',semantics)),logical_w=640,logical_h=480)
     ir=ir_for(binary,(track,style)) # ir_for's canvas is 640x360; timing has no geometry in this mode.
     actual=ir['track']['lines']
     assert len(actual)==len(expected)==8
@@ -102,11 +102,10 @@ def test_gpu_raster_grid_and_seek(binary,grid,semantics,mode):
     assert delta.mean()<.15 and np.mean(np.max(delta,axis=-1)>16)<.003
 
 
-@pytest.mark.parametrize('mutation',['avoid','fill','smart','too_many'])
+@pytest.mark.parametrize('mutation',['smart','too_many'])
 def test_unsupported_grid_settings_fail_without_replacing_scene(binary,grid,mutation):
     track,style=grid
-    changes={'avoid':{'allow_inter_page_line_overlap':False},'fill':{'auto_fill_section_time':True},
-             'smart':{'smart_horizontal':'equal_margins'},'too_many':{'line_alignments':['left']*33}}[mutation]
+    changes={'smart':{'smart_horizontal':'equal_margins'},'too_many':{'line_alignments':['left']*33}}[mutation]
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(track,style,width=640,height=360,fps=60)
         before,_=collect(process,[1400])

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Hashable, Protocol
 
 from krok_helper.subtitle_render.engine.layout.plan.model import LayoutOffsetWindow
 from krok_helper.subtitle_render.engine.layout.page.placement import (
@@ -87,13 +87,15 @@ def _page_offset_cache_key(
     logical_h: int,
     track: TimingTrack,
     style: Style,
+    metrics_identity: Hashable | None = None,
 ) -> tuple:
-    return (
+    key = (
         max(int(logical_w), 1),
         max(int(logical_h), 1),
         track_signature_for_windows(track),
         lyric_layout_style_signature(style),
     )
+    return key + (("metrics", metrics_identity),) if metrics_identity is not None else key
 
 
 def cached_page_offset_windows(
@@ -101,8 +103,9 @@ def cached_page_offset_windows(
     logical_h: int,
     track: TimingTrack,
     style: Style,
+    *, metrics_identity: Hashable | None = None,
 ) -> dict[int, tuple[LayoutOffsetWindow, ...]] | None:
-    key = _page_offset_cache_key(logical_w, logical_h, track, style)
+    key = _page_offset_cache_key(logical_w, logical_h, track, style, metrics_identity)
     cached = _PAGE_OFFSET_CACHE.get(key)
     if cached is None:
         return None
@@ -116,8 +119,9 @@ def store_page_offset_windows(
     track: TimingTrack,
     style: Style,
     resolved: dict[int, tuple[LayoutOffsetWindow, ...]],
+    *, metrics_identity: Hashable | None = None,
 ) -> None:
-    key = _page_offset_cache_key(logical_w, logical_h, track, style)
+    key = _page_offset_cache_key(logical_w, logical_h, track, style, metrics_identity)
     _PAGE_OFFSET_CACHE[key] = {
         track_index: tuple(windows) for track_index, windows in resolved.items()
     }
@@ -136,6 +140,7 @@ def resolve_page_offset_windows(
     track: TimingTrack,
     style: Style,
     resolvers: PageOffsetResolvers,
+    *, metrics_identity: Hashable | None = None,
 ) -> dict[int, tuple[LayoutOffsetWindow, ...]]:
     """Resolve and cache page translations through backend measurement ports."""
 
@@ -151,7 +156,7 @@ def resolve_page_offset_windows(
         or not style.dual_line_layout
     ):
         return {}
-    cached = cached_page_offset_windows(logical_w, logical_h, track, style)
+    cached = cached_page_offset_windows(logical_w, logical_h, track, style, metrics_identity=metrics_identity)
     if cached is not None:
         return cached
     display_lines = resolvers.display_lines(
@@ -175,7 +180,7 @@ def resolve_page_offset_windows(
         style,
         measurements,
     )
-    store_page_offset_windows(logical_w, logical_h, track, style, resolved)
+    store_page_offset_windows(logical_w, logical_h, track, style, resolved, metrics_identity=metrics_identity)
     return {key: tuple(value) for key, value in resolved.items()}
 
 
