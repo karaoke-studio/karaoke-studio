@@ -43,6 +43,7 @@ def run(process, path, cells, **options):
 
 def test_measurement_never_initializes_gpu(binary, font, monkeypatch, tmp_path):
     monkeypatch.setenv("KROK_SKIA_VULKAN_LIBRARY", str(tmp_path / "absent"))
+    monkeypatch.setenv("KROK_SUBTITLE_SKIA_TARGET", "invalid-render-target")
     with SkiaTextMetricsProcess(binary) as process:
         cells = run(process, font, ["A", "ffi", "a\u0301", " "])
         assert cells[0]["advance"] > 0 and cells[0]["ascent"] > 0

@@ -1,15 +1,15 @@
 """CPU-only Skia/HarfBuzz metrics connection, independent of rendering sessions."""
 from __future__ import annotations
 
-from .backend import NativeRendererError, NativeRendererProcess, heartbeat_lease_s
-from .skia_backend import SkiaRendererProcess
+from .backend import NativeRendererError, heartbeat_lease_s
+from .skia_process import SkiaSidecarProcess
 
 
-class SkiaTextMetricsProcess(SkiaRendererProcess):
+class SkiaTextMetricsProcess(SkiaSidecarProcess):
     def start(self):
         if self.is_running:
             return {"ok": True, "event": "already_running"}
-        ready = NativeRendererProcess.start(self)
+        ready = super().start()
         if ready.get("backend") != "skia" or ready.get("text_metrics_schema") != 1:
             self.abort(reason="Skia metrics handshake failed")
             raise NativeRendererError("sidecar 未声明 Skia 批量度量协议")
