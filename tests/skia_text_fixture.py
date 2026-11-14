@@ -60,3 +60,40 @@ def make_variable_font(root: Path):
     font.recalcTimestamp = False
     output = root / 'variable.ttf'; font.save(output)
     return output
+
+
+def make_cff_font(path: Path):
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(['.notdef', 'space', 'A'])
+    fb.setupCharacterMap({32: 'space', 65: 'A'})
+    strings = {}
+    for name, width in (('.notdef', 600), ('space', 250), ('A', 600)):
+        pen = T2CharStringPen(width, None)
+        if name != 'space':
+            pen.moveTo((50, 0)); pen.lineTo((550, 0)); pen.lineTo((550, 700)); pen.lineTo((50, 700)); pen.closePath()
+        strings[name] = pen.getCharString()
+    fb.setupCFF('LinK-P05-CFF', {'FullName': 'LinK P05 CFF', 'FamilyName': 'LinK P05 CFF', 'Weight': 'Regular'}, strings, {})
+    fb.setupHorizontalMetrics({'.notdef': (600, 50), 'space': (250, 0), 'A': (600, 50)})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({'familyName': 'LinK P05 CFF', 'styleName': 'Regular', 'psName': 'LinK-P05-CFF'})
+    fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+    fb.setupPost(); fb.setupMaxp()
+    fb.font['head'].created = fb.font['head'].modified = 3400000000
+    fb.font.recalcTimestamp = False
+    fb.font.save(path)
+    return path
+
+
+def make_colr_font(path: Path):
+    from fontTools.ttLib import TTFont
+    from fontTools.colorLib.builder import buildCOLR, buildCPAL
+    make_font(path)
+    font = TTFont(path, recalcTimestamp=False)
+    # Keep a nonempty monochrome base outline: a COLR renderer must use layers,
+    # so simply finding a glyf outline cannot count as support for this glyph.
+    font['COLR'] = buildCOLR({'woman': [('A', 0)]}, version=0)
+    font['CPAL'] = buildCPAL([[(1.0, 0.0, 0.0, 1.0)]])
+    font.save(path)
+    return path

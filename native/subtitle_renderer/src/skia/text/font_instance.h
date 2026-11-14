@@ -1,5 +1,6 @@
 #pragma once
 #include "include/core/SkFont.h"
+#include "glyph_outline.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -23,6 +24,8 @@ struct FontSpec {
 class FontInstance {
 public:
     explicit FontInstance(const FontSpec& spec);
+    ~FontInstance();
+    GlyphGeometry glyphGeometry(SkGlyphID) const;
     const SkFont& shapingFont() const { return font_; }
     float horizontalScale() const { return scaleX_; }
     const std::string& identity() const { return identity_; }
@@ -33,5 +36,6 @@ private:
     SkFont font_;
     float scaleX_ = 1;
     std::string identity_;
+    std::unique_ptr<GlyphOutlineSource> outlines_;
 };
 }

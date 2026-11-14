@@ -87,23 +87,14 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     result.advance = handler.advance * instance.horizontalScale();
     result.ascent = instance.ascent(); result.descent = instance.descent(); result.leading = instance.leading();
     result.glyphs = std::move(handler.output);
-    // Design-space bearings preserve the existing integer N3 cell-width rule.
-    // They are separate from the shaped pixel advance and actual outline ink.
-    auto designFont = font.makeWithSize(float(font.getTypeface()->getUnitsPerEm()));
+    std::vector<GlyphGeometry> geometries;
     for (const auto& glyph : result.glyphs) {
-        float width = 0;
-        designFont.getWidths({&glyph.id, 1}, {&width, 1});
-        result.designAdvance += width;
+        geometries.push_back(instance.glyphGeometry(glyph.id));
+        if (geometries.back().requiresColorPaint) result.outlineAvailable = false;
+        result.designAdvance += geometries.back().advance;
     }
-    // SkFont::getBounds is a conservative raster bound (includes padding),
-    // not a design side bearing. Use the outline at the face's own em scale.
-    const auto firstPath = designFont.getPath(result.glyphs.front().id);
-    result.designLeftBearing = firstPath ? firstPath->computeTightBounds().left() : 0;
-    const auto last = result.glyphs.back().id;
-    float lastWidth = 0;
-    designFont.getWidths({&last, 1}, {&lastWidth, 1});
-    const auto lastPath = designFont.getPath(last);
-    result.designRightBearing = lastPath ? lastWidth - lastPath->computeTightBounds().right() : 0;
+    result.designLeftBearing = geometries.front().leftBearing;
+    result.designRightBearing = geometries.back().rightBearing;
     std::vector<std::uint32_t> boundaries{std::uint32_t(utf8.size())};
     for (const auto& glyph : result.glyphs) {
         if (glyph.clusterStart >= utf8.size() || (std::uint8_t(utf8[glyph.clusterStart]) & 0xc0) == 0x80)
@@ -113,10 +104,11 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     std::sort(boundaries.begin(), boundaries.end());
     boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
     SkPathBuilder outlines;
+    std::size_t geometryIndex = 0;
     for (auto& glyph : result.glyphs) {
         if (!glyph.id) throw std::runtime_error("Skia shaping 返回缺字 glyph");
         glyph.clusterEnd = *std::upper_bound(boundaries.begin(), boundaries.end(), glyph.clusterStart);
-        auto path = font.getPath(glyph.id);
+        const auto& path = geometries[geometryIndex++].path;
         SkRect bounds = path ? path->computeTightBounds() : font.getBounds(glyph.id, nullptr);
         bounds.offset(glyph.position.x(), glyph.position.y());
         bounds.fLeft *= instance.horizontalScale(); bounds.fRight *= instance.horizontalScale();

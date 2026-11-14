@@ -175,9 +175,8 @@ def test_portable_font_has_exact_metrics_and_cell_cluster_boundaries(binary, tmp
         cells = run(process, path, ['A', '字', '한', 'a\u0301', 'fi', 'f', 'i'], size=50)
         # FreeType's normalized fixed-point scale may round by < 1e-4 pixel.
         assert [cells[0][k] for k in ('advance', 'ascent', 'descent')] == pytest.approx([30, 40, 10], abs=1e-4)
-        # SkFont paths normalize at 64px and FreeType uses 26.6 coordinates.
-        # The returned bounds describe that actual path, within one quantum.
-        assert cells[0]['ink'] == pytest.approx([2.5, -35, 27.5, 0], abs=50 / (64 * 64) + 1e-4)
+        # Design-em extraction must not retain SkFont's 64px path rounding.
+        assert cells[0]['ink'] == pytest.approx([2.5, -35, 27.5, 0], abs=1e-4)
         assert [cells[1]['advance'], cells[2]['advance']] == pytest.approx([50, 50], abs=1e-4)
         assert len(cells[4]['glyphs']) == 1 and cells[4]['glyphs'][0]['cluster_end'] == 2
         assert len(cells[5]['glyphs']) + len(cells[6]['glyphs']) == 2

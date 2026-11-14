@@ -66,10 +66,25 @@ FontInstance::FontInstance(const FontSpec& spec) {
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
-    key << "skia-m150-hb-ft-v1:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
+    key << "skia-m150-hb-ft-v2:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
         << ':' << std::bit_cast<std::uint32_t>(spec.scaleX) << ':' << spec.syntheticBold << ':' << spec.syntheticItalic;
     for (const auto& axis : coordinates) key << ':' << axis.axis << '=' << std::bit_cast<std::uint32_t>(axis.value);
     identity_ = key.str();
+    outlines_ = std::make_unique<GlyphOutlineSource>(spec);
+}
+FontInstance::~FontInstance() = default;
+GlyphGeometry FontInstance::glyphGeometry(SkGlyphID glyph) const {
+    auto exact = outlines_->load(glyph);
+    if (exact && !exact->requiresColorPaint) return *exact;
+    // Bitmap/color formats keep Skia's existing measurement behavior; the
+    // product's outline-availability gate still rejects unsupported drawing.
+    auto design = font_.makeWithSize(float(font_.getTypeface()->getUnitsPerEm()));
+    float advance = 0;
+    design.getWidths({&glyph, 1}, {&advance, 1});
+    const auto path = design.getPath(glyph);
+    const auto bounds = path ? path->computeTightBounds() : SkRect::MakeEmpty();
+    const bool color = exact && exact->requiresColorPaint;
+    return {color ? std::optional<SkPath>{} : font_.getPath(glyph), advance, bounds.left(), advance - bounds.right(), color};
 }
 float FontInstance::ascent() const { SkFontMetrics m; font_.getMetrics(&m); return -m.fAscent; }
 float FontInstance::descent() const { SkFontMetrics m; font_.getMetrics(&m); return m.fDescent; }
