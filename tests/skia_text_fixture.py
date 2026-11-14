@@ -2,7 +2,8 @@
 from pathlib import Path
 
 
-def make_font(path: Path, *, a_width=600, family="LinK P05 字体", weight=400):
+def make_font(path: Path, *, a_width=600, family="LinK P05 字体", weight=400,
+              ps_name="LinK-P05-Regular", ascent=800, descent=200):
     from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.ttGlyphPen import TTGlyphPen
     from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
@@ -25,10 +26,10 @@ def make_font(path: Path, *, a_width=600, family="LinK P05 字体", weight=400):
     fb.setupGlyf(glyphs)
     fb.setupHorizontalMetrics({name: (width, -150 if name == 'acutecomb' else 0 if name == 'space' else 50)
                                for name, width in widths.items()})
-    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupHorizontalHeader(ascent=ascent, descent=-descent)
     fb.setupNameTable({'familyName': family, 'styleName': 'Regular', 'uniqueFontIdentifier': family,
-                       'fullName': family, 'psName': 'LinK-P05-Regular', 'version': 'Version 1.0'})
-    fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200, usWeightClass=weight)
+                       'fullName': family, 'psName': ps_name, 'version': 'Version 1.0'})
+    fb.setupOS2(sTypoAscender=ascent, sTypoDescender=-descent, usWinAscent=ascent, usWinDescent=descent, usWeightClass=weight)
     fb.setupPost()
     fb.setupMaxp()
     addOpenTypeFeaturesFromString(fb.font, 'feature liga { sub f i by fi; } liga;')

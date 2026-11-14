@@ -41,8 +41,9 @@ std::uint32_t argb(const RgbaColor& c) {
     auto projected = scene::skiaSceneFromIr(ir);
     validateSkiaScene(projected, true);
     const auto layout = ir.value("skia_layout").toObject();
-    if (layout.value("version").toInt() != 1 || layout.value("metrics_identity").toString().size() != 64
+    if (layout.value("version").toInt() != 2 || layout.value("metrics_identity").toString().size() != 64
         || !layout.value("fonts").isObject() || !layout.value("lines").isArray()
+        || !layout.value("runs").isArray()
         || !ir.value("required_features").toArray().contains("p05_resolved_horizontal"))
         throw BackendError("Skia 缺少版本化的最终布局与度量快照");
     const auto lines = layout.value("lines").toArray();
@@ -51,6 +52,18 @@ std::uint32_t argb(const RgbaColor& c) {
     const auto originalLines = ir.value("track").toObject().value("lines").toArray();
     if (lines.size() != int(projected.lines.size()) || lines.size() > 4096)
         throw BackendError("Skia 最终布局行数不一致或超限");
+    const auto runs = layout.value("runs").toArray();
+    if (runs.size() > 4096) throw BackendError("Skia 字体实例数量超限");
+    using Fonts = std::vector<std::shared_ptr<const ::subtitle::skia::text::FontInstance>>;
+    std::vector<Fonts> runFonts;
+    std::vector<std::string> languages;
+    for (const auto& value : runs) {
+        if (!value.isObject()) throw BackendError("Skia 字体实例必须为对象");
+        const auto run = value.toObject();
+        if (run.value("rtl").toBool()) throw BackendError("Skia 当前规范布局尚不支持 RTL");
+        runFonts.push_back(scene::skiaRunFonts(run, resources));
+        languages.push_back(run.value("language").toString("und").toStdString());
+    }
     const double dpr = ir.value("screen").toObject().value("dpr").toDouble(1);
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     std::size_t totalCells = 0;
@@ -58,19 +71,20 @@ std::uint32_t argb(const RgbaColor& c) {
         const auto source = lines[index].toObject();
         const auto& line = projected.lines[index];
         const auto& style = projected.lineStyles[index];
-        if (!source.value("run").isObject() || !source.value("cells").isArray())
-            throw BackendError("Skia 最终布局缺少字体实例或单元");
-        const auto run = source.value("run").toObject();
-        if (run.value("rtl").toBool()) throw BackendError("Skia 当前规范布局尚不支持 RTL");
+        if (!source.value("cells").isArray()) throw BackendError("Skia 最终布局缺少单元");
         const auto cells = source.value("cells").toArray();
         const auto intervals = originalLines[index].toObject().value("resolved_intervals").toArray();
         if (cells.size() != int(line.chars.size()) || intervals.size() != cells.size() || (totalCells += cells.size()) > 65536)
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
-        const auto fonts = scene::skiaRunFonts(run, resources);
         ::subtitle::skia::ResolvedLine prepared{{}, argb(style.beforeFillPaint.color), argb(style.afterFillPaint.color),
             line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         for (int j = 0; j < cells.size(); ++j) {
             const auto cell = cells[j].toObject();
+            const auto runValue = cell.value("run_index");
+            const auto runIndex = runValue.toDouble(-1);
+            if (!runValue.isDouble() || !std::isfinite(runIndex) || std::floor(runIndex) != runIndex
+                || runIndex < 0 || runIndex >= runs.size())
+                throw BackendError("Skia 最终单元引用了无效字体实例");
             const auto interval = intervals[j].toArray();
             if (interval.size() != 2 || !interval[0].isDouble() || !interval[1].isDouble()
                 || !std::isfinite(interval[0].toDouble()) || !std::isfinite(interval[1].toDouble())
@@ -80,7 +94,7 @@ std::uint32_t argb(const RgbaColor& c) {
                 || interval[1].toDouble() < interval[0].toDouble())
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto text = QString::fromStdWString(line.chars[j].text).toUtf8();
-            auto shaped = ::subtitle::skia::text::shapeCell(text.toStdString(), fonts, run.value("language").toString("und").toStdString());
+            auto shaped = ::subtitle::skia::text::shapeCell(text.toStdString(), runFonts[int(runIndex)], languages[int(runIndex)]);
             same(cell.value("metrics"), scene::skiaCellMetricsJson(shaped));
             if (!shaped.outlineAvailable) throw BackendError("Skia 当前绘制仅支持有矢量轮廓的字体单元");
             const auto x = finite(cell, "origin_x"), y = finite(cell, "baseline_y");

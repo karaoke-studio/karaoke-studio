@@ -32,11 +32,11 @@ void supportedStyle(const TextStyle& s, bool canonical) {
         || s.beforeFillPaint.mode != "solid" || s.afterFillPaint.mode != "solid"
         || s.fontHint.resourcePath.empty() || (!canonical && (s.fontHint.syntheticBold || s.fontHint.syntheticItalic
         || s.fontHint.variable || s.fontAxis || s.latinFontAxis || !s.fontHint.axes.empty() || s.italic || s.latinItalic))
-        || s.fontHint.scale != 1.f || s.latinFontStretchPct != 100
+        || (!canonical && (s.fontHint.scale != 1.f || s.latinFontStretchPct != 100
         || s.latinFontSize.value_or(s.fontSize) != s.fontSize
         || (s.latinFontFamily && !s.latinFontFamily->empty() && *s.latinFontFamily != s.fontFamily)
         || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
-        || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight
+        || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight))
         || s.volumeEnabled || s.litEnabled)
         throw BackendError("Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }

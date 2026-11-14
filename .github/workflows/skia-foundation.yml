@@ -109,7 +109,7 @@ jobs:
           KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE: '0'
         run: |
           export KROK_TEST_SKIA_SIDECAR="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal/krok_skia_subtitle_renderer"
-          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py tests/test_subtitle_skia_text.py tests/test_subtitle_skia_resolved.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
+          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py tests/test_subtitle_skia_text.py tests/test_subtitle_skia_resolved.py tests/test_subtitle_skia_font_slots.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -140,7 +140,7 @@ jobs:
                   files += sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
           manifest = {"commit": os.environ["GITHUB_SHA"], "arch": arch, "run_id": os.environ["GITHUB_RUN_ID"],
                       "text_metrics_schema": 1,
-                      "resolved_layout_schema": 1,
+                      "resolved_layout_schema": 2,
                       "files": {f"native/{p.relative_to(native).as_posix()}": hashlib.sha256(p.read_bytes()).hexdigest()
                                 for p in files}}
           out = Path(os.environ["RUNNER_TEMP"]) / f"mac-validation-{arch}.tar.gz"
@@ -205,7 +205,7 @@ jobs:
           from pathlib import Path
           import subprocess, sys
           # upload-artifact materializes pytest's *current symlinks as duplicates.
-          for name in ('canonical-metrics.json', 'resolved-layout.json'):
+          for name in ('canonical-metrics.json', 'resolved-layout.json', 'font-slots-layout.json'):
               paths = sorted(p for p in Path('metrics-artifacts').rglob(name)
                              if not p.parent.name.endswith('current'))
               assert len(paths) == 2, paths

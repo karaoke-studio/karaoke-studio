@@ -51,6 +51,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError("sidecar 不支持 Skia 版本化选择握手，拒绝发送字幕配置")
             if "p05_resolved_horizontal" not in ready.get("profiles", []):
                 raise NativeRendererError("Skia sidecar 未声明 P05 规范布局能力")
+            if ready.get('resolved_layout_schema') != 2:
+                raise NativeRendererError('Skia sidecar 不支持字体实例表布局协议，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

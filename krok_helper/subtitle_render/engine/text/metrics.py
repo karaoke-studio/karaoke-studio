@@ -11,6 +11,9 @@ from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PAS
 from krok_helper.subtitle_render.engine.layout.line.width_policy import (
     truncate_div, nicokara_layout_width, nicokara_char_geometry_left_offset,
 )
+from krok_helper.subtitle_render.engine.text.font_slots import (
+    latin_font_size, latin_font_weight, latin_italic, is_n3_latin_text, is_emoji_text,
+)
 from krok_helper.subtitle_render.engine.text.font_weight import (
     bucket_weight,
     build_weight_font,
@@ -36,22 +39,6 @@ def build_font(style: Style) -> QFont:
     )
 
 
-def latin_font_size(style: Style) -> int:
-    value = style.latin_font_size_px
-    return int(value) if value is not None and int(value) > 0 else int(style.font_size_px)
-
-
-def latin_font_weight(style: Style) -> int:
-    value = style.latin_font_weight
-    return int(value) if value is not None and int(value) > 0 else int(style.font_weight)
-
-
-def latin_italic(style: Style) -> bool:
-    """英数槽斜体的生效值：``None`` = 跟随主文字·日文（与描边 2 同链）。"""
-    value = style.latin_italic
-    return bool(style.italic if value is None else value)
-
-
 _TEXT_CLASS_CACHE: dict[str, tuple[bool, bool]] = {}
 _TEXT_CLASS_CACHE_MAX = 8192
 
@@ -73,23 +60,6 @@ def _text_class(text: str) -> tuple[bool, bool]:
         _TEXT_CLASS_CACHE.clear()
     _TEXT_CLASS_CACHE[text] = classification
     return classification
-
-
-def is_n3_latin_text(text: str) -> bool:
-    return bool(text) and all(
-        ("0" <= char <= "9" or "A" <= char <= "Z" or "a" <= char <= "z")
-        or ("\u00c0" <= char <= "\u00d6"
-            or "\u00d8" <= char <= "\u00f6"
-            or "\u00f8" <= char <= "\u00ff")
-        for char in text
-    )
-
-
-def is_emoji_text(text: str) -> bool:
-    return any(
-        0x1F000 <= ord(char) <= 0x1FAFF or 0x2600 <= ord(char) <= 0x27BF
-        for char in text
-    )
 
 
 def _build_emoji_font(style: Style) -> QFont:
