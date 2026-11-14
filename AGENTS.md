@@ -277,6 +277,13 @@ git submodule status
    worker/共享资源策略保留。`SkiaBackend` 当前只接能力/诊断，字幕协议绘制
    明确报未实现，待 P04；不代表已替换生产 D2D。`src/effects` 禁止 Qt/平台头。
 
+   P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
+   `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
+   Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的
+   Wayland FIFO 呈现等待。隐藏保留 Qt device，完整设备恢复重建整个宿主；不要
+   将原窗口强制 QRhi purge 当作已验收恢复模式。生命周期、故障影响与硬件门槛
+   见实施计划 §14.8；P04 真实字幕协议、P09 正式预览和 P11 压力恢复尚未完成。
+
 文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 
 ### 关键约束

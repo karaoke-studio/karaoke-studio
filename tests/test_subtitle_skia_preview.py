@@ -173,7 +173,7 @@ def test_pyqt_host_loads_native_quick_module(qml_dir):
     # Loading needs no GPU, so the offscreen platform keeps this test headless.
     env = os.environ | {"QT_QPA_PLATFORM": "offscreen"}
     result = subprocess.run([sys.executable, "-c", LOAD_MODULE, str(qml_dir)], env=env,
-                            capture_output=True, text=True, encoding="utf-8", timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert result.returncode == 0, result.stderr
     lines = dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
     assert lines["qt"] == "6.11.0", "PyQt runtime must match the SDK the module was built with"
@@ -190,7 +190,7 @@ def show_item(qml_dir, api, extra_env=None):
     env["QT_FORCE_STDERR_LOGGING"] = "1"
     env.update(extra_env or {})
     result = subprocess.run([sys.executable, "-c", SHOW_ITEM, str(qml_dir), api], env=env,
-                            capture_output=True, text=True, encoding="utf-8", timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert result.returncode == 0, result.stderr
     assert "timeout" not in result.stdout, result.stdout + result.stderr
     lines = dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
@@ -290,9 +290,10 @@ def test_texture_handoff_is_clean_under_vulkan_validation(qml_dir, tmp_path):
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
     } | vulkan_validation_environment(log)
     result = subprocess.run([sys.executable, "-c", HANDOFF, str(qml_dir)], env=env,
-                            capture_output=True, text=True, encoding="utf-8", timeout=120)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     assert result.returncode == 0, result.stderr
-    assert int(result.stdout.split()[-1]) > 30, result.stdout
+    frames = re.search(r"^frames (\d+)$", result.stdout, re.M)
+    assert frames and int(frames[1]) > 30, result.stdout
     assert_vulkan_validation_clean(log)
 
 
@@ -423,7 +424,7 @@ def run_canvas(qml_dir, tmp_path, case):
     env = desktop_environment() | {
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "QT_FORCE_STDERR_LOGGING": "1"}
     result = subprocess.run([sys.executable, "-c", QUICK_CANVAS, str(qml_dir), str(tmp_path), case], env=env,
-                            capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=tmp_path)
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     if "skip no-ffmpeg" in result.stdout:
         pytest.skip("ffmpeg not on PATH to generate the test video")
