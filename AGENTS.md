@@ -284,8 +284,8 @@ git submodule status
    `KROK_SUBTITLE_SKIA_FALLBACK=none|raster`、`KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE=1|0`
    控制目标和回退，`KROK_SUBTITLE_SKIA_RENDERER` 可指定新 sidecar。关闭 GPU 仍走
    Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前产品配置使用 P05
-   `p05_resolved_horizontal`：legacy、单行居中底对齐、同一字体槽、实色填充和基础
-   走字，已支持显式字体的 Unicode 塑形单元；彩色/位图字形、注音、角色、N3 与
+   `p05_resolved_horizontal`：legacy、单行居中底对齐、主字/英数独立字体实例、实色
+   填充和基础走字，已支持显式字体的 Unicode 塑形单元；彩色/位图字形、注音、角色、N3 与
    多行等仍拒绝。旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
@@ -304,6 +304,11 @@ git submodule status
    或单元总宽居中。完整 P05.4/P05 及 D2D 画质预算尚未通过，见实施计划 §14.11。
    `gpu/context_options.h` 统一 owned/borrowed Vulkan/Metal 的精细覆盖策略，禁用
    Ganesh 内部 MSAA 与距离场路径近似；不能把低档覆盖或宽松的冒烟比较当最终画质验收。
+   P05.5 字体槽子集见实施计划 §14.12：`engine/text/font_slots.py` 复用既有整歌词单元
+   英数分类与继承，`skia_metrics.py` 按字体实例/文本去重，一次批量获取度量；基线始终
+   取主字字体，不能依行内实际字形的最大 descent 或首字字体改变。布局子协议已为 v2：
+   根级 `runs` 表、逐字 `run_index`，客户端须检查 `resolved_layout_schema=2`；旧 sidecar
+   明确拒绝。主字无实际字形时也必须查询其独立 `font_metrics`，并将其内容身份纳入缓存键。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
