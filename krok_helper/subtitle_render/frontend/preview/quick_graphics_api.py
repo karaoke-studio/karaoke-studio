@@ -2,8 +2,9 @@
 
 The shared Skia core drives Vulkan on Windows/Linux and Metal on macOS. Qt Quick picks its
 scene graph API once, before the first QQuickWindow exists, and on Windows it would default to
-Direct3D 11. ``select_quick_graphics_api`` must therefore run before any Quick window or widget
-is created, and ``verify_quick_graphics_api`` rejects a window that ended up elsewhere instead
+Direct3D 11. ``select_quick_graphics_api`` must therefore run before any Quick or top-level
+widget window is created (Linux surface configuration also needs that ordering), and
+``verify_quick_graphics_api`` rejects a window that ended up elsewhere instead
 of letting the preview run silently on an unsupported API.
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import sys
 
 from PyQt6.QtQuick import QQuickWindow, QSGRendererInterface
+from PyQt6.QtGui import QSurfaceFormat
 
 GraphicsApi = QSGRendererInterface.GraphicsApi
 
@@ -19,9 +21,26 @@ def required_quick_graphics_api(platform: str = sys.platform) -> GraphicsApi:
     return GraphicsApi.Metal if platform == "darwin" else GraphicsApi.Vulkan
 
 
+def _preview_surface_format(platform: str) -> QSurfaceFormat:
+    format = QSurfaceFormat.defaultFormat()
+    if platform == "linux":
+        # Qt Widgets may present synchronously from a Wayland expose callback. Blocking
+        # FIFO presentation can then wait for that same event queue (reproduced with
+        # WSLg/lavapipe after hide/show). Request a low-latency presentation mode instead;
+        # the compositor still owns display scheduling. Frame pacing belongs to the player.
+        format.setSwapInterval(0)
+    return format
+
+
 def select_quick_graphics_api(platform: str = sys.platform) -> GraphicsApi:
-    """Request the platform's Skia GPU API for every Qt Quick window created afterwards."""
+    """Configure the preview API before creating any Quick or top-level widget windows.
+
+    Linux also requests swap interval zero before native surfaces are created, avoiding a
+    blocking Wayland presentation wait. This does not change the subtitle/export frame clock.
+    """
     api = required_quick_graphics_api(platform)
+    if platform == "linux":
+        QSurfaceFormat.setDefaultFormat(_preview_surface_format(platform))
     QQuickWindow.setGraphicsApi(api)
     return api
 

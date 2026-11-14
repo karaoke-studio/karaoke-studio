@@ -22,7 +22,7 @@
 
 namespace krok::subtitle::preview {
 namespace {
-Q_LOGGING_CATEGORY(lcPreview, "krok.subtitle.skia.preview")
+Q_LOGGING_CATEGORY(lcPreview, "krok.subtitle.skia.preview", QtWarningMsg)
 
 // Platform branches live only in this adapter: which API is accepted, how Qt's device is
 // borrowed, and how one frame's texture is wrapped and handed back. Drawing is shared.

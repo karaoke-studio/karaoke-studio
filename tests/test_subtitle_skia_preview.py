@@ -120,6 +120,16 @@ def test_required_quick_graphics_api_per_platform():
     assert required_quick_graphics_api("darwin") == GraphicsApi.Metal
 
 
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+def test_preview_surface_format_does_not_mutate_global_defaults(platform):
+    from PyQt6.QtGui import QSurfaceFormat
+    from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import _preview_surface_format
+    before = QSurfaceFormat.defaultFormat().swapInterval()
+    requested = _preview_surface_format(platform)
+    assert requested.swapInterval() == (0 if platform == "linux" else before)
+    assert QSurfaceFormat.defaultFormat().swapInterval() == before
+
+
 def test_host_rejects_window_on_another_graphics_api():
     from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import (
         GraphicsApi, verify_quick_graphics_api)
