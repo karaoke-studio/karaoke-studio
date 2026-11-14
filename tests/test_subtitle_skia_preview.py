@@ -269,7 +269,9 @@ def test_metal_preview_under_active_api_validation(qml_dir):
     checked = subprocess.run([str(probe)], env=base | layer, capture_output=True, text=True, timeout=60)
     assert checked.returncode != 0, checked.stdout + checked.stderr
     assert "validation inactive" not in checked.stdout
-    assert "assert" in (checked.stdout + checked.stderr).lower(), checked.stdout + checked.stderr
+    # The failure must come from the validation layer's MTLDebug* proxies, not from checks the
+    # Metal framework always performs.
+    assert "MTLDebug" in checked.stdout + checked.stderr, checked.stdout + checked.stderr
     # The real preview under that same environment: any Metal API error would abort it.
     lines, stderr = show_item(qml_dir, "required", layer)
     assert lines["backend"] == "Metal" and lines["accepted"] == "True", stderr

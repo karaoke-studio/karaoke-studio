@@ -1,9 +1,10 @@
 // Positive control for Apple's Metal API validation (MTL_DEBUG_LAYER=1).
 //
-// It deliberately requests a zero-sized texture, which the validation layer rejects with an
-// assertion that aborts the process. Without the layer the call just returns nil and the probe
-// exits 0 saying so. Tests run this in the same environment as the preview so that "no Metal
-// validation errors" there means validation was really active, not merely requested.
+// It binds a buffer at an offset past its end on a compute encoder. Only the API validation
+// layer (its MTLDebug* encoder proxies) checks encoder arguments, so with the layer the call
+// fails an assertion and aborts; without it the call is not checked and the probe exits 0.
+// Checks the Metal framework always performs (such as rejecting a zero-sized texture
+// descriptor) would not tell the two apart. Nothing is committed to the GPU.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <objc/runtime.h>
@@ -16,17 +17,16 @@ int main() {
             std::fprintf(stderr, "No Metal device\n");
             return 3;
         }
-        // With the layer active the device is wrapped by a debug proxy class.
-        std::printf("device: %s (%s)\n", device.name.UTF8String, class_getName([device class]));
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        std::printf("device: %s; encoder class: %s\n", device.name.UTF8String,
+                    class_getName([(id)encoder class]));
         std::fflush(stdout);
-        MTLTextureDescriptor* descriptor =
-            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                               width:0
-                                                              height:0
-                                                           mipmapped:NO];
-        id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
-        std::printf("invalid zero-sized texture request returned %s: Metal API validation inactive\n",
-                    texture ? "an object" : "nil");
+        id<MTLBuffer> buffer = [device newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        [encoder setBuffer:buffer offset:4096 atIndex:0];  // out of range: only validation notices
+        [encoder endEncoding];
+        std::printf("out-of-range buffer offset accepted: Metal API validation inactive\n");
         return 0;
     }
 }
