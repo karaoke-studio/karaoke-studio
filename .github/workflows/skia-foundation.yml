@@ -32,7 +32,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: python -m pip install cmake
+      - name: Install build and preview test tools
+        # PyQt6 must match the Qt SDK exactly; aqtinstall is pinned to a commit that reads Qt 6.11.
+        run: >
+          python -m pip install cmake pytest numpy PyQt6==6.11.0 PyQt6-Qt6==6.11.0
+          "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
+      - uses: actions/cache@v4
+        with:
+          path: ~/qt-krok
+          key: qt-6.11.0-macos-qtbase-qtdeclarative-v1
+      - name: Install Qt 6.11.0 SDK for the Quick preview module
+        run: |
+          if [ ! -f ~/qt-krok/6.11.0/macos/lib/cmake/Qt6Quick/Qt6QuickConfig.cmake ]; then
+            python -m aqt install-qt mac desktop 6.11.0 clang_64 --archives qtbase qtdeclarative --outputdir ~/qt-krok
+          fi
       - uses: actions/cache@v4
         with:
           path: ~/.cache/krok-helper/skia-deps
@@ -41,8 +54,8 @@ jobs:
         env:
           CLEAN_ARG: ${{ inputs.clean && '--clean' || '' }}
         run: |
-          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal $CLEAN_ARG --jobs 3
-          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --jobs 3
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal $CLEAN_ARG --jobs 3 --qt-root ~/qt-krok/6.11.0/macos
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --jobs 3 --qt-root ~/qt-krok/6.11.0/macos
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only $CLEAN_ARG --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
       - name: Record hosted Metal capability honestly
@@ -69,6 +82,14 @@ jobs:
           if { [ "$status" -eq 0 ] || [ "${virtual_status:-1}" -eq 0 ]; } && [ "$owner_status" -ne 0 ]; then
             exit "$owner_status"
           fi
+      - name: Quick preview on the hosted Mac (Metal scene graph, real window)
+        env:
+          KROK_SKIA_NATIVE_TEST_ARCH: ${{ matrix.arch }}
+          KROK_SKIA_NATIVE_TEST_FONT: /System/Library/Fonts/Supplemental/Arial.ttf
+        run: |
+          export KROK_SKIA_NATIVE_TEST_ROOT="$HOME/.cache/krok-helper/skia-deps/native"
+          # The app's conftest imports the whole application; these tests need only PyQt6.
+          python -m pytest --noconftest tests/test_subtitle_skia_preview.py -rs -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:
