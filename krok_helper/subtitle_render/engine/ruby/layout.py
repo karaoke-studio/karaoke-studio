@@ -39,10 +39,8 @@ from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from .unit_layout import (
     ruby_interval_px,
     resolve_ruby_alignment,
-    _ruby_auto_prefers_center,
     ruby_layout_gap,
     ruby_pair_gap_floors,
-    _ruby_pair_gaps,
     measured_ruby_width,
     measured_ruby_left_offset,
     measured_ruby_origins,
@@ -54,20 +52,22 @@ _RUBY_UNIT_LAYOUT_CACHE: dict[tuple, list[tuple[str, float, float, float, float]
 _RUBY_UNIT_LAYOUT_CACHE_MAX = 4096
 
 
-# auto 判定的「脚本字母」区间：假名 / CJK / 谚文 / 希腊 / 西里尔。
-# 与 D2D text_semantics.cpp rubyAutoCenterLayout 的区间完全一致。
-
-
-def ruby_layout_width(reading, ruby_metrics, target_width, style=None, base_text=None):
+def ruby_layout_width(
+    reading: str, ruby_metrics: QFontMetrics, target_width: int | float | None,
+    style: Style | None = None, base_text: str | None = None,
+) -> float:
     return measured_ruby_width(ruby_unit_layouts(_ruby_utopia_visual_units(reading), ruby_metrics, style),
-                                      target_width, style, base_text)
+                               target_width, style, base_text)
 
 
-def ruby_layout_left_offset(reading, ruby_metrics, target_width, style=None, base_text=None):
+def ruby_layout_left_offset(
+    reading: str, ruby_metrics: QFontMetrics, target_width: int | float | None,
+    style: Style | None = None, base_text: str | None = None,
+) -> float:
     if target_width is None or not reading:
         return 0.0
     return measured_ruby_left_offset(ruby_unit_layouts(_ruby_utopia_visual_units(reading), ruby_metrics, style),
-                                      target_width, style, base_text)
+                                     target_width, style, base_text)
 
 
 def ruby_layout_left_overhang(
@@ -112,7 +112,10 @@ def ruby_layout_units(
     ]
 
 
-def ruby_layout_origins(units, ruby_metrics, x, target_width, *, style=None, base_text=None):
+def ruby_layout_origins(
+    units: list[str], ruby_metrics: QFontMetrics, x: int | float, target_width: int | float | None,
+    *, style: Style | None = None, base_text: str | None = None,
+) -> list[tuple[str, float, float, float]]:
     """Qt measurement adapter for shared N3 ruby placement."""
     return measured_ruby_origins(ruby_unit_layouts(units, ruby_metrics, style), x, target_width,
                                  style=style, base_text=base_text)

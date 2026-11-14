@@ -1436,12 +1436,20 @@ native 源码身份：`da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e781
 
 验证：
 
-- 新增文件 **27 通过**，覆盖继承、整单元分类、Qt 薄适配器、角色、空批次/空读音、组合字符、去重、非有限基线、整数/负值取整和描边净空。禁止 Qt 注音测量的真实 sidecar 测试通过。Windows CPU-only 独立构建同文件 **27 通过**，与 Vulkan 构建的度量 JSON 误差 **0**。
+- 新增文件 **27 通过**，覆盖继承、整单元分类、Qt 薄适配器、角色、空批次/空读音、组合字符、去重、非有限基线、整数/负值取整和描边净空。禁止 Qt 注音测量的真实 sidecar 测试通过。Windows/Linux CPU-only 独立构建同文件各 **27 通过**；两个 Windows 构建、两个 Linux 构建/X11/Wayland 共五份度量 JSON 最大误差 **0**。
 - Windows 完整 Skia 产品组合 **241 通过**；Linux X11/Wayland 各 **216 通过、25 跳过**（WSLg/软件 Vulkan，不代替真硬件门槛）。九份规范样例在 Windows/X11/Wayland 比较，身份、glyph/cluster、实例、时间精确一致，几何最大误差 **0**；原有八份 Windows 样例与修改前也逐值一致。
 - 相关架构、渲染、lower ruby、字体字重、N3 导入、时间线、构建和验收工具回归 **538 通过、12 跳过**。D2D GPU 自身的注音 stretch、共享 realization、完成后 wipe 释放和干涉网格缓存回归 **12 通过**；未改 D2D C++ 或二进制，未以 QPainter 画面对照作为 Skia 迁移判据。
+- 对照提取前提交 `9c1ad578` 的实际函数，固定随机种子生成字体槽与单元排布输入：**3,000 组字体槽、1,500 组排布结果逐值一致**。这是纯规则差分，不是以 QPainter 栅格化当画质 oracle。适配器类型签名和注释整理后，准备层/架构组合另 **172 通过**。
 - Mac 双架构构建、产品/验收包及九份样例比较已加入 CI，结果待回收。native 源码未改，指纹仍为 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`；本批不需要重建本机 C++ 产物。
 
-下一步用规范单元测量接入 ruby target、主字间距/悬垂、上下锚点/基线，再物化 reading parts/空 pause/checkpoint 对两层走字的最终轨迹，接通 IR 校验和公共绘制核心。P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出入场/粒子/走字线和正式预览压力恢复仍待后续阶段。
+下一步按以下依赖顺序接通，不能跳过中间语义：
+
+1. 主字规范宽度生成 intervals 后，复用 `ruby_target_indices` / `effective_ruby_for_target`，固定所属行、显式字符范围、同文不同时间目标和角色样式。审查 `active_rubies_for_line` 的无宽度默认区间，不能让其绕过规范时间端口。
+2. 一次批量度量有效读音，给现有注音干涉/间距算法注入规范 `unit_layouts`；先物化主字 gaps、悬垂和最终 target span，再计算上下基线、整行锚点及对应碰撞/页面边界。不得用原 advance 或 Qt 度量补洞。
+3. 复用既有 reading parts/空 pause/checkpoint 和主字内部显式边界优先规则，分别物化主字与读音的最终走字轨迹。当前 native `start/end` 线性单元不足以表达暂停和跨主字 checkpoint，不能把分段轨迹压成一对时间；重叠注音对主字仍保留首次匹配优先。
+4. 版本化最终 IR 和对应 capability，native 校验字体/cluster 快照、target、几何和轨迹后只画路径。加入上下 ruby、短/长读音、空 part、零时长、角色、页面位移、DPR、随机/倒序 seek 的 D2D GPU–Skia GPU 与 Skia Raster–GPU 对照，再逐项解除门禁。
+
+P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出入场/粒子/走字线和正式预览压力恢复仍待后续阶段。
 
 ## 15. 前期探针清理范围
 

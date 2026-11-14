@@ -146,4 +146,3 @@ def ruby_style_for_target_indices(
             if role_label:
                 return style_for_role_in_layout(style, role_label)
     return style
-

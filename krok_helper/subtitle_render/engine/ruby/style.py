@@ -7,8 +7,6 @@ from PyQt6.QtGui import QFont
 from krok_helper.subtitle_render.engine.text.font_weight import build_weight_font
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
-
-
 from .style_semantics import (
     ruby_uses_main_font,
     ruby_font_size,
@@ -26,6 +24,7 @@ from .style_semantics import (
     font_style_for_ruby_cell,
 )
 
+
 def _build_ruby_slot(style: Style, text: str) -> QFont:
     selected, stretch = font_style_for_ruby_cell(style, text)
     font = build_weight_font(resolve_qt_font_family(selected.font_family),
@@ -39,6 +38,7 @@ def build_ruby_font(style: Style) -> QFont:
 
 def build_ruby_font_for_text(style: Style, reading: str) -> QFont:
     return _build_ruby_slot(style, reading)
+
 
 __all__ = [
     "build_ruby_font",

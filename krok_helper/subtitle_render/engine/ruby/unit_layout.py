@@ -3,6 +3,7 @@
 Each unit is (text, integer box width, pen offset, ink left, ink right).
 The Qt adapter and Skia metrics use these exact same alignment/rounding rules.
 """
+from collections.abc import Sequence
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.engine.text.font_slots import is_n3_latin_text
 from krok_helper.subtitle_render.engine.layout.line.width_policy import truncate_div
@@ -28,6 +29,7 @@ def resolve_ruby_alignment(
     return "equal_space"
 
 
+# Same script-letter ranges as D2D text_semantics.cpp rubyAutoCenterLayout.
 _RUBY_SCRIPT_LETTER_RANGES = (
     (0x0370, 0x04FF),
     (0x1100, 0x11FF),
@@ -93,7 +95,7 @@ def ruby_layout_gap(
 
 
 def ruby_pair_gap_floors(
-    unit_layouts: list[tuple[str, float, float, float, float]],
+    unit_layouts: Sequence[tuple[str, float, float, float, float]],
     style: Style | None,
 ) -> list[float]:
     """相邻注音单元的最小净空下限，保证两层描边不互相叠压。
@@ -126,7 +128,7 @@ def ruby_pair_gap_floors(
 
 
 def _ruby_pair_gaps(
-    unit_layouts: list[tuple[str, float, float, float, float]],
+    unit_layouts: Sequence[tuple[str, float, float, float, float]],
     style: Style | None,
     base_gap: float,
 ) -> list[float]:
@@ -139,7 +141,7 @@ def _ruby_pair_gaps(
 
 
 def measured_ruby_width(
-    unit_layouts: list[tuple[str, float, float, float, float]],
+    unit_layouts: Sequence[tuple[str, float, float, float, float]],
     target_width: int | float | None,
     style: Style | None = None,
     base_text: str | None = None,
@@ -169,7 +171,7 @@ def measured_ruby_width(
 
 
 def measured_ruby_left_offset(
-    unit_layouts: list[tuple[str, float, float, float, float]],
+    unit_layouts: Sequence[tuple[str, float, float, float, float]],
     target_width: int | float | None,
     style: Style | None = None,
     base_text: str | None = None,
@@ -200,7 +202,7 @@ def measured_ruby_left_offset(
 
 
 def measured_ruby_origins(
-    unit_layouts: list[tuple[str, float, float, float, float]],
+    unit_layouts: Sequence[tuple[str, float, float, float, float]],
     x: int | float,
     target_width: int | float | None,
     *,
@@ -256,4 +258,3 @@ def measured_ruby_origins(
         result.append((unit, origin, width, offset))
         cursor += width + (gaps[index] if index < len(gaps) else 0.0)
     return result
-
