@@ -10,6 +10,10 @@ OwnerBackendSession::OwnerBackendSession(Factory factory, std::shared_ptr<Genera
     std::promise<void> startup;
     auto initialized = startup.get_future();
     thread_ = std::thread([this, factory = std::move(factory), startup = std::move(startup)]() mutable {
+        struct RunningGuard {
+            std::atomic<bool>& running;
+            ~RunningGuard() { running.store(false); }
+        } runningGuard{ownerRunning_};
         std::unique_ptr<RenderBackend> backend;
         try {
             backend = factory();
@@ -37,7 +41,9 @@ bool OwnerBackendSession::submit(int generation, Work work, Complete completeCal
     return true;
 }
 void OwnerBackendSession::close() {
-    if (std::this_thread::get_id() == owner_) throw BackendError("不能从 owner 回调同步关闭所属 session");
+    // A completed std::thread id can be reused by a later control thread.
+    if (ownerRunning_.load() && std::this_thread::get_id() == owner_)
+        throw BackendError("不能从 owner 回调同步关闭所属 session");
     std::lock_guard closeLock(closeMutex_);
     {
         std::lock_guard lock(mutex_);

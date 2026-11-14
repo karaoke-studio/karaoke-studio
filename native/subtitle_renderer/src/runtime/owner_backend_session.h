@@ -2,6 +2,7 @@
 #include "generation_cancellation.h"
 #include "../backends/render_backend.h"
 #include <condition_variable>
+#include <atomic>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -46,5 +47,6 @@ private:
     std::mutex closeMutex_;
     std::thread thread_;
     std::thread::id owner_;
+    std::atomic<bool> ownerRunning_{true};
 };
 }

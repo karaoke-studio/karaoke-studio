@@ -68,6 +68,10 @@ int main() {
         std::thread closeOne([&] { session.close(); });
         std::thread closeTwo([&] { session.close(); });
         closeOne.join(); closeTwo.join();
+        for (int i = 0; i < 50; ++i) {
+            std::thread laterCloser([&] { session.close(); });
+            laterCloser.join();
+        }
         require(state->created == state->worked && state->created == state->destroyed, "single owner lifecycle");
         require(!session.submit(17, [](RenderBackend&) {}, {}), "closed rejects");
         bool startupFailed = false;
