@@ -1,8 +1,7 @@
 #pragma once
 
-#include <QtCore/QSet>
-
-#include <atomic>
+#include "generation_cancellation.h"
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -23,11 +22,10 @@ public:
     void remember(std::thread job);
     void joinAll();
     void requestShutdown() noexcept;
+    std::shared_ptr<GenerationCancellation> cancellation() const { return cancellation_; }
 
 private:
-    std::mutex cancelMutex_;
-    QSet<int> cancelledGenerations_;
-    std::atomic<bool> shutdownRequested_{false};
+    std::shared_ptr<GenerationCancellation> cancellation_ = std::make_shared<GenerationCancellation>();
     std::mutex jobsMutex_;
     std::vector<std::thread> jobs_;
 };

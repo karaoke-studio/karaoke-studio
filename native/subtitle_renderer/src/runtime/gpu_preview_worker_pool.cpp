@@ -1,4 +1,5 @@
 #include "gpu_preview_worker_pool.h"
+#include "work_admission.h"
 
 #include "../backends/direct2d/d2d_backend.h"
 #include "../diagnostics/native_trace.h"
@@ -294,7 +295,7 @@ public:
 
     bool submit(Work work) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_ || !accepting_ || outstanding_ >= workerCount_) {
+        if (!canAcceptWork(stopping_, accepting_, outstanding_, workerCount_)) {
             nativeTrace(
                 "submit rejected stopping=%d accepting=%d outstanding=%d workers=%d",
                 stopping_ ? 1 : 0,

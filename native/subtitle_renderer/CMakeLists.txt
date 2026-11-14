@@ -12,8 +12,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(KROK_BUILD_LEGACY_SIDECAR "Build the current Windows Direct2D sidecar" ${WIN32})
 option(KROK_BUILD_SKIA "Build the independent Skia renderer foundation" OFF)
+option(KROK_BUILD_SCENE_ADAPTER "Build Qt/IR value projection without a renderer dependency" ${KROK_BUILD_LEGACY_SIDECAR})
 if(KROK_BUILD_LEGACY_SIDECAR)
     find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+elseif(KROK_BUILD_SCENE_ADAPTER)
+    find_package(Qt6 6.11.0 EXACT REQUIRED COMPONENTS Core Gui)
 endif()
 include(cmake/SubtitleScene.cmake)
 if(KROK_BUILD_SKIA)
@@ -141,6 +144,7 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_utopia_painter.cpp
     src/backends/qt/qt_utopia_painter.h
     src/backends/direct2d/d2d_backend.cpp
+    src/backends/direct2d/d2d_backend_factory.cpp
     src/backends/direct2d/d2d_backend_configure.cpp
     src/backends/direct2d/d2d_backend_render.cpp
     src/backends/direct2d/d2d_backend.h
@@ -175,6 +179,7 @@ target_include_directories(krok_subtitle_renderer
 target_link_libraries(krok_subtitle_renderer
     PRIVATE
         subtitle_scene_adapter
+        subtitle_session_runtime
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets

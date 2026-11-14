@@ -1,7 +1,7 @@
 #include "gpu_backend_runtime.h"
 
 #include "render_runtime.h"
-#include "../backends/direct2d/d2d_backend.h"
+#include "../backends/backend_factory.h"
 #include "../diagnostics/native_trace.h"
 
 #include <QtCore/QString>
@@ -64,7 +64,7 @@ RenderBackend *ensureGpuBackend(
     auto &backend = forceWarp ? state->warpBackend : state->hardwareBackend;
     if (backend == nullptr) {
         try {
-            backend = std::make_unique<krok::subtitle::native::Direct2DGpuBackend>(forceWarp);
+            backend = makeBackend(Direct2DOptions{forceWarp ? Direct2DAdapter::Warp : Direct2DAdapter::Hardware});
             const auto caps = backend->capabilities();
             std::cerr
                 << "gpu_backend=direct2d adapter=\"" << caps.adapterName

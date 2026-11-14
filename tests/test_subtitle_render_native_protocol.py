@@ -618,7 +618,10 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
         assert operation in implementation_source
     assert "RenderBackend *ensureGpuBackend(" not in main_source
     assert "GpuPreviewWorkerPool *gpuPreviewPool(" not in main_source
-    assert "std::make_unique<krok::subtitle::native::Direct2DGpuBackend>" in implementation_source
+    assert "makeBackend(Direct2DOptions{" in implementation_source
+    factory_source = Path("native/subtitle_renderer/src/backends/direct2d/d2d_backend_factory.cpp").read_text(encoding="utf-8")
+    assert "std::make_unique<Direct2DGpuBackend>" in factory_source
+    assert "Direct2DGpuBackend" not in implementation_source
     assert "Direct2DGpuBackend" not in header_source
     assert "Direct2DGpuBackend" not in main_source
     assert "QJsonObject" not in implementation_source
@@ -1024,9 +1027,8 @@ def test_native_direct2d_rendering_is_separate_lifecycle_stage():
 
 
 def test_native_render_model_breaks_protocol_backend_dependency_cycle():
-    model_source = Path(
-        "native/subtitle_renderer/src/model/render_types.h"
-    ).read_text(encoding="utf-8")
+    model_source = "\n".join(p.read_text(encoding="utf-8") for p in
+                             Path("native/subtitle_renderer/src/model").glob("*.h"))
     backend_source = Path(
         "native/subtitle_renderer/src/backends/render_backend.h"
     ).read_text(encoding="utf-8")
@@ -1051,9 +1053,9 @@ def test_native_render_model_breaks_protocol_backend_dependency_cycle():
         assert contract in model_source
         assert contract not in backend_source
     assert "class RenderBackend" in backend_source
-    assert '#include "../model/render_types.h"' in backend_source
-    assert '#include "../model/render_types.h"' in config_source
-    assert '#include "../model/render_types.h"' in signal_source
+    assert '#include "../model/render_scene.h"' in backend_source
+    assert '#include "../model/text_line.h"' in config_source
+    assert '#include "../model/text_style.h"' in signal_source
     assert "backends/" not in config_source
     for forbidden_dependency in (
         "commands/",
@@ -1063,7 +1065,7 @@ def test_native_render_model_breaks_protocol_backend_dependency_cycle():
         "backends/",
     ):
         assert forbidden_dependency not in model_source
-    assert "src/model/render_types.h" in cmake_source
+    assert "src/model/render_scene.h" in cmake_source
 
 
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
@@ -1729,16 +1731,21 @@ def test_native_gpu_scene_projection_hides_style_and_layout_mapping():
 
     assert "RenderScene gpuSceneFromConfig(" in header_source
     assert "RenderScene gpuSceneFromConfig(" not in main_source
+    projected_source = "\n".join(p.read_text(encoding="utf-8") for p in
+                                 Path("native/subtitle_renderer/src/scene").glob("*.cpp"))
     for private_rule in (
-        "gpuColor(",
-        "gpuPaint(",
-        "applyGpuResolvedStyle(",
+        "projectColor(",
+        "projectPaint(",
+        "applyResolvedStyle(",
         "alignmentIndexForLane(",
-        "applyGpuLineLayout(",
+        "applyLineLayout(",
     ):
+        assert private_rule in projected_source
         assert private_rule in implementation_source
         assert private_rule not in header_source
         assert private_rule not in main_source
+    assert '"qt_font_factory.h"' not in projected_source
+    assert '"qt_ruby_timing.h"' not in projected_source
     assert "RenderRuntime" not in implementation_source
     assert "SharedFrameRing" not in implementation_source
     assert '#include "backends/qt/gpu_scene_projection.h"' not in main_source

@@ -106,3 +106,29 @@ def test_same_core_gpu_and_raster_sample_interiors(native, tmp_path):
     diagnostic = {"mean_absolute_rgba": float(delta.mean()), "max_absolute_rgba": int(delta.max()),
                   "different_pixels": int(np.any(delta, axis=2).sum())}
     (tmp_path / "skia-gpu-raster-difference.json").write_text(json.dumps(diagnostic, indent=2))
+
+
+def test_actual_cmake_target_graph_keeps_scene_and_core_independent(native):
+    for directory in ("gpu_dir", "cpu_dir"):
+        replies = native[directory] / ".cmake/api/v1/reply"
+        models = list(replies.glob("codemodel-v2-*.json"))
+        assert models, "Build through the unified driver to publish the CMake code model"
+        model = json.loads(max(models, key=lambda p: p.stat().st_mtime_ns).read_text())
+        targets = model["configurations"][0]["targets"]
+        by_id = {target["id"]: json.loads((replies / target["jsonFile"]).read_text()) for target in targets}
+        by_name = {target["name"]: target for target in by_id.values()}
+        def closure(name):
+            found = set()
+            pending = [by_name[name]]
+            while pending:
+                target = pending.pop()
+                if target["name"] in found:
+                    continue
+                found.add(target["name"])
+                pending += [by_id[d["id"]] for d in target.get("dependencies", [])]
+            return found
+        for name in ("subtitle_scene", "subtitle_session_runtime", "subtitle_skia_core", "subtitle_skia_raster"):
+            dependencies = closure(name)
+            assert not dependencies.intersection({"subtitle_skia_gpu", "subtitle_skia_backend", "subtitle_scene_adapter", "krok_subtitle_renderer"})
+            for group in by_name[name].get("compileGroups", []):
+                assert not any("/Qt" in i["path"].replace("\\", "/") for i in group.get("includes", []))

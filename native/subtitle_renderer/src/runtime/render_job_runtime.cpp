@@ -3,21 +3,15 @@
 namespace krok::subtitle::native::runtime {
 
 bool RenderJobRuntime::generationCancelled(int generation) {
-    if (shutdownRequested_.load()) {
-        return true;
-    }
-    std::lock_guard<std::mutex> lock(cancelMutex_);
-    return cancelledGenerations_.contains(generation);
+    return cancellation_->cancelled(generation);
 }
 
 void RenderJobRuntime::cancelGeneration(int generation) {
-    std::lock_guard<std::mutex> lock(cancelMutex_);
-    cancelledGenerations_.insert(generation);
+    cancellation_->cancel(generation);
 }
 
 void RenderJobRuntime::clearGenerationCancel(int generation) {
-    std::lock_guard<std::mutex> lock(cancelMutex_);
-    cancelledGenerations_.remove(generation);
+    cancellation_->clear(generation);
 }
 
 void RenderJobRuntime::remember(std::thread job) {
@@ -39,7 +33,7 @@ void RenderJobRuntime::joinAll() {
 }
 
 void RenderJobRuntime::requestShutdown() noexcept {
-    shutdownRequested_.store(true);
+    cancellation_->shutdown();
 }
 
 }  // namespace krok::subtitle::native::runtime

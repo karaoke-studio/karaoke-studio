@@ -15,6 +15,11 @@ if(MSVC)
     target_compile_options(subtitle_scene PUBLIC /utf-8 PRIVATE /O2)
 endif()
 option(KROK_BUILD_NATIVE_TESTS "Build native boundary and deterministic effect tests" ON)
+find_package(Threads REQUIRED)
+add_library(subtitle_session_runtime STATIC
+    src/runtime/generation_cancellation.cpp
+    src/runtime/owner_backend_session.cpp)
+target_link_libraries(subtitle_session_runtime PUBLIC subtitle_scene Threads::Threads)
 if(KROK_BUILD_NATIVE_TESTS)
     enable_testing()
     add_executable(subtitle_scene_tests tests/scene_tests.cpp)
@@ -22,9 +27,13 @@ if(KROK_BUILD_NATIVE_TESTS)
     add_test(NAME subtitle_scene_tests COMMAND subtitle_scene_tests)
     add_executable(subtitle_effect_samples tests/effect_samples.cpp)
     target_link_libraries(subtitle_effect_samples PRIVATE subtitle_scene)
+    add_executable(subtitle_owner_session_tests tests/owner_session_tests.cpp)
+    target_link_libraries(subtitle_owner_session_tests PRIVATE subtitle_session_runtime)
+    add_test(NAME subtitle_owner_session_tests COMMAND subtitle_owner_session_tests)
+    set_tests_properties(subtitle_scene_tests subtitle_owner_session_tests PROPERTIES TIMEOUT 60)
 endif()
 
-if(KROK_BUILD_LEGACY_SIDECAR)
+if(KROK_BUILD_SCENE_ADAPTER)
     add_library(subtitle_scene_adapter STATIC
         src/scene/paint_projection.cpp
         src/scene/style_projection.cpp

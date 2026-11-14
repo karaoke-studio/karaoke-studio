@@ -19,6 +19,9 @@ struct BackendCaps {
     bool supportsStagingReadback = false;
     bool supportsGlyphs = false;
     bool supportsNativePreview = false;
+    // Optional until the versioned P04 handshake. Do not overload D3D featureLevel or WARP.
+    std::string api;
+    std::string executionTarget;
 };
 class BackendError : public std::runtime_error {
 public:

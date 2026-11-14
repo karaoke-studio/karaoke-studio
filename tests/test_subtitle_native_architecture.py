@@ -8,7 +8,7 @@ INCLUDE = re.compile(r'^\s*#\s*(?:include|import)\s*[<"]([^">]+)', re.M)
 PLATFORM = re.compile(r'^\s*#\s*(?:if|ifdef|ifndef|elif).*\b(?:_WIN32|WIN32|__APPLE__|__linux__|Q_OS_\w+)\b', re.M)
 
 
-def check_closure(start: Path, *, adapter=False):
+def check_closure(start: Path, *, adapter=False, public_runtime=False):
     pending = [start]
     seen = set()
     while pending:
@@ -28,7 +28,9 @@ def check_closure(start: Path, *, adapter=False):
             if target is not None and target.is_relative_to(SRC.resolve()):
                 relative = target.relative_to(SRC.resolve()).as_posix()
                 allowed = ("model/", "scene/", "protocol/") if adapter else ("model/", "effects/", "skia/core/", "skia/raster/")
-                assert relative.startswith(allowed), (path, relative)
+                extra = {"backends/render_backend.h", "runtime/generation_cancellation.h",
+                         "runtime/owner_backend_session.h", "runtime/work_admission.h"} if public_runtime else set()
+                assert relative.startswith(allowed) or relative in extra, (path, relative)
                 pending.append(target)
 
 
@@ -50,3 +52,15 @@ def test_removed_monolithic_type_header_has_no_live_consumers():
     for path in SRC.rglob("*"):
         if path.suffix in {".h", ".cpp", ".mm"}:
             assert not any(name.endswith("model/render_types.h") for name in INCLUDE.findall(path.read_text(encoding="utf-8"))), path
+
+
+def test_owner_runtime_uses_only_public_backend_values_and_standard_library():
+    for name in ("generation_cancellation.cpp", "owner_backend_session.cpp"):
+        check_closure(SRC / "runtime" / name, public_runtime=True)
+
+
+def test_skia_facade_does_not_depend_on_direct2d_worker_resources_or_qt():
+    forbidden = ("Direct2DGpuBackend", "sharedDeviceResources", "RealizationPrewarm", "gpu_preview_worker_pool", "QPainter")
+    for path in (SRC / "backends/skia").glob("*"):
+        text = path.read_text(encoding="utf-8")
+        assert not any(name in text for name in forbidden), path

@@ -9,6 +9,7 @@ from pathlib import Path
 def renderer_digest(repo: Path) -> str:
     native = repo / "native/subtitle_renderer"
     paths = [native / "CMakeLists.txt", repo / "scripts/build_skia_renderer.py"]
+    paths += list((native / "src/backends").glob("*.h"))
     for directory in (native / "src/skia", native / "src/model", native / "src/effects",
                       native / "src/scene", native / "src/runtime", native / "src/backends/skia",
                       native / "tests", native / "cmake", repo / "scripts/skia_build"):
