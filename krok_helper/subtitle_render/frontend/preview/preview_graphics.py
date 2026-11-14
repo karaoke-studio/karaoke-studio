@@ -670,6 +670,8 @@ class PreviewGraphicsView(QGraphicsView):
             signal.connect(self._on_skia_error, Qt.ConnectionType.QueuedConnection)
 
     def _on_skia_error(self, reason: str) -> None:
+        if self.sender() is not None and self.sender() is not self._async_renderer:
+            return
         self._note_frame_delivered()
         self.renderBackendChanged.emit(self.render_backend_label())
         self.gpuFallback.emit(reason)

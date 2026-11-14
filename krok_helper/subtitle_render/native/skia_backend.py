@@ -5,6 +5,7 @@ The production Direct2D resolver/preferences remain independent of this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import platform
@@ -60,10 +61,11 @@ def resolve_skia_renderer_path() -> Path:
 
 
 class SkiaRendererProcess(NativeRendererProcess):
-    def __init__(self, executable_path=None, *, selection: SkiaSelection | None = None, **kwargs) -> None:
+    def __init__(self, executable_path=None, *, selection: SkiaSelection | None = None, on_backend_info=None, **kwargs) -> None:
         super().__init__(executable_path or resolve_skia_renderer_path(), **kwargs)
         self.selection = selection or SkiaSelection.from_environment()
         self.skia_info: dict[str, Any] = {}
+        self._on_backend_info = on_backend_info or logging.getLogger(__name__).info
 
     def _launch_environment(self) -> dict[str, str]:
         env = super()._launch_environment() or os.environ.copy()
@@ -82,10 +84,12 @@ class SkiaRendererProcess(NativeRendererProcess):
                 raise NativeRendererError("sidecar 不支持 Skia 版本化选择握手，拒绝发送字幕配置")
             if "p04_ascii_solid_wipe" not in ready.get("profiles", []):
                 raise NativeRendererError("Skia sidecar 未声明 P04 字幕能力")
+            if "raster" not in ready.get("execution_targets", []):
+                raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",
                         "target": self.selection.target, "fallback": self.selection.fallback,
                         "require_hardware": self.selection.require_hardware})
-            selected = self._expect_ok(self._read_until_event("backend_selected"))
+            selected = self._expect_ok(self._read_until_event("backend_selected", timeout_s=self.gpu_configure_timeout_s))
             self.skia_info = selected.get("backend_info", {})
         except BaseException:
             self.abort(reason="Skia handshake failed")
@@ -95,6 +99,11 @@ class SkiaRendererProcess(NativeRendererProcess):
     def configure(self, *args, **kwargs):
         out = super().configure(*args, **kwargs)
         self.skia_info = out.get("backend_info", {})
+        info = self.skia_info
+        target = "GPU" if info.get("execution_target") == "gpu" else "Raster CPU"
+        self._on_backend_info(f"Skia 字幕后端：{target}，API={info.get('api')}，设备={info.get('adapter_name')}，"
+                              f"硬件={'是' if info.get('hardware') else '否'}，"
+                              f"回退原因={info.get('fallback_reason') or '无'}")
         return out
 
     def read_event(self):

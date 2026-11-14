@@ -553,7 +553,7 @@ def _render_subtitle_video_prepared(
                 monitor.set_stage("native 渲染")
             _write_frames_native(
                 process, job, total_frames, native_renderer_path,
-                should_cancel, on_progress,
+                should_cancel, on_progress, logger,
             )
         elif worker_count > 1:
             logger(f"多进程导出: {worker_count} 个 worker")
@@ -1292,6 +1292,7 @@ def _write_frames_native(
     renderer_path: Path,
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
+    logger: Logger | None = None,
 ) -> None:
     """Write full-frame RGBA frames rendered by the native sidecar."""
     monitor = active_export_monitor()
@@ -1303,7 +1304,7 @@ def _write_frames_native(
         enabled = job.gpu_export_enabled
         if enabled is None:
             enabled = os.environ.get("KROK_SUBTITLE_GPU_EXPORT", "1").lower() not in {"0", "false", "off", "no"}
-        factory = partial(SkiaRendererProcess, selection=SkiaSelection.from_environment(gpu_enabled=bool(enabled)))
+        factory = partial(SkiaRendererProcess, selection=SkiaSelection.from_environment(gpu_enabled=bool(enabled)), on_backend_info=logger)
     for frame in iter_native_rgba_frames(
         job.track,
         job.style,

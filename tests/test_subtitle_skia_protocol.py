@@ -184,7 +184,37 @@ def test_missing_gpu_loader_raster_fallback_is_explicit(binary, monkeypatch, tmp
         assert frames[0][..., 3].max() > 0
 
 
-@pytest.mark.parametrize("mutation", ["schema", "required", "dimensions", "effect", "text", "font"])
+def test_cpu_only_sidecar_rejects_gpu_and_reports_raster_fallback(binary, monkeypatch, tmp_path):
+    directory = Path(binary).parent
+    cpu = directory.parent / (directory.name.rsplit("-", 1)[0] + "-raster") / Path(binary).name
+    if not cpu.is_file():
+        pytest.skip("Build --cpu-only --qt-root to verify the CPU-only executable")
+    monkeypatch.setenv("KROK_SKIA_VULKAN_LIBRARY", str(tmp_path / "absent"))
+    with SkiaRendererProcess(cpu, selection=selection("raster")) as process:
+        assert process.skia_info["execution_target"] == "raster"
+        process.configure(*sample(), width=640, height=360, fps=60, duration_ms=1600)
+        frames, _ = collect(process, [550])
+        assert frames[0][..., 3].max() > 0
+    with pytest.raises(NativeRendererError, match="GPU"):
+        with SkiaRendererProcess(cpu, selection=selection("gpu")):
+            pass
+    with SkiaRendererProcess(cpu, selection=selection("gpu", "raster")) as process:
+        assert process.skia_info["execution_target"] == "raster"
+        assert process.skia_info["fallback_reason"]
+
+
+@pytest.mark.parametrize("target", ["gpu", "raster"])
+def test_full_hd_shared_frame_does_not_depend_on_legacy_sysv_size_limit(binary, target):
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(*sample(), width=1920, height=1080, fps=60, duration_ms=1600)
+        frames, events = collect(process, [550])
+        assert frames[0].shape == (1080, 1920, 4)
+        assert frames[0][..., 3].max() > 0
+        if os.name != "nt":
+            assert events[0]["shm_key"].startswith("posix:")
+
+
+@pytest.mark.parametrize("mutation", ["schema", "required", "dimensions", "effect", "text", "font", "missing_guide"])
 def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
     from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
     from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
@@ -201,6 +231,7 @@ def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
         elif mutation == "effect": ir["style"]["stroke_width_px"] = 7
         elif mutation == "text": ir["track"]["lines"][0]["chars"][0]["text"] = "字"
         elif mutation == "font": ir["style"]["font_resolved"]["resource_path"] = "missing.ttf"
+        elif mutation == "missing_guide": ir["track"]["lines"][0]["chars"][0]["vector_glyph_id"] = "unretained-glyph"
         process._send({"cmd": "configure", "ir": ir})
         with pytest.raises(NativeRendererError):
             process._expect_ok(process._read_until_event("configured"))
@@ -241,16 +272,19 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, supp
         assert canvas._async_renderer.selection.target == ("gpu" if gpu else "raster")
         canvas._async_renderer.frame_ready.connect(lambda image, t: frames.append((image, t)))
         canvas.gpuFallback.connect(errors.append)
+        canvas.resize(640, 360)
+        canvas.show()
         canvas.set_output_size(640, 360)
         canvas.set_track(supported_project[0])
         canvas.set_style(supported_project[1])
         canvas.set_time(550)
         deadline = time.monotonic() + 30
-        while not frames and not errors and time.monotonic() < deadline:
+        while (not frames or frames[-1][1] != 550 or canvas._subtitle_item._async_image is None) and not errors and time.monotonic() < deadline:
             QApplication.processEvents()
             time.sleep(0.01)
         assert not errors, errors
-        assert frames and not frames[-1][0].isNull()
+        assert frames and frames[-1][1] == 550 and not frames[-1][0].isNull()
+        assert canvas._subtitle_item._async_image is not None
         assert "Skia" in canvas.render_backend_label()
         canvas.set_gpu_preview_enabled(not gpu)
         assert canvas._async_renderer.selection.target == ("raster" if gpu else "gpu")
@@ -279,7 +313,9 @@ def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, suppo
     job = RenderJob(track, style, tmp_path / "unused", tmp_path / "p04.mp4", width=640, height=360,
                     background_source=BackgroundSource(kind="solid", color="#183048"), fps=60,
                     duration_ms=1500, include_audio=False, gpu_export_enabled=gpu, preset="ultrafast")
-    result = renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent)
+    logs = []
+    result = renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent, logger=logs.append)
+    assert any("Skia 字幕后端" in line and ("GPU" if gpu else "Raster CPU") in line for line in logs)
     assert result.is_file() and result.stat().st_size > 1000
     decoded = subprocess.run([ffmpeg, "-v", "error", "-i", str(result), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                              capture_output=True, timeout=30)

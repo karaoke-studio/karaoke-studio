@@ -207,7 +207,14 @@ class SharedFrameRingReader:
             return
         from PyQt6.QtCore import QSharedMemory
 
-        shared = QSharedMemory(self.shm_key)
+        if self.shm_key.startswith("posix:"):
+            from PyQt6.QtCore import QNativeIpcKey
+            native_key = QNativeIpcKey.fromString(self.shm_key)
+            if native_key.isEmpty() or native_key.type() != QNativeIpcKey.Type.PosixRealtime:
+                raise NativeRendererError("无效的 POSIX 共享内存键")
+            shared = QSharedMemory(native_key)
+        else:
+            shared = QSharedMemory(self.shm_key)
         if not shared.attach(QSharedMemory.AccessMode.ReadOnly):
             raise NativeRendererError(
                 f"failed to attach native shared memory {self.shm_key!r}: {shared.errorString()}"

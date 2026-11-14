@@ -2,6 +2,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QSharedMemory>
+#include <QtCore/QNativeIpcKey>
 #include <QtGui/QImage>
 
 #include <algorithm>
@@ -61,7 +62,16 @@ bool SharedFrameRingBuffer::ensure(
     if (sharedMemory_ != nullptr && sharedMemory_->isAttached()) {
         sharedMemory_->detach();
     }
-    sharedMemory_ = std::make_unique<QSharedMemory>(key);
+    // Skia's Unix transport exchanges a serialized native POSIX key. Ordinary
+    // keys retain the existing Direct2D/legacy behavior and semaphore identity.
+    if (key.startsWith(QStringLiteral("posix:"))) {
+        const auto nativeKey = QNativeIpcKey::fromString(key);
+        if (nativeKey.isEmpty() || nativeKey.type() != QNativeIpcKey::Type::PosixRealtime) {
+            if (error) *error = QStringLiteral("无效的 POSIX 共享内存键");
+            return false;
+        }
+        sharedMemory_ = std::make_unique<QSharedMemory>(nativeKey);
+    } else sharedMemory_ = std::make_unique<QSharedMemory>(key);
     bool created = sharedMemory_->create(totalBytes);
     if (!created) {
         // The GUI process ring reader may still hold this key attached, so

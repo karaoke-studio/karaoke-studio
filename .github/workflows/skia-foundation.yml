@@ -109,7 +109,14 @@ jobs:
           KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE: '0'
         run: |
           export KROK_TEST_SKIA_SIDECAR="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal/krok_skia_subtitle_renderer"
-          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py -rs -v --basetemp build/skia-protocol-tests
+          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: skia-protocol-${{ matrix.arch }}-evidence
+          path: |
+            build/skia-protocol.xml
+            build/skia-protocol-tests/**
       - name: Package the Mac validation bundle
         env:
           ARCH: ${{ matrix.arch }}

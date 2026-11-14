@@ -45,6 +45,9 @@ void validateEnvelope(const QJsonObject& ir) {
         for (const auto& cv : line.value("chars").toArray()) {
             if (!cv.isObject() || !cv.toObject().value("text").isString()) throw BackendError("Skia IR: invalid character");
             integer(cv.toObject(), "start_ms", -86400000, 86400000);
+            for (const auto* key : {"vector_glyph_id", "vector_glyph", "bitmap_guide", "wipe_points"})
+                if (cv.toObject().contains(QLatin1String(key)))
+                    throw BackendError("Skia P04: guide symbols and custom wipe curves require later phases");
         }
     }
 }

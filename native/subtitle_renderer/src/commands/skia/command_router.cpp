@@ -26,11 +26,13 @@ QJsonObject SkiaCommandRouter::select(const QJsonObject& request) {
     SkiaOptions options{requestedTarget_ == "gpu" ? SkiaTarget::Gpu : SkiaTarget::Raster};
     options.requireHardware = request.value("require_hardware").toBool();
     try {
-        session_ = std::make_unique<runtime::OwnerBackendSession>([options] { return makeBackend(options); }, cancellation_);
+        // The owner retains the transport until its thread exits. close() drops the
+        // control-thread reference first, so QSharedMemory is destroyed by its owner.
+        session_ = std::make_unique<runtime::OwnerBackendSession>([options, frames = frames_] { return makeBackend(options); }, cancellation_);
     } catch (const std::exception& e) {
         if (requestedTarget_ != "gpu" || fallback != "raster") throw;
         fallbackReason_ = QString::fromUtf8(e.what());
-        session_ = std::make_unique<runtime::OwnerBackendSession>([] { return makeBackend(SkiaOptions{SkiaTarget::Raster}); }, cancellation_);
+        session_ = std::make_unique<runtime::OwnerBackendSession>([frames = frames_] { return makeBackend(SkiaOptions{SkiaTarget::Raster}); }, cancellation_);
     }
     return response(true, "backend_selected");
 }
@@ -39,7 +41,7 @@ void SkiaCommandRouter::synchronous(const QJsonObject& request) {
     std::promise<runtime::JobCompletion> done;
     auto finished = done.get_future();
     QJsonObject out;
-    const bool accepted = session_->submit(0, [&](RenderBackend& backend) {
+    const bool accepted = session_->submit(0, [&, frames = frames_](RenderBackend& backend) {
         const auto cmd = request.value("cmd").toString();
         if (cmd == "configure") {
             auto scene = scene::skiaSceneFromIr(request.value("ir").toObject());
@@ -50,7 +52,7 @@ void SkiaCommandRouter::synchronous(const QJsonObject& request) {
             out.insert("schema", 3);
         } else if (cmd == "backend_info" || cmd == "gpu_diagnostics" || cmd == "diagnostics")
             out = response(true, cmd == "backend_info" ? "backend_info" : "gpu_diagnostics");
-        else if (cmd == "render_frame" || cmd == "render_frame_stats") out = frames_.frame(backend, request);
+        else if (cmd == "render_frame" || cmd == "render_frame_stats") out = frames->frame(backend, request);
         else throw BackendError("Unsupported Skia command");
         out.insert("backend_info", info(backend));
     }, [&](runtime::JobCompletion result) { done.set_value(result); });
@@ -83,9 +85,9 @@ bool SkiaCommandRouter::dispatch(const QJsonObject& request) {
             if (!session_ || !configured_) throw BackendError("Skia must be configured before rendering");
             const int generation = request.value("generation").toInt();
             if (generation < 1 || cancellation_->cancelled(generation)) throw BackendError("Invalid/cancelled generation");
-            const bool accepted = session_->submit(generation, [this, request, generation](RenderBackend& backend) {
+            const bool accepted = session_->submit(generation, [frames = frames_, cancellation = cancellation_, request, generation](RenderBackend& backend) {
                 auto started = response(true, "range_started"); started.insert("generation", generation); writeJson(started);
-                frames_.range(backend, request, *cancellation_);
+                frames->range(backend, request, *cancellation);
             }, [generation](runtime::JobCompletion result) {
                 auto out = response(result.outcome != runtime::JobOutcome::Failed, "range_done");
                 out.insert("generation", generation);
@@ -108,6 +110,7 @@ bool SkiaCommandRouter::dispatch(const QJsonObject& request) {
 }
 void SkiaCommandRouter::close() {
     cancellation_->shutdown();
+    frames_.reset();
     if (session_) session_->close();
     session_.reset();
 }
