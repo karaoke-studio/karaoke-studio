@@ -1,7 +1,6 @@
 """Dependency integrity and platform selection checks; no Qt renderer oracle."""
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 import re
@@ -14,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from skia_build.configuration import gn_text, validate_selection  # noqa: E402
 from skia_build.sources import checkout, download, sha256  # noqa: E402
+from skia_build.provenance import native_needs_clean, record_request  # noqa: E402
 
 
 @pytest.mark.parametrize("system,arch,api,cpu", [
@@ -106,3 +106,20 @@ def test_build_cli_rejects_incompatible_gpu_before_fetching():
                              "--cpu-only", "--gpu-api", "vulkan"], capture_output=True, text=True)
     assert result.returncode == 2
     assert "cannot be combined" in result.stderr
+
+
+def test_failed_dependency_request_still_requires_clean_on_toolchain_change(tmp_path):
+    path = tmp_path / "request.json"
+    record_request(path, "first", clean=False)
+    record_request(path, "first", clean=False)
+    with pytest.raises(RuntimeError, match="--clean"):
+        record_request(path, "different", clean=False)
+    assert json.loads(path.read_text())["fingerprint"] == "first"
+    record_request(path, "different", clean=True)
+
+
+def test_native_source_change_triggers_clean_once(tmp_path):
+    path = tmp_path / "source-request.json"
+    assert native_needs_clean(path, "headers-v1")
+    assert not native_needs_clean(path, "headers-v1")
+    assert native_needs_clean(path, "headers-v2")

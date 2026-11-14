@@ -133,7 +133,9 @@
       "crt": "MD",
       "llvm_version": "21.1.8",
       "llvm_url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-win64.exe",
-      "llvm_sha256": "7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113"
+      "llvm_sha256": "7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113",
+      "compiler_sha256": "812f6a0e80a5541108c0f4ae31121bcd5b692707041ac83a86e595f4729f5c8a",
+      "linker_sha256": "89c1209acd8d69b83d7c1a95173c59f036890de4cce713b508270ec4ac71c795"
     },
     "linux-x64": {
       "compiler": "clang++",
@@ -142,11 +144,13 @@
     },
     "macos-arm64": {
       "compiler": "AppleClang",
-      "xcode": "26.1.1"
+      "xcode": "26.1.1",
+      "sdk": "26.1"
     },
     "macos-x64": {
       "compiler": "AppleClang",
-      "xcode": "26.1.1"
+      "xcode": "26.1.1",
+      "sdk": "26.1"
     }
   },
   "qt_version": "6.11.0",

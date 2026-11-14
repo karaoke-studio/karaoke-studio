@@ -35,7 +35,9 @@ jobs:
       - name: Build native Metal and Raster
         run: |
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --clean --jobs 3
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --jobs 3
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --clean --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
       - name: Record hosted Metal capability honestly
         shell: bash
         run: |

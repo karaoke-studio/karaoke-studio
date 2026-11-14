@@ -62,6 +62,12 @@ void ValidationScene::draw(SkCanvas& canvas) const {
     font.setEdging(SkFont::Edging::kAntiAlias);
     font.setHinting(SkFontHinting::kNone);
     canvas.drawSimpleText("Lin-K Lyrics", 12, SkTextEncoding::kUTF8, 24, 320, font, paint);
+    auto outline = font.getPath(font.unicharToGlyph('K'));
+    if (!outline) throw std::runtime_error("FreeType glyph outline unavailable");
+    canvas.save();
+    canvas.translate(500, 90);
+    canvas.drawPath(*outline, paint);
+    canvas.restore();
     canvas.drawImageRect(image_, SkRect::MakeXYWH(470, 180, 80, 80), SkSamplingOptions(), nullptr);
 }
 }

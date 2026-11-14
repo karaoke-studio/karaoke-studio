@@ -130,7 +130,10 @@ def main(argv=None) -> int:
          *[f"-D{k}={v}" for k, v in cmake_args.items()]])
     run([cmake, "--build", native_output, "--parallel", options.jobs,
          *(["--clean-first"] if options.clean or clean_native else [])])
+    if renderer_digest(REPO) != native_identity["renderer_sources_sha256"] or sha256(LOCK) != identity["lock_sha256"]:
+        raise RuntimeError("Build inputs changed during compilation; rerun before publishing evidence")
     artifacts = {}
+    smoke_evidence = {}
     suffix = ".exe" if system == "windows" else ""
     for name in ("krok_skia_raster_smoke", *(() if options.cpu_only else ("krok_skia_gpu_smoke",))):
         binary = native_output / (name + suffix)
@@ -140,8 +143,14 @@ def main(argv=None) -> int:
             if name.endswith("gpu_smoke"):
                 smoke.append("--require-hardware")
             run(smoke)
+            report = json.loads((native_output / f"{name}.json").read_text(encoding="utf-8"))
+            if report["fingerprint"] != native_fingerprint or report["status"] != "passed":
+                raise RuntimeError("Smoke report identity/status mismatch")
+            smoke_evidence[name] = {"report": report, "font_sha256": sha256(options.smoke_font),
+                "files": {ext: sha256(native_output / f"{name}.{ext}") for ext in ("json", "rgba", "png")}}
     evidence = {"fingerprint": fingerprint, "identity": identity, "artifacts": artifacts,
-                "native_fingerprint": native_fingerprint, "native_identity": native_identity}
+                "native_fingerprint": native_fingerprint, "native_identity": native_identity,
+                "build_status": "passed", "smoke": smoke_evidence}
     # Publish only after a successful build and all requested smoke runs.
     fingerprint_file.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     (native_output / "build-fingerprint.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")

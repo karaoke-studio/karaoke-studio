@@ -81,7 +81,8 @@ def configure(lock: dict, root: Path, system: str, arch: str, gpu: str | None,
         identity["sdk_windows_h_sha256"] = sha256(sdk / "Include" / spec["sdk"] / "um/Windows.h")
         identity["stl_yvals_sha256"] = sha256(vc / "Tools/MSVC" / spec["msvc"] / "include/yvals_core.h")
     else:
-        compiler = Path(shutil.which("clang++-21") or shutil.which("clang++") or "clang++")
+        compiler = (Path(output(["xcrun", "--find", "clang++"])) if system == "macos" else
+                    Path(shutil.which("clang++-21") or shutil.which("clang++") or "clang++"))
         version = output([str(compiler), "--version"])
         c_compiler = compiler.with_name(compiler.name.replace("clang++", "clang"))
         args |= {"cc": str(c_compiler), "cxx": str(compiler)}
@@ -95,6 +96,9 @@ def configure(lock: dict, root: Path, system: str, arch: str, gpu: str | None,
             if not xcode.startswith(f"Xcode {spec['xcode']}\n"):
                 raise RuntimeError(f"Xcode differs from lock: {xcode}")
             identity |= {"xcode": xcode, "sdk": output(["xcrun", "--sdk", "macosx", "--show-sdk-version"])}
+            if identity["sdk"] != spec["sdk"]:
+                raise RuntimeError(f"macOS SDK differs from lock: {identity['sdk']}")
+            cmake["CMAKE_OBJCXX_COMPILER"] = str(compiler)
             cmake["CMAKE_OSX_ARCHITECTURES"] = "arm64" if arch == "arm64" else "x86_64"
     identity |= {"compiler": output([str(compiler), "--version"]), "compiler_sha256": sha256(compiler)}
     return args, cmake, identity

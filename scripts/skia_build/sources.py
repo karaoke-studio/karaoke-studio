@@ -104,4 +104,7 @@ def windows_llvm(root: Path, spec: dict, supplied: Path | None) -> Path:
     version = output([str(llvm / "bin" / "clang-cl.exe"), "--version"])
     if f"clang version {spec['llvm_version']}\n" not in version + "\n":
         raise RuntimeError(f"LLVM version differs from lock: {version}")
+    for name, field in (("clang-cl.exe", "compiler_sha256"), ("lld-link.exe", "linker_sha256")):
+        if sha256(llvm / "bin" / name) != spec[field]:
+            raise RuntimeError(f"LLVM binary digest differs from lock: {name}")
     return llvm

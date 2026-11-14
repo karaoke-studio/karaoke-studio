@@ -455,10 +455,10 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 **目的：** 把生产依赖、GPU 能力与 OpenGL 试验分开。
 
-- [ ] P01.1 选择同时具备所需 Ganesh Vulkan / Metal / RuntimeEffect 能力的官方 Skia revision；锁定 commit、依赖 commit/hash、编译器、SDK、GN 参数、CPU 架构和运行时。
-- [ ] P01.2 建立机器可读依赖锁和统一构建驱动（拟定 `scripts/build_skia_renderer.py`）。第三方包不能仅凭一个可变下载 URL 使用，不能链接目录里所有 `.lib` 作为依赖管理。
-- [ ] P01.3 Windows 使用与产品 Qt 一致的工具链和 MSVC 动态运行时策略；sidecar/宿主模块与 Qt 边界不得跨不同 CRT 分配和释放对象。不要继承孤立探针的 `/MT` 设置。
-- [ ] P01.4 修改 CMake：D2D 仅在 Windows 且显式启用时选入；Skia core 与 GPU adapter 单独选入；macOS 仅在 Metal target 启用 Objective-C++。
+- [x] P01.1 选择同时具备所需 Ganesh Vulkan / Metal / RuntimeEffect 能力的官方 Skia revision；锁定 commit、依赖 commit/hash、编译器、SDK、GN 参数、CPU 架构和运行时。固定官方 m150 `29d30fe30aa2e86c44302297d063dd3190c2c880`，详见 `native/subtitle_renderer/skia.lock.json`。
+- [x] P01.2 建立机器可读依赖锁和统一构建驱动 `scripts/build_skia_renderer.py`。下载包与 GN/Ninja 二进制分别校验 SHA-256，源码使用固定 Git commit；DEPS 校验上游 Git blob，避免 CRLF/LF 差异。仅显式导入四个 complete_static_lib 归档。
+- [x] P01.3 Windows 固定 clang-cl 21.1.8 + 产品构建树使用的 MSVC 14.50.35717 STL/SDK + `/MD`；SDK 10.0.26100.0，兼容 Qt 6.11.0 的 MSVC 动态运行时策略。P01 的目标不链接 Qt；跨 Qt 对象边界与宿主模块 ABI 仍须在 P03 实测。
+- [x] P01.4 CMake 以 `KROK_BUILD_LEGACY_SIDECAR` 控制原 Windows sidecar，保持原 Windows 默认构建；Skia 通过 `KROK_BUILD_SKIA` 独立启用，core、GPU、Raster 分开。仅 Metal target 启用 Objective-C++。
 - [ ] P01.5 Windows/Linux 创建 owned Vulkan session；macOS 创建 owned Metal session，绘制透明目标、路径、字体轮廓、图像并回读。
 - [ ] P01.6 增加实际 API/adapter/driver/软件设备诊断；要求硬件时拒绝软件设备和整帧 fallback。
 - [ ] P01.7 三平台执行相同小样例；纯构建、软件逻辑测试和硬件运行分别记录。
@@ -769,33 +769,39 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_export.py te
 
 ### 11.2 P01 要提供的统一构建命令契约
 
-以下是**待实现的命令接口**。`scripts/build_skia_renderer.py` 当前不存在；P01 实现驱动及帮助/参数检查后，这组命令才可执行。文档不能让接手者误以为它们现在已经有效。
+`scripts/build_skia_renderer.py` 已实现。P01 构建独立 C++ 基础 target 和冒烟可执行文件，尚未接入生产字幕协议；此时 `--qt-root` 可选，只校验/记录 Qt SDK 6.11.0，不链接 Qt。后续 sidecar/宿主模块仍须遵守 Qt 版本契约。
 
 ```powershell
-# Windows：在已初始化的、与构建树匹配的 MSVC x64 环境执行。
-C:\Python314\python.exe scripts/build_skia_renderer.py --platform windows --gpu-api vulkan --arch x64 --config Release --qt-root "C:/path/to/Qt/6.11.0/msvc2022_64" --clean
+# Windows：驱动定位固定 MSVC/SDK，自行设置对应 INCLUDE/LIB，无需手动 vcvars。
+C:\Python314\python.exe scripts/build_skia_renderer.py --platform windows --gpu-api vulkan --arch x64 --config Release --clean --smoke-font C:/Windows/Fonts/arial.ttf
+C:\Python314\python.exe scripts/build_skia_renderer.py --platform windows --cpu-only --arch x64 --clean --smoke-font C:/Windows/Fonts/arial.ttf
+# 第二次移除 --clean，验证依赖与项目对象缓存；命令其余部分保持一致。
 ```
 
 ```bash
-# Linux：使用实际带 PyQt6 6.11.0 的项目解释器与匹配原生 SDK。
-python3 scripts/build_skia_renderer.py --platform linux --gpu-api vulkan --arch x64 --config Release --qt-root /path/to/Qt/6.11.0/gcc_64 --clean
+# Linux：安装 Clang 21.1.8（如 Ubuntu 26.04 的 clang-21），P01 不需要 Qt。
+python3 scripts/build_skia_renderer.py --platform linux --gpu-api vulkan --arch x64 --clean
 
-# macOS：初始硬件矩阵使用 arm64。
-python3 scripts/build_skia_renderer.py --platform macos --gpu-api metal --arch arm64 --config Release --qt-root /path/to/Qt/6.11.0/macos --clean
+# macOS：固定 Xcode 26.1.1 / macOS SDK 26.1；另支持 --arch x64。
+DEVELOPER_DIR=/Applications/Xcode_26.1.1.app/Contents/Developer python3 scripts/build_skia_renderer.py --platform macos --gpu-api metal --arch arm64 --clean
 
 # CPU-only：--cpu-only 与 --gpu-api 互斥；不得要求 Vulkan SDK/loader。
-python3 scripts/build_skia_renderer.py --platform linux --cpu-only --arch x64 --config Release --qt-root /path/to/Qt/6.11.0/gcc_64 --clean
+python3 scripts/build_skia_renderer.py --platform linux --cpu-only --arch x64 --clean --smoke-font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 ```
 
 驱动必须做到：
 
 1. 验证组合、Qt 版本、Skia/依赖锁、架构和编译器指纹；错误组合立即失败。生产 GPU 构建始终包含 Raster，另提供不依赖 GPU SDK/loader 的 `--cpu-only` 构建。
-2. 依赖下载到专用忽略目录，例如 `build/skia-deps/`，校验完整 hash；不污染全局 Python 或现有生产构建树。
-3. 分开依赖缓存与项目对象缓存，构建树拟定为 `build/native-renderer-skia/<platform>-<arch>-<api>/`，CPU-only 的 api 段为 `raster`。不同工具链、CRT、GPU API 不复用同一批 `.obj`。
+2. Windows 默认缓存 `%LOCALAPPDATA%/krok-helper/skia-deps`，Linux/macOS 为 `~/.cache/krok-helper/skia-deps`，可传 `--cache-dir`；源码和工具均校验。Windows GN 子脚本存在非 ASCII 路径编码问题，驱动拒绝非 ASCII 缓存路径。无需移动项目路径。
+3. 缓存下 `src/skia` 为源码、`out/<platform>-<arch>-<api>` 为 GN 对象、`native/<platform>-<arch>-<api>` 为本项目对象/产物；CPU-only 的 api 段为 `raster`。不复用现有生产 `build/native-renderer`。
 4. 显式导入所需 Skia 库和系统依赖，固定静态/动态库策略；不能依据目录 glob 意外链接另一版库。
 5. 对共享头/工具链变化执行干净重建；遵守 AGENTS.md 关于中文 MSVC `/showIncludes` 和混用工具链对象的已知坑。
-6. 允许构建 sidecar 和宿主模块；Qt Quick SDK 必须与 PyQt 的 Qt 6.11.0 匹配，不能为获得新 API 顺手升级 runtime。
+6. P01 当前产出 `krok_skia_raster_smoke` 和 GPU 构建中的 `krok_skia_gpu_smoke`，未提前提供生产 sidecar/宿主模块；后续复用相同 core，Qt Quick SDK 必须与 PyQt 的 Qt 6.11.0 匹配。
 7. 输出可以被测试/打包消费的机器可读产物清单和 build fingerprint，不依靠多个脚本猜测路径。
+
+传 `--smoke-font` 时运行相同能力场景，GPU 必须通过 `--require-hardware`；软件设备失败不会转 Raster。也可单独运行 `native/.../krok_skia_gpu_smoke FONT OUTPUT_PREFIX [--require-hardware] [--frames 120]`。不传硬件要求时允许明确记录软件 Vulkan，仅作软件逻辑证据。输出 PNG、原始预乘 RGBA、JSON；字体由调用方提供，不提交系统字体。
+
+m150 GN 的 `skia_use_vma` 仅加入源码，Ganesh 默认 allocator 仍有 `SK_USE_VMA` 宏门控。Vulkan 构建显式添加该宏，避免初始化返回空；没有修改上游源码。CPU-only 不启用它，也不拉取 Vulkan Headers/VMA 依赖。
 
 ### 11.3 P04 要实现的选择与握手契约
 
