@@ -276,3 +276,121 @@ def test_metal_preview_under_active_api_validation(qml_dir):
     lines, stderr = show_item(qml_dir, "required", layer)
     assert lines["backend"] == "Metal" and lines["accepted"] == "True", stderr
     assert float(lines["coloured"]) > 0.05 and float(lines["moved"]) > 0.01, stderr
+
+
+# P03.6: the direct preview is one opaque Quick canvas (letterbox, background, Skia subtitles)
+# inside the widget hierarchy. A transparent stack-on-top overlay over the old QGraphicsView was
+# rejected: it either hides the background (normal stacking) or covers overlapping widgets such
+# as the floating player's controls (WA_AlwaysStackOnTop, which ignores widget masks).
+QUICK_CANVAS = r"""
+import shutil, subprocess, sys
+from pathlib import Path
+from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
+select_quick_graphics_api()
+from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, QUrl
+from PyQt6.QtGui import QColor, QImage, QLinearGradient, QPainter
+from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtQuick import QQuickItem
+from PyQt6.QtQuickWidgets import QQuickWidget
+from PyQt6.QtWidgets import QApplication, QFrame, QWidget
+app = QApplication(sys.argv)
+qml_dir, work, case = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+W, H = (640, 240) if case == "crop" else (640, 360)
+background = QImage(1920, 1080, QImage.Format.Format_RGB32)
+painter = QPainter(background)
+gradient = QLinearGradient(0, 0, 1920, 0)
+gradient.setColorAt(0, QColor(0, 160, 60))
+gradient.setColorAt(1, QColor(160, 0, 160))
+painter.fillRect(background.rect(), gradient)
+painter.end()
+background.save(str(work / "bg.png"))
+if case == "video":
+    if not shutil.which("ffmpeg"):
+        print("skip no-ffmpeg"); sys.exit(0)
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=640x480:rate=30:duration=3", "-pix_fmt", "yuv420p", str(work / "v.mp4")], check=True)
+    layer = "VideoOutput { objectName: 'video'; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }"
+else:
+    layer = "Image { anchors.fill: parent; source: 'bg.png'; fillMode: Image.Stretch }"
+# The 1920x1080 scene is scaled like the widget preview's KeepAspectRatioByExpanding: it fills
+# the canvas and the overflow is clipped, background and subtitles alike.
+(work / "canvas.qml").write_text(f'''import QtQuick
+import QtMultimedia
+import Krok.SubtitleSkia
+Rectangle {{
+    color: 'black'; clip: true
+    Item {{
+        width: 1920; height: 1080; anchors.centerIn: parent
+        scale: Math.max(parent.width / 1920, parent.height / 1080)
+        {layer}
+        SkiaSubtitleItem {{ objectName: 'subtitle'; anchors.fill: parent }}
+    }}
+}}
+''', encoding="utf-8")
+host = QWidget(); host.resize(W, H)
+canvas = QQuickWidget(host)
+canvas.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+canvas.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+canvas.engine().addImportPath(qml_dir)
+canvas.setSource(QUrl.fromLocalFile(str(work / "canvas.qml")))
+canvas.setGeometry(0, 0, W, H)
+assert not canvas.errors(), [e.toString() for e in canvas.errors()]
+blocker = QFrame(host)                      # stands in for overlaid controls (transport bar)
+blocker.setStyleSheet("background: #ff0000;")
+band = QRect(0, int(H * 0.45), W, 12)
+blocker.setGeometry(band); blocker.raise_()
+player = None
+if case == "video":                         # the existing Python player keeps the clock
+    player = QMediaPlayer()
+    player.setVideoOutput(canvas.rootObject().findChild(QQuickItem, "video"))
+    player.setSource(QUrl.fromLocalFile(str(work / "v.mp4"))); player.play()
+
+def report():
+    image = host.grab().toImage().convertToFormat(QImage.Format.Format_RGB32)
+    sx, sy = image.width() / W, image.height() / H
+    px = lambda x, y: QColor(image.pixel(int(x * sx), int(y * sy)))
+    middle = [px(x, H * 0.5) for x in range(0, W, 2)]
+    reds = [px(x, band.center().y()) for x in range(0, W, 2)]
+    item = canvas.rootObject().findChild(QQuickItem, "subtitle")
+    print("accepted", item.property("graphicsBackendAccepted"))
+    print("orange", sum(1 for c in middle if c.red() > 180 and c.green() > 100 and c.blue() < 90))
+    print("blocker_red", sum(1 for c in reds if c.red() > 200 and c.green() < 60 and c.blue() < 60), len(reds))
+    print("corner", px(3, 3).name())
+    hit = QApplication.widgetAt(host.mapToGlobal(QPoint(W // 2, int(H * 0.25))))
+    print("mouse_reaches_canvas", hit is canvas)
+    if player is not None:
+        print("video_playing", player.playbackState() == QMediaPlayer.PlaybackState.PlayingState and player.position() > 0)
+    app.quit()
+
+QTimer.singleShot(2000, report)
+QTimer.singleShot(12000, lambda: (print("timeout"), app.quit()))
+host.show()
+sys.exit(app.exec())
+"""
+
+
+def run_canvas(qml_dir, tmp_path, case):
+    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"} | {
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "QT_FORCE_STDERR_LOGGING": "1"}
+    result = subprocess.run([sys.executable, "-c", QUICK_CANVAS, str(qml_dir), str(tmp_path), case], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    if "skip no-ffmpeg" in result.stdout:
+        pytest.skip("ffmpeg not on PATH to generate the test video")
+    assert "timeout" not in result.stdout, result.stdout + result.stderr
+    return dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
+
+
+@pytest.mark.parametrize("case", ["image", "crop", "video"])
+def test_quick_canvas_composites_background_and_subtitles_under_widgets(qml_dir, tmp_path, case):
+    lines = run_canvas(qml_dir, tmp_path, case)
+    assert lines["accepted"] == "True"
+    assert int(lines["orange"]) > 20, lines              # Skia subtitles drawn over the background
+    red, total = map(int, lines["blocker_red"].split())
+    assert red == total, lines                            # overlaid widgets stay above the canvas
+    assert lines["mouse_reaches_canvas"] == "False"       # input passes through to the panel
+    if case == "video":
+        assert lines["corner"] == "#000000", lines        # 4:3 video in 16:9: contain + black bars
+        assert lines["video_playing"] == "True", lines
+    else:
+        assert lines["corner"] != "#000000", lines        # background, not a black hole, shows
