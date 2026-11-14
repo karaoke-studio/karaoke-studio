@@ -460,10 +460,10 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P01.3 Windows 固定 clang-cl 21.1.8 + 产品构建树使用的 MSVC 14.50.35717 STL/SDK + `/MD`；SDK 10.0.26100.0，兼容 Qt 6.11.0 的 MSVC 动态运行时策略。P01 的目标不链接 Qt；跨 Qt 对象边界与宿主模块 ABI 仍须在 P03 实测。
 - [x] P01.4 CMake 以 `KROK_BUILD_LEGACY_SIDECAR` 控制原 Windows sidecar，保持原 Windows 默认构建；Skia 通过 `KROK_BUILD_SKIA` 独立启用，core、GPU、Raster 分开。仅 Metal target 启用 Objective-C++。
 - [ ] P01.5 Windows/Linux 创建 owned Vulkan session；macOS 创建 owned Metal session，绘制透明目标、路径、字体轮廓、图像并回读。
-- [ ] P01.6 增加实际 API/adapter/driver/软件设备诊断；要求硬件时拒绝软件设备和整帧 fallback。
+- [x] P01.6 增加实际 API/adapter/driver/软件设备诊断；Windows 真硬件通过，Linux CPU Vulkan 与 hosted 虚拟 Metal 在要求硬件时均正确拒绝，不做整帧 fallback。
 - [ ] P01.7 三平台执行相同小样例；纯构建、软件逻辑测试和硬件运行分别记录。
-- [ ] P01.8 增加 build fingerprint；依赖/参数变化必须使缓存失效；测试干净构建和第二次缓存构建。
-- [ ] P01.9 同时创建 Raster 目标，调用同一个 core 绘制；验证 CPU-only 构建、禁用/移除 GPU loader 后仍可启动、RuntimeEffect/滤镜在 Raster 中可用。
+- [x] P01.8 增加 build fingerprint；依赖/参数变化必须使缓存失效；Windows Vulkan、CPU-only 与 Linux CPU-only 已完成干净构建/缓存复用；native 头变化强制全清。其余平台构建结果继续单独记录。
+- [x] P01.9 Raster 目标调用同一 core；Windows/Linux CPU-only 已实际运行。Windows 两种构建中的 Raster 均在指定不存在的 Vulkan loader 时通过，GPU 同条件明确失败；RuntimeEffect/滤镜、Unicode 字体/输出路径、重复帧通过。后续完整字幕能力的 Raster 验收不由此关闭。
 
 **交付物：** 可重复构建入口、锁定依赖、owned GPU session、Raster 目标、正式测试 target 中的 GPU/CPU 冒烟。
 
@@ -1026,16 +1026,20 @@ P00 输入和采集分类已具备；P01 已进入实际实施，见下面的构
 
 | 环境 | 当前实际证据 | 尚未完成 |
 |---|---|---|
-| Windows x64 / RTX 3070 Ti Laptop | 原生 Vulkan owned session、绘制/回读、相同 core 的 Raster、CPU-only 构建已成功 | 最终指纹下的干净/缓存重建及 loader/Unicode 集成测试收口中 |
-| Ubuntu 26.04 x64 / WSL | Clang 21.1.8 编译；llvmpipe 软件 Vulkan 与 Raster 场景通过；`--require-hardware` 正确失败 | CPU-only 构建收口中；原生 Linux 硬件 Vulkan 未验证 |
+| Windows x64 / RTX 3070 Ti Laptop | Vulkan 与 CPU-only 干净构建/第二次缓存构建通过；7 项 native GPU/Raster 集成测试通过 | 原生字幕 IR、完整字体/特效和呈现仍在 P02 以后 |
+| Ubuntu 26.04 x64 / WSL | Clang 21.1.8 编译；llvmpipe 软件 Vulkan 与 Raster 场景通过；硬件要求正确失败；CPU-only 干净/缓存构建、缺 loader 的 120 帧通过 | 最终 Vulkan 指纹重建收口中；原生 Linux 硬件 Vulkan 未验证 |
 | macOS ARM64 / GitHub hosted | Xcode 26.1.1 / SDK 26.1，Metal 与 CPU-only 目标编译、Raster 场景通过 | 当前设备为虚拟 Metal，要求硬件时正确拒绝；虚拟执行补验中，真机硬件门槛未过 |
-| macOS x64 / GitHub hosted | 已启动同一工作流 | 编译/运行结果待返回，不能先记通过 |
+| macOS x64 / GitHub hosted | 第一轮 Metal 与 CPU-only 编译、Raster 场景通过；要求硬件正确拒绝虚拟设备 | 最终场景/缓存/虚拟执行补验中；真机硬件门槛未过 |
 
 第一轮 macOS 任务：[43539927650](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43539927650)；最终场景/缓存/虚拟设备补验：[43541333354](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43541333354)。CI 的 job 成功只表示构建和 Raster 检查通过；硬件尝试的退出码、日志和 JSON 必须单独查看，不能据绿色 job 推断 Metal 真硬件已通过。
 
 构建产物 `build-fingerprint.json` 分别记录依赖身份和 native 源码身份、编译器/SDK/GN/Ninja 摘要、精确参数、可执行文件摘要。请求指纹在编译前写入，失败编译也不能隐去工具链变化；native 源码/共享头变化自动全清本项目对象。编译期间输入变化时拒绝发布证据。传 `--smoke-font` 的成功构建还记录场景 JSON、字体、PNG/RGBA 摘要；仅编译时不会虚报 GPU 运行。
 
-纯逻辑与 P00 工具回归目前为 **44 passed**（`tests/test_skia_build.py`、`tests/test_subtitle_gpu_baseline.py`）。`tests/test_subtitle_skia_native.py` 为显式选择已构建产物的 GPU/Raster 集成测试，不调用 QPainter。
+纯逻辑与 P00 工具回归为 **44 passed**（`tests/test_skia_build.py`、`tests/test_subtitle_gpu_baseline.py`）；Windows native 集成 **7 passed / 2.36s**，合计 51 个用例。native 文件为 `tests/test_subtitle_skia_native.py`，通过 `KROK_SKIA_NATIVE_TEST_ROOT` 指定缓存的 `native` 目录后执行，不调用 QPainter。覆盖缺 loader 时两种 Raster 独立运行、GPU 明确失败、Unicode 字体和输出路径、各 120 帧重复一致、GPU/Raster 相同源码摘要及 shader/PNG 内部区域对照。
+
+Windows 最终依赖指纹：Vulkan `2c67109d22c8543a868449eb78404d12e60768b46347e2b267bf5edb99007966`，CPU-only `67b418178730c73305ff6aae43f7937cbbb5de1dd3189de5710d34809229351e`；Linux CPU-only `1b6ad6f46a8e280521bf11247cf60c4e89e7948642f3b98c66a14fae386f2d44`。第二次构建的 GN 与本项目 Ninja 均报告 `no work to do`。本机日志位于 `build/skia-p01-*-final.log`、`build/skia-p01-*-cached.log`、`build/skia-p01-native-tests.log`，不入库。
+
+LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VCRUNTIME140/UCRT 动态运行时，无 Qt、Vulkan loader 导入；没有沿用旧 `/MT` 探针。Vulkan loader 仅由 GPU adapter 动态打开。
 
 现有 D2D CMake 默认配置已重新通过，未改变生产路径。P00 的 D2D 严格回访差异仍未豁免。P01 小样例不关闭 P03 的 Qt 纹理互操作门槛，也不关闭后续字幕功能、30 分钟压力或正式打包门槛。
 
