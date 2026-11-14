@@ -286,8 +286,8 @@ git submodule status
    Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前产品配置使用 P05
    `p05_resolved_horizontal`：legacy / n3_1074 横排，左/中/右与顶/中/底定位、
    主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
-   多行网格已接入共享分页、碰撞时间压缩、整页平移与段内填充；目前仍不能启用智能
-   水平避让。彩色/位图字形、注音等仍拒绝；完整 N3 几何兼容尚未验收。
+   多行网格已接入共享分页、碰撞时间压缩、整页平移、段内填充及两种智能水平布局。
+   彩色/位图字形、注音等仍拒绝；完整 N3 几何兼容尚未验收。
    旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
@@ -336,6 +336,12 @@ git submodule status
    未提供该参数的旧 Qt/D2D 调用者保留原缓存命名空间。行位改变须重新测对应几何。
    `p05_page_collisions` 下的页面位移窗口传给公共 Skia 核心，按半开时间窗平移整行
    （路径与 wipe clip 一起移动）；原解析时间和最终字形排版不得在帧循环重算。
+   P05 智能水平布局见 §14.17：`page/skia_smart_horizontal.py` 在配置期按整页计算
+   `center_position` / `equal_margins`，未上屏同行也参与统计；首字符的角色主字槽字号
+   与 Latin 绘制字号不同，不能混用。legacy 用墨迹包络宽，N3 用单元网格宽。
+   所有同行最终 lane 变化时须清页面统计和碰撞几何缓存；不要仅更新本行。
+   持久化 `TrackPagePlan` 是页成员的权威来源，不能重新按容量分组；查询缓存包含
+   页计划签名。客户端检查 `p05_smart_horizontal`，native 帧循环不重新求 SmartHorizon。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

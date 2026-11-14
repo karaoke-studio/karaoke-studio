@@ -518,7 +518,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；完整槽位/fallback 绘制与字体校准尚未完成，见 §14.10/§14.11。
 - [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
-- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格及跨页碰撞/填充已接通，见 §14.11/§14.13/§14.15/§14.16；智能水平避让、ruby 等完整布局与 D2D 画质验收仍未完成。
+- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout bcb0ea9e
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43629757622 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 119ee949
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43633277739 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1396,6 +1396,31 @@ native 源码身份：`a78a07f84c779d0f7910c934c4c5afbcf5fc966d2e7e8b81857ffd3a4
 **本轮没有修改覆盖策略或放宽 P00 画质预算。** 布局/碰撞通过不代替完整画质验收，仍不能宣布已替代 D2D。后续继续智能水平布局、ruby 与其余几何校准，再推进绘制外观和重点动画/粒子/走字线。
 
 native 源码身份：`fd9406a3e5e28f5db320b0d2cc4f19bbc0a63e4d22160ee9b73fcb1fd946c52a`。本机证据：`build/p05-collision-native.log`、`build/p05-collision-linux-{xcb,wayland}.log`、`build/p05-collision-regression{,-final}.log`、`build/p05-collision-d2d-regression.log`、`build/p05-collision-tests.log` 与四种构建日志。Linux 仍为 llvmpipe，新 Mac 功能真机门槛继续保留；未做 4K 或 QPainter 画面对照。
+
+### 14.17 P05 智能水平布局：整页宽度、首字符字号与同行状态（2026-11-15）
+
+**本批解除 `center_position` / `equal_margins` 门禁，不关闭 P05 或严格画质预算。** 实现提交 `119ee949`。两种模式在 legacy / n3_1074 的多行 asymmetric 布局中接入；单行、居中/per_row 模式仍沿用原本不应用 SmartHorizon 的语义。生产 D2D 的绘制实现未改；共享页成员查询补上持久化计划分支，见下方边界说明。ruby、竖排/RTL、完整 fallback、复杂外观与动画/粒子/走字线仍待完成。
+
+实现：
+
+- 新 `engine/layout/page/skia_smart_horizontal.py` 只消费规范宽度、画布、页成员、最终 lane、边距和字体槽值，输出逻辑 X 位移；没有 Qt 字体测量、IPC 或 GPU 对象。中心位置模式保留整式向下取整，等余白模式按页内 left/center/right 三类最大宽度计算 slack；长行无正余白或缺少左右任一类别时不强行推挤。奇数画布与分数字宽使用明确的浮点/取整边界，不先把每个分量截断。
+- legacy 的 SmartHorizon 宽度取实际锚定墨迹包络，N3 取规范单元网格宽；与各自普通锚定使用同一数据。等余白模式的字号基准取源顺序页首行首字符的**角色主字槽**字号，中心位置模式取本行首字符同一槽字号；Latin 字形即使实际以另一个字号绘制，也不能拿 Latin 字号代替这个主字基准。
+- 同页未上屏或已退场的同行仍参加宽度统计，不按当前帧可见内容重新分组。`SkiaCollisionGeometry` 在测量阶段及最终 IR 投影前更新完整的同行 lane 上下文；任一同行行位改变即失效页面最大宽度和碰撞包络缓存，即使当前行自己的 lane 没变。碰撞测量和最终绘制继续使用同一智能水平位置。
+- 作者的 `line_offsets_x` 在 SmartHorizon 后应用，不影响余白统计；center override 与既有单行短页居中规则保留。所有位移只在配置期进入最终字形坐标和 wipe 边界，native 绘制热循环没有新增 SmartHorizon 求解。
+- 共享 `renderable_page_map` 原来始终调用自动行数分组；现遇到已保存的 `TrackPagePlan` 时，使用权威页计划解析出的实际成员，避免把“2 行页 + 1 行页”误当作一个 3 行页。页计划签名及布局 ID 参与查询缓存，在同一布局 pass 内编辑页计划后也失效旧结果。无持久化计划时保留原自动分页路径，不重写分页算法。
+- 新 `p05_smart_horizontal` 握手能力使旧 sidecar 在选择目标前被拒绝；未知智能模式明确失败，原场景保留。Skia 布局子协议仍为 v2，原 P04 原始配置不借此放开功能。
+
+本机验证：
+
+- Windows Skia/架构/进度组合 **227 通过**，Linux X11/Wayland 各 **189 通过、25 跳过**。新 `tests/test_subtitle_skia_smart.py` 共 **30 项**，首轮专项全部通过：包含奇数画布/分数字宽、长行/类别缺失、首字符主字与 Latin 字号区别、不可见同行、作者偏移一次应用、短页/页计划覆盖、同行变化后的缓存、GPU/Raster/DPR 1.5 与 seek。
+- 生成字体三行/两行/一行 × 两模式 × 两语义 **12 组 D2D GPU 比较**及 Meiryo/Arial 混排 **4 组比较**均满足原有 **1px** 几何门槛；没有使用 QPainter 画面对照或放宽阈值。首字符主字字号改变而 Latin 字形保持同一 112px 轮廓时，页面余白仍按主字字号变化，测试明确检查了这两个量不能互换。
+- 相关显示/分页/放置/时间线/架构/渲染/传输/导出/构建回归 **706 通过**，既有 D2D shared realization/G6 零回读另 **3 通过**。Windows/Linux 的 Vulkan 与 CPU-only 因 native 能力门禁变化均干净重建，各 CTest **3/3 通过**。
+- 八份规范字体/布局样例（新增 `smart-layout.json`）已在 Windows/X11/Wayland 比较，字体身份、glyph/cluster、实例索引与区间精确一致，几何最大误差 **0**。Mac CI [43633277739](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43633277739)（`119ee949`）**5 项全部成功**：两架构 Metal/Raster 构建及产品组合、跨架构八份样例比较、两个干净环境验收包。产品各 **185 通过、29 跳过**、预览/原生能力各 **21 通过、1 跳过**；29 项跳过为 Vulkan 注入、Windows D2D 与实装字体等平台专用项。
+- 下载的 arm64 八份样例与 Windows/X11/Wayland 再比较，最大误差也均为 **0**，两架构 Metal/Raster 指纹均核对为本节同一源码身份。验收包的新增 `smart_horizontal` 步骤在两个干净 Mac 均退出 **0**，功能项全部通过，托管虚拟 Metal 的真硬件门槛正确保留。§14.6 的朋友测试说明已更新到本轮提交与验收包。
+
+**完整字体/布局与画质门槛仍未全部通过。** 智能水平功能通过不代替 ruby、竖排、RTL、全特效或 P00 画质验收，也不宣布 D2D 退役。后续继续注音和其余几何迁移，再接入复杂外观及重点特效。
+
+native 源码身份：`da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`。本机日志为 `build/p05-smart-*`，新增跨平台规范样例 `smart-layout.json`，Mac 验收包按 `smart_horizontal=1` manifest 标志运行同一智能布局文件。Linux 真硬件、新 Mac 功能真机门槛继续保留，未做 4K。
 
 ## 15. 前期探针清理范围
 
