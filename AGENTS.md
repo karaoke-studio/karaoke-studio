@@ -275,15 +275,27 @@ git submodule status
    的 Qt/IR 值投影；原 `model/render_types.h` 已删除，不要重新引入总括类型头。
    `src/backends/backend_selection.h` / `backend_factory.h` 定义类型化工厂，
    Skia 使用 `runtime/OwnerBackendSession` 的单 owner 执行与销毁；D2D 的既有
-   worker/共享资源策略保留。`SkiaBackend` 当前只接能力/诊断，字幕协议绘制
-   明确报未实现，待 P04；不代表已替换生产 D2D。`src/effects` 禁止 Qt/平台头。
+   worker/共享资源策略保留。`src/effects` 禁止 Qt/平台头。
+
+   P04 最小字幕链路已接入独立的 C++ `krok_skia_subtitle_renderer`，与生产 D2D
+   可执行文件分开；`src/skia/core/prepared_scene` 共用于 GPU/Raster，Qt IR 投影、
+   字体文件读取、GPU session 和共享内存分别在边界模块。显式设置
+   `KROK_SUBTITLE_RENDER_BACKEND=skia` 才启用；`KROK_SUBTITLE_SKIA_TARGET=gpu|raster`、
+   `KROK_SUBTITLE_SKIA_FALLBACK=none|raster`、`KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE=1|0`
+   控制目标和回退，`KROK_SUBTITLE_SKIA_RENDERER` 可指定新 sidecar。关闭 GPU 仍走
+   Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前只支持 legacy、
+   单行居中底对齐、可打印 ASCII、静态字体快照、实色填充和基础走字，完整字体/
+   N3 布局在 P05。不是已经替换 D2D。带 `--qt-root` 的 GPU/CPU-only 构建均产出
+   新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
+   POSIX native IPC key，D2D 普通键维持原行为；不能退回 Mac 默认 System V 的大小限制。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的
    Wayland FIFO 呈现等待。隐藏保留 Qt device，完整设备恢复重建整个宿主；不要
    将原窗口强制 QRhi purge 当作已验收恢复模式。生命周期、故障影响与硬件门槛
-   见实施计划 §14.8；P04 真实字幕协议、P09 正式预览和 P11 压力恢复尚未完成。
+   见实施计划 §14.8；P04 产品 G5 闭环见 §14.9。P03 Quick 直画模块仍是边界验证，
+   P09 正式零回读预览和 P11 压力恢复尚未完成。
 
 文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 

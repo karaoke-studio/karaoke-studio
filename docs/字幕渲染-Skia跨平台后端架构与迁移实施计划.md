@@ -2,7 +2,7 @@
 
 > 创建：2026-11-14；现状核对基线：`main` / `0c5b6264`。
 >
-> 状态：**实施计划，尚未实现正式 Skia 后端；本文件中的任务默认均未完成。**
+> 状态：**实现已推进到 P04 的实验字幕闭环，生产默认仍为 D2D，完整迁移尚未完成；以逐项勾选及第 14 节证据为准。**
 >
 > 用户已明确目标：Windows、Linux 使用 Vulkan，macOS 使用 Metal；字幕绘制核心使用完全相同的源码；完整承接当前字幕渲染能力，最终替代 Direct2D。
 >
@@ -502,14 +502,14 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 ### P04：真实 IR 到 sidecar 的最小闭环
 
-- [ ] P04.1 接入现有 configure / frame / diagnostics / cancel 入口，用同一 IR schema 承载选定后端；未知必需字段和无效 schema 显式失败。
-- [ ] P04.2 实现最小 `PreparedScene`、简单文字路径、静态填充与基础走字；仅支持的子集如实报告，未支持能力不静默忽略。
-- [ ] P04.3 实现 RGBA/BGRA、alpha、stride、目标方向与共享内存元数据适配；复用现有 ring 的过期槽检测。
-- [ ] P04.4 用真实 `.yurika` 中受支持的简单场景完成“加载 -> IR -> Skia -> G5 预览 -> 短 MP4”的闭环。
-- [ ] P04.5 选中 Skia 后诊断必须明确记录实际设备和 fallback；测试要求无 fallback 时任何回退都失败。
-- [ ] P04.6 为后端身份和编译能力增加启动握手，不向旧 sidecar 发送未声明支持的选择字段后仍假定生效。
-- [ ] P04.7 保留 D2D 默认和现有开关偏好，新的实验选择只作用于已明确选择 Skia 的会话。
-- [ ] P04.8 相同 IR 显式选择 Skia GPU / Raster，完成共享内存预览和短导出；注入 GPU 初始化失败/用户关闭 GPU，确认转 Raster 而不调用 QPainter。
+- [x] P04.1 独立 Skia sidecar 复用 schema 3、configure / frame / diagnostics / cancel 与 ring；启动后先做版本化选择。无效 schema、未知 `required_features`、缺失导唱符引用显式失败，失败配置保留上一有效场景。
+- [x] P04.2 `PreparedScene` 准备真实字体路径，GPU/Raster 调用同一 `draw`；已实现静态实色与基础走字。限 legacy 单行居中底对齐、可打印 ASCII、静态字体快照；其他布局、shaping、描边、装饰、注音和动画明确拒绝，详见 §14.9。
+- [x] P04.3 实现 RGBA straight / BGRA premultiplied、sRGB、top-left 和 stride 元数据，复用 ring 的 generation/frame/slot 检查。Unix 使用 Qt POSIX native IPC key，解决 Mac 默认 System V 分配限制；含 1080p 单帧及短导出验收，未补 4K。
+- [x] P04.4 测试真实保存并重新加载的 `.yurika` + LRC 简单场景，经项目控制器/加载器、正式 IR、G5 预览和原有 ffmpeg 导出器输出 1.5 秒 MP4。是自动化生成的受支持工程，不代表已有完整歌曲工程已兼容。
+- [x] P04.5 诊断和导出日志报告实际 API、设备、硬件标记、请求/实际目标及 fallback 原因；`fallback=none` 初始化失败直接失败。
+- [x] P04.6 启动声明 backend、IR schema、selection version、编译执行目标、profile 和像素格式；客户端确认后才发送 `select_backend`，旧 sidecar 不进入配置。
+- [x] P04.7 D2D 保持默认。Skia 使用独立可执行文件/解析入口和实验环境开关；预览/导出仍尊重现有 GPU 勾选，Skia 会话关闭 GPU 选择 Raster。
+- [x] P04.8 相同 IR 完成 GPU/Raster 随机 seek、RGBA/BGRA、透明度和输出对照；Vulkan loader 注入失败、CPU-only 请求 GPU、产品 G5/MP4 的关闭 GPU及初始化失败均覆盖，不调用 QPainter 字幕绘制。
 
 **门槛：** 在产品实际调用路径里成功，而非另一个绕过前端、协议、资源解析和导出器的 demo。
 
@@ -889,8 +889,8 @@ Skia 子集未覆盖的项目可以明确拒绝并给出中文原因，或按现
 |---|---|---|---|
 | 官方 Skia commit、依赖锁、编译参数和 CRT | 构建/依赖 | P01 | 已锁定并实际构建，见 §14.5 和 skia.lock.json |
 | 各支持架构与 Linux 发行版/驱动基线 | 构建/产品能力 | P00/P01 | Windows x64、Ubuntu 26.04 x64、macOS ARM64/x64 已构建；Linux/macOS 真机 GPU 待验，发行版分发基线仍待 P12 |
-| Qt 6.11.0 宿主纹理交接与同步实现 | GPU/Qt adapter | P03 | 有官方接口依据，Skia 互操作未验证 |
-| 宿主内预览故障隔离与运行策略 | runtime/presenter | P03 | 待 P03 证据 |
+| Qt 6.11.0 宿主纹理交接与同步实现 | GPU/Qt adapter | P03 | 选定路径已验证，证据及未通过的强制 purge 路径见 §14.8；P09 尚未正式接管产品预览 |
+| 宿主内预览故障隔离与运行策略 | runtime/presenter | P03 | 已记录故障影响，保留 sidecar/G5 隔离入口，见 §14.8 |
 | 规范度量、原生字体路径与 Qt 计划注入点 | 字体/共享语义计划 | P05 | 架构已指定；实现待校准 |
 | 精确颜色空间/GPU format/alpha 转换配置 | paint/GPU/传输出口 | P06 | 需按当前画面校准并锁定 |
 | 各类画面/性能容许值与例外 | 对照测试 | P00 起、对应阶段前 | 待样例登记，禁止完成后反向放宽 |
@@ -917,7 +917,7 @@ Skia 子集未覆盖的项目可以明确拒绝并给出中文原因，或按现
 下一任务 ID：
 ```
 
-当前阶段状态：P00.1–P00.6 的输入清单、采集和分类已交付；**现有 D2D 严格回访仍有未通过项，未豁免，也不称“全部基线验收通过”**。P01 代码与可用环境验证已交付，Apple M4 Pro 真机已通过原验收包检查，Linux 真硬件门槛仍保留（§14.5/§14.6）。P02 已交付（§14.7）；P03 的选定宿主边界与可用环境验证已交付（§14.8），新增 Mac 生命周期项可用新版验收包在真机补验。P04–P12 待实施。本计划按仓库证据做了可执行性和架构反证检查；没有用户要求的独立评审/多轮批准流程，也没有声称获得独立评审批准。
+当前阶段状态：P00.1–P00.6 的输入清单、采集和分类已交付；**现有 D2D 严格回访仍有未通过项，未豁免，也不称“全部基线验收通过”**。P01 代码与可用环境验证已交付，Apple M4 Pro 真机已通过原验收包检查，Linux 真硬件门槛仍保留（§14.5/§14.6）。P02 已交付（§14.7）；P03 的选定宿主边界与可用环境验证已交付（§14.8），新增 Mac 生命周期项可用新版验收包在真机补验。P04 最小产品闭环已实现（§14.9）；下一阶段 P05，P05–P12 未完成。本计划按仓库证据做了可执行性和架构反证检查；没有用户要求的独立评审/多轮批准流程，也没有声称获得独立评审批准。
 
 P00 第一批记录（2026-11-14）：
 
@@ -1054,7 +1054,7 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 - **CI 负责构建**：`skia-foundation.yml` 的 Mac 任务在 Xcode 26.1.1 / SDK 26.1、Qt 6.11.0 SDK（aqtinstall 固定提交）下构建 Metal 与 CPU-only 目标及 `Krok.SubtitleSkia` 预览模块，打包为产物 `mac-validation-arm64` / `mac-validation-x64`（tar.gz 保留可执行位，附 SHA-256 清单、构建指纹与 CMake code model）。
 - **CI 自检可移植性**：`bundle-check` 任务在无 Qt SDK、无构建缓存的干净 Mac 上运行一键脚本；托管机为虚拟 Metal，使用 `--allow-virtual-gpu`，只允许硬件门槛未过。首次通过：[43560806767](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43560806767)（提交 `90ec1d81`，两种架构功能项全部通过，含 Apple Metal 调试层下的预览测试；虚拟设备被硬件检查正确拒绝）。
-- **测试者只运行** `scripts/mac_hardware_check.py <下载的验收包>`：校验清单、去除 quarantine、在 `build/mac-hardware-check/venv` 安装 PyQt6 6.11.0，依次运行 Metal 真硬件冒烟、Raster 冒烟、owned 后端测试、预览测试（含带正面对照的 Metal API 验证测试）与原生能力测试，生成 `build/mac-hardware-check-results.zip`。系统信息只收集白名单字段，不含序列号与硬件 UUID。退出码：0 = 全部通过；1 = 功能项失败；2 = 功能通过但不是真硬件。
+- **测试者只运行** `scripts/mac_hardware_check.py <下载的验收包>`：校验清单、去除 quarantine、在 `build/mac-hardware-check/venv` 安装 PyQt6 6.11.0 及测试/字体/歌词解析依赖（包括 `charset-normalizer`），依次运行 Metal 真硬件冒烟、Raster 冒烟、owned 后端测试、预览测试（含带正面对照的 Metal API 验证测试）与原生能力测试；P04 新包还运行真实 IR、G5 和短 MP4 测试。生成 `build/mac-hardware-check-results.zip`。系统信息只收集白名单字段，不含序列号与硬件 UUID。退出码：0 = 全部通过；1 = 功能项失败；2 = 功能通过但不是真硬件。
 
 可直接转给测试者（或其 Codex/Claude）的说明，提交号与运行号随最新一次通过的 CI 更新：
 
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout bfd8c0b3
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43570585410 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 576aac77
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43577203050 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1155,7 +1155,56 @@ QT_QPA_PLATFORM=wayland KROK_VULKAN_VALIDATION=1 python -m pytest --noconftest t
 # 去掉 KROK_VULKAN_VALIDATION 后另跑图像检查；Windows 使用相同测试文件及 Vulkan SDK。
 ```
 
-Linux Qt SDK 6.11.0 需要 `qtbase qtdeclarative icu` 归档及 xkb/Vulkan 开发头、xcb cursor 等平台库；P01 只需离屏核心的环境并不足以直接编译/运行 Qt Quick。当前 Linux 设备仍为软件 Vulkan，真硬件门槛未关闭；P09 的正式应用容器、多显示器与恢复路径、P11 长时间负载仍未验收。下一实现阶段是 **P04**。
+Linux Qt SDK 6.11.0 需要 `qtbase qtdeclarative icu` 归档及 xkb/Vulkan 开发头、xcb cursor 等平台库；P01 只需离屏核心的环境并不足以直接编译/运行 Qt Quick。当前 Linux 设备仍为软件 Vulkan，真硬件门槛未关闭；P09 的正式应用容器、多显示器与恢复路径、P11 长时间负载仍未验收。本节为 P03 交付记录，当前阶段见 §14.9。
+
+### 14.9 P04：真实 IR、独立 sidecar、G5 与短视频闭环
+
+实现提交：`7101aaeb`（公共准备/绘制核心与版本化 sidecar）、`4b761bab`（产品预览/导出）、`95026357`（Unix POSIX 传帧及资源销毁）、`576aac77`（产品失败回退与可移植验收依赖）。**D2D 仍为默认，P04 是受限实验入口，不能替代完整 D2D 字幕后端。**
+
+职责与入口：
+
+- `src/skia/core/prepared_scene.*`：无 Qt、平台分支、设备句柄和文件路径；接字体字节与值输入，准备 `SkPath`，按 IR 的 resolved intervals 和 display window 做基础走字。GPU/Raster 共用这一实现。
+- `src/scene/skia_ir_projection.*`：复用 schema 3 解析、样式和布局值投影，验证受支持子集；`backends/skia/scene_input.*` 消费旧模型边界的 Unicode 字体路径并读字节。P05 仍需消除 Qt 字体度量依赖，提供完整 shaping、规范度量、fallback、N3 和 ruby 几何。
+- `backends/skia/skia_backend.*`：owned Vulkan/Metal 或 Raster surface、准备事务与像素回读；`commands/skia`：选择/诊断、帧/批次、取消与 ring。`OwnerBackendSession` 保证设备创建/调用/销毁在同一线程；传帧对象由该 owner 保留并最终释放。新代码拆分成小模块，未扩展 D2D 大文件。
+- `native/skia_backend.py`：独立 sidecar 解析及握手；`frontend/preview/skia_async.py`：有界 latest-request worker，经原有 G5 画布显示；导出复用 `iter_native_rgba_frames` 与原来的 MP4 编码/背景/清理流程。QImage 负责共享像素显示，不负责字幕绘制。P03 的 Quick 直画验证模块没有在 P04 冒充生产零回读入口，正式接入留给 P09。
+
+当前 profile 是 `p04_ascii_solid_wipe`：仅 **legacy、单行居中底对齐、可打印 ASCII、显式静态字体快照、实色 before/after 与基本逐字走字**。不支持的 CJK/shaping、N3 几何、多行/竖排/RTL、注音、角色混排、导唱符、描边/装饰、标题、粒子、出入场与走字线均显式失败；完整迁移按 P05–P08 继续。配置失败不发布半成品，也不调用 QPainter 兜底。
+
+实验入口（不保存到工程，不改变默认后端）：
+
+```powershell
+# Windows GPU 构建；Linux 对应 --gpu-api vulkan，macOS 对应 --gpu-api metal。
+C:\Python314\python.exe scripts/build_skia_renderer.py --gpu-api vulkan --qt-root C:\Users\18007\AppData\Local\krok-helper\qt\6.11.0\msvc2022_64
+# CPU-only 也可带 --qt-root，产出不链接 Vulkan/Metal 的同名 Skia sidecar。
+$env:KROK_SUBTITLE_RENDER_BACKEND='skia'
+$env:KROK_SUBTITLE_SKIA_TARGET='gpu'        # 或 raster
+$env:KROK_SUBTITLE_SKIA_FALLBACK='none'     # 验收禁止回退；允许同核心 CPU 时用 raster
+$env:KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE='1'
+# 可选：KROK_SUBTITLE_SKIA_RENDERER 指向具体的 krok_skia_subtitle_renderer。
+# 应用内现有 GPU 预览/导出勾选仍有效：关闭即 Skia Raster。
+C:\Python314\python.exe app.py
+```
+
+Windows/Linux 的源码构建缓存依然使用 P01 的 ASCII 路径规则。Unix 的 Skia ring 使用 `QSharedMemory::platformSafeKey(..., PosixRealtime)` 并传输 `QNativeIpcKey::toString()`；Python 按该 native key 连接，D2D 普通键不变。Mac 初轮短导出被默认 System V 的系统大小限制拒绝，修复后 1080p 单帧和批次导出通过；没有通过调大系统内核参数规避。接口依据见 [Qt native IPC keys](https://doc.qt.io/qt-6.11/qnativeipckey.html)。
+
+自动化验收：
+
+```powershell
+$env:QT_QPA_PLATFORM='windows'
+$env:KROK_TEST_SKIA_SIDECAR="$env:USERPROFILE\.cache\krok-helper\skia-deps\native\windows-x64-vulkan\krok_skia_subtitle_renderer.exe"
+C:\Python314\python.exe -m pytest tests/test_subtitle_skia_protocol.py -q
+```
+
+Linux 另设 `QT_QPA_PLATFORM=xcb` / `wayland` 分进程测试；软件设备测试必须显式 `KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE=0`，不能由程序自动假装硬件。新模块支持 `--noconftest`，用完整产品 IR/项目加载/预览/导出调用路径，测试数据为真实保存并重新读取的简单 `.yurika`/LRC，未修改用户原工程。
+
+验收结果与界限：
+
+- Windows RTX 3070 Ti Laptop、Vulkan：**27 项通过**；包含 GPU/Raster 同 IR、seek 重复帧确定性、透明实色、RGBA/BGRA 转换、非整齐宽度 stride、过期槽拒绝、取消后重配、CPU-only、Unicode 字体文件路径、1080p、真实 G5、90 帧 MP4、GPU 初始化失败/关闭 GPU、未支持内容失败后的半成品清理。独立 owned 字幕用例在启用正面对照的 Vulkan 同步验证层下通过。
+- Linux Ubuntu 26.04 / WSLg / llvmpipe Vulkan：**xcb 与 Wayland 各 27 项通过**；GPU 与 CPU-only 均已构建。这里是软件 Vulkan 功能证据，Linux 真硬件门槛仍开着。
+- macOS：最新 [43577203050](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43577203050)（提交 `576aac77`）的 ARM64/x64 构建及两个无 SDK/缓存的 `bundle-check` **四个任务全部成功**。两种架构的 P04 产品测试各 **23 passed, 4 skipped**；跳过三项 Vulkan 专用故障注入，以及无系统 ffmpeg 时的失败半成品清理用例，GPU/Raster 的正常短 MP4 均使用已安装的 imageio-ffmpeg 实际完成，没有跳过。回传包确认 `functional_passed=true`、`hardware_gate_passed=false`，托管虚拟 Metal 没被当成物理硬件。前轮免 SDK 包暴露的 `charset-normalizer` 缺项已显式补齐，不能把构建机的隐式传递依赖当成测试机保证。
+- 相关单元/边界/字体回归 **168 passed, 2 skipped**；最终导出器、预览调度、native 导出、架构与构建回归合跑 **413 passed**。D2D 全量原生重建后 **3 项 GPU/DirectComposition 回归通过**，使用 GPU 自身路径作对照，未建立 QPainter 画面 oracle。既有 P00 严格回访差异仍未豁免。
+
+本机日志：`build/p04-protocol-tests.log`、`build/p04-linux-tests.log`、`build/p04-regression.log`、`build/p04-final-regression.log`、`build/p04-d2d-regression.log`、`build/p04-vulkan-validation.log`。Windows/Linux GPU/Raster 与 Mac 构建的 native 源码身份：`046ad19671e12cb356e0af9f4457641bc55c7fd275309fef23d31306be780ed2`。Mac 使用托管虚拟 Metal；新版 P04 和生命周期仍需用 §14.6 的新验收包在真实 Mac 补验，不能沿用旧 M4 Pro 的 P01/P03 结果关闭新门槛。下一任务是 **P05.1–P05.3**，先做字体实例资源、shaping 与规范度量入口，不直接跳到完整特效或宣布退役 D2D。
 
 ## 15. 前期探针清理范围
 
