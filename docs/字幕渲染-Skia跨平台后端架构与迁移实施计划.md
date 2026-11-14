@@ -1043,6 +1043,59 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 现有 D2D CMake 默认配置已重新通过，未改变生产路径。P00 的 D2D 严格回访差异仍未豁免。P01 小样例不关闭 P03 的 Qt 纹理互操作门槛，也不关闭后续字幕功能、30 分钟压力或正式打包门槛。
 
+### 14.6 交给朋友的 Codex：macOS 实机验收入口
+
+可以直接让另一台 Mac 的 Codex 按本节测试，无需先制作安装包。测试对象是当前 `main` 的 P01 C++ 基础层；不需要安装整个 PyQt 应用、不需要 Qt SDK，也不依赖 `skia-python`。需要 Git、Python 3.11+、CMake、锁定的 Xcode 26.1.1 / SDK 26.1 和网络下载依赖；GN/Ninja/Skia 由统一驱动获取并校验。
+
+可直接发给朋友的指令：
+
+> 请阅读本仓库 AGENTS.md 和 docs/字幕渲染-Skia跨平台后端架构与迁移实施计划.md，按 §14.6 在这台 Mac 实测 P01。先记录当前 commit、机器/系统/芯片架构和 Xcode/SDK，使用锁文件与统一构建入口；执行 Metal 真硬件、同一 core 的 Raster、CPU-only、第二次缓存构建、Unicode 资源路径和重复帧测试。回传构建指纹、实际设备/API/driver、通过/失败项和原始错误。只做本阶段测试，输出放 build/ 或专用缓存，不修改锁文件/绘制核心，不创建分支、提交或推送。不要以虚拟 GPU、软件回退、单纯编译成功替代 Metal 真硬件通过；不要将能力小样例写成完整字幕功能通过。若锁定工具链缺失，报告具体缺项。
+
+建议 Codex 按以下顺序执行；路径可以按本机解释器位置调整，参数语义不能改：
+
+1. `git submodule status`；初始化缺失的 submodule。记录 `git rev-parse HEAD` 与工作区状态，在当前分支测试，不覆盖本地改动。
+2. 记录 `sw_vers`、`uname -m`、`system_profiler SPHardwareDataType SPDisplaysDataType` 的芯片/GPU/Metal 信息。**回传时去掉序列号、硬件 UUID 等个人设备标识**；无需复制完整 system_profiler 输出。
+3. 为本次命令设置 `DEVELOPER_DIR=/Applications/Xcode_26.1.1.app/Contents/Developer`，运行 `xcodebuild -version`、`xcrun --sdk macosx --show-sdk-version`。锁定的 SDK 为 26.1；找不到时记录为工具链未就绪，不把它归类为 Skia 绘制失败。无需修改全局 xcode-select。
+4. 使用已有 Python 3.11+ 和 CMake；若缺 CMake，可在 `build/skia-validation-venv` 创建独立 venv 并 `python -m pip install cmake`。P01 构建本身不要求安装 requirements.txt 或 PyQt。
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode_26.1.1.app/Contents/Developer
+# Apple Silicon 用 arm64；Intel 用 x64。记录实际终端/Python 架构，避免混淆 Rosetta 结果。
+ARCH=arm64
+FONT=/System/Library/Fonts/Supplemental/Arial.ttf
+CACHE="$HOME/.cache/krok-helper/skia-deps"
+mkdir -p build/skia-macos-validation
+
+# 首次干净构建；--smoke-font 自动要求 Metal 真硬件，失败不会转 Raster。
+python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --gpu-api metal --clean --smoke-font "$FONT" > build/skia-macos-validation/metal-clean.log 2>&1
+# 上一命令成功后，保持参数不变，仅移除 --clean；两层 Ninja 都应无须重编。
+python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --gpu-api metal --smoke-font "$FONT" > build/skia-macos-validation/metal-cached.log 2>&1
+
+# 独立的无 GPU 构建。
+python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --cpu-only --clean --smoke-font "$FONT" > build/skia-macos-validation/raster-clean.log 2>&1
+python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --cpu-only --smoke-font "$FONT" > build/skia-macos-validation/raster-cached.log 2>&1
+
+# Unicode 字体和输出路径；使用同一份字体字节，避免换字体造成差异。
+cp "$FONT" "build/skia-macos-validation/字幕 字体.ttf"
+"$CACHE/native/macos-$ARCH-metal/krok_skia_gpu_smoke" "build/skia-macos-validation/字幕 字体.ttf" "build/skia-macos-validation/Metal 字幕" --require-hardware --frames 120
+"$CACHE/native/macos-$ARCH-raster/krok_skia_raster_smoke" "build/skia-macos-validation/字幕 字体.ttf" "build/skia-macos-validation/CPU 字幕" --frames 120
+otool -L "$CACHE/native/macos-$ARCH-raster/krok_skia_raster_smoke"
+```
+
+每个构建命令都必须检查退出码。Metal 步骤失败时保留原日志，继续独立 CPU-only 验证，不把后面的成功覆盖前面的失败。CPU-only 的导入表不应依赖 Metal/Vulkan；同一 core 的能力检查必须包含 glyph_outline、RuntimeEffect、blur、PNG、透明/预乘 alpha、repeat_exact。确认 `Metal 字幕.json` 为 `api=metal`、`hardware=true`、`status=passed`，而 `CPU 字幕.json` 为 `api=raster`、`hardware=false`。
+
+如果朋友已安装本项目测试依赖，还可设置 `KROK_SKIA_NATIVE_TEST_ROOT="$CACHE/native"`、`KROK_SKIA_NATIVE_TEST_ARCH="$ARCH"`、`KROK_SKIA_NATIVE_TEST_FONT="$FONT"`，运行 `python3 -m pytest tests/test_subtitle_skia_native.py -q`。其中 Vulkan loader 注入项在 Mac 会明确 skip；不能把该项的 skip 记为 Metal 故障注入通过。没有 PyQt 测试环境时，上面的独立 native 命令仍是有效的 P01 验证入口。
+
+回传结果应包含：
+
+- 当前 commit、Mac 芯片/架构、macOS/Xcode/SDK 版本；不要回传机器序列号。
+- 四份构建日志及退出码、两个构建目录的 `build-fingerprint.json`。
+- 120 帧测试的 JSON、PNG、RGBA；不需要发送系统字体文件，记录字体 SHA256 即可。
+- 真硬件 Metal 是否通过、CPU-only 是否通过、缓存是否复用；失败时给完整错误与失败步骤，不只给“测试失败”。
+- 若运行 pytest，提供结果和 skip 原因。注明这里只覆盖 P01，尚未验证字幕 IR、出入场/粒子/走字线、Qt 预览、视频导出和长时间稳定性。
+
+PNG 中的场景应有半透明色块、曲线路径、发光圆、英文文字、独立 K 字形轮廓和半透明图片块。可以人工抽查，但以程序能力断言、后端身份、指纹和日志为主；不要与 QPainter 生成图比较。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
