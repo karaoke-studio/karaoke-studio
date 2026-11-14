@@ -716,6 +716,8 @@ def iter_native_rgba_frames(
     threads: int | None = None,
     chunk_frames: int | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    process_factory: Callable[..., NativeRendererProcess] | None = None,
+    extra_tracks: list[TimingTrack] | None = None,
 ) -> Iterator[bytes]:
     """Yield full-frame RGBA bytes rendered by the native sidecar in order."""
     frame_total = max(int(total_frames), 0)
@@ -735,6 +737,8 @@ def iter_native_rgba_frames(
         threads=threads,
         chunk_frames=chunk_frames,
         should_cancel=should_cancel,
+        **({"process_factory": process_factory} if process_factory else {}),
+        **({"extra_tracks": extra_tracks} if extra_tracks else {}),
     ):
         yield frame
 
@@ -753,6 +757,8 @@ def iter_native_rgba_frames_at_times(
     threads: int | None = None,
     chunk_frames: int | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    process_factory: Callable[..., NativeRendererProcess] | None = None,
+    extra_tracks: list[TimingTrack] | None = None,
 ) -> Iterator[tuple[int, bytes]]:
     """Yield ``(t_ms, rgba_bytes)`` for explicit timestamps from the sidecar."""
     timestamps_all = [int(t_ms) for t_ms in timestamps_ms]
@@ -766,8 +772,11 @@ def iter_native_rgba_frames_at_times(
         else max(int(chunk_frames), 1)
     )
     generation = 1
-    with NativeRendererProcess(renderer_path, response_timeout_s=5.0, close_timeout_s=1.0) as renderer:
+    factory = process_factory or NativeRendererProcess
+    with factory(renderer_path, response_timeout_s=5.0, close_timeout_s=1.0) as renderer:
         configure_kwargs = {"width": width, "height": height, "fps": fps}
+        if extra_tracks:
+            configure_kwargs["extra_tracks"] = extra_tracks
         if duration_ms is not None:
             configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
         if roll_shift_ms:
@@ -796,6 +805,8 @@ def iter_native_rgba_frames_at_times(
                         renderer.send_cancel_generation(generation)
                         raise ExportCancelled("已停止导出。")
                     event = renderer.read_event()
+                    if not event.get("ok", False):
+                        raise NativeRendererError(str(event.get("error") or event))
                     if int(event.get("generation", generation)) != generation:
                         continue
                     kind = event.get("event")

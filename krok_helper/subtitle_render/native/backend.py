@@ -974,7 +974,7 @@ class NativeRendererProcess:
             raise NativeRendererError(f"native renderer did not become ready: {ready}")
         return ready
 
-    def _launch_environment(self) -> dict[str, str]:
+    def _launch_environment(self) -> dict[str, str] | None:
         return _sidecar_environment(self.executable_path)
 
     def _start_supervisor(self) -> None:

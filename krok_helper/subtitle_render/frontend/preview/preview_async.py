@@ -320,6 +320,9 @@ def native_preview_enabled() -> bool:
 
 def _gpu_preview_default_enabled() -> bool:
     """Enable GPU preview by default only for interactive Windows sessions."""
+    from krok_helper.subtitle_render.native.skia_backend import skia_requested
+    if skia_requested():
+        return True
     qpa_platform = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
     return os.name == "nt" and qpa_platform not in {"offscreen", "minimal"}
 

@@ -13,6 +13,12 @@ int main(int argc, char** argv) {
     ready.insert("schema", 3);
     ready.insert("selection_version", 1);
     ready.insert("profiles", QJsonArray{"p04_ascii_solid_wipe"});
+    QJsonArray targets{"raster"};
+#ifdef KROK_SKIA_SIDECAR_GPU
+    targets.append("gpu");
+#endif
+    ready.insert("execution_targets", targets);
+    ready.insert("pixel_formats", QJsonArray{"rgba8888", "bgra8888_premultiplied"});
     ready.insert("fingerprint", KROK_SKIA_FINGERPRINT);
     protocol::writeJson(ready);
     commands::SkiaCommandRouter router;

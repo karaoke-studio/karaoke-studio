@@ -25,17 +25,18 @@ std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
 void supportedStyle(const TextStyle& s) {
-    if (s.vertical || s.rightToLeft || s.alignment != "center" || s.verticalPosition != "bottom"
+    if (s.layoutSemantics != "legacy" || s.vertical || s.rightToLeft || s.alignment != "center" || s.verticalPosition != "bottom"
         || s.laneCount != 1 || s.smartHorizontal != "none" || s.allowBiting
         || s.strokeWidth != 0 || s.stroke2Width != 0 || s.latinStrokeWidth != 0 || s.latinStroke2Width != 0
         || s.decorationKindForState(false) != "none" || s.decorationKindForState(true) != "none"
         || s.beforeFillPaint.mode != "solid" || s.afterFillPaint.mode != "solid"
         || s.fontHint.resourcePath.empty() || s.fontHint.syntheticBold || s.fontHint.syntheticItalic
-        || s.fontHint.variable || !s.fontHint.axes.empty() || s.italic || s.latinItalic
+        || s.fontHint.variable || s.fontAxis || s.latinFontAxis || !s.fontHint.axes.empty() || s.italic || s.latinItalic
         || s.fontHint.scale != 1.f || s.latinFontStretchPct != 100
         || s.latinFontSize.value_or(s.fontSize) != s.fontSize
         || (s.latinFontFamily && !s.latinFontFamily->empty() && *s.latinFontFamily != s.fontFamily)
-        || (!s.latinFontHint.resourcePath.empty() && s.latinFontHint.resourcePath != s.fontHint.resourcePath)
+        || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
+        || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight
         || s.volumeEnabled || s.litEnabled)
         throw BackendError("Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }

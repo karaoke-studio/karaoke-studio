@@ -35,7 +35,7 @@ jobs:
       - name: Install build and preview test tools
         # PyQt6 must match the Qt SDK exactly; aqtinstall is pinned to a commit that reads Qt 6.11.
         run: >
-          python -m pip install cmake pytest numpy imageio-ffmpeg==0.6.0 PyQt6==6.11.0 PyQt6-Qt6==6.11.0
+          python -m pip install cmake pytest numpy fonttools PyQt6-Fluent-Widgets imageio-ffmpeg==0.6.0 PyQt6==6.11.0 PyQt6-Qt6==6.11.0
           "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
       - uses: actions/cache@v4
         with:
@@ -56,8 +56,8 @@ jobs:
         run: |
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal $CLEAN_ARG --jobs 3 --qt-root ~/qt-krok/6.11.0/macos
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --jobs 3 --qt-root ~/qt-krok/6.11.0/macos
-          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only $CLEAN_ARG --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
-          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only $CLEAN_ARG --jobs 3 --qt-root ~/qt-krok/6.11.0/macos --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --jobs 3 --qt-root ~/qt-krok/6.11.0/macos --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
       - name: Record hosted Metal capability honestly
         shell: bash
         run: |
@@ -104,6 +104,12 @@ jobs:
             ~/.cache/krok-helper/skia-deps/native/**/*.log
             ~/.cache/krok-helper/skia-deps/native/**/*.exitcode
             build/skia-preview-tests/**/lifecycle.*.log
+      - name: Product IR, G5 preview and short MP4 (hosted Metal device)
+        env:
+          KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE: '0'
+        run: |
+          export KROK_TEST_SKIA_SIDECAR="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal/krok_skia_subtitle_renderer"
+          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py -rs -v --basetemp build/skia-protocol-tests
       - name: Package the Mac validation bundle
         env:
           ARCH: ${{ matrix.arch }}
@@ -113,11 +119,11 @@ jobs:
           from pathlib import Path
           arch = os.environ["ARCH"]
           native = Path.home() / ".cache/krok-helper/skia-deps/native"
-          keep = {"metal": ["krok_skia_gpu_smoke", "krok_skia_raster_smoke", "subtitle_skia_backend_tests",
+          keep = {"metal": ["krok_skia_gpu_smoke", "krok_skia_raster_smoke", "subtitle_skia_backend_tests", "krok_skia_subtitle_renderer",
                             "krok_metal_validation_probe",
                             "libsubtitle_skia_preview_test_control.dylib",
                             "build-fingerprint.json", ".cmake/api/v1/reply", "qml"],
-                  "raster": ["krok_skia_raster_smoke", "subtitle_skia_backend_tests",
+                  "raster": ["krok_skia_raster_smoke", "subtitle_skia_backend_tests", "krok_skia_subtitle_renderer",
                              "build-fingerprint.json", ".cmake/api/v1/reply"]}
           files = []
           for api, names in keep.items():

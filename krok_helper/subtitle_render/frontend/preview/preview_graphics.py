@@ -451,8 +451,12 @@ class PreviewGraphicsView(QGraphicsView):
         self._render_busy_timer = QTimer(self)
         self._render_busy_timer.setInterval(_RENDER_BUSY_POLL_MS)
         self._render_busy_timer.timeout.connect(self._update_render_busy_badge)
-        if async_preview_enabled():
-            if gpu_preview_enabled():
+        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        from .skia_async import SkiaAsyncSubtitleRenderer
+        if async_preview_enabled() or skia_requested():
+            if skia_requested():
+                renderer_cls = lambda w, h, parent: SkiaAsyncSubtitleRenderer(w, h, parent, gpu_enabled=gpu_preview_enabled())
+            elif gpu_preview_enabled():
                 renderer_cls = GpuAsyncSubtitleRenderer
             elif native_preview_enabled():
                 renderer_cls = NativeAsyncSubtitleRenderer
@@ -466,6 +470,7 @@ class PreviewGraphicsView(QGraphicsView):
             self._connect_native_preview_signal()
             self._connect_gpu_fallback_signal()
             self._connect_backend_mode_signal()
+            self._connect_skia_error_signal()
             self._subtitle_item.set_async_mode(True)
             self._refresh_async_target()
 
@@ -609,17 +614,21 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_gpu_preview_enabled(self, enabled: bool) -> None:
         """Switch the subtitle worker between GPU and Painter at runtime."""
-        target_cls = GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
+        from krok_helper.subtitle_render.native.skia_backend import skia_requested, SkiaSelection
+        from .skia_async import SkiaAsyncSubtitleRenderer
+        skia = skia_requested()
+        target_cls = SkiaAsyncSubtitleRenderer if skia else GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
         if type(self._async_renderer) is target_cls:
-            return
+            if not skia or self._async_renderer.selection == SkiaSelection.from_environment(gpu_enabled=enabled):
+                return
         self._stop_async_renderer()
-        if not enabled and not async_preview_enabled():
+        if not skia and not enabled and not async_preview_enabled():
             self._subtitle_item.set_async_mode(False)
             self._subtitle_item.set_time(self._t_ms)
             # 同步 QPainter 模式（async 全关）后端确定是 CPU，也必须通知 UI。
             self.renderBackendChanged.emit(self.render_backend_label())
             return
-        self._async_renderer = target_cls(self._output_w, self._output_h, self)
+        self._async_renderer = target_cls(self._output_w, self._output_h, self, **({"gpu_enabled": enabled} if skia else {}))
         self._async_renderer.frame_ready.connect(
             self._on_async_frame, Qt.ConnectionType.QueuedConnection
         )
@@ -627,6 +636,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._connect_native_preview_signal()
         self._connect_gpu_fallback_signal()
         self._connect_backend_mode_signal()
+        self._connect_skia_error_signal()
         self._subtitle_item.set_async_mode(True)
         if hasattr(self._async_renderer, "set_playing"):
             self._async_renderer.set_playing(self._video_playing)
@@ -653,6 +663,16 @@ class PreviewGraphicsView(QGraphicsView):
             signal.connect(
                 self._on_gpu_fallback, Qt.ConnectionType.QueuedConnection
             )
+
+    def _connect_skia_error_signal(self) -> None:
+        signal = getattr(self._async_renderer, "renderError", None)
+        if signal is not None:
+            signal.connect(self._on_skia_error, Qt.ConnectionType.QueuedConnection)
+
+    def _on_skia_error(self, reason: str) -> None:
+        self._note_frame_delivered()
+        self.renderBackendChanged.emit(self.render_backend_label())
+        self.gpuFallback.emit(reason)
 
     def _on_gpu_fallback(self, reason: str) -> None:
         # GPU 整帧回落后字幕由 CPU 图接管：Qt 字幕项要重新显示。
@@ -688,7 +708,7 @@ class PreviewGraphicsView(QGraphicsView):
         if sender is not None and sender is not self._async_renderer:
             # 渲染器热切换后，旧渲染器仍在事件队列里的迟到信号不得污染新状态。
             return
-        self.renderBackendChanged.emit("CPU" if mode == "cpu" else "GPU")
+        self.renderBackendChanged.emit(self.render_backend_label())
 
     def render_backend_label(self) -> str:
         """当前实际渲染后端的用户可见标签（GPU / CPU）。
@@ -699,6 +719,8 @@ class PreviewGraphicsView(QGraphicsView):
         renderer = self._async_renderer
         if renderer is None:
             return "CPU"
+        if hasattr(renderer, "backend_label"):
+            return renderer.backend_label
         mode = getattr(renderer, "current_backend_mode", None)
         if mode is not None:
             return "CPU" if mode == "cpu" else "GPU"

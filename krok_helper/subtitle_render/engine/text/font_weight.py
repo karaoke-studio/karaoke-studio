@@ -82,7 +82,8 @@ def resolve_font_instance(
     )
     instance = resolve_instance(capabilities, request)
     instance = replace(instance, generation=capabilities_generation())
-    if os.name == "nt" and instance.reason != "missing_family":
+    # Skia consumes the same explicit font snapshot on Windows, Linux and macOS.
+    if instance.reason != "missing_family":
         from krok_helper.subtitle_render.engine.text.font_resource import snapshot_raw_font
         # The catalog resolves localized aliases before choosing the face.
         # Passing the original spelling to Qt can silently select Tahoma and

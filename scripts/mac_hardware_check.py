@@ -25,7 +25,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 WORK = REPO / "build/mac-hardware-check"
 FONT = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
-PYQT = ["PyQt6==6.11.0", "PyQt6-Qt6==6.11.0", "pytest", "numpy", "imageio-ffmpeg==0.6.0"]
+PYQT = ["PyQt6==6.11.0", "PyQt6-Qt6==6.11.0", "pytest", "numpy", "fonttools", "PyQt6-Fluent-Widgets", "imageio-ffmpeg==0.6.0"]
 # Only these system_profiler display fields are kept: no serial numbers or hardware UUIDs.
 GPU_FIELDS = ("sppci_model", "sppci_cores", "spdisplays_mtlgpufamilysupport", "spdisplays_vendor",
               "sppci_device_type", "spdisplays_metal")
@@ -136,7 +136,9 @@ def main(argv=None) -> int:
         "KROK_SKIA_NATIVE_TEST_ROOT": str(native), "KROK_SKIA_NATIVE_TEST_ARCH": arch,
         "KROK_SKIA_NATIVE_TEST_FONT": str(FONT), "PYTHONPATH": str(REPO),
         # Adds the preview test under Apple's Metal API validation, with its own positive control.
-        "KROK_METAL_VALIDATION": "1"}
+        "KROK_METAL_VALIDATION": "1",
+        "KROK_TEST_SKIA_SIDECAR": str(gpu / "krok_skia_subtitle_renderer"),
+        "KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE": "0" if options.allow_virtual_gpu else "1"}
     steps = {
         "metal_hardware_smoke": [gpu / "krok_skia_gpu_smoke", FONT, logs / "metal", "--require-hardware", "--frames", "120"],
         "raster_smoke": [cpu / "krok_skia_raster_smoke", FONT, logs / "raster", "--frames", "120"],
@@ -145,6 +147,9 @@ def main(argv=None) -> int:
                           "tests/test_subtitle_skia_preview_lifecycle.py", "--basetemp", logs / "preview-tests"],
         "native_capabilities": [python, "-m", "pytest", "--noconftest", "-rs", "-v", "tests/test_subtitle_skia_native.py"],
     }
+    if (gpu / "krok_skia_subtitle_renderer").is_file():
+        steps["subtitle_protocol"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                      "tests/test_subtitle_skia_protocol.py", "--basetemp", logs / "protocol-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

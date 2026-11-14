@@ -8,3 +8,6 @@ add_executable(krok_skia_subtitle_renderer
 target_link_libraries(krok_skia_subtitle_renderer PRIVATE subtitle_skia_backend subtitle_scene_adapter Qt6::Core Qt6::Gui)
 target_compile_definitions(krok_skia_subtitle_renderer PRIVATE KROK_SKIA_FINGERPRINT="${KROK_SKIA_FINGERPRINT}")
 krok_strict_float(krok_skia_subtitle_renderer)
+if(TARGET subtitle_skia_gpu)
+    target_compile_definitions(krok_skia_subtitle_renderer PRIVATE KROK_SKIA_SIDECAR_GPU)
+endif()

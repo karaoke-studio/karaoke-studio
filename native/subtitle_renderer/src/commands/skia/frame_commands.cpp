@@ -14,26 +14,38 @@ void SkiaFrames::range(RenderBackend& backend, const QJsonObject& request, runti
         throw BackendError("Skia range requires 1..120 timestamps, unique generation and one retained slot per frame");
     const auto key = request.value("shm_key").toString();
     if (key.isEmpty()) throw BackendError("Skia range requires an explicit shared-memory key");
+    const auto format = request.value("pixel_format").toString("rgba8888");
+    const bool bgra = format == "bgra8888_premultiplied";
+    if (!bgra && format != "rgba8888") throw BackendError("Unsupported Skia transfer pixel format");
     for (qsizetype i = 0; i < times.size(); ++i) {
         if (cancellation.cancelled(generation)) return;
         if (!times[i].isDouble()) throw BackendError("Skia range requires integer timestamps");
         const int tMs = times[i].toInt();
         auto result = backend.renderFrame(tMs);
         auto& pixels = result.surface;
+        if (bgra) {
+            for (std::size_t offset = 0; offset < pixels.bytes.size(); offset += 4) {
+                auto* p = pixels.bytes.data() + offset;
+                const auto red = p[0];
+                p[0] = std::uint8_t((int(p[2]) * p[3] + 127) / 255);
+                p[1] = std::uint8_t((int(p[1]) * p[3] + 127) / 255);
+                p[2] = std::uint8_t((int(red) * p[3] + 127) / 255);
+            }
+        }
         QString error;
         if (i == 0 && !ring_.ensure(key, slotCount, pixels.width, pixels.height, &error))
             throw BackendError(error.toStdString());
         cancellation.publishIfActive(generation, [&] {
             runtime::SharedFrameRing metadata;
             if (!ring_.writeRgba(pixels.bytes.data(), pixels.width, pixels.height, pixels.stride,
-                                 generation, int(i), tMs, int(i), &metadata))
+                                 generation, int(i), tMs, int(i), &metadata, bgra ? 2 : 1, format))
                 throw BackendError("Skia shared-memory publication failed");
             auto out = protocol::response(true, "frame_ready");
             out.insert("generation", generation);
             out.insert("frame_index", int(i));
             out.insert("t_ms", tMs);
             out.insert("origin", "top_left");
-            out.insert("alpha_type", "straight");
+            out.insert("alpha_type", bgra ? "premultiplied" : "straight");
             out.insert("color_space", "srgb");
             out.insert("render_ms", result.renderMs);
             out.insert("readback_ms", result.readbackMs);

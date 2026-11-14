@@ -66,7 +66,7 @@ class SkiaRendererProcess(NativeRendererProcess):
         self.skia_info: dict[str, Any] = {}
 
     def _launch_environment(self) -> dict[str, str]:
-        env = super()._launch_environment()
+        env = super()._launch_environment() or os.environ.copy()
         qt_lib = QLibraryInfo.path(QLibraryInfo.LibraryPath.LibrariesPath)
         key = "DYLD_FRAMEWORK_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
         if sys.platform != "win32":
@@ -96,3 +96,11 @@ class SkiaRendererProcess(NativeRendererProcess):
         out = super().configure(*args, **kwargs)
         self.skia_info = out.get("backend_info", {})
         return out
+
+    def read_event(self):
+        event = super().read_event()
+        if event.get("event") == "frame_ready" and event.get("payload") == "shared_memory":
+            alpha = {"rgba8888": "straight", "bgra8888_premultiplied": "premultiplied"}.get(event.get("pixel_format"))
+            if alpha is None or event.get("alpha_type") != alpha or event.get("origin") != "top_left" or event.get("color_space") != "srgb":
+                raise NativeRendererError("Skia 帧格式、alpha、方向或色彩空间与声明不符")
+        return event

@@ -15,6 +15,7 @@ def renderer_digest(repo: Path) -> str:
     for directory in (native / "src/skia", native / "src/model", native / "src/effects",
                       native / "src/scene", native / "src/runtime", native / "src/backends/skia",
                       native / "src/preview",
+                        native / "src/commands/skia", native / "src/protocol", native / "src/diagnostics",
                       native / "tests", native / "cmake", repo / "scripts/skia_build"):
         paths += [p for p in directory.rglob("*") if p.suffix in {".h", ".cpp", ".mm", ".cmake", ".py"}]
     result = hashlib.sha256()

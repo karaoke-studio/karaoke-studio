@@ -2828,7 +2828,8 @@ class SubtitleRenderWindow(QWidget):
         if gpu_env_override is not None or gpu_default_version < GPU_PREVIEW_DEFAULT_VERSION:
             gpu_preview_on = gpu_preview_enabled()
         else:
-            gpu_preview_on = sys.platform == "win32" and bool(
+            from krok_helper.subtitle_render.native.skia_backend import skia_requested
+            gpu_preview_on = (sys.platform == "win32" or skia_requested()) and bool(
                 output.get("gpu_preview_enabled", True)
             )
         try:
@@ -2837,10 +2838,12 @@ class SubtitleRenderWindow(QWidget):
             )
         except (TypeError, ValueError):
             gpu_export_default_version = 0
+        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        gpu_platform = sys.platform == "win32" or skia_requested()
         if gpu_export_default_version < GPU_EXPORT_DEFAULT_VERSION:
-            gpu_export_enabled = sys.platform == "win32"
+            gpu_export_enabled = gpu_platform
         else:
-            gpu_export_enabled = sys.platform == "win32" and bool(
+            gpu_export_enabled = gpu_platform and bool(
                 output.get("gpu_export_enabled", True)
             )
         # GPU preferences are local application settings and are intentionally
@@ -4186,11 +4189,12 @@ class SubtitleRenderWindow(QWidget):
             self._project_shortcuts.append(shortcut)
 
     def _make_export_tab(self) -> QWidget:
+        from krok_helper.subtitle_render.native.skia_backend import skia_requested
         page = ExportWorkspaceView(
             fps_options=SCREEN_FPS_OPTIONS,
             render_worker_options=RENDER_WORKER_OPTIONS,
             gpu_preview_checked=gpu_preview_enabled(),
-            gpu_controls_visible=sys.platform == "win32",
+            gpu_controls_visible=sys.platform == "win32" or skia_requested(),
             gpu_direct_present_checked=self._load_direct_present_preference(),
         )
         page.locationSettingsRequested.connect(
@@ -4233,6 +4237,8 @@ class SubtitleRenderWindow(QWidget):
         self._gpu_export_check = controls.gpu_export_check
 
         self._gpu_direct_check = controls.gpu_direct_present_check
+        if skia_requested():
+            self._gpu_direct_check.setVisible(False)
         self._export_monitor_card = controls.monitor_card
         self._export_monitor_layout = controls.monitor_layout
         self._export_eta_label = controls.eta_label
@@ -11472,7 +11478,8 @@ class SubtitleRenderWindow(QWidget):
         # GPU 两个开关的出厂值与 _apply_output_settings 读空配置的分支一致；
         # 静默置位 + 直接下发给面板，同样不走用户点击的 apply 路径。
         gpu_preview_factory = gpu_preview_enabled()
-        gpu_export_factory = sys.platform == "win32"
+        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        gpu_export_factory = sys.platform == "win32" or skia_requested()
         blocked_preview = self._gpu_preview_check.blockSignals(True)
         try:
             self._gpu_preview_check.setChecked(gpu_preview_factory)

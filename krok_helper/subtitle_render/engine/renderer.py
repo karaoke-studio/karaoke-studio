@@ -379,12 +379,14 @@ def _render_subtitle_video_prepared(
         )
     job = replace(job, **freeze_kwargs)
     total_frames = _frame_count(duration_ms, job.fps)
-    native_export_requested = _native_export_requested(job)
-    native_renderer_path = resolve_native_renderer_path() if native_export_requested else None
+    from krok_helper.subtitle_render.native.skia_backend import skia_requested, resolve_skia_renderer_path
+    skia_active = skia_requested()
+    native_export_requested = skia_active or _native_export_requested(job)
+    native_renderer_path = (resolve_skia_renderer_path() if skia_active else resolve_native_renderer_path()) if native_export_requested else None
     native_export_active = native_renderer_path is not None
     if native_export_requested and native_renderer_path is None:
         logger("native 导出 sidecar 未找到，已回退到 Python 渲染器")
-    gpu_export_requested = _gpu_export_requested(job)
+    gpu_export_requested = not skia_active and _gpu_export_requested(job)
     gpu_renderer_path = resolve_native_renderer_path() if gpu_export_requested else None
     gpu_fallback_reasons = (
         gpu_unsupported_features(job.track, job.style, list(job.extra_tracks))
@@ -1294,6 +1296,14 @@ def _write_frames_native(
     """Write full-frame RGBA frames rendered by the native sidecar."""
     monitor = active_export_monitor()
     written = 0
+    from functools import partial
+    from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection, skia_requested
+    factory = None
+    if skia_requested():
+        enabled = job.gpu_export_enabled
+        if enabled is None:
+            enabled = os.environ.get("KROK_SUBTITLE_GPU_EXPORT", "1").lower() not in {"0", "false", "off", "no"}
+        factory = partial(SkiaRendererProcess, selection=SkiaSelection.from_environment(gpu_enabled=bool(enabled)))
     for frame in iter_native_rgba_frames(
         job.track,
         job.style,
@@ -1305,6 +1315,7 @@ def _write_frames_native(
         roll_shift_ms=_job_roll_shift_ms(job),
         renderer_path=renderer_path,
         should_cancel=should_cancel,
+        **({"process_factory": factory, "extra_tracks": list(job.extra_tracks)} if factory else {}),
     ):
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
