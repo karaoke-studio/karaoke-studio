@@ -1,0 +1,62 @@
+name: Skia native foundation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install cmake
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/krok-helper/skia-deps
+          key: skia-m150-macos-${{ matrix.arch }}-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
+      - name: Build native Metal and Raster
+        run: |
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --clean --jobs 3
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --clean --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
+      - name: Record hosted Metal capability honestly
+        shell: bash
+        run: |
+          dir="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal"
+          "$dir/krok_skia_raster_smoke" /System/Library/Fonts/Supplemental/Arial.ttf "$dir/raster"
+          set +e
+          "$dir/krok_skia_gpu_smoke" /System/Library/Fonts/Supplemental/Arial.ttf "$dir/metal" --require-hardware > "$dir/metal-attempt.log" 2>&1
+          status=$?
+          echo "$status" > "$dir/metal-attempt.exitcode"
+          cat "$dir/metal-attempt.log"
+          if [ "$status" -ne 0 ]; then
+            echo '::warning::Native build and Raster passed; hosted Metal hardware smoke did not pass. Hardware gate remains open.'
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: skia-macos-${{ matrix.arch }}-evidence
+          path: |
+            ~/.cache/krok-helper/skia-deps/native/**/build-fingerprint.json
+            ~/.cache/krok-helper/skia-deps/native/**/*.json
+            ~/.cache/krok-helper/skia-deps/native/**/*.rgba
+            ~/.cache/krok-helper/skia-deps/native/**/*.png
+            ~/.cache/krok-helper/skia-deps/native/**/*.log
+            ~/.cache/krok-helper/skia-deps/native/**/*.exitcode

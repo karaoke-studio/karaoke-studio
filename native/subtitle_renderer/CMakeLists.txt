@@ -10,6 +10,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # include flags instead of relying on a hand-maintained c_cpp_properties path.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(KROK_BUILD_LEGACY_SIDECAR "Build the current Windows Direct2D sidecar" ${WIN32})
+option(KROK_BUILD_SKIA "Build the independent Skia renderer foundation" OFF)
+if(KROK_BUILD_SKIA)
+    include(cmake/SkiaRenderer.cmake)
+endif()
+if(NOT KROK_BUILD_LEGACY_SIDECAR)
+    return()
+endif()
+if(NOT WIN32)
+    message(FATAL_ERROR "The legacy Direct2D sidecar requires Windows; disable KROK_BUILD_LEGACY_SIDECAR")
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 # Version fingerprint: the native sidecar must be built against the same Qt that

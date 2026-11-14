@@ -78,10 +78,13 @@ def configure(lock: dict, root: Path, system: str, arch: str, gpu: str | None,
             *[sdk / "Lib" / spec["sdk"] / part / "x64" for part in ("ucrt", "um")]])
         os.environ["PATH"] = str(sdk / "bin" / spec["sdk"] / "x64") + os.pathsep + os.environ["PATH"]
         identity |= {"msvc": spec["msvc"], "sdk": spec["sdk"], "crt": "MD"}
+        identity["sdk_windows_h_sha256"] = sha256(sdk / "Include" / spec["sdk"] / "um/Windows.h")
+        identity["stl_yvals_sha256"] = sha256(vc / "Tools/MSVC" / spec["msvc"] / "include/yvals_core.h")
     else:
-        compiler = Path(shutil.which("clang++") or "clang++")
+        compiler = Path(shutil.which("clang++-21") or shutil.which("clang++") or "clang++")
         version = output([str(compiler), "--version"])
-        args |= {"cc": "clang", "cxx": "clang++"}
+        c_compiler = compiler.with_name(compiler.name.replace("clang++", "clang"))
+        args |= {"cc": str(c_compiler), "cxx": str(compiler)}
         cmake["CMAKE_CXX_COMPILER"] = str(compiler)
         if system == "linux":
             if f"clang version {spec['version']}" not in version:
