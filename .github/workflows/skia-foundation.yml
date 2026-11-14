@@ -90,6 +90,7 @@ jobs:
         run: |
           export KROK_SKIA_NATIVE_TEST_ROOT="$HOME/.cache/krok-helper/skia-deps/native"
           # The app's conftest imports the whole application; these tests need only PyQt6.
+          mkdir -p build
           python -m pytest --noconftest tests/test_subtitle_skia_preview.py tests/test_subtitle_skia_preview_lifecycle.py -rs -v --basetemp build/skia-preview-tests
       - uses: actions/upload-artifact@v4
         if: always()
