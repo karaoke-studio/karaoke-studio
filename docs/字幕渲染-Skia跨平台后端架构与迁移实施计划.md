@@ -518,8 +518,8 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；完整槽位/fallback 绘制与字体校准尚未完成，见 §14.10/§14.11。
 - [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
-- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy 单行产品链路已接通，复用共享计划并校验最终几何/区间；完整布局和 D2D 画质验收仍未完成，见 §14.11。
-- [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例、字号/字重/斜体/stretch 与主字基线已接入单行产品链路，见 §14.12；角色、完整 N3 布局与严格画质门槛仍待完成。
+- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行产品链路已接通，复用共享计划并校验最终几何/区间；完整布局和 D2D 画质验收仍未完成，见 §14.11/§14.13。
+- [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例、字号/字重/斜体/stretch 与主字基线见 §14.12；单行九种锚点与规范轮廓精度见 §14.13。角色、完整 N3 布局与严格画质门槛仍待完成。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 7f23a2b1
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43606520555 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 59de016c
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43611797825 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1290,6 +1290,36 @@ native 源码身份：`15a3e54db5dfaef988372e6ee0ec12a683269bc6828f4f19b95d30068
 **P00 画质门槛继续开放，不调阈值。** 复查 §14.11 的同一 Arial 样例，Skia GPU 与 Skia Raster 的 alpha **逐字节一致，差异像素数 0**；RGBA 仅有 208 像素的颜色舍入差异。两者对 D2D 都保留同一 alpha IoU **0.971068**、P95 **17**，union channel MAE 分别约 **3.579 / 3.586**。此样例 D2D 有 17 档 alpha、Skia 有 201 档；这些是实测诊断，不能推广为所有路径的固定行为，也不能仅凭它们认定全部差异只有量化原因。故不再把该样例当作 Vulkan 专有缺陷反复调整 GPU 参数；继续在 P05 内补齐字体/几何校准，严格预算未过前不宣布可替代 D2D。证据：`build/p05-5-coverage-diagnosis.json`、`build/p05-5-raster.png`。
 
 native 源码身份：`b53f73f466b01bbf159362712446f8b8b311f8e52d36b2ec5bc1a2c8f4319495`。本机日志：`build/p05-5-native-tests.log`、`build/p05-5-slot-final.log`、`build/p05-5-linux-tests.log`、`build/p05-5-regression.log`、`build/p05-5-mixed-d2d.log`、`build/p05-5-d2d-regression.log`。Linux 仍是 llvmpipe；未做 4K、QPainter 画面对照或关闭新 Mac 真机门槛。
+
+### 14.13 P05.5 第二批：单行定位、N3 单元网格与设计轮廓精度（2026-11-15）
+
+**本批仍为完整 P05 的子集。** 实现提交 `2661874c`（字体轮廓精度）、`59de016c`（单行定位）。扩展后的规范链路支持 legacy / n3_1074 单行横排、左/中/右 × 顶/中/底、水平和纵向边距、per_row 与逐行偏移、布局覆盖，保留主字/英数独立实例、实色和基础走字。多行页级网格、角色、ruby、竖排/RTL、完整 fallback 和全部特效仍明确拒绝；不能把单行 N3 支持等同于完整 N3 兼容，也不能据此关闭 P05。生产 D2D 默认和 C++ 绘制实现未变。
+
+实现边界：
+
+- `engine/layout/line/alignment.py` 原样提取既有 lane/对齐/偏移解析，旧 Qt 调用点重新导入相同函数。新 `skia_placement.py` 只消费共享计划的布局样式、页元数据、规范度量和画布尺寸，返回最终水平偏移与基线；不包含 Qt 字体测量、IPC 或 GPU 句柄，不重做计时。
+- legacy 以实际墨迹包络定位；主字 ascent/descent 决定行框，保留无实际注音时仍存在的样式注音预留，负预留截到 0。N3 以整数单元网格定位，行高使用主字 em 字号及按主字度量比例向下取整的 descent，不套用 legacy 的注音预留。两种语义不能共用一个“看起来居中”的公式。
+- 使用共享计划解析后的 layout override 和 center override。短页底对齐可以消费 `line_alignments` 的尾部槽，但单 lane 的 `line_offsets_x` 仍取槽 0；per_row 的 X/Y 偏移只应用一次，center override 仅覆盖横向锚点及 row X，不抹掉 row Y。零宽单元不额外消耗字间距，与既有 GPU 单元推进规则一致。
+- `skia_ir.py` 在配置期生成最终 `origin_x` / `baseline_y` / wipe 边界；native 仍校验字体/塑形快照并消费原解析区间，不在帧循环排版。布局 schema 仍为 v2，新增 `p05_single_line_placement` 握手能力；缺少该能力的旧 sidecar 会在后端选择前被拒绝，避免新布局被旧门禁或旧算法静默处理。旧 P04 profile 保持原来的 legacy 居中底对齐兼容范围。
+
+本轮定位矩阵暴露并修复了一个此前居中样例掩盖的精度缺陷：
+
+- 锁定版本的 `SkFont::getPath` 默认先归一到 **64px** 生成路径；反复按字号放大并不能恢复被舍入的字体轮廓。生成字体的 45px 墨迹可变成约 44.995px，随后既有 N3 整数单元宽度截断少 1px，两个单元便积累成 2px 锚点偏差。
+- 新 `src/skia/text/glyph_outline.*` 通过锁定依赖中的 **FreeType 公开接口** 在 `units_per_EM` ppem、无 hinting 下读取 26.6 设计轮廓，保留变量字体的分数设计单位，再统一缩放为路径。没有引入第二套依赖版本、Skia 私有接口、逐平台字体引擎或取整补丁；CMake 仅增加同一锁定 FreeType 的私有头路径。合成粗斜体保持显式实例策略，度量与 GPU/Raster 绘制消费同一规范路径。
+- 字体几何身份升为 `skia-m150-hb-ft-v2`，使旧轮廓度量缓存失效。TTF 整数边界、CFF 字体轮廓和变量轴分数轮廓有独立回归；TTF/CFF 已知坐标要求 1e-4px，而变量字体使用公开 26.6 设计量化的明确上限，不借放宽定位预算修补误差。
+- COLR 字形即使带有非空单色基底，也不能把基底当作完整彩色结果。新增便携 COLRv0 字体先复现该误判，再用公开颜色层/paint 查询标记为需要彩色绘制；当前绘制仍明确拒绝。GPU 和 Raster 均验证拒绝后原场景像素不变。
+
+本地验证：
+
+- Windows Skia/架构/进度组合 **127 通过**，随后新增的两项彩色字形事务验证使轮廓专项 **8 通过**。九种位置分别对照 legacy / N3 的 D2D GPU，共 **18 组**，alpha bbox 边缘差不超过既有 1px；这是定位回归，不是最终画质验收。GPU/Raster 的 DPR 1.5 与回访 seek 也覆盖两种布局语义。
+- Linux X11/Wayland 各 **105 通过、9 跳过**；新增事务验证后轮廓专项另 **8 通过**。Windows/X11/Wayland 的规范字体度量、最终布局、双字体、单行九锚点四份 JSON，字体身份、glyph/cluster、实例索引和区间精确一致，几何数值最大误差 **0**。
+- Windows/Linux 的 Vulkan 与 CPU-only 均干净重建，各 CTest **3/3 通过**。既有 D2D shared realization 与 G6 零回读专项 **3 通过**。字体/布局/传输/导出相关回归最终并行 **487 通过、15 跳过**。首轮与构建同时执行时为 **486 通过、15 跳过、1 失败**：固定请求次数估算一秒吞吐的调度用例超出次数上限；随后串行单跑和整组复验均通过。保留首次结果，不改生产调度或放宽测试断言。
+- Mac CI [43611797825](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43611797825)（`59de016c`）**5 个任务全部成功**：arm64/x64 的 Metal/Raster 构建、两个干净环境验收包、跨架构四份样例比较。产品/字体/定位组合各 **103 通过、13 跳过**，预览/原生能力各 **21 通过、1 跳过**。13 项跳过为 Vulkan 故障注入、Windows D2D 对照和实装 Windows 字体等平台专用项；便携 TTF/CFF/变量/COLR 字体、无 GPU 度量和 GPU/Raster 对照均执行。
+- 新测试已进入 Mac 验收包；manifest 新增 `single_line_placement=1`，一键脚本据此运行定位和轮廓测试，跨架构比较新增 `placement-layout.json`。两个干净 Mac 的功能项全部通过，托管虚拟 Metal 的真硬件门槛被正确保留。已下载的 arm64 四份规范样例与 Windows/X11/Wayland 再比较，几何最大误差也均为 **0**；Mac 两架构的 Metal/Raster 构建指纹均核对为本节同一源码身份。§14.6 的朋友验收说明已更新到本轮提交与验收包。
+
+**P00 严格画质预算仍未过。** 用新轮廓再次运行同一 Arial 50px / 640×360 / `AWi` 样例，alpha 阈值仍为 16：Skia GPU / Raster 对 D2D 的 IoU 均为 **0.971068**、P95 均为 **17**，union channel MAE 约 **3.575 / 3.583**，alpha 总量差均约 **0.679%**。本次修复解决单元设计几何精度，没有关闭该抗锯齿/覆盖画质差异，也没有修改 P00 阈值；不能宣布已经可以替代 D2D。
+
+native 源码身份：`0588887388e7f062fbdfbf9c2292c12cf66e6c6a9d5225c96c16acc727a8f494`。本机日志：`build/p05-placement-native.log`、`build/p05-placement-linux-xcb.log`、`build/p05-placement-linux-wayland.log`、`build/p05-placement-linux-outline.log`、`build/p05-placement-regression.log`、`build/p05-placement-regression-final.log`、`build/p05-placement-d2d.log`、`build/p05-placement-arial-budget.json`。Linux 仍为 llvmpipe，Mac 新功能需新版验收包真机补验；未做 4K 或 QPainter 画面对照。
 
 ## 15. 前期探针清理范围
 
