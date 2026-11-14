@@ -10,6 +10,7 @@ import hashlib
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import LocalLineGeometry, local_line_geometry
+from krok_helper.subtitle_render.engine.layout.line.skia_placement import place_horizontal_line
 from krok_helper.subtitle_render.engine.text.cell_positions import char_left_positions
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.font_slots import font_style_for_cell
@@ -44,6 +45,7 @@ class RubyLineGeometry:
     overflow: tuple[int, int]
     main: LocalLineGeometry
     rubies: tuple[RubyGeometry, ...]
+    anchor: tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -140,10 +142,33 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                 visible = ink[2] > ink[0] and ink[3] > ink[1]
                 x = origin + pen
                 cells.append({'metrics': cell, 'run_index': run, 'origin_x': x, 'baseline_y': baseline,
+                              'layout_left': origin, 'layout_right': origin + width,
                               'wipe_left': x + ink[0] if visible else origin,
                               'wipe_right': x + ink[2] if visible else origin + width})
             rubies.append(RubyGeometry(target, tuple(span), baseline, tuple(cells)))
-        lines.append(RubyLineGeometry(tuple(clock), tuple(gaps), (left_overflow, right_overflow), local, tuple(rubies)))
+        anchor = ((local.ink[0], local.ink[2]) if local.ink else (0, max(local.layout_width, 1)))
+        if appearance.layout_semantics == 'n3_1074':
+            # N3 aligns the union of the main grid and ruby UNIT BOXES. Ink
+            # bearings are irrelevant here; overflow on either side shifts
+            # every path together and must later enter page-width statistics.
+            boxes = [(c['layout_left'], c['layout_right']) for r in rubies for c in r.cells]
+            anchor = (min([0, *(b[0] for b in boxes)]),
+                      max([max(local.layout_width, 1), *(b[1] for b in boxes)]))
+        lines.append(RubyLineGeometry(tuple(clock), tuple(gaps), (left_overflow, right_overflow),
+                                      local, tuple(rubies), anchor))
     signature = (measured.identity, ruby_metrics.identity, value_signature(track.rubies), value_signature(line_styles))
     identity = hashlib.sha256(repr(signature).encode('utf-8')).hexdigest()
     return RubyTrackGeometry(ruby_metrics, tuple(lines), identity)
+
+
+def ruby_line_position(item, main_metrics, prepared, width, height):
+    """Place an entire prepared line using its semantic anchor, including ruby.
+
+    Page/smart policies must consume this same anchor width when integrated;
+    applying a ruby-only shift would detach the main text and its wipe clips.
+    """
+    left, right = prepared.anchor
+    position = place_horizontal_line(item, main_metrics.baseline_metrics, width=width, height=height,
+                                     ink_left=left, ink_right=right, layout_width=right-left)
+    return (replace(position, offset_x=position.offset_x-left)
+            if item.layout_style.layout_semantics == 'n3_1074' else position)

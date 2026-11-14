@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.text.cell_positions import char_left_positions
 from krok_helper.subtitle_render.engine.ruby.selection import active_rubies_for_line
 from krok_helper.subtitle_render.engine.ruby.interference import RubySpacingSpan, resolve_ruby_spacing
-from krok_helper.subtitle_render.engine.ruby.skia_geometry import prepare_ruby_geometry
+from krok_helper.subtitle_render.engine.ruby.skia_geometry import prepare_ruby_geometry, ruby_line_position
 from krok_helper.subtitle_render.engine.text.skia_metrics import measure_track
 from krok_helper.subtitle_render.native.skia_fonts import resolve_skia_font
 from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
@@ -128,6 +128,7 @@ def test_canonical_geometry_maps_repeated_targets_and_inserts_main_gaps(binary,a
     if semantics=='legacy':
         (tmp_path/'ruby-geometry.json').write_text(json.dumps({
             'gaps':line.gaps,'overflow':line.overflow,'intervals':line.intervals,
+            'anchor':line.anchor,
             'main':line.main.cells,'width':line.main.layout_width,'ink':line.main.ink,
             'rubies':[{'annotation_index':r.target.annotation_index,'indices':r.target.indices,
                        'span':r.span,'baseline':r.baseline_offset,'cells':r.cells,
@@ -279,11 +280,10 @@ def test_prepared_main_and_ruby_bounds_match_d2d_gpu(binary,annotated,semantics)
 
 def _assert_gpu_bounds(binary,track,style):
     from test_subtitle_render_gpu_backend import _render_g1_frames
-    from krok_helper.subtitle_render.engine.layout.line.skia_geometry import line_position
     main,prepared=prepare(binary,track,style)
     local=prepared.lines[0]
     item=SimpleNamespace(line=track.lines[0],layout_style=style,lane=0,page_line_count=1,center_override=False)
-    position=line_position(item,main.lines[0],local.main,640,360)
+    position=ruby_line_position(item,main.lines[0],local,640,360)
     boxes=[local.main.ink]
     for ruby in local.rubies:
         for cell in ruby.cells:
@@ -315,12 +315,11 @@ def test_pending_application_font_ruby_gpu_parity(binary,annotated,explicit):
 
 
 @pytest.mark.skipif(sys.platform!='win32',reason='Direct2D GPU geometry reference is Windows-only')
-@pytest.mark.xfail(strict=True,raises=AssertionError,
-                   reason='P05 open: N3 line anchor after ruby interference has not been integrated')
-def test_pending_n3_interference_page_anchor_gpu_parity(binary,annotated):
+@pytest.mark.parametrize('semantics',['legacy','n3_1074'])
+def test_interference_line_anchor_matches_d2d_gpu(binary,annotated,semantics):
     from PyQt6.QtGui import QFontDatabase
     if not {'Meiryo','Arial'}<=set(QFontDatabase.families()):pytest.skip('Install Meiryo and Arial')
     track,style=annotated
-    style=replace(style,layout_semantics='n3_1074',font_family='Meiryo',font_family_latin='Arial',
+    style=replace(style,layout_semantics=semantics,font_family='Meiryo',font_family_latin='Arial',
                   ruby_font_family='Meiryo',ruby_font_family_latin='Arial')
     _assert_gpu_bounds(binary,track,style)
