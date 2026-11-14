@@ -342,6 +342,13 @@ git submodule status
    所有同行最终 lane 变化时须清页面统计和碰撞几何缓存；不要仅更新本行。
    持久化 `TrackPagePlan` 是页成员的权威来源，不能重新按容量分组；查询缓存包含
    页计划签名。客户端检查 `p05_smart_horizontal`，native 帧循环不重新求 SmartHorizon。
+   P05.6 注音准备层见 §14.18：`ruby/style_semantics.py` 是字体槽/角色/描边继承的
+   纯规则来源，Qt `ruby/style.py` 仅构造字体并保留导出；注音 Latin 的 family/weight
+   继承不同于主字 Latin，不要直接套主字槽解析。`ruby/unit_layout.py` 共用已度量单元
+   的对齐、取整与净空规则；`ruby/skia_metrics.py` 使用共用 `text/skia_batch.py` 批量
+   获取规范几何和日文注音槽基线。全英数/空读音也不能改用实际字形基线。
+   这仍是准备层，产品含 ruby 的 Skia 配置继续拒绝；间距/锚点、两层 timing、最终
+   IR/native 绘制、上下 ruby 和完整 reading parts 验收尚未完成，不要提前解除门禁。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

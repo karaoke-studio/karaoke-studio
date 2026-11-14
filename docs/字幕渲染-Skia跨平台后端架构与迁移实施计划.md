@@ -520,7 +520,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
-- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
+- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。字体槽、规范批量度量和共用单元排布底座见 §14.18，尚未解除注音绘制门禁。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
@@ -1421,6 +1421,27 @@ native 源码身份：`fd9406a3e5e28f5db320b0d2cc4f19bbc0a63e4d22160ee9b73fcb1fd
 **完整字体/布局与画质门槛仍未全部通过。** 智能水平功能通过不代替 ruby、竖排、RTL、全特效或 P00 画质验收，也不宣布 D2D 退役。后续继续注音和其余几何迁移，再接入复杂外观及重点特效。
 
 native 源码身份：`da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`。本机日志为 `build/p05-smart-*`，新增跨平台规范样例 `smart-layout.json`，Mac 验收包按 `smart_horizontal=1` manifest 标志运行同一智能布局文件。Linux 真硬件、新 Mac 功能真机门槛继续保留，未做 4K。
+
+### 14.18 P05.6 注音准备：字体槽、规范度量与共用单元排布（2026-11-15）
+
+**本批交付注音准备层，不是注音绘制验收，不关闭 P05.6。** 产品仍拒绝含 ruby 的 Skia 配置，未新增绘制能力声明。受 ruby 影响的主字间距/溢出、目标锚点、基线、reading parts/空 pause/checkpoint、上下 ruby 和最终 IR/native 绘制仍需接入并与 D2D GPU 对照；不能仅把读音画到主字上方就解除门禁。
+
+实现边界：
+
+- `engine/ruby/style_semantics.py` 持有原有纯字体、描边和角色继承规则；原 `style.py` 保留公开导出，作为 Qt 字体构造薄适配器。`font_style_for_ruby_cell` 同供该适配器与 Skia 使用：注音英数槽的 family 继承顺序、跟随主字时使用主字日文 weight、独立字号/斜体/stretch 与主字英数槽不同，不能直接套主字 Latin 解析器。
+- `engine/ruby/unit_layout.py` 接收已度量的 `(text, box_width, pen_offset, ink_left, ink_right)`，统一居中/均分/auto、负间距、双描边净空、宽度/悬垂与 N3 取整。原 `layout.py` 在 Qt 度量后调用同一算法，Skia 直接输入规范度量；没有维护第二套注音对齐规则。此处不选择目标、不分配时间、不查字体。
+- `engine/text/skia_batch.py` 从已有主字度量路径提取实例/文本去重和结果校验，主字调用顺序、IR 和身份不变。`engine/ruby/skia_metrics.py::measure_readings` 接收已解析角色样式的 `(reading, style)`，一个 CPU 批次度量所有读音，返回显式资源/实例、逐 grapheme 塑形、整数单元宽度/offset 与日文注音槽基线。全英数/空读音仍独立获取该基线，不按实际字形或 Latin 字号改变；空批次不发现字体、不调用 IPC。
+- 准备层处理首层描边对单元宽度/pen 的影响与脚本描边继承，这不表示 Skia 已能绘制描边。字形内容身份、glyph/cluster 和映射进入测量身份，本地路径不进入该身份。几何 grapheme 与时间 mora/reading parts 分层，度量层不重分配时间。
+- 新 `ruby-metrics.json` 加入规范样例比较，`run_indices` 数组按离散身份精确比较；几何仍用原 `1e-4px` 门槛。验收包增加 `ruby_metrics=1`，一键脚本按标志运行准备层测试，不宣称 sidecar 已支持注音绘制。
+
+验证：
+
+- 新增文件 **27 通过**，覆盖继承、整单元分类、Qt 薄适配器、角色、空批次/空读音、组合字符、去重、非有限基线、整数/负值取整和描边净空。禁止 Qt 注音测量的真实 sidecar 测试通过。Windows CPU-only 独立构建同文件 **27 通过**，与 Vulkan 构建的度量 JSON 误差 **0**。
+- Windows 完整 Skia 产品组合 **241 通过**；Linux X11/Wayland 各 **216 通过、25 跳过**（WSLg/软件 Vulkan，不代替真硬件门槛）。九份规范样例在 Windows/X11/Wayland 比较，身份、glyph/cluster、实例、时间精确一致，几何最大误差 **0**；原有八份 Windows 样例与修改前也逐值一致。
+- 相关架构、渲染、lower ruby、字体字重、N3 导入、时间线、构建和验收工具回归 **538 通过、12 跳过**。D2D GPU 自身的注音 stretch、共享 realization、完成后 wipe 释放和干涉网格缓存回归 **12 通过**；未改 D2D C++ 或二进制，未以 QPainter 画面对照作为 Skia 迁移判据。
+- Mac 双架构构建、产品/验收包及九份样例比较已加入 CI，结果待回收。native 源码未改，指纹仍为 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`；本批不需要重建本机 C++ 产物。
+
+下一步用规范单元测量接入 ruby target、主字间距/悬垂、上下锚点/基线，再物化 reading parts/空 pause/checkpoint 对两层走字的最终轨迹，接通 IR 校验和公共绘制核心。P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出入场/粒子/走字线和正式预览压力恢复仍待后续阶段。
 
 ## 15. 前期探针清理范围
 

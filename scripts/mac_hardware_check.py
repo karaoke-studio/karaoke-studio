@@ -175,6 +175,9 @@ def main(argv=None) -> int:
     if manifest.get("smart_horizontal", 0) >= 1:
         steps["smart_horizontal"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                      "tests/test_subtitle_skia_smart.py", "--basetemp", logs / "smart-tests"]
+    if manifest.get("ruby_metrics", 0) >= 1:
+        steps["ruby_metrics"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                 "tests/test_subtitle_skia_ruby_metrics.py", "--basetemp", logs / "ruby-metrics-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

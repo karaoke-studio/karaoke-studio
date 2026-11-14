@@ -264,5 +264,6 @@ def test_sample_comparison_keeps_resource_and_cluster_identity_exact():
     assert compare({'advance': 20}, {'advance': 20.00001}) < 1e-4
     for a, b in (({'id': 1}, {'id': 2}), ({'cluster_end': 1}, {'cluster_end': 2}),
                  ({'run_index': 0}, {'run_index': .000001}),
+                 ({'run_indices': [0, 1]}, {'run_indices': [0, 1.000001]}),
                  ({'font_identity': 'old'}, {'font_identity': 'new'})):
         with pytest.raises(ValueError): compare(a, b)

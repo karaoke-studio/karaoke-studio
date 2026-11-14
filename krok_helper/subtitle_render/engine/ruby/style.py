@@ -2,209 +2,43 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from PyQt6.QtGui import QFont
 
-from krok_helper.subtitle_render.engine.text import (
-    is_n3_latin_text,
-)
-from krok_helper.subtitle_render.engine.text import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.font_weight import build_weight_font
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
-from krok_helper.subtitle_render.domain.timing import TimingLine
 
 
-def ruby_uses_main_font(style: Style) -> bool:
-    """Return whether an untouched ruby font slot still follows main text."""
-    return bool(style.ruby_font_follow_main) and all(
-        value is None
-        for value in (
-            style.ruby_font_family,
-            style.ruby_font_family_latin,
-            style.ruby_font_weight,
-            style.ruby_latin_font_size_px,
-            style.ruby_latin_font_weight,
-        )
-    ) and int(style.ruby_font_size_px) == 45
+from .style_semantics import (
+    ruby_uses_main_font,
+    ruby_font_size,
+    ruby_italic_value,
+    ruby_latin_italic_value,
+    ruby_scale,
+    scaled_px,
+    scaled_signed_px,
+    ruby_stroke_width,
+    ruby_stroke2_enabled,
+    ruby_stroke2_width_value,
+    ruby_stroke2_width,
+    ruby_script_stroke_style,
+    ruby_style_for_target_indices,
+    font_style_for_ruby_cell,
+)
 
-
-def ruby_font_size(style: Style) -> int:
-    return max(int(style.ruby_font_size_px), 1)
-
-
-def ruby_italic_value(style: Style) -> bool:
-    """注音·日文槽斜体的生效值：``None`` = 跟随主文字（与描边 2 同链）。"""
-    value = style.ruby_italic
-    return bool(style.italic if value is None else value)
-
-
-def ruby_latin_italic_value(style: Style) -> bool:
-    """注音·英数槽斜体的生效值：``None`` = 跟随注音·日文槽的生效值。"""
-    value = style.ruby_latin_italic
-    return bool(ruby_italic_value(style) if value is None else value)
-
-
-def ruby_scale(style: Style) -> float:
-    return ruby_font_size(style) / max(style.font_size_px, 1)
-
-
-def scaled_px(value: int, scale: float) -> int:
-    if value <= 0:
-        return 0
-    return max(1, int(round(value * scale)))
-
-
-def scaled_signed_px(value: int, scale: float) -> int:
-    if value == 0:
-        return 0
-    sign = 1 if value > 0 else -1
-    return sign * max(1, int(round(abs(value) * scale)))
-
+def _build_ruby_slot(style: Style, text: str) -> QFont:
+    selected, stretch = font_style_for_ruby_cell(style, text)
+    font = build_weight_font(resolve_qt_font_family(selected.font_family),
+                             selected.font_size_px, selected.font_weight, italic=selected.italic)
+    if stretch != 1:
+        font.setStretch(round(stretch * 100))
+    return font
 
 def build_ruby_font(style: Style) -> QFont:
-    family = (
-        style.font_family
-        if ruby_uses_main_font(style)
-        else style.ruby_font_family or style.font_family
-    )
-    size = ruby_font_size(style)
-    weight = (
-        style.font_weight
-        if ruby_uses_main_font(style)
-        else style.ruby_font_weight
-        if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
-        else style.font_weight
-    )
-    font = build_weight_font(
-        resolve_qt_font_family(family),
-        size,
-        int(weight),
-        italic=ruby_italic_value(style),
-    )
-    return font
-
+    return _build_ruby_slot(style, "")
 
 def build_ruby_font_for_text(style: Style, reading: str) -> QFont:
-    """Build the effective Japanese or Latin ruby font for one reading/unit.
-
-    Must mirror the GPU projection chain (gpu_scene_projection.cpp resolving
-    rubyLatinFontFamily/rubyLatinFontWeight + d2d_backend_configure.cpp
-    selecting the per-unit face): latin family falls back through
-    ruby-latin -> main-latin -> ruby -> main; follow-main latin inherits the
-    MAIN weight (not the main latin weight), because the sidecar resolves
-    rubyLatinFontWeight against the already-resolved ruby weight.
-    """
-    if not is_n3_latin_text(reading):
-        return build_ruby_font(style)
-    if ruby_uses_main_font(style):
-        family = style.font_family_latin or style.font_family
-        weight = int(style.font_weight)
-    else:
-        family = (
-            style.ruby_font_family_latin
-            or style.font_family_latin
-            or style.ruby_font_family
-            or style.font_family
-        )
-        weight = (
-            int(style.ruby_latin_font_weight)
-            if style.ruby_latin_font_weight is not None
-            and int(style.ruby_latin_font_weight) > 0
-            else int(style.ruby_font_weight)
-            if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
-            else int(style.font_weight)
-        )
-    size = (
-        int(style.ruby_latin_font_size_px)
-        if style.ruby_latin_font_size_px is not None
-        and int(style.ruby_latin_font_size_px) > 0
-        else ruby_font_size(style)
-    )
-    font = build_weight_font(
-        resolve_qt_font_family(family),
-        max(size, 1),
-        weight,
-        italic=ruby_latin_italic_value(style),
-    )
-    stretch = (
-        style.ruby_latin_font_stretch_pct
-        if style.ruby_latin_font_stretch_pct is not None
-        else style.latin_font_stretch_pct
-    )
-    if int(stretch) != 100:
-        font.setStretch(max(50, min(200, int(stretch))))
-    return font
-
-
-def ruby_stroke_width(style: Style) -> int:
-    if style.ruby_stroke_width_px is not None:
-        return max(int(style.ruby_stroke_width_px), 0)
-    return scaled_px(style.stroke_width_px, ruby_scale(style))
-
-
-def ruby_stroke2_enabled(style: Style) -> bool:
-    return (
-        style.stroke2_enabled
-        if style.ruby_stroke2_enabled is None
-        else bool(style.ruby_stroke2_enabled)
-    )
-
-
-def ruby_stroke2_width_value(style: Style) -> int:
-    """Return the inherited second-outline width before applying its switch."""
-    if style.ruby_stroke2_width_px is not None:
-        return max(int(style.ruby_stroke2_width_px), 0)
-    return scaled_px(style.stroke2_width_px, ruby_scale(style))
-
-
-def ruby_stroke2_width(style: Style) -> int:
-    return ruby_stroke2_width_value(style) if ruby_stroke2_enabled(style) else 0
-
-
-def ruby_script_stroke_style(style: Style, reading: str) -> Style:
-    """Materialize the reading script's outlines into common ruby fields."""
-    if not is_n3_latin_text(reading):
-        return style
-    width = (
-        ruby_stroke_width(style)
-        if style.ruby_latin_stroke_width_px is None
-        or int(style.ruby_latin_stroke_width_px) <= 0
-        else max(int(style.ruby_latin_stroke_width_px), 0)
-    )
-    enabled = (
-        ruby_stroke2_enabled(style)
-        if style.ruby_latin_stroke2_enabled is None
-        else bool(style.ruby_latin_stroke2_enabled)
-    )
-    width2 = (
-        ruby_stroke2_width_value(style)
-        if style.ruby_latin_stroke2_width_px is None
-        or int(style.ruby_latin_stroke2_width_px) <= 0
-        else max(int(style.ruby_latin_stroke2_width_px), 0)
-    )
-    return replace(
-        style,
-        ruby_stroke_width_px=width,
-        ruby_stroke2_enabled=True,
-        ruby_stroke2_width_px=width2 if enabled else 0,
-    )
-
-
-def ruby_style_for_target_indices(
-    style: Style,
-    line: TimingLine,
-    indices: list[int],
-) -> Style:
-    """Resolve the first role-specific style covered by a ruby target."""
-    for index in indices:
-        if 0 <= index < len(line.chars):
-            role_label = line.chars[index].role_label
-            if role_label:
-                return style_for_role_in_layout(style, role_label)
-    return style
-
+    return _build_ruby_slot(style, reading)
 
 __all__ = [
     "build_ruby_font",
