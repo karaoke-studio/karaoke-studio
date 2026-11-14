@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout c0e72070
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43636069404 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout bac54165
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43640232001 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1453,7 +1453,7 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 ### 14.19 P05.6 注音几何准备：规范目标、主字间距与局部锚点（2026-11-15）
 
-**本批接通主字规范度量 → 注音目标/间距/局部几何的准备链路，尚未开启产品注音绘制。** 初始提交 `0fee80d4`；不把几何准备等同于最终 IR/绘制验收，P05.6 继续未勾选。后续补齐 N3 并集锚点后，实际 D2D GPU 边界对照由三项未通过减少为两项，见下方。
+**本批接通主字规范度量 → 注音目标/间距/局部几何的准备链路，尚未开启产品注音绘制。** 初始提交 `0fee80d4`，并集锚点修正 `bac54165`；不把几何准备等同于最终 IR/绘制验收，P05.6 继续未勾选。后续补齐 N3 并集锚点后，实际 D2D GPU 边界对照由三项未通过减少为两项，见下方。
 
 - `ruby/selection.py::active_rubies_for_line` 新增可选 `intervals` 端口。旧调用者保留原默认时钟和缓存键；规范调用者传入 `TextMetricSnapshot.resolve_intervals` 的区间，缓存追加区间值，不能复用默认宽度分配的结果。`ruby/skia_geometry.py::prepare_ruby_geometry` 据此调用原 target/effective-ruby 规则，处理显式行/字符归属、同文重复、共享时间块、子字符串落在一个作者单元内和角色继承。手工构造轨道缺少行号时仍用真实源行索引隔离注音，不修改源对象。
 - 原 `text/layout.py::char_left_positions` 原样提取到纯 `text/cell_positions.py`，旧入口保留导出；`ruby/interference.py` 接收目标 span 和已度量 bounds provider，复用原稳定排序、上下组隔离、逐项推开、负间距和悬垂取整。旧 Qt 适配器与 Skia 都调用此规则，没有第二套避让算法。主字区间先固定，插入 gaps 只改变空间，不重新分配演唱时间。
@@ -1467,8 +1467,9 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 - 专项最终 Windows **31 通过、2 严格预期失败**；27 项准备测试覆盖所有权/时钟隔离、重复与部分目标、真实 shared span、角色/锚点、混合 descent、负间距/零宽单元、空行、NaN/Infinity、时序变化不移动几何及禁止 Qt 测量。四项用明确指定的 Meiryo/Arial、单个混合读音目标/多个发生干涉的读音比较实际 D2D GPU 画面包络，legacy/N3 均满足 **1px**；这是几何核对，不代替 P00 严格栅格化预算。
 - 两项严格 `xfail` 是迁移的未关闭门槛，不算验收通过，也未放宽比较：应用内测试字体且隐式 ruby Latin 继承时，边缘差最大 **32px**；显式指定两槽后仍有约 **5px** 垂直差。原 N3 多注音干涉锚点项已用上述并集规则修正，移除了未通过标记，保留原 **1px** 条件作为普通回归。剩余两项保留 `strict=True`，意外通过必须移除对应标记。
 - 已定位的证据：`native/protocol.py::_font_face_slot_overrides` 的 ruby Latin resource hint 使用 `ruby_latin → ruby → main`，而 `font_style_for_ruby_cell` 与 C++ `scene/style_projection.cpp` 还会继承 main Latin，隐式槽因此可携带另一字体的 hint。应用内字体的 D2D ruby box 度量调用也未沿用绘制 face 的全部 hint；其与规范字体 box 的差异仍须查证。未为匹配这些结果去修改 Skia 的继承规则，也未在本批修改 D2D 源码/二进制或旧字体提示链。
-- 原有完整 Skia 组合（新增 GPU 核对前）Windows **268 通过**、Linux X11/Wayland 各 **243 通过、25 跳过**；十份规范字体/布局/注音几何样例在三环境比较均为 **0**，原九份 Windows 样例与 §14.18 逐值一致。新增平台专用用例只影响跳过/未通过计数，最终组合与 Mac 结果回收后补记。
+- 最终 Windows 完整 Skia 组合 **272 通过、2 严格预期失败**；Linux X11/Wayland 的完整组合（新增 GPU 核对前）各 **243 通过、25 跳过**，最终注音几何专项各 **27 通过、6 跳过**。十份规范字体/布局/注音几何样例在三环境比较均为 **0**，原九份 Windows 样例与 §14.18 逐值一致。新锚点样例在 Windows/Linux Vulkan、Windows/Linux CPU-only 和 Wayland 共五种环境/构建中也逐值一致。
 - 相关架构/渲染/lower ruby/字重/N3 导入/时间线/显示/分页回归 **612 通过、12 跳过**；构建/验收工具 **26 通过**；原 D2D 注音 GPU 回归 **12 通过**。对照提取前 `a2628ee8` 的函数，固定随机种子各生成 **2,000 组字符流位置、2,000 组注音避让**，结果逐值一致。Windows/Linux CPU-only 准备层亦通过；本批 native 源码未变。
+- 最终 Mac CI [43640232001](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43640232001)（`bac54165`）**5 项全部成功**：arm64/x64 产品组合各 **239 通过、35 跳过**，预览/原生能力各 **21 通过、1 跳过**；十份跨架构样例最大误差 **0**。下载的 arm64 十份样例与 Windows/X11/Wayland 再比较也均为 **0**，两架构 Metal/Raster 的四份指纹均核对为 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`。两份干净 Mac 验收包的 `ruby_metrics` / `ruby_geometry` 步骤均退出 **0**、功能项全部通过，托管虚拟 Metal 的真硬件门槛仍保留。§14.6 的朋友入口已更新到最终提交/验收包；初始 `0fee80d4` 的运行 `43639801887` 已取消，不作为最终证据。
 
 下一批先核实并解决上述两项字体边界差异、把准备的锚点接到页面/SmartHorizon 端口，再把 reading parts、空 pause、checkpoint 和主字显式内部边界规则物化为两层分段轨迹；当前 native 线性 start/end 单元不足以表达这些规则。最终 IR、共享 C++ 绘制与 GPU/Raster 回归完成前，不能宣布注音可用。
 
