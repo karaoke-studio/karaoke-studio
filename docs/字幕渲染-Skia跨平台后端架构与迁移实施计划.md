@@ -83,7 +83,7 @@
 | 当前位置 | 当前职责 / 事实 | 迁移时的最小处理 |
 |---|---|---|
 | `krok_helper/subtitle_render/engine/layout/plan/` | 已有共享不可变语义计划，包含行窗口、分页、lane、时间区间等 | 继续作为宿主语义编排的事实源，不在 Skia 侧复制分页与窗口规则 |
-| `engine/layout/plan/orchestrator.py`、`engine/layout/line/qt_geometry.py` | 虽有 resolver 边界，逐字区间仍直接依赖 Qt 字宽测量 | P05 显式接入统一度量快照，不能误认为换个 resolver 就已经完全解耦 |
+| `engine/layout/plan/orchestrator.py`、`engine/layout/line/qt_geometry.py` | P05.3 已移除 orchestrator 对 Qt 逐字区间的隐式调用，现有调用者显式传旧 resolver；新快照端口可用 | P05.4 仍需将规范度量真正用于最终 IR，不能误认为换个 resolver 就已完成全部布局迁移 |
 | `engine/render/render_ir.py`、`native/protocol.py` | IR、字体资源、角色 / 粒子 / 布局表已有去重与解析 | 复用协议入口，必要时小范围扩展并版本化；不创建另一套工程模型 |
 | `native/subtitle_renderer/src/backends/qt/gpu_scene_projection.cpp` | 协议到 native 场景投影仍引用 Qt 字体、行布局和 ruby helper，不是纯字段拷贝 | 分离纯投影与旧几何兼容；P05 完成度量替换后收口；禁止 Skia 包含 Qt 后端私有头 |
 | `src/model/render_types.h` | 混合场景值、后端诊断、帧结果、窗口目标等多种概念 | 按实际消费者渐进提取类型；不再给单个共享头无限追加字段 |
@@ -515,9 +515,9 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 ### P05：字体、规范度量与完整几何
 
-- [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。
-- [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。
-- [ ] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。
+- [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例与度量资源消费、注册字体物理快照用例已实现；完整绘制接入尚未完成，见 §14.10。
+- [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster 与显式 fallback 已实现；ruby checkpoint 和实际绘制待接入。
+- [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
@@ -917,7 +917,7 @@ Skia 子集未覆盖的项目可以明确拒绝并给出中文原因，或按现
 下一任务 ID：
 ```
 
-当前阶段状态：P00.1–P00.6 的输入清单、采集和分类已交付；**现有 D2D 严格回访仍有未通过项，未豁免，也不称“全部基线验收通过”**。P01 代码与可用环境验证已交付，Apple M4 Pro 真机已通过原验收包检查，Linux 真硬件门槛仍保留（§14.5/§14.6）。P02 已交付（§14.7）；P03 的选定宿主边界与可用环境验证已交付（§14.8），新增 Mac 生命周期项可用新版验收包在真机补验。P04 最小产品闭环已实现（§14.9）；下一阶段 P05，P05–P12 未完成。本计划按仓库证据做了可执行性和架构反证检查；没有用户要求的独立评审/多轮批准流程，也没有声称获得独立评审批准。
+当前阶段状态：P00.1–P00.6 的输入清单、采集和分类已交付；**现有 D2D 严格回访仍有未通过项，未豁免，也不称“全部基线验收通过”**。P01 代码与可用环境验证已交付，Apple M4 Pro 真机已通过原验收包检查，Linux 真硬件门槛仍保留（§14.5/§14.6）。P02 已交付（§14.7）；P03 的选定宿主边界与可用环境验证已交付（§14.8），新增 Mac 生命周期项可用新版验收包在真机补验。P04 最小产品闭环已实现（§14.9）；P05 字体/度量底座与 P05.3 已交付（§14.10），正式 IR、完整几何与 ruby 尚未完成；P05–P12 仍在实施。本计划按仓库证据做了可执行性和架构反证检查；没有用户要求的独立评审/多轮批准流程，也没有声称获得独立评审批准。
 
 P00 第一批记录（2026-11-14）：
 
@@ -1205,6 +1205,32 @@ Linux 另设 `QT_QPA_PLATFORM=xcb` / `wayland` 分进程测试；软件设备测
 - 相关单元/边界/字体回归 **168 passed, 2 skipped**；最终导出器、预览调度、native 导出、架构与构建回归合跑 **413 passed**。D2D 全量原生重建后 **3 项 GPU/DirectComposition 回归通过**，使用 GPU 自身路径作对照，未建立 QPainter 画面 oracle。既有 P00 严格回访差异仍未豁免。
 
 本机日志：`build/p04-protocol-tests.log`、`build/p04-linux-tests.log`、`build/p04-regression.log`、`build/p04-final-regression.log`、`build/p04-d2d-regression.log`、`build/p04-vulkan-validation.log`。Windows/Linux GPU/Raster 与 Mac 构建的 native 源码身份：`046ad19671e12cb356e0af9f4457641bc55c7fd275309fef23d31306be780ed2`。Mac 使用托管虚拟 Metal；新版 P04 和生命周期仍需用 §14.6 的新验收包在真实 Mac 补验，不能沿用旧 M4 Pro 的 P01/P03 结果关闭新门槛。下一任务是 **P05.1–P05.3**，先做字体实例资源、shaping 与规范度量入口，不直接跳到完整特效或宣布退役 D2D。
+
+### 14.10 P05 首批：字体实例、HarfBuzz 塑形与无 GPU 度量（2026-11-14）
+
+**交付范围是 P05.1/P05.2 的底座和 P05.3，不是完整 P05。** 实际字幕绘制仍是 §14.9 的 `p04_ascii_solid_wipe`，CJK、ruby、N3、多行及特效门禁保持关闭。生产 D2D 默认、二进制和字体几何路径未切换。提交：`5214ff05`（度量底座与计划端口）、`246421f7`（跨平台字体样例和比较）、`5a5a9eb8`（进程启动与渲染策略分离）、`d1cdc3fa`（塑形后缺字判定与 CI 样例去重）。
+
+实现边界：
+
+- `src/skia/text/font_instance.*`：不可变字体字节、实际 SHA-256、collection face、实际轴坐标（含默认值）、字号、stretch 和合成粗斜体组成身份。轴名、重复轴、范围、非有限值均检查；使用空 font manager 从显式字节创建 face，不依赖系统隐式 fallback。
+- `src/skia/text/shaped_cell.*`：FreeType 字体与锁定的 HarfBuzz/ICU 塑形，返回 glyph、位置、UTF-8 byte cluster、advance、基线度量与实际路径 ink bounds。按现有作者定义的歌词单元分别塑形：单元内允许 ligature/组合，单元间不擅自合并计时。完整 ruby checkpoint 分配尚未实现。
+- 缺字按**塑形结果**决定，按显式字体链逐个尝试整个单元；若没有完整 face 则明确报错。仅检查 cmap 会误拒绝能合成为预组合字形的文本，已有专门回归。彩色 glyph 无轮廓时标记 `outline_available=false`；不据此承诺完整 emoji 绘制。
+- m150 的 HarfBuzz advance 路径会重复乘 `SkFont::scaleX`，因此塑形使用单位水平缩放，再对输出 advance、坐标和路径统一缩放一次。度量使用无 hinting、linear metrics 与 subpixel，CPU/GPU 构建复用同一代码。
+- `commands/skia/text_commands.*`：`measure_text` / `text_measured`、`metrics_schema=1` 的批量协议；字体读文件和摘要核对在 Qt 边界，核心无 Qt/平台头。限制字体字节、run、cell 和文本总量，并提供进度心跳。该命令在创建渲染 session 前执行，响应明确 `execution_target=cpu_metrics`、`gpu_initialized=false`。
+- `native/skia_process.py` 只负责新 sidecar 定位、启动和 Qt 动态库路径；`skia_backend.py` 负责渲染选择；`skia_text.py` 只协商度量能力。无效的 GPU 选择环境变量、不可用 Vulkan loader 均不阻断纯 CPU 度量。Windows 构建复制上游 ICU 的 `icudtl.dat` 到 sidecar 旁并记录摘要，其他系统使用静态 ICU 数据。
+- `engine/text/metric_snapshot.py`：不可变单元/行快照，检查有限值、UTF-8 cluster、歌词单元与样式身份；缓存身份包含物理字体身份和度量值。`layout/plan/orchestrator.py` 移除 Qt 逐字度量 import，要求调用者显式提供 `char_intervals`，并将度量身份纳入计划缓存。现有 Qt/D2D 调用者传入原 resolver，保持既有行为；缓存保留 resolver 强引用，避免对象 id 重用误命中。
+
+**advance 不等于既有 N3 布局宽度。** `LineMetric.capture(..., layout_widths=...)` 要求调用者显式提供校准后的宽度策略；当前没有把原始 advance 偷换成 N3 的字宽。P05.4 下一步应校准 ink/advance、空格、stretch 和字间距，再让规范快照真正驱动正式 IR；同时打通 PreparedScene 的 glyph/path 消费，才可扩大绘制 profile。随后完成横排/角色、ruby、竖排/RTL、页级网格及其 GPU 对照。仅新增 resolver 或通过文本度量测试不能关闭这些项。
+
+验证：
+
+- Windows Vulkan 与 CPU-only、Linux Vulkan 与 CPU-only 均重新构建，四种构建各 3 项 CTest 通过。native 源码身份：`537219b650189c0c8fa8e21a4bbd5b80d7964d25655b4c46be43885744c29450`。
+- Windows 真实 Qt 平台：字体度量、P04 协议、架构边界与进度测试合计 **63 通过**；Linux WSLg X11/Wayland 各 **48 通过、2 跳过**。跳过的是依赖 Windows 实际字体的变量字体/CJK/emoji 环境样例，便携合成字体样例在各平台执行。
+- 相关 Python 回归 **419 通过**；D2D 共享 realization 与 G6 零回读专项 **3 通过**。没有修改 D2D 渲染实现，也没有运行 QPainter 画面对照。
+- 自生成固定字体含 CJK/韩文、组合字符、ligature 和本地化 family；另生成变量字体验证轴插值。覆盖内容更换但路径不变、相同内容换路径、应用内注册/移除/重注册、合成粗斜体、stretch、显式 fallback、缺字报错与错误后继续服务、CPU-only/GPU 构建相同度量。
+- `scripts/compare_skia_text_metrics.py` 对字体身份、glyph id、cluster 与数量精确比较，几何误差上限 `1e-4` 像素，拒绝 NaN/Inf。固定样例在 Windows、Linux X11、Linux Wayland 间实际最大误差 **0**。单独的理论轮廓断言按 SkFont 64px 归一化与 FreeType 26.6 坐标的一量子解释，不放宽平台间比较。
+
+本机日志：`build/p05-final-text.log`、`build/p05-linux-tests.log`、`build/p05-d2d-regression.log`、`build/skia-p05-build.log`、`build/skia-p05-cpu-build.log`、`build/p05-linux-build.log`。Linux 仍是 llvmpipe；正式 Linux 硬件 GPU、Mac 新功能真机与完整 P05 验收仍保留。
 
 ## 15. 前期探针清理范围
 

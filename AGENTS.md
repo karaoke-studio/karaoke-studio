@@ -289,6 +289,16 @@ git submodule status
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
    POSIX native IPC key，D2D 普通键维持原行为；不能退回 Mac 默认 System V 的大小限制。
 
+   P05 已交付字体/度量底座（实施计划 §14.10），尚未完成整个阶段。`src/skia/text`
+   使用锁定的 FreeType/HarfBuzz/ICU；字体以内容摘要、face、实际 axes、字号与粗斜体/
+   stretch 标识，不使用系统隐式 fallback。`measure_text` 是独立 CPU 批量协议，
+   不调用 GPU 初始化；Windows 必须保留构建产物旁的 `icudtl.dat`。Python
+   `native/skia_text.py` 与 `engine/text/metric_snapshot.py` 提供度量客户端和不可变
+   快照，layout orchestrator 通过显式 resolver 接收逐字区间。现有 D2D/Qt 调用者
+   仍显式传入原 resolver，生产行为不变。不能把字体 advance 直接当作 N3 布局宽度；
+   P05.4 需校准宽度策略并生成最终 IR。当前实际字幕绘制仍受 P04 profile 限制，
+   不得因度量能处理 CJK/组合字符就提前放开绘制门禁；ruby、完整布局与绘制接入待完成。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的
