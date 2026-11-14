@@ -201,6 +201,20 @@ def test_portable_variable_font_interpolates_and_rejects_out_of_range_axes(binar
                             [{'font_ids': ['font'], 'size': 50, 'cells': ['A']}])
 
 
+def test_shaping_checks_composed_glyph_coverage_before_choosing_fallback(binary, tmp_path):
+    from skia_text_fixture import make_font
+    from fontTools.ttLib import TTFont
+    path = make_font(tmp_path / 'composed.ttf')
+    font = TTFont(path)
+    for cmap in font['cmap'].tables: cmap.cmap.pop(0x301, None)
+    font.save(path)
+    with SkiaTextMetricsProcess(binary) as process:
+        composed = run(process, path, ['á', 'a\u0301'])
+    assert composed[0]['advance'] == composed[1]['advance']
+    assert composed[0]['glyphs'][0]['id'] == composed[1]['glyphs'][0]['id']
+    assert composed[1]['glyphs'][0]['cluster_end'] == len('a\u0301'.encode())
+
+
 def test_registered_unicode_family_exports_physical_snapshot_and_invalidates_on_registry_change(binary, tmp_path):
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtGui import QFontDatabase

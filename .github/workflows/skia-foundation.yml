@@ -203,7 +203,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import subprocess, sys
-          paths = sorted(Path('metrics-artifacts').rglob('canonical-metrics.json'))
+          # upload-artifact materializes pytest's *current symlinks as duplicates.
+          paths = sorted(p for p in Path('metrics-artifacts').rglob('canonical-metrics.json')
+                         if not p.parent.name.endswith('current'))
           assert len(paths) == 2, paths
           subprocess.run([sys.executable, 'scripts/compare_skia_text_metrics.py', *map(str, paths)], check=True)
           PY

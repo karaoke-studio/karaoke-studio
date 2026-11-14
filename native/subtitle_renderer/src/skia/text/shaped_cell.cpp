@@ -29,7 +29,6 @@ std::vector<SkUnichar> decode(const std::string& text) {
     }
     return out;
 }
-bool ignorable(SkUnichar c) { return c == 0x200c || c == 0x200d || (c >= 0xfe00 && c <= 0xfe0f) || (c >= 0xe0100 && c <= 0xe01ef); }
 class Handler final : public SkShaper::RunHandler {
 public:
     std::vector<SkGlyphID> ids;
@@ -54,26 +53,34 @@ public:
 ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<const FontInstance>>& fonts,
                      const std::string& language, bool rightToLeft) {
     if (utf8.empty() || utf8.size() > 65536 || fonts.empty()) throw std::runtime_error("Skia 度量单元或字体链无效");
-    const auto scalars = decode(utf8);
+    decode(utf8);
+    auto unicode = SkUnicodes::ICU::Make();
+    auto shaper = SkShapers::HB::ShapeDontWrapOrReorder(unicode, nullptr);
+    if (!unicode || !shaper) throw std::runtime_error("Skia HarfBuzz/ICU shaping 初始化失败");
+    Handler handler;
     std::size_t selected = 0;
     for (; selected < fonts.size(); ++selected) {
         if (!fonts[selected]) throw std::runtime_error("Skia 字体链包含空实例");
         const auto& font = fonts[selected]->shapingFont();
-        if (std::all_of(scalars.begin(), scalars.end(), [&](auto c) { return ignorable(c) || font.unicharToGlyph(c); })) break;
+        auto script = SkShapers::HB::ScriptRunIterator(utf8.data(), utf8.size());
+        if (!script) throw std::runtime_error("Skia script iterator 初始化失败");
+        SkShaper::TrivialFontRunIterator fontRuns(font, utf8.size());
+        SkShaper::TrivialBiDiRunIterator bidi(rightToLeft ? 1 : 0, utf8.size());
+        SkShaper::TrivialLanguageRunIterator languages(language.c_str(), utf8.size());
+        Handler candidate;
+        shaper->shape(utf8.data(), utf8.size(), fontRuns, bidi, *script, languages, nullptr, 0,
+                      std::numeric_limits<float>::max(), &candidate);
+        // Coverage is the SHAPED result: cmap-only checks wrongly reject a +
+        // combining mark when the face supplies its precomposed glyph instead.
+        if (!candidate.output.empty() && std::all_of(candidate.output.begin(), candidate.output.end(),
+                                                    [](const auto& glyph) { return glyph.id != 0; })) {
+            handler = std::move(candidate);
+            break;
+        }
     }
     if (selected == fonts.size()) throw std::runtime_error("Skia 显式字体链缺少该歌词单元的完整字形");
     const auto& instance = *fonts[selected];
     const auto& font = instance.shapingFont();
-    auto unicode = SkUnicodes::ICU::Make();
-    auto shaper = SkShapers::HB::ShapeDontWrapOrReorder(unicode, nullptr);
-    auto script = SkShapers::HB::ScriptRunIterator(utf8.data(), utf8.size());
-    if (!unicode || !shaper || !script) throw std::runtime_error("Skia HarfBuzz/ICU shaping 初始化失败");
-    SkShaper::TrivialFontRunIterator fontRuns(font, utf8.size());
-    SkShaper::TrivialBiDiRunIterator bidi(rightToLeft ? 1 : 0, utf8.size());
-    SkShaper::TrivialLanguageRunIterator languages(language.c_str(), utf8.size());
-    Handler handler;
-    shaper->shape(utf8.data(), utf8.size(), fontRuns, bidi, *script, languages, nullptr, 0,
-                  std::numeric_limits<float>::max(), &handler);
     ShapedCell result;
     result.fontIdentity = instance.identity(); result.selectedFont = selected;
     result.advance = handler.advance * instance.horizontalScale();
