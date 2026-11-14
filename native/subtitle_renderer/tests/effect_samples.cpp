@@ -1,4 +1,5 @@
-// Dump canonical scalar/pixel samples for comparison with the pre-extraction D2D evaluator.
+// Dump canonical scalar/pixel samples for comparison with the pre-extraction D2D evaluator
+// and across platforms. scripts/compare_effect_samples.py parses this exact layout.
 #ifdef KROK_LEGACY_FX_REFERENCE
 #include "d2d_fx.h"
 namespace fx = krok::subtitle::native::direct2d;

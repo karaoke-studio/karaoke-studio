@@ -1,0 +1,69 @@
+name: Native scene portability
+
+# Builds the platform-neutral scene values, deterministic effects and owner session on every
+# target OS without Qt or Skia, runs their tests, and checks that all platforms evaluate the
+# shared effects to the same result (libm last-bit noise tolerated, discrete changes are not).
+on:
+  push:
+    paths:
+      - native/subtitle_renderer/**
+      - scripts/compare_effect_samples.py
+      - .github/workflows/native-scene.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scene:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-2025
+          - name: linux-x64
+            runner: ubuntu-24.04
+          - name: macos-arm64
+            runner: macos-15
+          - name: macos-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: bash
+        run: >
+          cmake -S native/subtitle_renderer -B build/scene -DCMAKE_BUILD_TYPE=Release
+          -DKROK_BUILD_LEGACY_SIDECAR=OFF -DKROK_BUILD_SCENE_ADAPTER=OFF
+          ${{ matrix.runner == 'ubuntu-24.04' && '-DCMAKE_CXX_COMPILER=clang++' || '' }}
+      - name: Build
+        run: cmake --build build/scene --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build/scene -C Release --output-on-failure
+      - name: Sample effects
+        shell: bash
+        run: |
+          binary=$(find build/scene -type f \( -name subtitle_effect_samples -o -name subtitle_effect_samples.exe \) | head -n 1)
+          "$binary" "effect-samples-${{ matrix.name }}.bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: effect-samples-${{ matrix.name }}
+          path: effect-samples-${{ matrix.name }}.bin
+
+  compare:
+    needs: scene
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: effect-samples-*
+          merge-multiple: true
+          path: samples
+      - name: Compare every platform with Windows x64
+        run: >
+          python3 scripts/compare_effect_samples.py samples/effect-samples-windows-x64.bin
+          samples/effect-samples-linux-x64.bin samples/effect-samples-macos-arm64.bin
+          samples/effect-samples-macos-x64.bin
