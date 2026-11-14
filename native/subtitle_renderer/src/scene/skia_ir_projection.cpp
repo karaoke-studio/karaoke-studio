@@ -105,7 +105,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (cell.vectorGlyph || cell.bitmapGuide || !cell.fallbackFamily.isEmpty()
                 || !cell.resolvedEndMs)
-                throw BackendError("Skia: guides/fallback or unresolved timing require later phases");
+                throw BackendError("Skia 当前尚不支持导唱符、缺字回退或未解析计时");
             TextChar ch;
             if (&cellStyle != &resolved) {
                 auto [entry, inserted] = roleStyles.try_emplace(&cellStyle, int(out.charStyles.size()));
