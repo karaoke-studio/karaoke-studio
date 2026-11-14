@@ -50,6 +50,10 @@ jobs:
           cat "$dir/metal-attempt.log"
           if [ "$status" -ne 0 ]; then
             echo '::warning::Native build and Raster passed; hosted Metal hardware smoke did not pass. Hardware gate remains open.'
+            "$dir/krok_skia_gpu_smoke" /System/Library/Fonts/Supplemental/Arial.ttf "$dir/metal-virtual" > "$dir/metal-virtual-attempt.log" 2>&1
+            virtual_status=$?
+            echo "$virtual_status" > "$dir/metal-virtual-attempt.exitcode"
+            cat "$dir/metal-virtual-attempt.log"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
