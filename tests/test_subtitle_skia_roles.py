@@ -99,6 +99,8 @@ def test_same_text_different_roles_do_not_collide_in_interval_snapshot(binary,ro
     a,b=capture(plain),capture(lead)
     snapshot=TextMetricSnapshot((a,b))
     assert snapshot.resolve_intervals(plain,style)!=snapshot.resolve_intervals(lead,style)
+    with pytest.raises(ValueError,match='快照'):
+        snapshot.resolve_intervals(replace(plain,chars=[replace(c,role_label='other') for c in units]),style)
     # Exercise the real plan as well: two identical-text lines use different role widths.
     ir=ir_for(binary,(replace(track,lines=[plain,replace(lead,chars=[replace(c,start_ms=c.start_ms+2000,
         source_span_start_ms=2200,source_span_end_ms=3000) for c in lead.chars],end_ms=3000)]),style))
@@ -109,7 +111,8 @@ def test_same_text_different_roles_do_not_collide_in_interval_snapshot(binary,ro
 def test_role_size_and_first_character_do_not_move_line_baseline(binary,roles,semantics):
     track,style=roles
     style=replace(style,layout_semantics=semantics,singer_style_overrides={1:SubtitleStyleScheme(font_size_px=65)})
-    line=replace(track.lines[0],singer_id=1)
+    source=track.lines[0]
+    line=replace(source,singer_id=1,chars=[replace(source.chars[0],role_label='lead'),*source.chars[1:]])
     decorated=ir_for(binary,(replace(track,lines=[line]),style))
     plain=ir_for(binary,(replace(track,lines=[replace(line,chars=[replace(c,role_label=None) for c in line.chars])]),style))
     for a,b in zip(decorated['skia_layout']['lines'][0]['cells'],plain['skia_layout']['lines'][0]['cells']):
