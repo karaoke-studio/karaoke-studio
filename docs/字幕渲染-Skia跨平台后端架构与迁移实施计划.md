@@ -891,7 +891,7 @@ Skia 子集未覆盖的项目可以明确拒绝并给出中文原因，或按现
 | 各支持架构与 Linux 发行版/驱动基线 | 构建/产品能力 | P00/P01 | Windows x64、Ubuntu 26.04 x64、macOS ARM64/x64 已构建；Linux/macOS 真机 GPU 待验，发行版分发基线仍待 P12 |
 | Qt 6.11.0 宿主纹理交接与同步实现 | GPU/Qt adapter | P03 | 选定路径已验证，证据及未通过的强制 purge 路径见 §14.8；P09 尚未正式接管产品预览 |
 | 宿主内预览故障隔离与运行策略 | runtime/presenter | P03 | 已记录故障影响，保留 sidecar/G5 隔离入口，见 §14.8 |
-| 规范度量、原生字体路径与 Qt 计划注入点 | 字体/共享语义计划 | P05 | 架构已指定；实现待校准 |
+| 规范度量、原生字体路径与 Qt 计划注入点 | 字体/共享语义计划 | P05 | 无 GPU 度量、字体身份与快照端口已实现；正式 IR 和布局宽度待 P05.4 校准 |
 | 精确颜色空间/GPU format/alpha 转换配置 | paint/GPU/传输出口 | P06 | 需按当前画面校准并锁定 |
 | 各类画面/性能容许值与例外 | 对照测试 | P00 起、对应阶段前 | 待样例登记，禁止完成后反向放宽 |
 | native/宿主模块包收集与升级指纹 | 打包/更新 | P12 | 待实现 |
@@ -1054,7 +1054,7 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 - **CI 负责构建**：`skia-foundation.yml` 的 Mac 任务在 Xcode 26.1.1 / SDK 26.1、Qt 6.11.0 SDK（aqtinstall 固定提交）下构建 Metal 与 CPU-only 目标及 `Krok.SubtitleSkia` 预览模块，打包为产物 `mac-validation-arm64` / `mac-validation-x64`（tar.gz 保留可执行位，附 SHA-256 清单、构建指纹与 CMake code model）。
 - **CI 自检可移植性**：`bundle-check` 任务在无 Qt SDK、无构建缓存的干净 Mac 上运行一键脚本；托管机为虚拟 Metal，使用 `--allow-virtual-gpu`，只允许硬件门槛未过。首次通过：[43560806767](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43560806767)（提交 `90ec1d81`，两种架构功能项全部通过，含 Apple Metal 调试层下的预览测试；虚拟设备被硬件检查正确拒绝）。
-- **测试者只运行** `scripts/mac_hardware_check.py <下载的验收包>`：校验清单、去除 quarantine、在 `build/mac-hardware-check/venv` 安装 PyQt6 6.11.0 及测试/字体/歌词解析依赖（包括 `charset-normalizer`），依次运行 Metal 真硬件冒烟、Raster 冒烟、owned 后端测试、预览测试（含带正面对照的 Metal API 验证测试）与原生能力测试；P04 新包还运行真实 IR、G5 和短 MP4 测试。生成 `build/mac-hardware-check-results.zip`。系统信息只收集白名单字段，不含序列号与硬件 UUID。退出码：0 = 全部通过；1 = 功能项失败；2 = 功能通过但不是真硬件。
+- **测试者只运行** `scripts/mac_hardware_check.py <下载的验收包>`：校验清单、去除 quarantine、在 `build/mac-hardware-check/venv` 安装 PyQt6 6.11.0 及测试/字体/歌词解析依赖（包括 `charset-normalizer`），依次运行 Metal 真硬件冒烟、Raster 冒烟、owned 后端测试、预览测试（含带正面对照的 Metal API 验证测试）与原生能力测试；P04 新包还运行真实 IR、G5 和短 MP4 测试，P05 新包按 manifest 的 `text_metrics_schema=1` 增加无 GPU 字体度量测试。生成 `build/mac-hardware-check-results.zip`。系统信息只收集白名单字段，不含序列号与硬件 UUID。退出码：0 = 全部通过；1 = 功能项失败；2 = 功能通过但不是真硬件。
 
 可直接转给测试者（或其 Codex/Claude）的说明，提交号与运行号随最新一次通过的 CI 更新：
 
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 576aac77
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43577203050 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout d1cdc3fa
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43582803210 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1224,11 +1224,13 @@ Linux 另设 `QT_QPA_PLATFORM=xcb` / `wayland` 分进程测试；软件设备测
 
 验证：
 
-- Windows Vulkan 与 CPU-only、Linux Vulkan 与 CPU-only 均重新构建，四种构建各 3 项 CTest 通过。native 源码身份：`537219b650189c0c8fa8e21a4bbd5b80d7964d25655b4c46be43885744c29450`。
+- Windows Vulkan 与 CPU-only、Linux Vulkan 与 CPU-only 均重新构建，四种构建各 3 项 CTest 通过。Mac arm64/x64 的 Metal 与 CPU-only 构建亦通过；这些构建的 native 源码身份均为 `537219b650189c0c8fa8e21a4bbd5b80d7964d25655b4c46be43885744c29450`。
 - Windows 真实 Qt 平台：字体度量、P04 协议、架构边界与进度测试合计 **63 通过**；Linux WSLg X11/Wayland 各 **48 通过、2 跳过**。跳过的是依赖 Windows 实际字体的变量字体/CJK/emoji 环境样例，便携合成字体样例在各平台执行。
+- Mac CI [43582803210](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43582803210)（`d1cdc3fa`）：arm64/x64 的 P04 协议与 P05 字体度量各 **44 通过、6 跳过**，Quick 预览与原生能力组各 **21 通过、1 跳过**。协议/度量组跳过项为既有平台专用用例及 2 项 Windows 字体环境样例；并非跳过便携字体、变量轴、组合字符或 CPU-only 对照。
+- 上述运行的 **5 个任务全部成功**：两个 Mac 构建、两个无 SDK/构建缓存的验收包自检、一个相同字体的跨架构度量比较。验收包已包含独立的 `text_metrics` 步骤；§14.6 的一键说明已更新到该提交与运行。托管机的虚拟 Metal 被硬件闸正确拒绝，`--allow-virtual-gpu` 仅允许该硬件门槛未过，不能据此关闭真机验收。
 - 相关 Python 回归 **419 通过**；D2D 共享 realization 与 G6 零回读专项 **3 通过**。没有修改 D2D 渲染实现，也没有运行 QPainter 画面对照。
 - 自生成固定字体含 CJK/韩文、组合字符、ligature 和本地化 family；另生成变量字体验证轴插值。覆盖内容更换但路径不变、相同内容换路径、应用内注册/移除/重注册、合成粗斜体、stretch、显式 fallback、缺字报错与错误后继续服务、CPU-only/GPU 构建相同度量。
-- `scripts/compare_skia_text_metrics.py` 对字体身份、glyph id、cluster 与数量精确比较，几何误差上限 `1e-4` 像素，拒绝 NaN/Inf。固定样例在 Windows、Linux X11、Linux Wayland 间实际最大误差 **0**。单独的理论轮廓断言按 SkFont 64px 归一化与 FreeType 26.6 坐标的一量子解释，不放宽平台间比较。
+- `scripts/compare_skia_text_metrics.py` 对字体身份、glyph id、cluster 与数量精确比较，几何误差上限 `1e-4` 像素，拒绝 NaN/Inf。固定样例在 Windows、Linux X11、Linux Wayland、Mac arm64/x64 间实际最大误差 **0**（Mac 两架构的比较由 CI 单独执行，再与 Windows/Linux 下载样例交叉核对）。单独的理论轮廓断言按 SkFont 64px 归一化与 FreeType 26.6 坐标的一量子解释，不放宽平台间比较。
 
 本机日志：`build/p05-final-text.log`、`build/p05-linux-tests.log`、`build/p05-d2d-regression.log`、`build/skia-p05-build.log`、`build/skia-p05-cpu-build.log`、`build/p05-linux-build.log`。Linux 仍是 llvmpipe；正式 Linux 硬件 GPU、Mac 新功能真机与完整 P05 验收仍保留。
 
