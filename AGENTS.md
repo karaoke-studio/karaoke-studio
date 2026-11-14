@@ -197,7 +197,7 @@ git submodule status
 
 11. **改 sidecar 共享头文件后增量构建不可信，必须 `--clean-first`**——本机
     中文 VS 工具链下 MSVC 的 `/showIncludes` 输出是本地化的「注意: 包含文件:」，
-    ninja 的头文件依赖解析失效；改了 `render_types.h` 这类被大量 TU 包含的
+    ninja 的头文件依赖解析失效；改了 `model/render_scene.h` 这类被大量 TU 包含的
     头（例如给结构体加字段）后，增量构建只会重编少数几个 .cpp，新旧
     sizeof 不同的对象文件混链，运行期随机 0xC0000409 / 0xC0000005 崩溃
     （表现之一：configure 即崩，GPU 预览拉起的 sidecar 死亡，连带
@@ -217,7 +217,8 @@ git submodule status
 13. **sidecar 的 d2d_fx / d2d_backend_internal / d2d_backend_render 禁止新增
     Qt 头文件**——Qt 头（未定义 `QT_NO_KEYWORDS` 时）会把 `emit` / `slots` /
     `signals` **关键字宏**带进编译单元，而这些文件里有既有的同名局部变量
-    （如 d2d_fx.cpp 的 `const int emit = ...`），宏展开为空后声明变成
+    （纯特效现已提取到 `src/effects`，如 `effects/particles/scanline.cpp` 的
+    `const int emit = ...`），宏展开为空后声明变成
     `const int = ...`，在别人的老代码行上报 C2513，极具误导性（例如在
     d2d_fx.cpp 加 `#include <QImage>` 就会触发）。需要图像像素时传原始预乘
     BGRA 缓冲（参考 `scanlineImageCompositePixels` 的裸指针 API），Qt 侧解码
@@ -265,6 +266,13 @@ git submodule status
    `%LOCALAPPDATA%/krok-helper/skia-deps`；Linux/macOS 默认 `~/.cache/krok-helper/skia-deps`。
    GPU 参数固定 Windows/Linux `--gpu-api vulkan`、macOS `--gpu-api metal`；
    `--cpu-only` 与 GPU 参数互斥。阶段实测和剩余硬件门槛以该实施文档为准。
+
+   P02 已提取 `src/model` 的分组值类型、`src/effects` 的纯算法和 `src/scene`
+   的 Qt/IR 值投影；原 `model/render_types.h` 已删除，不要重新引入总括类型头。
+   `src/backends/backend_selection.h` / `backend_factory.h` 定义类型化工厂，
+   Skia 使用 `runtime/OwnerBackendSession` 的单 owner 执行与销毁；D2D 的既有
+   worker/共享资源策略保留。`SkiaBackend` 当前只接能力/诊断，字幕协议绘制
+   明确报未实现，待 P04；不代表已替换生产 D2D。`src/effects` 禁止 Qt/平台头。
 
 文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 
