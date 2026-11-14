@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from skia_build.configuration import gn_text, validate_selection  # noqa: E402
 from skia_build.sources import checkout, download, sha256  # noqa: E402
-from skia_build.provenance import native_needs_clean, record_request, renderer_digest  # noqa: E402
+from skia_build.provenance import (  # noqa: E402
+    native_needs_clean, record_request, renderer_digest, reset_relocated_cmake_cache)
 
 
 @pytest.mark.parametrize("system,arch,api,cpu", [
@@ -124,6 +125,27 @@ def test_native_source_change_triggers_clean_once(tmp_path):
     assert native_needs_clean(path, "headers-v1")
     assert not native_needs_clean(path, "headers-v1")
     assert native_needs_clean(path, "headers-v2")
+
+
+def test_relocated_cmake_cache_is_reset_but_matching_cache_is_kept(tmp_path):
+    build = tmp_path / "native"
+    (build / "CMakeFiles").mkdir(parents=True)
+    (build / "build.ninja").write_text("kept")
+    for log in (".ninja_deps", ".ninja_log"):
+        (build / log).write_text("old absolute header paths")
+
+    def write_cache(directory: str) -> None:
+        (build / "CMakeCache.txt").write_text(f"CMAKE_CACHEFILE_DIR:INTERNAL={directory}\n")
+
+    write_cache(build.as_posix())
+    assert not reset_relocated_cmake_cache(build)
+    assert (build / "CMakeCache.txt").exists()
+    write_cache("c:/elsewhere/native")
+    assert reset_relocated_cmake_cache(build)
+    assert not (build / "CMakeCache.txt").exists() and not (build / "CMakeFiles").exists()
+    assert not (build / ".ninja_deps").exists() and not (build / ".ninja_log").exists()
+    assert (build / "build.ninja").read_text() == "kept"
+    assert not reset_relocated_cmake_cache(build)
 
 
 def test_renderer_digest_has_os_independent_case_sensitive_path_order(tmp_path):

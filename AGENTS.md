@@ -262,8 +262,11 @@ git submodule status
 
    P01 的独立构建入口已实现：`scripts/build_skia_renderer.py`，锁文件为
    `native/subtitle_renderer/skia.lock.json`。它构建 C++ Skia 基础层和 GPU/Raster
-   冒烟目标，尚未替换生产 sidecar。Windows 缓存路径必须为 ASCII，默认放在
-   `%LOCALAPPDATA%/krok-helper/skia-deps`；Linux/macOS 默认 `~/.cache/krok-helper/skia-deps`。
+   冒烟目标，尚未替换生产 sidecar。三平台默认缓存均为 `~/.cache/krok-helper/skia-deps`
+   （Windows 即 `%USERPROFILE%\.cache\...`，路径必须为 ASCII；可做成指向其他磁盘的 junction）。
+   **不要放回 `%LOCALAPPDATA%`**：MSIX 打包的工具（如 Claude 桌面版）经重定向层访问
+   `AppData\Local`，解析不了其中指向其他磁盘的 junction（ERROR 649）。缓存根目录变化会改变
+   依赖指纹（LLVM 绝对路径进入编译命令），需 `--clean` 重编一次。
    GPU 参数固定 Windows/Linux `--gpu-api vulkan`、macOS `--gpu-api metal`；
    `--cpu-only` 与 GPU 参数互斥。阶段实测和剩余硬件门槛以该实施文档为准。
 

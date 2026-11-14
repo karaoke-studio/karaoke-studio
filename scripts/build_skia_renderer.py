@@ -16,7 +16,8 @@ import sysconfig
 
 from skia_build.configuration import configure, digest, gn_text, host_platform, validate_selection
 from skia_build.sources import fetch_sources, sha256, tools
-from skia_build.provenance import native_needs_clean, record_request, renderer_digest
+from skia_build.provenance import (native_needs_clean, record_request, renderer_digest,
+                                   reset_relocated_cmake_cache)
 
 REPO = Path(__file__).resolve().parents[1]
 LOCK = REPO / "native/subtitle_renderer/skia.lock.json"
@@ -30,8 +31,9 @@ def arguments(argv=None):
     parser.add_argument("--gpu-api", choices=("vulkan", "metal"))
     parser.add_argument("--cpu-only", action="store_true")
     parser.add_argument("--config", choices=("Release",), default="Release")
-    default_cache = (Path(os.environ["LOCALAPPDATA"]) / "krok-helper/skia-deps"
-                     if system == "windows" else Path.home() / ".cache/krok-helper/skia-deps")
+    # Same location on every OS. Not %LOCALAPPDATA%: MSIX-packaged tools see that folder through
+    # a redirection layer that cannot follow a junction onto another drive (ERROR 649).
+    default_cache = Path.home() / ".cache/krok-helper/skia-deps"
     parser.add_argument("--cache-dir", type=Path, default=default_cache)
     parser.add_argument("--llvm-root", type=Path)
     parser.add_argument("--qt-root", type=Path, help="Optional Qt SDK identity; not linked by P01")
@@ -123,6 +125,9 @@ def main(argv=None) -> int:
     native_identity["dependency_fingerprint"] = fingerprint
     native_fingerprint = digest(native_identity)
     clean_native = native_needs_clean(native_output / "source-request.json", native_fingerprint)
+    if reset_relocated_cmake_cache(native_output):
+        print("Native CMake cache was created under another cache path; reconfiguring", flush=True)
+        clean_native = True
     cmake_args |= {
         "KROK_BUILD_LEGACY_SIDECAR": "OFF", "KROK_BUILD_SKIA": "ON",
         "KROK_SKIA_GPU_API": options.gpu_api or "none", "KROK_SKIA_SOURCE": source.as_posix(),
