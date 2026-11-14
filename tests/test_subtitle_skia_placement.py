@@ -12,7 +12,7 @@ from test_subtitle_skia_font_slots import application, binary, mixed, project
 from test_subtitle_skia_protocol import collect, selection
 from test_subtitle_skia_resolved import ir_for
 from krok_helper.subtitle_render.domain.models import LyricsLayout, Style, TimingChar, TimingLine
-from krok_helper.subtitle_render.engine.layout.line.skia_placement import place_single_line
+from krok_helper.subtitle_render.engine.layout.line.skia_placement import place_horizontal_line as place_single_line
 from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess

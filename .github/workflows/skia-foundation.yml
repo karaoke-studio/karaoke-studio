@@ -109,7 +109,7 @@ jobs:
           KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE: '0'
         run: |
           export KROK_TEST_SKIA_SIDECAR="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal/krok_skia_subtitle_renderer"
-          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py tests/test_subtitle_skia_text.py tests/test_subtitle_skia_resolved.py tests/test_subtitle_skia_font_slots.py tests/test_subtitle_skia_placement.py tests/test_subtitle_skia_outline.py tests/test_subtitle_skia_roles.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
+          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py tests/test_subtitle_skia_text.py tests/test_subtitle_skia_resolved.py tests/test_subtitle_skia_font_slots.py tests/test_subtitle_skia_placement.py tests/test_subtitle_skia_outline.py tests/test_subtitle_skia_roles.py tests/test_subtitle_skia_grid.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -143,6 +143,7 @@ jobs:
                       "resolved_layout_schema": 2,
                       "single_line_placement": 1,
                       "inline_roles": 1,
+                      "fixed_row_grid": 1,
                       "files": {f"native/{p.relative_to(native).as_posix()}": hashlib.sha256(p.read_bytes()).hexdigest()
                                 for p in files}}
           out = Path(os.environ["RUNNER_TEMP"]) / f"mac-validation-{arch}.tar.gz"
@@ -207,7 +208,7 @@ jobs:
           from pathlib import Path
           import subprocess, sys
           # upload-artifact materializes pytest's *current symlinks as duplicates.
-          for name in ('canonical-metrics.json', 'resolved-layout.json', 'font-slots-layout.json', 'placement-layout.json', 'roles-layout.json'):
+          for name in ('canonical-metrics.json', 'resolved-layout.json', 'font-slots-layout.json', 'placement-layout.json', 'roles-layout.json', 'grid-layout.json'):
               paths = sorted(p for p in Path('metrics-artifacts').rglob(name)
                              if not p.parent.name.endswith('current'))
               assert len(paths) == 2, paths

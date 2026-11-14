@@ -1,4 +1,4 @@
-"""Single-lane placement from canonical metrics; no Qt measurement or paging.
+"""Fixed horizontal lane placement from canonical metrics; no Qt measurement.
 
 Legacy anchors its ink union and reserves the style's ruby allowance even on
 rubyless lines. N3 anchors the cell grid and uses an integer em-height box.
@@ -14,11 +14,16 @@ class LinePosition:
     baseline_y: float
 
 
-def place_single_line(item, metrics, *, width, height, ink_left, ink_right, layout_width):
+def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, layout_width):
     style = item.layout_style
     mode = style.line_horizontal_layout
-    if style.dual_line_layout or mode not in {'center', 'asymmetric', 'per_row'}:
-        raise ValueError('Skia 当前定位仅支持单行布局')
+    if mode not in {'center', 'asymmetric', 'per_row'}:
+        raise ValueError('Skia 行水平布局无效')
+    lanes = max(len(style.line_alignments), 1) if style.dual_line_layout else 1
+    if not 0 <= item.lane < lanes:
+        raise ValueError('Skia 行网格索引无效')
+    if style.dual_line_layout and mode == 'asymmetric' and style.smart_horizontal != 'none':
+        raise ValueError('Skia 多行布局暂不支持智能水平避让')
     if style.line_y_position not in {'top', 'center', 'bottom'}:
         raise ValueError('Skia 行纵向位置无效')
     if style.layout_semantics == 'legacy':
@@ -39,7 +44,7 @@ def place_single_line(item, metrics, *, width, height, ink_left, ink_right, layo
     margin = style.horizontal_margin_px
     x_extra, y_extra = 0, 0
     if mode == 'per_row':
-        y_extra = row_y
+        y_extra = row_y if item.lane < 2 else 0
     if item.center_override or mode == 'center':
         align = 'center'
     elif mode == 'per_row':
@@ -57,12 +62,17 @@ def place_single_line(item, metrics, *, width, height, ink_left, ink_right, layo
         x = (width - left - right) / 2
     else:
         raise ValueError('Skia 行水平对齐无效')
+    step = ascent + descent + style.line_gap_px
     if style.line_y_position == 'top':
         baseline = style.line_y_margin_px + extra + ascent
     elif style.line_y_position == 'center':
-        baseline = (height - (ascent + descent + extra)) / 2 + extra + ascent
+        block = (ascent + descent) * lanes + style.line_gap_px * (lanes - 1)
+        baseline = (height - block) / 2 + ascent
+        if lanes == 1:
+            baseline += extra / 2
     else:
-        baseline = height - style.line_y_margin_px - descent
-    # Single-lane authored X offsets use slot 0; the alignment can consume a
-    # bottom short-page tail slot. This is the existing GPU projection contract.
-    return LinePosition(x + x_extra + lane_offset_x(style, item.lane), baseline + y_extra)
+        baseline = height - style.line_y_margin_px - descent - step * (lanes - 1)
+    # Match the shared native projection's distinct alignment/offset slots.
+    offset_rows = item.page_line_count if style.dual_line_layout and mode == 'asymmetric' else None
+    return LinePosition(x + x_extra + lane_offset_x(style, item.lane, offset_rows),
+                        baseline + step * item.lane + y_extra)

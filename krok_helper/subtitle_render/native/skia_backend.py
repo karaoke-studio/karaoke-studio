@@ -57,6 +57,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 未声明单行定位能力，请重新构建')
             if 'p05_inline_roles' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia sidecar 未声明行内角色能力，请重新构建')
+            if 'p05_fixed_row_grid' not in ready.get('profiles', []):
+                raise NativeRendererError('Skia sidecar 未声明多行网格能力，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

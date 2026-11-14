@@ -21,7 +21,8 @@ void validateEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     for (const auto& feature : ir.value("required_features").toArray()) {
         if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal"
-            && feature.toString() != "p05_single_line_placement" && feature.toString() != "p05_inline_roles")
+            && feature.toString() != "p05_single_line_placement" && feature.toString() != "p05_inline_roles"
+            && feature.toString() != "p05_fixed_row_grid")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -43,6 +44,7 @@ void validateEnvelope(const QJsonObject& ir) {
     for (const auto& value : track.value("lines").toArray()) {
         if (!value.isObject()) throw BackendError("Skia IR: invalid line");
         const auto line = value.toObject();
+        if (line.contains("lane")) integer(line, "lane", 0, 31);
         if (!line.value("chars").isArray()) throw BackendError("Skia IR: line.chars is required");
         for (const auto& cv : line.value("chars").toArray()) {
             if (!cv.isObject() || !cv.toObject().value("text").isString()) throw BackendError("Skia IR: invalid character");
@@ -71,7 +73,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     // Materialize a role once, rather than copying a full style into each cell.
     std::map<const protocol::ResolvedStyle*, int> roleStyles;
     for (const auto& source : cfg.lines) {
-        if (source.lane != 0 || source.annotationBaselineY || source.wipeReverse
+        if (source.annotationBaselineY || source.wipeReverse
             || source.entryAnimation != "none" || source.exitAnimation != "none"
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
             || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled
@@ -95,6 +97,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         style.layoutOffsetX += float(source.layoutOffsetX * cfg.dpr);
         style.layoutOffsetY += float(source.layoutOffsetY * cfg.dpr);
         TextLine line;
+        line.lane = source.lane;
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;

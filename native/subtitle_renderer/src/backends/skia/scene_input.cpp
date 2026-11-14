@@ -26,7 +26,9 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 void supportedStyle(const TextStyle& s, bool canonical) {
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
-        || s.vertical || s.rightToLeft || s.dualLineLayout || s.laneCount != 1
+        || s.vertical || s.rightToLeft || s.laneCount < 1 || s.laneCount > 32
+        || (!canonical && (s.dualLineLayout || s.laneCount != 1))
+        || (canonical && s.dualLineLayout && s.smartHorizontal != "none")
         || (s.alignment != "left" && s.alignment != "center" && s.alignment != "right")
         || (s.verticalPosition != "top" && s.verticalPosition != "center" && s.verticalPosition != "bottom")
         || (!canonical && (s.alignment != "center" || s.verticalPosition != "bottom" || s.smartHorizontal != "none"))
@@ -44,7 +46,7 @@ void supportedStyle(const TextStyle& s, bool canonical) {
         || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
         || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight))
         || s.volumeEnabled || s.litEnabled)
-        throw BackendError(canonical ? "Skia 当前仅支持单行横排、实色填充与基础走字" :
+        throw BackendError(canonical ? "Skia 当前仅支持固定网格横排、实色填充与基础走字" :
             "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }
 }
@@ -58,7 +60,8 @@ void validateSkiaScene(const RenderScene& scene, bool canonical) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
         supportedStyle(style, canonical);
-        if (line.lane != 0 || !line.rubies.empty() || !line.bursts.empty() || !line.placementWindows.empty()
+        if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
+            || !line.rubies.empty() || !line.bursts.empty() || !line.placementWindows.empty()
             || line.fadeInMs || line.fadeOutMs || line.entryAnimation != "none" || line.exitAnimation != "none"
             || (line.karaokeAnimation != "none" && line.karaokeAnimation != "inherit")
             || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || line.wipeReverse

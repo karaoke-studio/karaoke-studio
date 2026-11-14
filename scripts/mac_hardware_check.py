@@ -166,6 +166,9 @@ def main(argv=None) -> int:
     if manifest.get("inline_roles", 0) >= 1:
         steps["inline_roles"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                  "tests/test_subtitle_skia_roles.py", "--basetemp", logs / "role-tests"]
+    if manifest.get("fixed_row_grid", 0) >= 1:
+        steps["fixed_row_grid"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                   "tests/test_subtitle_skia_grid.py", "--basetemp", logs / "grid-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"
