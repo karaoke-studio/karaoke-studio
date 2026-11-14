@@ -11,6 +11,7 @@ import math
 from .font_slots import font_style_for_cell
 from .metric_snapshot import CellMetric, LineMetric, TextMetricSnapshot
 from .skia_width import cell_geometry
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,11 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
     for line, appearance in zip(track.lines, line_styles, strict=True):
         main = instance(appearance)
         cells = []
+        role_styles = {}
         for char in line.chars:
-            selected, stretch = font_style_for_cell(appearance, char.text)
+            if char.role_label not in role_styles:
+                role_styles[char.role_label] = style_for_role_in_layout(appearance, char.role_label)
+            selected, stretch = font_style_for_cell(role_styles[char.role_label], char.text)
             run = instance(selected, stretch)
             if char.text not in text_indices[run]:
                 text_indices[run][char.text] = len(runs[run]['cells'])

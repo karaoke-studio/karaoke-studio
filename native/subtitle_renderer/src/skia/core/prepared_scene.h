@@ -39,10 +39,14 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
 private:
-    struct Cell { SkPath path; float left, right; int startMs, endMs; };
+    struct Cell {
+        SkPath path;
+        float left, right;
+        int startMs, endMs;
+        std::uint32_t before, after;
+    };
     struct Line {
         std::vector<Cell> cells;
-        std::uint32_t before, after;
         int startMs, endMs;
     };
     int width_, height_;

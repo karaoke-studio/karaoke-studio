@@ -34,7 +34,9 @@ void supportedStyle(const TextStyle& s, bool canonical) {
         || s.strokeWidth != 0 || s.stroke2Width != 0 || s.latinStrokeWidth != 0 || s.latinStroke2Width != 0
         || s.decorationKindForState(false) != "none" || s.decorationKindForState(true) != "none"
         || s.beforeFillPaint.mode != "solid" || s.afterFillPaint.mode != "solid"
-        || s.fontHint.resourcePath.empty() || (!canonical && (s.fontHint.syntheticBold || s.fontHint.syntheticItalic
+        // Canonical fonts come exclusively from the validated layout resource
+        // table. D2D compatibility hints may be absent on inherited role slots.
+        || (!canonical && (s.fontHint.resourcePath.empty() || s.fontHint.syntheticBold || s.fontHint.syntheticItalic
         || s.fontHint.variable || s.fontAxis || s.latinFontAxis || !s.fontHint.axes.empty() || s.italic || s.latinItalic))
         || (!canonical && (s.fontHint.scale != 1.f || s.latinFontStretchPct != 100
         || s.latinFontSize.value_or(s.fontSize) != s.fontSize
@@ -48,9 +50,10 @@ void supportedStyle(const TextStyle& s, bool canonical) {
 }
 void validateSkiaScene(const RenderScene& scene, bool canonical) {
     if (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
-        || scene.viewportOffsetY != 0 || scene.lineBand.enabled || !scene.charStyles.empty()
+        || scene.viewportOffsetY != 0 || scene.lineBand.enabled || (!canonical && !scene.charStyles.empty())
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
+    for (const auto& style : scene.charStyles) supportedStyle(style, canonical);
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
@@ -64,9 +67,11 @@ void validateSkiaScene(const RenderScene& scene, bool canonical) {
         if (line.displayWindows[0].fadeInMs > 0 || line.displayWindows[0].fadeOutMs > 0)
             throw BackendError("Skia P04: fading requires P07");
         for (const auto& ch : line.chars) {
-            if ((!canonical && ch.text.size() != 1) || ch.styleIndex >= 0 || ch.vectorGlyph || ch.bitmapGuide
+            if ((!canonical && (ch.text.size() != 1 || ch.styleIndex >= 0)) || ch.vectorGlyph || ch.bitmapGuide
                 || !ch.wipePoints.empty() || !ch.fallbackFamily.empty())
                 throw BackendError("Skia P04: shaping, guide symbols, fallback fonts and custom wipe curves require later phases");
+            if (ch.styleIndex < -1 || ch.styleIndex >= int(scene.charStyles.size()))
+                throw BackendError("Skia 字符样式引用无效");
         }
     }
 }

@@ -47,6 +47,7 @@ class LineMetric:
     style_signature: object
     layout_widths: tuple[int, ...]
     ink_widths: tuple[int, ...]
+    roles: tuple[str | None, ...]
 
     @classmethod
     def capture(cls, line: TimingLine, style: Style, metrics, *, layout_widths) -> LineMetric:
@@ -57,7 +58,8 @@ class LineMetric:
         if any(type(w) is not int or w < 0 for w in widths):
             raise ValueError("布局宽度必须为非负整数")
         return cls(cells, value_signature(style_for_line(style, line)), widths,
-                   tuple(max(math.ceil(c.ink[2] - c.ink[0]), 0) for c in cells))
+                   tuple(max(math.ceil(c.ink[2] - c.ink[0]), 0) for c in cells),
+                   tuple(c.role_label or None for c in line.chars))
 
 
 @dataclass(frozen=True)
@@ -69,7 +71,7 @@ class TextMetricSnapshot:
         object.__setattr__(self, 'lines', tuple(self.lines))
         lookup = {}
         for line in self.lines:
-            key = (tuple(c.text for c in line.metrics), line.style_signature)
+            key = (tuple(c.text for c in line.metrics), line.roles, line.style_signature)
             lookup.setdefault(key, []).append(line)
         object.__setattr__(self, '_lookup', MappingProxyType({k: tuple(v) for k, v in lookup.items()}))
 
@@ -81,8 +83,9 @@ class TextMetricSnapshot:
 
     def resolve_intervals(self, line: TimingLine, style: Style) -> list[tuple[int, int]]:
         texts = tuple(c.text for c in line.chars)
+        roles = tuple(c.role_label or None for c in line.chars)
         signature = value_signature(style_for_line(style, line))
-        candidates = self._lookup.get((texts, signature), ())
+        candidates = self._lookup.get((texts, roles, signature), ())
         if not candidates or any(m != candidates[0] for m in candidates):
             raise ValueError("规范度量快照缺失、过期或存在冲突")
         measured = candidates[0]

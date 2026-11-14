@@ -11,6 +11,7 @@ from krok_helper.subtitle_render.domain.paint import (
     PaintFill,
 )
 from krok_helper.subtitle_render.domain.models import (
+    LYRICS_LAYOUT_CHAR_FIELDS,
     N3_FONT_INHERITANCE_FIELDS,
     RUBY_DECORATION_OVERRIDE_FIELDS,
     SCANLINE_GLOBAL_ROLE_KEY,
@@ -146,6 +147,15 @@ def style_for_role(style: Style, role_label: str | None) -> Style:
     if not changes:
         return style
     return replace(style, **changes)
+
+
+def style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
+    """Apply role visuals while retaining the active layout's spacing fields."""
+    role_style = style_for_role(style, role_label)
+    return replace(
+        role_style,
+        **{name: getattr(style, name) for name in LYRICS_LAYOUT_CHAR_FIELDS},
+    )
 
 
 def auto_appearance_basis(style: Style, track: object) -> Style:

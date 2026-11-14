@@ -10,10 +10,10 @@ struct ResolvedCell {
     SkPath path;
     float left = 0, right = 0;
     int startMs = 0, endMs = 0;
+    std::uint32_t before = 0, after = 0;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
-    std::uint32_t before = 0, after = 0;
     int startMs = 0, endMs = 0;
 };
 struct ResolvedSubtitleInput {

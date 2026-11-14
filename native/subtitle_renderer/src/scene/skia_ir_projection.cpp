@@ -6,6 +6,7 @@
 #include <QtCore/QJsonArray>
 #include <cmath>
 #include <limits>
+#include <map>
 
 namespace krok::subtitle::native::scene {
 namespace {
@@ -20,7 +21,7 @@ void validateEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     for (const auto& feature : ir.value("required_features").toArray()) {
         if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal"
-            && feature.toString() != "p05_single_line_placement")
+            && feature.toString() != "p05_single_line_placement" && feature.toString() != "p05_inline_roles")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -66,6 +67,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     out.width = cfg.physicalWidth();
     out.height = cfg.physicalHeight();
     out.layoutReferenceScale = float(cfg.dpr);
+    // Pointers refer to the immutable parser cache for this projection only.
+    // Materialize a role once, rather than copying a full style into each cell.
+    std::map<const protocol::ResolvedStyle*, int> roleStyles;
     for (const auto& source : cfg.lines) {
         if (source.lane != 0 || source.annotationBaselineY || source.wipeReverse
             || source.entryAnimation != "none" || source.exitAnimation != "none"
@@ -99,10 +103,19 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});
         for (const auto& cell : source.chars) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (&cellStyle != &resolved || cell.vectorGlyph || cell.bitmapGuide || !cell.fallbackFamily.isEmpty()
+            if (cell.vectorGlyph || cell.bitmapGuide || !cell.fallbackFamily.isEmpty()
                 || !cell.resolvedEndMs)
-                throw BackendError("Skia P04: character overrides/guides/fallback or unresolved timing require later phases");
+                throw BackendError("Skia: guides/fallback or unresolved timing require later phases");
             TextChar ch;
+            if (&cellStyle != &resolved) {
+                auto [entry, inserted] = roleStyles.try_emplace(&cellStyle, int(out.charStyles.size()));
+                if (inserted) {
+                    TextStyle roleStyle = style;
+                    applyResolvedStyle(roleStyle, cellStyle, cfg.dpr);
+                    out.charStyles.push_back(std::move(roleStyle));
+                }
+                ch.styleIndex = entry->second;
+            }
             ch.text = cell.text.toStdWString();
             ch.startMs = cell.startMs + offset;
             ch.endMs = *cell.resolvedEndMs + offset;

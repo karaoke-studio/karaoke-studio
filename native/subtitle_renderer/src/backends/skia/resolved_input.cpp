@@ -76,8 +76,7 @@ std::uint32_t argb(const RgbaColor& c) {
         const auto intervals = originalLines[index].toObject().value("resolved_intervals").toArray();
         if (cells.size() != int(line.chars.size()) || intervals.size() != cells.size() || (totalCells += cells.size()) > 65536)
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
-        ::subtitle::skia::ResolvedLine prepared{{}, argb(style.beforeFillPaint.color), argb(style.afterFillPaint.color),
-            line.displayWindows[0].startMs, line.displayWindows[0].endMs};
+        ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         for (int j = 0; j < cells.size(); ++j) {
             const auto cell = cells[j].toObject();
             const auto runValue = cell.value("run_index");
@@ -104,7 +103,9 @@ std::uint32_t argb(const RgbaColor& c) {
                 throw BackendError("Skia 最终走字边界与字形墨迹不一致");
             auto path = shaped.outline.makeTransform(SkMatrix::Translate(float(x), float(y)));
             path = path.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));
-            prepared.cells.push_back({path, float(left * dpr), float(right * dpr), line.chars[j].startMs, line.chars[j].endMs});
+            const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
+            prepared.cells.push_back({path, float(left * dpr), float(right * dpr), line.chars[j].startMs, line.chars[j].endMs,
+                argb(paint.beforeFillPaint.color), argb(paint.afterFillPaint.color)});
         }
         out.lines.push_back(std::move(prepared));
     }

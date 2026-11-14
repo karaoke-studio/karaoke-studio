@@ -26,7 +26,7 @@ def _page_offsets(w, h, track, style):
 def _validate_style(style):
     if (style.dual_line_layout or style.vertical or style.right_to_left or style.layout_semantics not in {'legacy', 'n3_1074'}
             or style.lower_ruby_enabled):
-        raise ValueError('Skia 当前规范布局仅支持单行横排，不支持角色、注音或导唱符')
+        raise ValueError('Skia 当前规范布局仅支持单行横排，不支持注音或导唱符')
 
 
 def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
@@ -36,8 +36,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
-        if source.rubies or any(c.role_label or c.vector_glyph for l in source.lines for c in l.chars):
-            raise ValueError('Skia 当前规范布局尚不支持角色、注音或导唱符')
+        if source.rubies or any(c.vector_glyph for l in source.lines for c in l.chars):
+            raise ValueError('Skia 当前规范布局尚不支持注音或导唱符')
         with layout_pass():
             section_edge_context(source, source_style)
             styles = []
@@ -81,7 +81,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             for key in ('origin_x', 'wipe_left', 'wipe_right'):
                 cell[key] += position.offset_x
         lines.append({'cells': cells})
-    ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement']
+    ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles']
     ir['skia_layout'] = {'version': 2, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
     return ir

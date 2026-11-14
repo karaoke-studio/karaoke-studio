@@ -8,7 +8,7 @@ from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFont, QFontMetrics
 
 from krok_helper.subtitle_render.engine.guide import vector_glyph_width
-from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role, style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.metrics import (
     build_font,
     build_latin_font,
@@ -19,10 +19,7 @@ from krok_helper.subtitle_render.engine.text.metrics import (
     letter_spacing,
     make_font_for,
 )
-from krok_helper.subtitle_render.domain.models import (
-    LYRICS_LAYOUT_CHAR_FIELDS,
-    Style,
-)
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine
 
 
@@ -134,15 +131,6 @@ def main_script_stroke_style(style: Style, text: str) -> Style:
         stroke_width_px=max(int(width), 0),
         stroke2_enabled=True,
         stroke2_width_px=effective_width2,
-    )
-
-
-def style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
-    """Apply role visuals while retaining the active layout's spacing fields."""
-    role_style = style_for_role(style, role_label)
-    return replace(
-        role_style,
-        **{name: getattr(style, name) for name in LYRICS_LAYOUT_CHAR_FIELDS},
     )
 
 

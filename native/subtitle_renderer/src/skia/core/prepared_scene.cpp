@@ -18,12 +18,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         throw std::runtime_error("Skia: invalid resolved canvas size");
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
-        Line line{{}, source.before, source.after, source.startMs, source.endMs};
+        Line line{{}, source.startMs, source.endMs};
         for (const auto& cell : source.cells) {
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
-            line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs});
+            line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs, cell.before, cell.after});
         }
         lines_.push_back(std::move(line));
     }
@@ -46,7 +46,7 @@ PreparedScene::PreparedScene(const SubtitleInput& input) : width_(input.width), 
         SkFontMetrics metrics;
         font.getMetrics(&metrics);
         const float baseline = source.bottomY - metrics.fDescent;
-        Line line{{}, source.beforeArgb, source.afterArgb, source.visibleStartMs, source.visibleEndMs};
+        Line line{{}, source.visibleStartMs, source.visibleEndMs};
         float cursor = 0;
         for (const auto& cell : source.cells) {
             if (cell.codepoint < 32 || cell.codepoint > 126 || cell.endMs < cell.startMs)
@@ -60,7 +60,7 @@ PreparedScene::PreparedScene(const SubtitleInput& input) : width_(input.width), 
             if (!path && cell.codepoint != ' ')
                 throw std::runtime_error("Skia P04: outline unavailable (bitmap/color glyph not supported)");
             line.cells.push_back({path.value_or(SkPath()).makeTransform(SkMatrix::Translate(cursor, baseline)),
-                                  cursor, cursor + advance, cell.startMs, cell.endMs});
+                                  cursor, cursor + advance, cell.startMs, cell.endMs, source.beforeArgb, source.afterArgb});
             cursor += advance + source.letterSpacing;
         }
         const float left = source.centerX - (cursor - (source.cells.empty() ? 0 : source.letterSpacing)) / 2;
@@ -86,14 +86,14 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             if (progress < 1) {
                 canvas.save();
                 canvas.clipRect(SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f));
-                paint.setColor(line.before);
+                paint.setColor(cell.before);
                 canvas.drawPath(cell.path, paint);
                 canvas.restore();
             }
             if (progress > 0) {
                 canvas.save();
                 canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f));
-                paint.setColor(line.after);
+                paint.setColor(cell.after);
                 canvas.drawPath(cell.path, paint);
                 canvas.restore();
             }
