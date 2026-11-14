@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from skia_build.configuration import gn_text, validate_selection  # noqa: E402
 from skia_build.sources import checkout, download, sha256  # noqa: E402
-from skia_build.provenance import native_needs_clean, record_request  # noqa: E402
+from skia_build.provenance import native_needs_clean, record_request, renderer_digest  # noqa: E402
 
 
 @pytest.mark.parametrize("system,arch,api,cpu", [
@@ -123,3 +124,15 @@ def test_native_source_change_triggers_clean_once(tmp_path):
     assert native_needs_clean(path, "headers-v1")
     assert not native_needs_clean(path, "headers-v1")
     assert native_needs_clean(path, "headers-v2")
+
+
+def test_renderer_digest_has_os_independent_case_sensitive_path_order(tmp_path):
+    files = {"native/subtitle_renderer/CMakeLists.txt": b"a",
+             "native/subtitle_renderer/cmake/z.cmake": b"b", "scripts/build_skia_renderer.py": b"c"}
+    for name, data in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    canonical = (b"native/subtitle_renderer/CMakeLists.txt\0a\0"
+                 b"native/subtitle_renderer/cmake/z.cmake\0b\0scripts/build_skia_renderer.py\0c\0")
+    assert renderer_digest(tmp_path) == hashlib.sha256(canonical).hexdigest()

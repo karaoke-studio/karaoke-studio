@@ -2,6 +2,11 @@ name: Skia native foundation
 
 on:
   workflow_dispatch:
+    inputs:
+      clean:
+        description: Rebuild all Skia dependency objects
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,10 +38,12 @@ jobs:
           path: ~/.cache/krok-helper/skia-deps
           key: skia-m150-macos-${{ matrix.arch }}-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
       - name: Build native Metal and Raster
+        env:
+          CLEAN_ARG: ${{ inputs.clean && '--clean' || '' }}
         run: |
-          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --clean --jobs 3
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal $CLEAN_ARG --jobs 3
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --gpu-api metal --jobs 3
-          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --clean --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
+          python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only $CLEAN_ARG --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
           python scripts/build_skia_renderer.py --platform macos --arch ${{ matrix.arch }} --cpu-only --jobs 3 --smoke-font /System/Library/Fonts/Supplemental/Arial.ttf
       - name: Record hosted Metal capability honestly
         shell: bash

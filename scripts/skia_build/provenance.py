@@ -12,7 +12,8 @@ def renderer_digest(repo: Path) -> str:
     for directory in (native / "src/skia", native / "cmake", repo / "scripts/skia_build"):
         paths += [p for p in directory.rglob("*") if p.suffix in {".h", ".cpp", ".mm", ".cmake", ".py"}]
     result = hashlib.sha256()
-    for path in sorted(paths):
+    # WindowsPath compares case-insensitively; fingerprints must use the same order on every OS.
+    for path in sorted(paths, key=lambda p: p.relative_to(repo).as_posix()):
         result.update(path.relative_to(repo).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
     return result.hexdigest()
 
