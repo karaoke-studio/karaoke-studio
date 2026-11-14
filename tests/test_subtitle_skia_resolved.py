@@ -50,9 +50,12 @@ def ir_for(binary, project, **kwargs):
 def test_canonical_ir_draws_shaped_cells_and_keeps_seek_stable(binary, project, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.render import render_ir
     from krok_helper.subtitle_render.engine.layout.line import qt_geometry
+    from krok_helper.subtitle_render.engine.text import metrics as qt_metrics
     fail = lambda *a, **k: pytest.fail('Qt-backed layout was called')
     monkeypatch.setattr(render_ir, 'build_track_layout_plan', fail)
     monkeypatch.setattr(qt_geometry, 'resolved_char_intervals_for_line', fail)
+    monkeypatch.setattr(qt_metrics, 'QFontMetrics', fail)
+    monkeypatch.setattr(qt_metrics, 'QPainterPath', fail)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configured = process.configure(*project, width=640, height=360, fps=60)
         assert configured['backend_info']['profile'] == 'p05_resolved_horizontal'
@@ -147,13 +150,16 @@ def test_final_timing_preserves_source_style_and_roll_offsets(binary, project):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU comparison')
-@pytest.mark.parametrize('font_kind', ['portable', 'system'])
+@pytest.mark.parametrize('font_kind', ['portable', 'system', 'cjk'])
 def test_static_font_geometry_matches_existing_d2d_gpu(binary, project, font_kind):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     track, style = project
     # Plain individual glyphs are common to the old D2D path and HarfBuzz.
-    texts = ['A', '字', '한'] if font_kind == 'portable' else ['A', 'W', 'i']
+    texts = ['A', '字', '한'] if font_kind == 'portable' else ['字', '歌', '詞'] if font_kind == 'cjk' else ['A', 'W', 'i']
     if font_kind == 'system': style = replace(style, font_family='Arial')
+    if font_kind == 'cjk':
+        if not Path('C:/Windows/Fonts/meiryo.ttc').is_file(): pytest.skip('Meiryo fixture')
+        style = replace(style, font_family='Meiryo')
     track = replace(track, lines=[TimingLine(chars=[TimingChar(t, 200+i*200) for i,t in enumerate(texts)], end_ms=1800)])
     with NativeRendererProcess() as d2d:
         _, expected = _render_g1_frames(d2d, style, (1900,), force_warp=False, track=track)

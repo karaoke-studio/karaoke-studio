@@ -1,4 +1,5 @@
 #include "gpu/metal_borrowed.h"
+#include "gpu/context_options.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkSurface.h"
 #include "include/gpu/ganesh/GrBackendSurface.h"
@@ -17,7 +18,7 @@ sk_sp<GrDirectContext> makeBorrowedMetalContext(const MetalBorrowedDevice& borro
     // retain(): Skia holds its own references; the owner's references are untouched.
     backend.fDevice.retain(borrowed.device);
     backend.fQueue.retain(borrowed.queue);
-    auto context = GrDirectContexts::MakeMetal(backend);
+    auto context = GrDirectContexts::MakeMetal(backend, subtitleContextOptions());
     if (!context) throw std::runtime_error("Skia Ganesh could not use the borrowed Metal device");
     return context;
 }

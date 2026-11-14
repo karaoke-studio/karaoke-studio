@@ -1,4 +1,5 @@
 #include "gpu/vulkan_borrowed.h"
+#include "gpu/context_options.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkSurface.h"
 #include "include/gpu/GpuTypes.h"
@@ -33,7 +34,7 @@ sk_sp<GrDirectContext> makeBorrowedVulkanContext(const VulkanBorrowedDevice& bor
     backend.fGetProc = [getInstanceProc, getDeviceProc](const char* name, VkInstance instance, VkDevice device) {
         return device ? getDeviceProc(device, name) : getInstanceProc(instance, name);
     };
-    auto context = GrDirectContexts::MakeVulkan(backend);
+    auto context = GrDirectContexts::MakeVulkan(backend, subtitleContextOptions());
     if (!context) throw std::runtime_error("Skia Ganesh could not use the borrowed Vulkan device");
     return context;
 }

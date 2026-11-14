@@ -1,4 +1,5 @@
 #include "gpu/gpu_session.h"
+#include "gpu/context_options.h"
 #include "gpu/vulkan_loader.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/vk/GrVkDirectContext.h"
@@ -133,7 +134,7 @@ void VulkanSession::initialize(bool requireHardware) {
         if (!proc) unresolved_ += std::string(name) + ";";
         return proc;
     };
-    context_ = GrDirectContexts::MakeVulkan(backend);
+    context_ = GrDirectContexts::MakeVulkan(backend, subtitleContextOptions());
     if (!context_) throw std::runtime_error("Skia Ganesh Vulkan initialization failed; unresolved=" + unresolved_);
 }
 }

@@ -1,4 +1,5 @@
 #include "gpu/gpu_session.h"
+#include "gpu/context_options.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/mtl/GrMtlBackendContext.h"
 #include "include/gpu/ganesh/mtl/GrMtlDirectContext.h"
@@ -26,7 +27,7 @@ public:
             GrMtlBackendContext backend;
             backend.fDevice.retain((__bridge GrMTLHandle)device_);
             backend.fQueue.retain((__bridge GrMTLHandle)queue_);
-            context_ = GrDirectContexts::MakeMetal(backend);
+            context_ = GrDirectContexts::MakeMetal(backend, subtitleContextOptions());
             if (!context_) throw std::runtime_error("Skia Ganesh Metal initialization failed");
             info_ = {"metal", name.UTF8String,
                      std::string("macOS ") + NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String +
