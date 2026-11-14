@@ -174,8 +174,6 @@ def test_item_runs_on_the_platform_skia_api(qml_dir):
     assert lines["backend"] == ("Metal" if sys.platform == "darwin" else "Vulkan")
     assert lines["accepted"] == "True"
     assert lines["host_check"] == "ok"
-    if sys.platform == "darwin":
-        pytest.skip("Metal texture hand-off is not implemented yet")
     # The shared Skia probe reached the composited window over the black QML background...
     assert float(lines["coloured"]) > 0.05, stderr
     # ...and it is animated by time, so later frames really were drawn by Skia.
