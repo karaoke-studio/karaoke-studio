@@ -3,7 +3,7 @@
 #include "../render_backend.h"
 #include <memory>
 namespace krok::subtitle::native {
-// Thin sidecar boundary. Scene preparation/drawing is introduced by P04+ in the common core.
+// Device ownership/readback boundary. All subtitle paths and drawing live in the common core.
 class SkiaBackend final : public RenderBackend {
 public:
     explicit SkiaBackend(const SkiaOptions& options);

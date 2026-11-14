@@ -21,14 +21,22 @@ int main(int argc, char** argv) {
         auto future = done.get_future();
         const bool accepted = session.submit(1, [&](RenderBackend& backend) {
             caps = backend.capabilities();
-            if (caps.backend != "skia" || caps.warp || caps.supportsGlyphs || caps.supportsNativePreview
-                || caps.supportsTransparentSurface || caps.supportsStagingReadback)
+            if (caps.backend != "skia" || caps.warp || !caps.supportsGlyphs || caps.supportsNativePreview
+                || !caps.supportsTransparentSurface || !caps.supportsStagingReadback)
                 throw std::runtime_error("incorrect advertised capabilities");
             if (options.target == SkiaTarget::Raster && (caps.api != "raster" || caps.hardware))
                 throw std::runtime_error("Raster identity");
+            backend.configure({});
+            auto blank = backend.renderFrame(0);
+            if (blank.surface.width != 1920 || blank.surface.bytes.size() != 1920u * 1080 * 4)
+                throw std::runtime_error("empty scene readback");
             bool unsupported = false;
-            try { backend.configure({}); } catch (const BackendError&) { unsupported = true; }
-            if (!unsupported) throw std::runtime_error("unimplemented scene must fail explicitly");
+            RenderScene invalid;
+            invalid.viewportRotation = 30;
+            try { backend.configure(invalid); } catch (const BackendError&) { unsupported = true; }
+            if (!unsupported) throw std::runtime_error("unsupported scene must fail explicitly");
+            if (backend.renderFrame(0).surface.bytes != blank.surface.bytes)
+                throw std::runtime_error("failed configure changed the scene");
             const auto diagnostics = backend.diagnostics();
             if (diagnostics.realizationEnabled || diagnostics.realizationSupported || diagnostics.resourceCacheEnabled)
                 throw std::runtime_error("Direct2D cache features must not leak into Skia diagnostics");

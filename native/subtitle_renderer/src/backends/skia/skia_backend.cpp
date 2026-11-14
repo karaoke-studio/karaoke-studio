@@ -1,6 +1,9 @@
 #include "skia_backend.h"
 #include "../backend_factory.h"
 #include "raster/raster_surface.h"
+#include "scene_input.h"
+#include "include/core/SkColorSpace.h"
+#include <chrono>
 #ifdef KROK_SKIA_GPU_ENABLED
 #include "gpu/gpu_session.h"
 #endif
@@ -10,18 +13,21 @@ namespace krok::subtitle::native {
 struct SkiaBackend::Impl {
     std::thread::id owner = std::this_thread::get_id();
     BackendCaps caps;
-    sk_sp<SkSurface> raster;
 #ifdef KROK_SKIA_GPU_ENABLED
     std::unique_ptr<::subtitle::skia::GpuSession> gpu;
 #endif
+    // Reverse destruction: prepared paths, surface, then the owning GPU session.
+    sk_sp<SkSurface> surface;
+    std::unique_ptr<::subtitle::skia::PreparedScene> prepared;
 };
 SkiaBackend::SkiaBackend(const SkiaOptions& options) : impl_(std::make_unique<Impl>()) {
     auto& caps = impl_->caps;
     caps.backend = "skia";
-    // Nothing can be rendered or read back until P04 wires the scene IR, so no frame,
-    // surface, glyph or preview capability is advertised yet.
+    caps.supportsGlyphs = true;  // Limited by the explicit P04 input validator.
+    caps.supportsTransparentSurface = true;
+    caps.supportsStagingReadback = true;
     if (options.target == SkiaTarget::Raster) {
-        impl_->raster = ::subtitle::skia::makeRasterSurface(1, 1);
+        impl_->surface = ::subtitle::skia::makeRasterSurface(1, 1);
         caps.adapterName = "Skia Raster CPU";
         caps.api = "raster";
         caps.executionTarget = "raster";
@@ -44,7 +50,7 @@ void SkiaBackend::requireOwner() const {
 }
 [[noreturn]] void SkiaBackend::unavailable() const {
     requireOwner();
-    throw BackendError("Skia 字幕协议绘制尚未实现（P04），不能使用其他后端伪装成功");
+    throw BackendError("Skia P04 尚不支持此直画/探针操作");
 }
 BackendCaps SkiaBackend::capabilities() const { requireOwner(); return impl_->caps; }
 BackendDiagnostics SkiaBackend::diagnostics() const {
@@ -56,8 +62,44 @@ BackendDiagnostics SkiaBackend::diagnostics() const {
     return out;
 }
 ProbeResult SkiaBackend::renderProbe(const ProbeOptions&) { unavailable(); }
-void SkiaBackend::configure(const RenderScene&) { unavailable(); }
-ProbeResult SkiaBackend::renderFrame(int, bool) { unavailable(); }
+void SkiaBackend::configure(const RenderScene& scene) {
+    requireOwner();
+    // Transactional prepare: a rejected configure preserves the previous scene.
+    auto prepared = std::make_unique<::subtitle::skia::PreparedScene>(skiaSceneInput(scene));
+    sk_sp<SkSurface> surface;
+#ifdef KROK_SKIA_GPU_ENABLED
+    if (impl_->gpu) surface = impl_->gpu->makeSurface(scene.width, scene.height);
+    else
+#endif
+        surface = ::subtitle::skia::makeRasterSurface(scene.width, scene.height);
+    impl_->surface = std::move(surface);
+    impl_->prepared = std::move(prepared);
+}
+ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
+    requireOwner();
+    if (!impl_->prepared) throw BackendError("Skia scene is not configured");
+    if (compactBands) throw BackendError("Skia P04 does not support compact bands");
+    using Clock = std::chrono::steady_clock;
+    const auto begin = Clock::now();
+    impl_->prepared->draw(*impl_->surface->getCanvas(), tMs);
+#ifdef KROK_SKIA_GPU_ENABLED
+    if (impl_->gpu) impl_->gpu->finish(*impl_->surface);
+#endif
+    const auto rendered = Clock::now();
+    ProbeResult result;
+    auto& out = result.surface;
+    out.width = impl_->prepared->width();
+    out.height = impl_->prepared->height();
+    out.stride = out.width * 4;
+    out.bytes.resize(std::size_t(out.stride) * out.height);
+    auto info = SkImageInfo::Make(out.width, out.height, kRGBA_8888_SkColorType,
+                                  kUnpremul_SkAlphaType, SkColorSpace::MakeSRGB());
+    if (!impl_->surface->readPixels(info, out.bytes.data(), out.stride, 0, 0))
+        throw BackendError("Skia RGBA readback failed");
+    result.renderMs = std::chrono::duration<double, std::milli>(rendered - begin).count();
+    result.readbackMs = std::chrono::duration<double, std::milli>(Clock::now() - rendered).count();
+    return result;
+}
 NativePreviewResult SkiaBackend::presentFrame(int, const NativePreviewTarget&, int) { unavailable(); }
 NativeRenderOnlyResult SkiaBackend::renderFrameOnly(int, int) { unavailable(); }
 NativePreviewResult SkiaBackend::presentRendered(const NativePreviewTarget&, int, int) { unavailable(); }

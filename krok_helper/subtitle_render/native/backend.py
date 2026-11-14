@@ -947,7 +947,7 @@ class NativeRendererProcess:
             self._stall_aborted = False
             self._send_stall_reported = False
             self._send_started_monotonic = 0.0
-        env = _sidecar_environment(self.executable_path)
+        env = self._launch_environment()
         self._process = subprocess.Popen(
             [str(self.executable_path)],
             stdin=subprocess.PIPE,
@@ -973,6 +973,9 @@ class NativeRendererProcess:
         if not ready.get("ok"):
             raise NativeRendererError(f"native renderer did not become ready: {ready}")
         return ready
+
+    def _launch_environment(self) -> dict[str, str]:
+        return _sidecar_environment(self.executable_path)
 
     def _start_supervisor(self) -> None:
         stop = threading.Event()
