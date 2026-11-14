@@ -22,7 +22,8 @@ void validateEnvelope(const QJsonObject& ir) {
     for (const auto& feature : ir.value("required_features").toArray()) {
         if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal"
             && feature.toString() != "p05_single_line_placement" && feature.toString() != "p05_inline_roles"
-            && feature.toString() != "p05_fixed_row_grid" && feature.toString() != "p05_page_collisions")
+            && feature.toString() != "p05_fixed_row_grid" && feature.toString() != "p05_page_collisions"
+            && feature.toString() != "p05_smart_horizontal")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())

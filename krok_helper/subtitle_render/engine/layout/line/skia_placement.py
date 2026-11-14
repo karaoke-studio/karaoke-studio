@@ -22,8 +22,6 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
     lanes = max(len(style.line_alignments), 1) if style.dual_line_layout else 1
     if not 0 <= item.lane < lanes:
         raise ValueError('Skia 行网格索引无效')
-    if style.dual_line_layout and mode == 'asymmetric' and style.smart_horizontal != 'none':
-        raise ValueError('Skia 多行布局暂不支持智能水平避让')
     if style.line_y_position not in {'top', 'center', 'bottom'}:
         raise ValueError('Skia 行纵向位置无效')
     if style.layout_semantics == 'legacy':

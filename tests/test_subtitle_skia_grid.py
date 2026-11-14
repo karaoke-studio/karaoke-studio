@@ -105,7 +105,7 @@ def test_gpu_raster_grid_and_seek(binary,grid,semantics,mode):
 @pytest.mark.parametrize('mutation',['smart','too_many'])
 def test_unsupported_grid_settings_fail_without_replacing_scene(binary,grid,mutation):
     track,style=grid
-    changes={'smart':{'smart_horizontal':'equal_margins'},'too_many':{'line_alignments':['left']*33}}[mutation]
+    changes={'smart':{'smart_horizontal':'unknown'},'too_many':{'line_alignments':['left']*33}}[mutation]
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(track,style,width=640,height=360,fps=60)
         before,_=collect(process,[1400])

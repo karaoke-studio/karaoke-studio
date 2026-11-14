@@ -20,8 +20,8 @@ def _validate_style(style):
             or style.lower_ruby_enabled):
         raise ValueError('Skia 当前规范布局仅支持横排，不支持注音或导唱符')
     if style.dual_line_layout:
-        if style.line_horizontal_layout == 'asymmetric' and style.smart_horizontal != 'none':
-            raise ValueError('Skia 多行布局暂不支持智能水平避让')
+        if style.line_horizontal_layout == 'asymmetric' and style.smart_horizontal not in {'none','center_position','equal_margins'}:
+            raise ValueError('Skia 智能水平布局模式无效')
         if len(style.line_alignments) > 32:
             raise ValueError('Skia 当前最多支持 32 行网格')
 
@@ -56,12 +56,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
 
     ir = build_render_ir(track, style, layout_plan_builder=build_plan, **kwargs)
     plan, measured, geometry = prepared[0]
+    geometry.set_lanes(plan.lines)
     lines = []
     for index, item in enumerate(plan.lines):
         position = geometry.position(item, kwargs['width'], kwargs['height'])
         lines.append({'cells': positioned_cells(geometry.locals[index], position)})
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles',
-                               'p05_fixed_row_grid', 'p05_page_collisions']
+                               'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal']
     ir['skia_layout'] = {'version': 2, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
     return ir

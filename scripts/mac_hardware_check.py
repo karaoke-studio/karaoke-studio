@@ -172,6 +172,9 @@ def main(argv=None) -> int:
     if manifest.get("page_collisions", 0) >= 1:
         steps["page_collisions"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                     "tests/test_subtitle_skia_collision.py", "--basetemp", logs / "collision-tests"]
+    if manifest.get("smart_horizontal", 0) >= 1:
+        steps["smart_horizontal"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                     "tests/test_subtitle_skia_smart.py", "--basetemp", logs / "smart-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

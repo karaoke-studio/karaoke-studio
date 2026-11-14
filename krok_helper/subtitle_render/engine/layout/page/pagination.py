@@ -7,6 +7,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import lane_count, row
 from krok_helper.subtitle_render.engine.timing.timeline import assign_lanes
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
+from .plan import page_plan_signature, resolve_page_plan
 
 
 def _page_lines_style_key(style: Style) -> tuple:
@@ -15,7 +16,7 @@ def _page_lines_style_key(style: Style) -> tuple:
         bool(style.dual_line_layout),
         len(style.line_alignments or ()),
         int(style.section_gap_ms),
-        tuple(len(layout.line_alignments or ()) for layout in style.layouts),
+        tuple((layout.layout_id, len(layout.line_alignments or ())) for layout in style.layouts),
     )
 
 
@@ -24,7 +25,7 @@ def renderable_page_map(
 ) -> dict[int, tuple[tuple[TimingLine, int], ...]]:
     """Map each renderable line identity to the lines and lanes on its page."""
     cache = getattr(_LAYOUT_PASS, "page_maps", None)
-    cache_key = (id(track), _page_lines_style_key(style)) if cache is not None else None
+    cache_key = (id(track), _page_lines_style_key(style), page_plan_signature(track)) if cache is not None else None
     if cache is not None:
         hit = cache.get(cache_key)
         if hit is not None:
@@ -37,12 +38,18 @@ def renderable_page_map(
         section_gap_ms=style.section_gap_ms,
     )
     page_map: dict[int, tuple[tuple[TimingLine, int], ...]] = {}
-    for index, item in enumerate(render_lines):
-        page_start = page_starts[index]
-        page_end = min(page_start + page_rows[index], len(render_lines))
-        page_map[id(item)] = tuple(
-            (render_lines[i], lanes[i]) for i in range(page_start, page_end)
-        )
+    if track.page_plan is not None:
+        for page in resolve_page_plan(track, style).pages:
+            members = tuple((track.lines[index], lane) for lane, index in enumerate(page.track_line_indices))
+            for item, _lane in members:
+                page_map[id(item)] = members
+    else:
+        for index, item in enumerate(render_lines):
+            page_start = page_starts[index]
+            page_end = min(page_start + page_rows[index], len(render_lines))
+            page_map[id(item)] = tuple(
+                (render_lines[i], lanes[i]) for i in range(page_start, page_end)
+            )
     if cache is not None:
         # The key contains id(track), so retain the owner for the pass.
         cache[cache_key] = page_map

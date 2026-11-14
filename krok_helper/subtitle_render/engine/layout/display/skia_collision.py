@@ -1,9 +1,11 @@
 """Configuration-scoped canonical geometry adapter for shared page policies."""
 from types import SimpleNamespace
+from dataclasses import replace
 from .resolver import CollisionLineGeometry, build_measured_collision_bands
 from .schedule import collision_time_window_name, display_line_collision_time_window
 from ..line.skia_geometry import local_line_geometry, line_position, collision_bounds
 from ..page.pagination import line_center_override
+from ..page.skia_smart_horizontal import SmartHorizontalPages
 from ..plan.page_offsets import MeasuredPageLine
 from ...render_progress import report_display_measure_progress, report_render_progress
 
@@ -14,11 +16,17 @@ class SkiaCollisionGeometry:
         self.identity = ('skia', measured.identity)
         self.indices = {id(line): i for i, line in enumerate(track.lines)}
         self.locals = tuple(local_line_geometry(m, s) for m, s in zip(measured.lines, styles, strict=True))
+        self.smart = SmartHorizontalPages(track, style, styles, self.locals)
         self.cache = {}
+
+    def set_lanes(self, items):
+        if self.smart.set_lanes(items):
+            self.cache.clear()
 
     def position(self, item, width, height):
         i = self.indices[id(item.line)]
-        return line_position(item, self.measured.lines[i], self.locals[i], width, height)
+        position = line_position(item, self.measured.lines[i], self.locals[i], width, height)
+        return replace(position, offset_x=position.offset_x + self.smart.shift(item, width))
 
     def geometry(self, item, width, height):
         i = self.indices[id(item.line)]
@@ -34,6 +42,7 @@ class SkiaCollisionGeometry:
         return self.cache[key]
 
     def measure(self, width, height, items, *, time_window=None):
+        self.set_lanes(items)
         geometries = []
         for index, item in enumerate(items):
             report_display_measure_progress(index, len(items))
@@ -42,6 +51,7 @@ class SkiaCollisionGeometry:
         return build_measured_collision_bands(items, self.style, geometries, time_window=time_window)
 
     def page_lines(self, width, height, track, style, items):
+        self.set_lanes(items)
         measured = []
         for index, item in enumerate(items):
             report_render_progress('page_offsets', index, len(items))
