@@ -283,9 +283,11 @@ git submodule status
    `KROK_SUBTITLE_RENDER_BACKEND=skia` 才启用；`KROK_SUBTITLE_SKIA_TARGET=gpu|raster`、
    `KROK_SUBTITLE_SKIA_FALLBACK=none|raster`、`KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE=1|0`
    控制目标和回退，`KROK_SUBTITLE_SKIA_RENDERER` 可指定新 sidecar。关闭 GPU 仍走
-   Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前只支持 legacy、
-   单行居中底对齐、可打印 ASCII、静态字体快照、实色填充和基础走字，完整字体/
-   N3 布局在 P05。不是已经替换 D2D。带 `--qt-root` 的 GPU/CPU-only 构建均产出
+   Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前产品配置使用 P05
+   `p05_resolved_horizontal`：legacy、单行居中底对齐、同一字体槽、实色填充和基础
+   走字，已支持显式字体的 Unicode 塑形单元；彩色/位图字形、注音、角色、N3 与
+   多行等仍拒绝。旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
+   带 `--qt-root` 的 GPU/CPU-only 构建均产出
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
    POSIX native IPC key，D2D 普通键维持原行为；不能退回 Mac 默认 System V 的大小限制。
 
@@ -295,9 +297,13 @@ git submodule status
    不调用 GPU 初始化；Windows 必须保留构建产物旁的 `icudtl.dat`。Python
    `native/skia_text.py` 与 `engine/text/metric_snapshot.py` 提供度量客户端和不可变
    快照，layout orchestrator 通过显式 resolver 接收逐字区间。现有 D2D/Qt 调用者
-   仍显式传入原 resolver，生产行为不变。不能把字体 advance 直接当作 N3 布局宽度；
-   P05.4 需校准宽度策略并生成最终 IR。当前实际字幕绘制仍受 P04 profile 限制，
-   不得因度量能处理 CJK/组合字符就提前放开绘制门禁；ruby、完整布局与绘制接入待完成。
+   仍显式传入原 resolver，生产行为不变。P05.4 的单行子集已实际接入
+   `engine/render/skia_ir.py`：复用共享整数单元宽度策略、时间/窗口计划，输出最终
+   字形坐标和区间；native `backends/skia/resolved_input` 校验字体摘要、塑形与 cluster
+   快照后消费最终几何，禁止重新分配时间。legacy 按墨迹包络居中，不按 advance
+   或单元总宽居中。完整 P05.4/P05 及 D2D 画质预算尚未通过，见实施计划 §14.11。
+   `gpu/context_options.h` 统一 owned/borrowed Vulkan/Metal 的精细覆盖策略，禁用
+   Ganesh 内部 MSAA 与距离场路径近似；不能把低档覆盖或宽松的冒烟比较当最终画质验收。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

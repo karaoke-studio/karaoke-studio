@@ -515,10 +515,10 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 ### P05：字体、规范度量与完整几何
 
-- [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例与度量资源消费、注册字体物理快照用例已实现；完整绘制接入尚未完成，见 §14.10。
-- [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster 与显式 fallback 已实现；ruby checkpoint 和实际绘制待接入。
+- [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；完整槽位/fallback 绘制与字体校准尚未完成，见 §14.10/§14.11。
+- [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
-- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。
+- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy 单行产品链路已接通，复用共享计划并校验最终几何/区间；完整布局和 D2D 画质验收仍未完成，见 §14.11。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
@@ -917,7 +917,7 @@ Skia 子集未覆盖的项目可以明确拒绝并给出中文原因，或按现
 下一任务 ID：
 ```
 
-当前阶段状态：P00.1–P00.6 的输入清单、采集和分类已交付；**现有 D2D 严格回访仍有未通过项，未豁免，也不称“全部基线验收通过”**。P01 代码与可用环境验证已交付，Apple M4 Pro 真机已通过原验收包检查，Linux 真硬件门槛仍保留（§14.5/§14.6）。P02 已交付（§14.7）；P03 的选定宿主边界与可用环境验证已交付（§14.8），新增 Mac 生命周期项可用新版验收包在真机补验。P04 最小产品闭环已实现（§14.9）；P05 字体/度量底座与 P05.3 已交付（§14.10），正式 IR、完整几何与 ruby 尚未完成；P05–P12 仍在实施。本计划按仓库证据做了可执行性和架构反证检查；没有用户要求的独立评审/多轮批准流程，也没有声称获得独立评审批准。
+当前阶段状态：P00.1–P00.6 的输入清单、采集和分类已交付；**现有 D2D 严格回访仍有未通过项，未豁免，也不称“全部基线验收通过”**。P01 代码与可用环境验证已交付，Apple M4 Pro 真机已通过原验收包检查，Linux 真硬件门槛仍保留（§14.5/§14.6）。P02 已交付（§14.7）；P03 的选定宿主边界与可用环境验证已交付（§14.8），新增 Mac 生命周期项可用新版验收包在真机补验。P04 最小产品闭环已实现（§14.9）；P05 字体/度量底座与 P05.3 已交付（§14.10），P05.4 的单行最终 IR 和实际绘制已接入（§14.11），完整布局、ruby 与 D2D 严格画质预算尚未通过；P05–P12 仍在实施。本计划按仓库证据做了可执行性和架构反证检查；没有用户要求的独立评审/多轮批准流程，也没有声称获得独立评审批准。
 
 P00 第一批记录（2026-11-14）：
 
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout d1cdc3fa
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43582803210 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 22433bbc
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43602269846 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1208,7 +1208,7 @@ Linux 另设 `QT_QPA_PLATFORM=xcb` / `wayland` 分进程测试；软件设备测
 
 ### 14.10 P05 首批：字体实例、HarfBuzz 塑形与无 GPU 度量（2026-11-14）
 
-**交付范围是 P05.1/P05.2 的底座和 P05.3，不是完整 P05。** 实际字幕绘制仍是 §14.9 的 `p04_ascii_solid_wipe`，CJK、ruby、N3、多行及特效门禁保持关闭。生产 D2D 默认、二进制和字体几何路径未切换。提交：`5214ff05`（度量底座与计划端口）、`246421f7`（跨平台字体样例和比较）、`5a5a9eb8`（进程启动与渲染策略分离）、`d1cdc3fa`（塑形后缺字判定与 CI 样例去重）。
+**交付范围是 P05.1/P05.2 的底座和 P05.3，不是完整 P05。** 本节记录该批提交的历史状态，后续实际绘制接入见 §14.11。该批次的字幕绘制仍是 §14.9 的 `p04_ascii_solid_wipe`，CJK、ruby、N3、多行及特效门禁保持关闭。生产 D2D 默认、二进制和字体几何路径未切换。提交：`5214ff05`（度量底座与计划端口）、`246421f7`（跨平台字体样例和比较）、`5a5a9eb8`（进程启动与渲染策略分离）、`d1cdc3fa`（塑形后缺字判定与 CI 样例去重）。
 
 实现边界：
 
@@ -1233,6 +1233,37 @@ Linux 另设 `QT_QPA_PLATFORM=xcb` / `wayland` 分进程测试；软件设备测
 - `scripts/compare_skia_text_metrics.py` 对字体身份、glyph id、cluster 与数量精确比较，几何误差上限 `1e-4` 像素，拒绝 NaN/Inf。固定样例在 Windows、Linux X11、Linux Wayland、Mac arm64/x64 间实际最大误差 **0**（Mac 两架构的比较由 CI 单独执行，再与 Windows/Linux 下载样例交叉核对）。单独的理论轮廓断言按 SkFont 64px 归一化与 FreeType 26.6 坐标的一量子解释，不放宽平台间比较。
 
 本机日志：`build/p05-final-text.log`、`build/p05-linux-tests.log`、`build/p05-d2d-regression.log`、`build/skia-p05-build.log`、`build/skia-p05-cpu-build.log`、`build/p05-linux-build.log`。Linux 仍是 llvmpipe；正式 Linux 硬件 GPU、Mac 新功能真机与完整 P05 验收仍保留。
+
+### 14.11 P05.4 首批：规范度量实际驱动最终 IR 与字幕绘制（2026-11-14）
+
+**已接通单行产品链路，完整 P05.4/P05 尚未验收。** 提交 `4d377a39`（最终 IR 与字形消费）、`22433bbc`（统一 GPU 覆盖策略及实字体对照）。生产 D2D 仍为默认，原 D2D C++ 实现和可执行文件未改；新 Skia 客户端不再调用旧 P04 的 native advance 排字路径。
+
+当前能力为 `p05_resolved_horizontal`：legacy、单行居中底对齐、主字/Latin 同一字体槽、实色 before/after、基础走字；已能实际绘制字体覆盖的 CJK、Latin、韩文、组合字符及单元内连字。多行/N3/竖排/RTL、角色混排、ruby、导唱符、复杂动画/粒子/走字线仍明确拒绝；位图/彩色无矢量轮廓字形不冒充已支持。完整 fallback 绘制与多槽位布局继续按 P05.1/P05.2/P05.5–P05.7 实施，原 P04 ASCII profile 仅保留协议兼容测试。
+
+配置链路与模块边界：
+
+1. `native/skia_fonts.py` 只做平台字体发现、物理快照与实例决策；`SkiaTextMetricsProcess` 在独立 CPU 连接批量度量，不创建 GPU。新增设计空间 advance/bearing 与像素墨迹分开返回，不能把保守的 raster bounds 当作 side bearing。
+2. `engine/text/skia_width.py` 用规范度量生成整数单元宽度/路径偏移。原 `truncate_div`、`nicokara_layout_width`、`nicokara_char_geometry_left_offset` 原样移入无 Qt 的 `layout/line/width_policy.py`，旧 Qt 调用点导入同一函数，未改原表达式。设计 bearing 目前来自 em 尺度的轮廓边界，更多字体、轴与复杂单元仍须校准，不能称已覆盖所有 D2D/N3 情形。
+3. `engine/render/skia_ir.py` 把快照注入现有 `LayoutPlanResolvers`，复用共享时间/窗口/分页元数据和区间分配；单行页避让通过原规则的早退分支，不另造分页器。`build_render_ir(..., layout_plan_builder=...)` 是配置端口，默认调用者保持原路径。快照预索引歌词/样式身份，避免整轨逐行反复扫描全部度量。
+4. 最终 schema 3 IR 追加 `required_features=[p05_resolved_horizontal]` 与 `skia_layout.version=1`：字体内容摘要、实例 run、完整 metrics/glyph/cluster 快照、最终 origin/baseline/wipe 边界；计时仍是原 `resolved_intervals` 的唯一来源。legacy **按实际墨迹包络居中**，不是按 advance 或单元总宽居中；负字间距的步进按旧 GPU 规则钳制。
+5. `backends/skia/resolved_input.*` 在配置期核对字体字节与摘要、重新塑形并逐字段校验快照（glyph/cluster 精确，数值 `1e-4`），验证完整整数区间及有限坐标。缺失/失配/不支持的配置失败且保留上一场景，不悄悄回到 Qt 度量或旧 P04 排字。
+6. `SkiaBackend::configureResolved` 接收独立的 `core/ResolvedSubtitleInput`，避免向旧 `RenderScene` 塞入 Skia 私有状态。路径准备/物理 DPR 转换仅在配置发生，GPU/Raster 共用 `PreparedScene::draw`；帧热路径不测量、不塑形、不分配字幕时间。
+
+GPU 覆盖策略：原表面已经请求单采样，但 Ganesh 默认 `fInternalMultisampleCount=4` 会在内部路径缓冲使用 MSAA，实测边缘只出现 3 档非全透明/不透明覆盖。`gpu/context_options.h` 为 owned/borrowed Vulkan/Metal 统一禁用内部 MSAA 和距离场路径近似，使用精细覆盖；未修改平台或 core 绘制分支。Skia 内部可能按路径选择缓存 mask，这不代表整帧 CPU 栅格化；首次准备、上传和缓存成本仍需在 P11 测量，不提前承诺性能达标。
+
+验证记录：
+
+- Windows 产品/文本/最终 IR/架构/进度测试 **82 通过**；相关布局、字体、协议和导出回归 **487 通过、15 跳过**。测试把旧计划 builder、Qt 字宽和 QPainter 路径测量设为失败，Skia 产品配置及实际 GPU/Raster 绘制仍通过。
+- Linux WSLg X11/Wayland 各 **64 通过、5 跳过**；跳过为 2 项 Windows 字体环境样例和 3 项 D2D GPU 对照。固定字体的度量、glyph、cluster、最终坐标/基线/走字边界和解析区间在 Windows/X11/Wayland 的实际最大差 **0**。
+- Mac [43602269846](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43602269846)（`22433bbc`）：arm64/x64 的产品 IR、度量与最终布局各 **60 通过、9 跳过**，预览/原生能力组各 **21 通过、1 跳过**。固定字体的 `canonical-metrics.json` 和 `resolved-layout.json` 跨架构精确身份/cluster/区间及数值比较均通过，实际最大误差 **0**。
+- 最终 Mac CI **5 个任务全部成功**：两种架构构建、两种干净环境验收包、一个跨架构比较；manifest 追加 `resolved_layout_schema=1`，一键脚本据此执行最终布局用例。下载的 Mac arm64 样例与 Windows/Linux 再次逐项比较，两份样例的实际最大差均为 **0**；两个 Mac 架构的 Metal/Raster 构建指纹也已核对为下述相同源码身份。§14.6 已更新到该提交与验收包，供真机补验。
+- Windows borrowed 预览、生命周期与原生能力 **29 通过、1 跳过**；Vulkan 同步验证层已实际启用并通过正面对照。Linux X11/Wayland 的 borrowed 预览与生命周期各 **21 通过、1 跳过**，同步验证层同样实际启用；跳过项为 Metal 验证。
+- Windows 生成字体、Arial、Meiryo 三组 D2D GPU 几何冒烟均通过；既有 D2D 共享 realization / G6 零回读专项另 **3 通过**。这些冒烟不等价于 P00 的完整跨后端画质验收。
+- 覆盖真实组合字符与连字绘制、共享时间块按规范单元宽度分时、缺失/失配字体与 cluster、非有限坐标、非法区间、事务配置、GPU/Raster 同 IR、DPR 1/1.5/2、随机 seek、空轨/空行、source/style 时间偏移与前黑偏移。没有做 QPainter 画面对照或 4K 补测。
+
+**严格画质门槛仍未过，未放宽预算。** `build/p05-4-arial-budget.json` 的 Arial 50px / 640×360 / `AWi` 已唱完样例，按 P00 固定 alpha 阈值 16、预乘 RGBA 比较：alpha IoU **0.971068**（要求 ≥0.98），union channel MAE **3.578746**（≤3），P95 **17**（≤16），alpha 总量相对差 **0.679%**（≤2%）。禁用内部 MSAA 前同样例 MAE 为 6.238199、P95 为 32；画面覆盖更细，但固定阈值下的 IoU 不能混用其他阈值的约 0.99 诊断值。已查看两张 GPU 输出，内容与锚点一致，边缘差异继续保留为具名待验项。后续先扩大实字体/字号与布局校准，再完成 P05 其余几何；不得凭几何冒烟通过宣布 D2D 可退役。
+
+native 源码身份：`15a3e54db5dfaef988372e6ee0ec12a683269bc6828f4f19b95d3006875bc5e2`。本机日志：`build/p05-4-native-tests.log`、`build/p05-4-regression.log`、`build/p05-4-linux-tests.log`、`build/p05-4-preview-tests.log`、`build/p05-4-linux-preview.log`、`build/p05-4-d2d-regression.log`；GPU 实字体诊断图为 `build/p05-4-d2d.png` / `build/p05-4-skia.png`。Linux 仍为 llvmpipe，托管 Mac 仍为虚拟 Metal；新功能不能沿用旧 M4 Pro 的 P01/P03 结果关闭真机门槛。
 
 ## 15. 前期探针清理范围
 
