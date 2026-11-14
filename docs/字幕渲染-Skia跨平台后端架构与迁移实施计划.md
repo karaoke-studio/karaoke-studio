@@ -488,9 +488,9 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 - [x] P03.1 在 Qt 6.11.0 原生 SDK 构建一个最小 Qt Quick 模块，确认 PyQt 宿主可以加载；补齐现有只安装 qtbase 的构建入口所需 Qt Quick 模块。Windows x64 已验证：`build_skia_renderer.py --qt-root` 构建 QML 模块 `Krok.SubtitleSkia`（`SkiaSubtitleItem : QQuickRhiItem`，MODULE 插件，QRhi 经 `Qt6::GuiPrivate`），PyQt6 6.11.0 宿主加载通过（`tests/test_subtitle_skia_preview.py`）；Qt 身份只进入本项目 native 指纹，不触发 Skia 重编；冒烟脚本补装 `qtdeclarative`。Linux/macOS 需在对应平台装入 Qt 6.11.0 SDK 后复验。
 - [x] P03.2 在创建任何 Qt Quick 窗口/控件前选择 Windows/Linux Vulkan、macOS Metal；检查实际 `graphicsApi()`，拒绝悄悄使用 Windows 默认 D3D 或 OpenGL。宿主侧 `frontend/preview/quick_graphics_api.py` 负责选择与校验；`SkiaSubtitleItem` 在渲染线程按 `QRhi::backend()` 判定并经 `graphicsBackend` / `graphicsBackendAccepted` 回报，不接受时不绘制。实测（Windows x64，PyQt6 6.11.0）：`createWindowContainer` 内的 `QQuickView` 实际运行 Vulkan，`QVulkanInstance` 由 Qt 自行创建（PyQt6 未暴露该类，宿主无需创建）；强制 D3D11 时组件与宿主均拒绝。macOS Metal / Linux 待对应平台复验。
-- [ ] P03.3 用 Skia 在同设备可用纹理绘制透明移动图样；实现 Vulkan / Metal 各自的设备借用与纹理包装，公共图样绘制代码不变。**Vulkan 已完成（Windows x64 实测），Metal 待实现。** 设备所有权定为“Skia 借用 Qt 的设备”：`skia/gpu/vulkan_borrowed.*`（无 Qt 依赖）以 Qt 的 instance/device/queue 建 Ganesh context，**不声明任何可选特性与扩展**，Skia 只用核心 Vulkan，从而不依赖 Qt 未公开的设备启用集；所有调用在 Qt 渲染线程，与 Qt 同队列同线程提交。`SkiaSubtitleItem` 每帧包装 `colorTexture()` 的 VkImage，绘制 core 的 `drawMotionProbe`（仅依赖请求时间），提交并转到 `SHADER_READ_ONLY_OPTIMAL` 后 `setNativeLayout` 通知 Qt。实测透明图样正确合成在 QML 黑底上（覆盖 21%，400ms 两次截图变化 35%），无 CPU 回读。同步正确性的验证见 P03.4/P03.5。
-- [ ] P03.4 证明 GPU 提交顺序。Ganesh 若使用自己的命令缓冲，必须建立与 Qt sampling 的明确顺序；不得照抄 Qt 原生例子就假设 Skia 也写入 Qt 当前 command buffer。**Vulkan 已证明（Windows x64），Metal 待做。** Skia 不写入 Qt 的 command buffer，而在 `render()` 内用自己的 command buffer 立即提交到同一 VkQueue，Qt 本帧采样该纹理的命令在帧末才提交，提交顺序天然在后。显式依赖由 Skia 自身的 barrier 建立（读 m150 源码确认）：flush 末尾转 `SHADER_READ_ONLY_OPTIMAL` 时 dstStage=`FRAGMENT_SHADER`、dstAccess=着色器读，覆盖其后 Qt 的片段采样（RAW）；下一帧按 Qt 报告的布局包装，转回颜色附件的 srcStage=`FRAGMENT_SHADER`，等待上一帧采样完成（WAR）。Qt 记录的布局与实际一致，故 Qt 不再插入冲突的转换。
-- [ ] P03.5 验证 Vulkan layout / queue family 与屏障、Metal 队列顺序和 wrapper 寿命；启用可用的验证层，处理所有同步/lifetime 错误。**Vulkan 已验证（Windows x64，Vulkan SDK 1.4.363.1），Metal 待做。** Khronos 验证层（Core、Synchronization、Object lifetime、Thread safety）下运行 120+ 帧并中途 resize 重建纹理：零同步冲突、零 lifetime 错误；Skia 自持设备的冒烟同样零告警。测试屏蔽第三方隐式层（`VK_LOADER_LAYERS_DISABLE=~implicit~`），并以验证层的 `CURRENT-VALIDATION-ENABLED`（含 Synchronization）为正面对照（`tests/test_subtitle_skia_preview.py`，`KROK_VULKAN_VALIDATION=1` 时运行）。唯一报告的 `VUID-VkImageCreateInfo-initialLayout-12478` 经 API dump 归属于 Qt 6.11.0 QRhiVulkan 自己以 PREINITIALIZED+OPTIMAL 创建的 `QQuickRhiItem` 颜色纹理（用途 COLOR_ATTACHMENT|SAMPLED|TRANSFER_SRC|TRANSFER_DST，尺寸随组件），Skia 只包装不创建；测试按精确 VUID 列为 Qt 侧已知项，其余任何报告均失败。API dump 层挂载时进程退出阶段曾段错误，未挂载时均正常退出，暂记为调试层自身问题。
+- [ ] P03.3 用 Skia 在同设备可用纹理绘制透明移动图样；实现 Vulkan / Metal 各自的设备借用与纹理包装，公共图样绘制代码不变。**Vulkan 已完成（Windows x64 实测）；Metal 已实现（`skia/gpu/metal_borrowed.*`，借用 Qt 的 MTLDevice/MTLCommandQueue 包装 MTLTexture），CI 托管 Mac（虚拟 Metal，arm64/x64）绘制检查通过，真硬件待 §14.6。** 设备所有权定为“Skia 借用 Qt 的设备”：`skia/gpu/vulkan_borrowed.*`（无 Qt 依赖）以 Qt 的 instance/device/queue 建 Ganesh context，**不声明任何可选特性与扩展**，Skia 只用核心 Vulkan，从而不依赖 Qt 未公开的设备启用集；所有调用在 Qt 渲染线程，与 Qt 同队列同线程提交。`SkiaSubtitleItem` 每帧包装 `colorTexture()` 的 VkImage，绘制 core 的 `drawMotionProbe`（仅依赖请求时间），提交并转到 `SHADER_READ_ONLY_OPTIMAL` 后 `setNativeLayout` 通知 Qt。实测透明图样正确合成在 QML 黑底上（覆盖 21%，400ms 两次截图变化 35%），无 CPU 回读。同步正确性的验证见 P03.4/P03.5。
+- [ ] P03.4 证明 GPU 提交顺序。Ganesh 若使用自己的命令缓冲，必须建立与 Qt sampling 的明确顺序；不得照抄 Qt 原生例子就假设 Skia 也写入 Qt 当前 command buffer。**Vulkan 已证明（Windows x64）；Metal 依据 Qt 6.11.0 `qrhimetal.mm`：帧命令缓冲区在 `endFrame()` 才 commit、全文件无显式 enqueue，Skia 在 `render()` 内 commit 必先入队；Qt 纹理为 Private 存储、默认 tracked hazard tracking，Metal 自动排序写后读。真硬件待 §14.6。** Skia 不写入 Qt 的 command buffer，而在 `render()` 内用自己的 command buffer 立即提交到同一 VkQueue，Qt 本帧采样该纹理的命令在帧末才提交，提交顺序天然在后。显式依赖由 Skia 自身的 barrier 建立（读 m150 源码确认）：flush 末尾转 `SHADER_READ_ONLY_OPTIMAL` 时 dstStage=`FRAGMENT_SHADER`、dstAccess=着色器读，覆盖其后 Qt 的片段采样（RAW）；下一帧按 Qt 报告的布局包装，转回颜色附件的 srcStage=`FRAGMENT_SHADER`，等待上一帧采样完成（WAR）。Qt 记录的布局与实际一致，故 Qt 不再插入冲突的转换。
+- [ ] P03.5 验证 Vulkan layout / queue family 与屏障、Metal 队列顺序和 wrapper 寿命；启用可用的验证层，处理所有同步/lifetime 错误。**Vulkan 已验证（Windows x64，Vulkan SDK 1.4.363.1）；Metal 在 CI 托管 Mac 上以 `MTL_DEBUG_LAYER=1` 运行预览测试通过（虚拟设备），真硬件待 §14.6。** Khronos 验证层（Core、Synchronization、Object lifetime、Thread safety）下运行 120+ 帧并中途 resize 重建纹理：零同步冲突、零 lifetime 错误；Skia 自持设备的冒烟同样零告警。测试屏蔽第三方隐式层（`VK_LOADER_LAYERS_DISABLE=~implicit~`），并以验证层的 `CURRENT-VALIDATION-ENABLED`（含 Synchronization）为正面对照（`tests/test_subtitle_skia_preview.py`，`KROK_VULKAN_VALIDATION=1` 时运行）。唯一报告的 `VUID-VkImageCreateInfo-initialLayout-12478` 经 API dump 归属于 Qt 6.11.0 QRhiVulkan 自己以 PREINITIALIZED+OPTIMAL 创建的 `QQuickRhiItem` 颜色纹理（用途 COLOR_ATTACHMENT|SAMPLED|TRANSFER_SRC|TRANSFER_DST，尺寸随组件），Skia 只包装不创建；测试按精确 VUID 列为 Qt 侧已知项，其余任何报告均失败。API dump 层挂载时进程退出阶段曾段错误，未挂载时均正常退出，暂记为调试层自身问题。
 - [ ] P03.6 在实际 Widgets 预览容器测试透明字幕、视频/静态背景、黑边、裁切、旋转、缩放、鼠标事件与布局层叠；不要只测独立窗口。
 - [ ] P03.7 测试 Qt threaded/basic 渲染循环实际采用模式、隐藏/重建、resize、DPR、scene graph invalidation 和关闭；GPU 释放均在正确线程。
 - [ ] P03.8 Linux X11 和 Wayland 分别验证，不把 Xvfb 测试当 Wayland GPU 呈现通过。
@@ -1045,62 +1045,30 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 现有 D2D CMake 默认配置已重新通过，未改变生产路径。P00 的 D2D 严格回访差异仍未豁免。P01 小样例不关闭 P03 的 Qt 纹理互操作门槛，也不关闭后续字幕功能、30 分钟压力或正式打包门槛。
 
-### 14.6 交给朋友的 Codex：macOS 实机验收入口
+### 14.6 macOS 实机验收：CI 预构建验收包 + 一键脚本
 
-可以直接让另一台 Mac 的 Codex 按本节测试，无需先制作安装包。测试对象是当前 `main` 的 P01 C++ 基础层；不需要安装整个 PyQt 应用、不需要 Qt SDK，也不依赖 `skia-python`。需要 Git、Python 3.11+、CMake、锁定的 Xcode 26.1.1 / SDK 26.1 和网络下载依赖；GN/Ninja/Skia 由统一驱动获取并校验。
+（2026-11-14 改版。旧流程要求测试者安装锁定的 Xcode 26.1.1、Qt SDK 并自行编译 Skia，负担过重；构建可复现性已由 CI 在锁定工具链上证明，测试者只需提供真实 Metal GPU 的运行结果。）
 
-可直接发给朋友的指令：
+- **CI 负责构建**：`skia-foundation.yml` 的 Mac 任务在 Xcode 26.1.1 / SDK 26.1、Qt 6.11.0 SDK（aqtinstall 固定提交）下构建 Metal 与 CPU-only 目标及 `Krok.SubtitleSkia` 预览模块，打包为产物 `mac-validation-arm64` / `mac-validation-x64`（tar.gz 保留可执行位，附 SHA-256 清单、构建指纹与 CMake code model）。
+- **CI 自检可移植性**：`bundle-check` 任务在无 Qt SDK、无构建缓存的干净 Mac 上运行一键脚本；托管机为虚拟 Metal，使用 `--allow-virtual-gpu`，只允许硬件门槛未过。首次通过：[43560806767](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43560806767)（提交 `90ec1d81`，两种架构功能项全部通过，含 Apple Metal 调试层下的预览测试；虚拟设备被硬件检查正确拒绝）。
+- **测试者只运行** `scripts/mac_hardware_check.py <下载的验收包>`：校验清单、去除 quarantine、在 `build/mac-hardware-check/venv` 安装 PyQt6 6.11.0，依次运行 Metal 真硬件冒烟、Raster 冒烟、owned 后端测试、预览测试（另在 `MTL_DEBUG_LAYER=1` 下复跑）与原生能力测试，生成 `build/mac-hardware-check-results.zip`。系统信息只收集白名单字段，不含序列号与硬件 UUID。退出码：0 = 全部通过；1 = 功能项失败；2 = 功能通过但不是真硬件。
 
-> 请阅读本仓库 AGENTS.md 和 docs/字幕渲染-Skia跨平台后端架构与迁移实施计划.md，按 §14.6 在这台 Mac 实测 P01。先记录当前 commit、机器/系统/芯片架构和 Xcode/SDK，使用锁文件与统一构建入口；执行 Metal 真硬件、同一 core 的 Raster、CPU-only、第二次缓存构建、Unicode 资源路径和重复帧测试。回传构建指纹、实际设备/API/driver、通过/失败项和原始错误。只做本阶段测试，输出放 build/ 或专用缓存，不修改锁文件/绘制核心，不创建分支、提交或推送。不要以虚拟 GPU、软件回退、单纯编译成功替代 Metal 真硬件通过；不要将能力小样例写成完整字幕功能通过。若锁定工具链缺失，报告具体缺项。
+可直接转给测试者（或其 Codex/Claude）的说明，提交号与运行号随最新一次通过的 CI 更新：
 
-建议 Codex 按以下顺序执行；路径可以按本机解释器位置调整，参数语义不能改：
+```text
+需要：一台真实的 Mac（Apple Silicon 或 Intel）、已登录的桌面会话、Python 3.11 或更高版本、git、一个 GitHub 账号（下载 Actions 产物要登录）。不需要 Xcode、Qt 或编译。
 
-1. `git submodule status`；初始化缺失的 submodule。记录 `git rev-parse HEAD` 与工作区状态，在当前分支测试，不覆盖本地改动。
-2. 记录 `sw_vers`、`uname -m`、`system_profiler SPHardwareDataType SPDisplaysDataType` 的芯片/GPU/Metal 信息。**回传时去掉序列号、硬件 UUID 等个人设备标识**；无需复制完整 system_profiler 输出。
-3. 为本次命令设置 `DEVELOPER_DIR=/Applications/Xcode_26.1.1.app/Contents/Developer`，运行 `xcodebuild -version`、`xcrun --sdk macosx --show-sdk-version`。锁定的 SDK 为 26.1；找不到时记录为工具链未就绪，不把它归类为 Skia 绘制失败。无需修改全局 xcode-select。
-4. 使用已有 Python 3.11+ 和 CMake；若缺 CMake，可在 `build/skia-validation-venv` 创建独立 venv 并 `python -m pip install cmake`。P01 构建本身不要求安装 requirements.txt 或 PyQt。
+1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
+   cd karaoke-studio
+   git checkout 90ec1d81
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43560806767 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+3. 在仓库根目录运行：
+   python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
+   （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
+4. 把生成的 build/mac-hardware-check-results.zip 发回来。脚本最后打印的退出码和结果摘要也一并附上。
 
-```bash
-export DEVELOPER_DIR=/Applications/Xcode_26.1.1.app/Contents/Developer
-# Apple Silicon 用 arm64；Intel 用 x64。记录实际终端/Python 架构，避免混淆 Rosetta 结果。
-ARCH=arm64
-FONT=/System/Library/Fonts/Supplemental/Arial.ttf
-CACHE="$HOME/.cache/krok-helper/skia-deps"
-mkdir -p build/skia-macos-validation
-
-# 首次干净构建；--smoke-font 自动要求 Metal 真硬件，失败不会转 Raster。
-python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --gpu-api metal --clean --smoke-font "$FONT" > build/skia-macos-validation/metal-clean.log 2>&1
-# 上一命令成功后，保持参数不变，仅移除 --clean；两层 Ninja 都应无须重编。
-python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --gpu-api metal --smoke-font "$FONT" > build/skia-macos-validation/metal-cached.log 2>&1
-
-# 独立的无 GPU 构建。
-python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --cpu-only --clean --smoke-font "$FONT" > build/skia-macos-validation/raster-clean.log 2>&1
-python3 scripts/build_skia_renderer.py --platform macos --arch "$ARCH" --cpu-only --smoke-font "$FONT" > build/skia-macos-validation/raster-cached.log 2>&1
-
-# Unicode 字体和输出路径；使用同一份字体字节，避免换字体造成差异。
-cp "$FONT" "build/skia-macos-validation/字幕 字体.ttf"
-"$CACHE/native/macos-$ARCH-metal/krok_skia_gpu_smoke" "build/skia-macos-validation/字幕 字体.ttf" "build/skia-macos-validation/Metal 字幕" --require-hardware --frames 120
-"$CACHE/native/macos-$ARCH-raster/krok_skia_raster_smoke" "build/skia-macos-validation/字幕 字体.ttf" "build/skia-macos-validation/CPU 字幕" --frames 120
-otool -L "$CACHE/native/macos-$ARCH-raster/krok_skia_raster_smoke"
-
-# P02 新增的 owned backend 能力/诊断与线程生命周期检查。
-"$CACHE/native/macos-$ARCH-metal/subtitle_skia_backend_tests" --gpu
-"$CACHE/native/macos-$ARCH-raster/subtitle_skia_backend_tests"
+只运行上述步骤，不要修改仓库文件，不要创建分支、提交或推送。如果某一步报错，原样贴回完整的错误信息。
 ```
-
-每个构建命令都必须检查退出码。Metal 步骤失败时保留原日志，继续独立 CPU-only 验证，不把后面的成功覆盖前面的失败。CPU-only 的导入表不应依赖 Metal/Vulkan；同一 core 的能力检查必须包含 glyph_outline、RuntimeEffect、blur、PNG、透明/预乘 alpha、repeat_exact。确认 `Metal 字幕.json` 为 `api=metal`、`hardware=true`、`status=passed`，而 `CPU 字幕.json` 为 `api=raster`、`hardware=false`。
-
-如果朋友已安装本项目测试依赖，还可设置 `KROK_SKIA_NATIVE_TEST_ROOT="$CACHE/native"`、`KROK_SKIA_NATIVE_TEST_ARCH="$ARCH"`、`KROK_SKIA_NATIVE_TEST_FONT="$FONT"`，运行 `python3 -m pytest tests/test_subtitle_skia_native.py -q`。其中 Vulkan loader 注入项在 Mac 会明确 skip；不能把该项的 skip 记为 Metal 故障注入通过。没有 PyQt 测试环境时，上面的独立 native 命令仍是有效的 P01 验证入口。
-
-回传结果应包含：
-
-- 当前 commit、Mac 芯片/架构、macOS/Xcode/SDK 版本；不要回传机器序列号。
-- 四份构建日志及退出码、两个构建目录的 `build-fingerprint.json`。
-- 120 帧测试的 JSON、PNG、RGBA；不需要发送系统字体文件，记录字体 SHA256 即可。
-- 真硬件 Metal 是否通过、CPU-only 是否通过、缓存是否复用；失败时给完整错误与失败步骤，不只给“测试失败”。
-- 若运行 pytest，提供结果和 skip 原因。注明这里只覆盖 P01，尚未验证字幕 IR、出入场/粒子/走字线、Qt 预览、视频导出和长时间稳定性。
-
-PNG 中的场景应有半透明色块、曲线路径、发光圆、英文文字、独立 K 字形轮廓和半透明图片块。可以人工抽查，但以程序能力断言、后端身份、指纹和日志为主；不要与 QPainter 生成图比较。
 
 ### 14.7 P02 实施与 D2D 回归证据（2026-11-14）
 
