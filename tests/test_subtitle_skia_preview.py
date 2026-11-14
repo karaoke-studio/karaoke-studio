@@ -13,6 +13,21 @@ import sys
 
 import pytest
 
+def desktop_environment(platform=sys.platform):
+    # Strip the application's headless default, but retain explicit X11/Wayland selection.
+    return {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"
+            or (platform == "linux" and v in {"xcb", "wayland"})}
+
+
+@pytest.mark.parametrize("platform,selection,expected", [
+    ("linux", "xcb", "xcb"), ("linux", "wayland", "wayland"),
+    ("linux", "offscreen", None), ("win32", "offscreen", None), ("darwin", "offscreen", None)])
+def test_desktop_environment_preserves_explicit_linux_window_system(monkeypatch, platform, selection, expected):
+    monkeypatch.setenv("QT_QPA_PLATFORM", selection)
+    assert desktop_environment(platform).get("QT_QPA_PLATFORM") == expected
+    assert os.environ["QT_QPA_PLATFORM"] == selection
+
+
 LOAD_MODULE = r"""
 import sys
 from PyQt6.QtCore import QT_VERSION_STR, QUrl
@@ -44,6 +59,7 @@ if sys.argv[2] == "required":
 else:
     QQuickWindow.setGraphicsApi(getattr(QSGRendererInterface.GraphicsApi, sys.argv[2]))
 app = QApplication(sys.argv)
+print("platform", app.platformName())
 host = QWidget()
 host.resize(240, 120)
 view = QQuickView()
@@ -158,7 +174,7 @@ def test_pyqt_host_loads_native_quick_module(qml_dir):
 
 def show_item(qml_dir, api, extra_env=None):
     # A real window: Vulkan/Metal need the platform's windowing system, not offscreen.
-    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}
+    env = desktop_environment()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     # Without a console, Qt on Windows logs to the debugger instead of the stderr pipe.
     env["QT_FORCE_STDERR_LOGGING"] = "1"
@@ -167,7 +183,10 @@ def show_item(qml_dir, api, extra_env=None):
                             capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert result.returncode == 0, result.stderr
     assert "timeout" not in result.stdout, result.stdout + result.stderr
-    return dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line), result.stderr
+    lines = dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
+    if sys.platform == "linux" and env.get("QT_QPA_PLATFORM"):
+        assert lines["platform"] == env["QT_QPA_PLATFORM"], result.stdout
+    return lines, result.stderr
 
 
 def test_item_runs_on_the_platform_skia_api(qml_dir):
@@ -223,14 +242,8 @@ sys.exit(app.exec())
 QT_OWNED_VALIDATION_IDS = {"VUID-VkImageCreateInfo-initialLayout-12478"}
 
 
-def test_texture_handoff_is_clean_under_vulkan_validation(qml_dir, tmp_path):
-    if sys.platform == "darwin":
-        pytest.skip("Vulkan validation; Metal uses its own API validation")
-    if not os.environ.get("KROK_VULKAN_VALIDATION"):
-        pytest.skip("Set KROK_VULKAN_VALIDATION=1 with the Khronos validation layer installed")
-    log = tmp_path / "validation.log"
-    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"} | {
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+def vulkan_validation_environment(log):
+    env = {
         # Third-party overlays (OBS, Steam, vendor hooks) must not add noise or hide errors.
         "VK_LOADER_LAYERS_DISABLE": "~implicit~",
         "VK_INSTANCE_LAYERS": "VK_LAYER_KHRONOS_validation",
@@ -242,16 +255,35 @@ def test_texture_handoff_is_clean_under_vulkan_validation(qml_dir, tmp_path):
     if os.environ.get("VULKAN_SDK"):
         layers = "Bin" if sys.platform == "win32" else "share/vulkan/explicit_layer.d"
         env["VK_ADD_LAYER_PATH"] = str(Path(os.environ["VULKAN_SDK"]) / layers)
+    return env
+
+
+def assert_vulkan_validation_clean(log):
+    text = log.read_text(encoding="utf-8", errors="replace")
+    # Positive control: the layer really ran, with synchronization checks enabled.
+    current = "CURRENT-VALIDATION-ENABLED" in text and "Synchronization" in text
+    older = ("Khronos Validation Layer Active" in text
+             and "VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT" in text)
+    assert current or older, text[:2000]
+    reported = re.findall(r"^Validation (?:Error|Warning): \[ ([^\]]+?) \]", text, re.M)
+    assert not [r for r in reported if r.startswith("SYNC-")], text[:4000]
+    assert set(reported) <= QT_OWNED_VALIDATION_IDS, text[:4000]
+
+
+def test_texture_handoff_is_clean_under_vulkan_validation(qml_dir, tmp_path):
+    if sys.platform == "darwin":
+        pytest.skip("Vulkan validation; Metal uses its own API validation")
+    if not os.environ.get("KROK_VULKAN_VALIDATION"):
+        pytest.skip("Set KROK_VULKAN_VALIDATION=1 with the Khronos validation layer installed")
+    log = tmp_path / "validation.log"
+    env = desktop_environment() | {
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+    } | vulkan_validation_environment(log)
     result = subprocess.run([sys.executable, "-c", HANDOFF, str(qml_dir)], env=env,
                             capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert result.returncode == 0, result.stderr
     assert int(result.stdout.split()[-1]) > 30, result.stdout
-    text = log.read_text(encoding="utf-8", errors="replace")
-    # Positive control: the layer really ran, with synchronization checks enabled.
-    assert "CURRENT-VALIDATION-ENABLED" in text and "Synchronization" in text, text[:2000]
-    reported = re.findall(r"^Validation (?:Error|Warning): \[ ([^\]]+?) \]", text, re.M)
-    assert not [r for r in reported if r.startswith("SYNC-")], text[:4000]
-    assert set(reported) <= QT_OWNED_VALIDATION_IDS, text[:4000]
+    assert_vulkan_validation_clean(log)
 
 
 def test_metal_preview_under_active_api_validation(qml_dir):
@@ -294,6 +326,7 @@ from PyQt6.QtQuick import QQuickItem
 from PyQt6.QtQuickWidgets import QQuickWidget
 from PyQt6.QtWidgets import QApplication, QFrame, QWidget
 app = QApplication(sys.argv)
+print("platform", app.platformName())
 qml_dir, work, case = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
 W, H = (640, 240) if case == "crop" else (640, 360)
 background = QImage(1920, 1080, QImage.Format.Format_RGB32)
@@ -305,9 +338,16 @@ painter.fillRect(background.rect(), gradient)
 painter.end()
 background.save(str(work / "bg.png"))
 if case == "video":
-    if not shutil.which("ffmpeg"):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except ImportError:
+            pass
+    if not ffmpeg:
         print("skip no-ffmpeg"); sys.exit(0)
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                     "testsrc=size=640x480:rate=30:duration=3", "-pix_fmt", "yuv420p", str(work / "v.mp4")], check=True)
     layer = "VideoOutput { objectName: 'video'; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }"
 else:
@@ -370,7 +410,7 @@ sys.exit(app.exec())
 
 
 def run_canvas(qml_dir, tmp_path, case):
-    env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"} | {
+    env = desktop_environment() | {
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "QT_FORCE_STDERR_LOGGING": "1"}
     result = subprocess.run([sys.executable, "-c", QUICK_CANVAS, str(qml_dir), str(tmp_path), case], env=env,
                             capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=tmp_path)
@@ -378,7 +418,10 @@ def run_canvas(qml_dir, tmp_path, case):
     if "skip no-ffmpeg" in result.stdout:
         pytest.skip("ffmpeg not on PATH to generate the test video")
     assert "timeout" not in result.stdout, result.stdout + result.stderr
-    return dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
+    lines = dict(line.split(" ", 1) for line in result.stdout.splitlines() if " " in line)
+    if sys.platform == "linux" and env.get("QT_QPA_PLATFORM"):
+        assert lines["platform"] == env["QT_QPA_PLATFORM"], result.stdout
+    return lines
 
 
 @pytest.mark.parametrize("case", ["image", "crop", "video"])

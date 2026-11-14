@@ -35,7 +35,7 @@ jobs:
       - name: Install build and preview test tools
         # PyQt6 must match the Qt SDK exactly; aqtinstall is pinned to a commit that reads Qt 6.11.
         run: >
-          python -m pip install cmake pytest numpy PyQt6==6.11.0 PyQt6-Qt6==6.11.0
+          python -m pip install cmake pytest numpy imageio-ffmpeg==0.6.0 PyQt6==6.11.0 PyQt6-Qt6==6.11.0
           "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
       - uses: actions/cache@v4
         with:
@@ -90,7 +90,7 @@ jobs:
         run: |
           export KROK_SKIA_NATIVE_TEST_ROOT="$HOME/.cache/krok-helper/skia-deps/native"
           # The app's conftest imports the whole application; these tests need only PyQt6.
-          python -m pytest --noconftest tests/test_subtitle_skia_preview.py -rs -v
+          python -m pytest --noconftest tests/test_subtitle_skia_preview.py tests/test_subtitle_skia_preview_lifecycle.py -rs -v --basetemp build/skia-preview-tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -102,6 +102,7 @@ jobs:
             ~/.cache/krok-helper/skia-deps/native/**/*.png
             ~/.cache/krok-helper/skia-deps/native/**/*.log
             ~/.cache/krok-helper/skia-deps/native/**/*.exitcode
+            build/skia-preview-tests/**/lifecycle.*.log
       - name: Package the Mac validation bundle
         env:
           ARCH: ${{ matrix.arch }}
@@ -113,6 +114,7 @@ jobs:
           native = Path.home() / ".cache/krok-helper/skia-deps/native"
           keep = {"metal": ["krok_skia_gpu_smoke", "krok_skia_raster_smoke", "subtitle_skia_backend_tests",
                             "krok_metal_validation_probe",
+                            "libsubtitle_skia_preview_test_control.dylib",
                             "build-fingerprint.json", ".cmake/api/v1/reply", "qml"],
                   "raster": ["krok_skia_raster_smoke", "subtitle_skia_backend_tests",
                              "build-fingerprint.json", ".cmake/api/v1/reply"]}

@@ -21,3 +21,10 @@ target_include_directories(subtitle_skia_preview PRIVATE src src/preview/qt_skia
 # QRhi (<rhi/qrhi.h>) is Qt's semi-public GPU API; Qt ships it through GuiPrivate.
 target_link_libraries(subtitle_skia_preview PUBLIC Qt6::Quick Qt6::Gui PRIVATE Qt6::GuiPrivate subtitle_skia_gpu)
 krok_strict_float(subtitle_skia_preview)
+
+if(KROK_BUILD_NATIVE_TESTS)
+    # Test-only process-local screen scaling: exercises real Qt DPR change notifications and
+    # texture recreation without changing the user's desktop settings or the QML API.
+    add_library(subtitle_skia_preview_test_control SHARED tests/preview_test_control.cpp)
+    target_link_libraries(subtitle_skia_preview_test_control PRIVATE Qt6::GuiPrivate)
+endif()

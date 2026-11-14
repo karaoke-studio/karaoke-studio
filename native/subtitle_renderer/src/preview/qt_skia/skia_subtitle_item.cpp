@@ -4,8 +4,10 @@
 #include "include/core/SkSurface.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QCoreApplication>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
+#include <QtCore/QThread>
 #include <rhi/qrhi.h>
 #include <exception>
 #include <stdexcept>
@@ -107,17 +109,23 @@ struct PlatformBridge {
 
 class SkiaSubtitleRenderer final : public QQuickRhiItemRenderer {
 public:
+    SkiaSubtitleRenderer() { trace("created"); }
     ~SkiaSubtitleRenderer() override {
+        requireOwner();
         // Destroyed on the render thread before Qt releases its device; drop Skia's use first.
         if (context_) context_->flushAndSubmit(GrSyncCpu::kYes);
         context_.reset();
+        trace("released");
     }
 protected:
     void initialize(QRhiCommandBuffer*) override {
+        requireOwner();
         // Runs again when the item's texture is recreated (resize, new window): re-report then.
         backend_ = QString::fromLatin1(rhi()->backendName());
         accepted_ = rhi()->backend() == kRequiredBackend;
         reported_ = false;
+        trace("initialized");
+        qCDebug(lcPreview) << "texture-size" << colorTexture()->pixelSize();
         if (!accepted_) {
             qCWarning(lcPreview) << "Rejecting scene graph backend" << backend_
                                  << "- Skia preview requires" << kRequiredName;
@@ -135,6 +143,7 @@ protected:
         }
     }
     void synchronize(QQuickRhiItem* item) override {
+        requireOwner();
         // synchronize() precedes initialize() within a frame, so a fresh result is published
         // on the following frame, which render() requests below.
         if (!backend_.isEmpty() && !reported_) {
@@ -143,6 +152,7 @@ protected:
         }
     }
     void render(QRhiCommandBuffer* cb) override {
+        requireOwner();
         if (!drawWithSkia()) {
             // Transparent texture; nothing else is drawn on an unaccepted or failed backend.
             cb->beginPass(renderTarget(), Qt::transparent, {1.0f, 0});
@@ -152,6 +162,15 @@ protected:
         update();
     }
 private:
+    void requireOwner() const {
+        if (QThread::currentThread() != owner_)
+            qFatal("Skia preview GPU resource accessed outside its owner thread");
+    }
+    void trace(const char* event) const {
+        qCDebug(lcPreview).nospace() << "lifecycle " << event
+            << " renderer=" << quintptr(this) << " thread=" << quintptr(owner_)
+            << " gui=" << (owner_ == QCoreApplication::instance()->thread());
+    }
     bool drawWithSkia() {
         if (!accepted_ || !context_) return false;
         QRhiTexture& texture = *colorTexture();
@@ -160,6 +179,7 @@ private:
             ::subtitle::skia::drawMotionProbe(*surface->getCanvas(), texture.pixelSize().width(),
                                               texture.pixelSize().height(), clock_.elapsed() / 1000.0);
             bridge_.submit(*context_, *surface, texture);
+            trace("rendered");
             return true;
         } catch (const std::exception& error) {
             qCWarning(lcPreview) << "Skia preview frame failed:" << error.what();
@@ -168,6 +188,7 @@ private:
         }
     }
     QString backend_;
+    QThread* const owner_ = QThread::currentThread();
     bool accepted_ = false;
     bool reported_ = false;
     QElapsedTimer clock_;

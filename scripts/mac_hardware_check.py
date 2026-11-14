@@ -25,7 +25,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 WORK = REPO / "build/mac-hardware-check"
 FONT = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
-PYQT = ["PyQt6==6.11.0", "PyQt6-Qt6==6.11.0", "pytest", "numpy"]
+PYQT = ["PyQt6==6.11.0", "PyQt6-Qt6==6.11.0", "pytest", "numpy", "imageio-ffmpeg==0.6.0"]
 # Only these system_profiler display fields are kept: no serial numbers or hardware UUIDs.
 GPU_FIELDS = ("sppci_model", "sppci_cores", "spdisplays_mtlgpufamilysupport", "spdisplays_vendor",
               "sppci_device_type", "spdisplays_metal")
@@ -141,7 +141,8 @@ def main(argv=None) -> int:
         "metal_hardware_smoke": [gpu / "krok_skia_gpu_smoke", FONT, logs / "metal", "--require-hardware", "--frames", "120"],
         "raster_smoke": [cpu / "krok_skia_raster_smoke", FONT, logs / "raster", "--frames", "120"],
         "owned_metal_backend": [gpu / "subtitle_skia_backend_tests", "--gpu", "--allow-software"],
-        "quick_preview": [python, "-m", "pytest", "--noconftest", "-rs", "-v", "tests/test_subtitle_skia_preview.py"],
+        "quick_preview": [python, "-m", "pytest", "--noconftest", "-rs", "-v", "tests/test_subtitle_skia_preview.py",
+                          "tests/test_subtitle_skia_preview_lifecycle.py", "--basetemp", logs / "preview-tests"],
         "native_capabilities": [python, "-m", "pytest", "--noconftest", "-rs", "-v", "tests/test_subtitle_skia_native.py"],
     }
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
