@@ -101,3 +101,71 @@ jobs:
             ~/.cache/krok-helper/skia-deps/native/**/*.png
             ~/.cache/krok-helper/skia-deps/native/**/*.log
             ~/.cache/krok-helper/skia-deps/native/**/*.exitcode
+      - name: Package the Mac validation bundle
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, tarfile
+          from pathlib import Path
+          arch = os.environ["ARCH"]
+          native = Path.home() / ".cache/krok-helper/skia-deps/native"
+          keep = {"metal": ["krok_skia_gpu_smoke", "krok_skia_raster_smoke", "subtitle_skia_backend_tests",
+                            "build-fingerprint.json", ".cmake/api/v1/reply", "qml"],
+                  "raster": ["krok_skia_raster_smoke", "subtitle_skia_backend_tests",
+                             "build-fingerprint.json", ".cmake/api/v1/reply"]}
+          files = []
+          for api, names in keep.items():
+              base = native / f"macos-{arch}-{api}"
+              for name in names:
+                  path = base / name
+                  files += sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+          manifest = {"commit": os.environ["GITHUB_SHA"], "arch": arch, "run_id": os.environ["GITHUB_RUN_ID"],
+                      "files": {f"native/{p.relative_to(native).as_posix()}": hashlib.sha256(p.read_bytes()).hexdigest()
+                                for p in files}}
+          out = Path(os.environ["RUNNER_TEMP"]) / f"mac-validation-{arch}.tar.gz"
+          with tarfile.open(out, "w:gz") as bundle:
+              for path in files:  # tar keeps the executable bits that artifact zips drop
+                  bundle.add(path, f"native/{path.relative_to(native).as_posix()}")
+              manifest_path = Path(os.environ["RUNNER_TEMP"]) / "manifest.json"
+              manifest_path.write_text(json.dumps(manifest, indent=2))
+              bundle.add(manifest_path, "manifest.json")
+          print(out, len(files), "files")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-validation-${{ matrix.arch }}
+          path: ${{ runner.temp }}/mac-validation-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  bundle-check:
+    # A fresh Mac with no Qt SDK and no build cache, like the machine that will run the bundle.
+    needs: macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-validation-${{ matrix.arch }}
+          path: downloaded
+      - name: One-command hardware check (hosted Metal is virtual, so only the hardware gate may fail)
+        run: python scripts/mac_hardware_check.py downloaded/mac-validation-${{ matrix.arch }}.tar.gz --allow-virtual-gpu
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-hardware-check-${{ matrix.arch }}-results
+          path: build/mac-hardware-check-results.zip
