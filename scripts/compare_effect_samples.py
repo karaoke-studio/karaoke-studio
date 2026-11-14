@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 import struct
 import sys
@@ -28,8 +29,8 @@ ALPHA_TOLERANCE = 1e-4
 
 
 class Reader:
-    def __init__(self, data: bytes):
-        self.data, self.offset = data, 0
+    def __init__(self, data: bytes, label: str):
+        self.data, self.offset, self.label = data, 0, label
 
     def take(self, size: int) -> bytes:
         if self.offset + size > len(self.data):
@@ -39,7 +40,13 @@ class Reader:
         return chunk
 
     def floats(self, count: int) -> tuple[float, ...]:
-        return struct.unpack(f"<{count}f", self.take(4 * count))
+        start = self.offset
+        values = struct.unpack(f"<{count}f", self.take(4 * count))
+        for index, value in enumerate(values):
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"{self.label}: non-finite float {value!r} at byte offset {start + 4 * index}")
+        return values
 
     def u32(self) -> int:
         return struct.unpack("<I", self.take(4))[0]
@@ -75,7 +82,7 @@ class Report:
 
 
 def compare(reference: bytes, candidate: bytes) -> Report:
-    a, b = Reader(reference), Reader(candidate)
+    a, b = Reader(reference, "reference"), Reader(candidate, "candidate")
     report = Report()
     for _ in range(GEO_EFFECTS * GEO_INDICES * GEO_TIMES):
         for x, y in zip(a.floats(GEO_FIELDS), b.floats(GEO_FIELDS)):
@@ -124,7 +131,12 @@ def main(argv=None) -> int:
     reference = options.reference.read_bytes()
     failed = False
     for candidate in options.candidates:
-        report = compare(reference, candidate.read_bytes())
+        try:
+            report = compare(reference, candidate.read_bytes())
+        except ValueError as error:
+            print(f"{candidate.name} vs {options.reference.name}: FAIL: {error}")
+            failed = True
+            continue
         worst = ", ".join(f"{name}={value:.3g}" for name, value in report.particle_max.items())
         print(f"{candidate.name} vs {options.reference.name}: {report.particles} particles; "
               f"geometry max={report.geometry_max:.3g}; particle max: {worst}")
