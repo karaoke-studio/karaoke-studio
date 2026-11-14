@@ -1,5 +1,6 @@
 #pragma once
 #include "include/core/SkPath.h"
+#include "resolved_scene.h"
 #include <cstdint>
 #include <vector>
 
@@ -33,6 +34,7 @@ struct SubtitleInput {
 class PreparedScene {
 public:
     explicit PreparedScene(const SubtitleInput& input);
+    explicit PreparedScene(const ResolvedSubtitleInput& input);
     void draw(SkCanvas& canvas, int tMs) const;
     int width() const { return width_; }
     int height() const { return height_; }

@@ -1,9 +1,12 @@
 #include "command_router.h"
 #include "text_commands.h"
 #include "../../backends/backend_factory.h"
+#include "../../backends/skia/skia_backend.h"
+#include "../../backends/skia/resolved_input.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../protocol/json_protocol.h"
 #include <future>
+#include <QtCore/QJsonArray>
 
 namespace krok::subtitle::native::commands {
 using protocol::response;
@@ -13,7 +16,7 @@ QJsonObject SkiaCommandRouter::info(RenderBackend& backend) const {
     return {{"backend", "skia"}, {"api", QString::fromStdString(caps.api)},
         {"execution_target", QString::fromStdString(caps.executionTarget)}, {"hardware", caps.hardware},
         {"adapter_name", QString::fromStdString(caps.adapterName)}, {"requested_target", requestedTarget_},
-        {"fallback_reason", fallbackReason_}, {"profile", "p04_ascii_solid_wipe"},
+        {"fallback_reason", fallbackReason_}, {"profile", static_cast<SkiaBackend&>(backend).profile()},
         {"pixel_format", "rgba8888"}, {"alpha_type", "straight"}, {"origin", "top_left"}, {"color_space", "srgb"}};
 }
 QJsonObject SkiaCommandRouter::select(const QJsonObject& request) {
@@ -45,11 +48,23 @@ void SkiaCommandRouter::synchronous(const QJsonObject& request) {
     const bool accepted = session_->submit(0, [&, frames = frames_](RenderBackend& backend) {
         const auto cmd = request.value("cmd").toString();
         if (cmd == "configure") {
-            auto scene = scene::skiaSceneFromIr(request.value("ir").toObject());
-            backend.configure(scene);
+            const auto ir = request.value("ir").toObject();
+            int width = 0, height = 0;
+            if (ir.contains("skia_layout")) {
+                auto input = resolvedSkiaInput(ir);
+                width = input.width; height = input.height;
+                static_cast<SkiaBackend&>(backend).configureResolved(input);
+            } else {
+                if (ir.value("required_features").toArray().contains("p05_resolved_horizontal"))
+                    throw BackendError("Skia 最终布局载荷缺失");
+                auto scene = scene::skiaSceneFromIr(ir);
+                width = scene.width; height = scene.height;
+                backend.configure(scene);
+            }
             configured_ = true;
             out = response(true, "configured");
-            out.insert("width", scene.width); out.insert("height", scene.height);
+            out.insert("width", width); out.insert("height", height);
+            if (ir.contains("skia_layout")) out.insert("metrics_identity", ir.value("skia_layout").toObject().value("metrics_identity"));
             out.insert("schema", 3);
         } else if (cmd == "backend_info" || cmd == "gpu_diagnostics" || cmd == "diagnostics")
             out = response(true, cmd == "backend_info" ? "backend_info" : "gpu_diagnostics");

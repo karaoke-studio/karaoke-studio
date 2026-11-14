@@ -121,7 +121,7 @@ def test_product_ir_ring_wipe_seek_and_transparency(binary, target):
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         assert process.skia_info["execution_target"] == target
         configured = process.configure(track, style, width=641, height=360, fps=60, duration_ms=1600)
-        assert configured["backend_info"]["profile"] == "p04_ascii_solid_wipe"
+        assert configured["backend_info"]["profile"] == "p05_resolved_horizontal"
         frames, events = collect(process, [100, 550, 1250, 550])
         assert all(f.shape == (360, 641, 4) for f in frames)
         assert np.array_equal(frames[1], frames[3]), "random seek must be deterministic"

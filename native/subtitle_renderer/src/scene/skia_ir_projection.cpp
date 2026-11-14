@@ -19,7 +19,7 @@ int integer(const QJsonObject& o, const char* key, int minimum, int maximum) {
 void validateEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     for (const auto& feature : ir.value("required_features").toArray()) {
-        if (feature.toString() != "p04_ascii_solid_wipe")
+        if (feature.toString() != "p04_ascii_solid_wipe" && feature.toString() != "p05_resolved_horizontal")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -92,9 +92,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;
-        if (!source.displayStartMs || !source.displayEndMs)
+        if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
-        line.displayWindows.push_back({*source.displayStartMs + offset, *source.displayEndMs + offset, 0, 0});
+        line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});
         for (const auto& cell : source.chars) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (&cellStyle != &resolved || cell.vectorGlyph || cell.bitmapGuide || !cell.fallbackFamily.isEmpty()

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import logging
 import os
 from typing import Any
-from .backend import NativeRendererError
+from .backend import NativeRendererError, heartbeat_lease_s
 from .skia_process import SkiaSidecarProcess, resolve_skia_renderer_path
 
 
@@ -49,8 +49,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
         try:
             if (ready.get("backend"), ready.get("schema"), ready.get("selection_version")) != ("skia", 3, 1):
                 raise NativeRendererError("sidecar 不支持 Skia 版本化选择握手，拒绝发送字幕配置")
-            if "p04_ascii_solid_wipe" not in ready.get("profiles", []):
-                raise NativeRendererError("Skia sidecar 未声明 P04 字幕能力")
+            if "p05_resolved_horizontal" not in ready.get("profiles", []):
+                raise NativeRendererError("Skia sidecar 未声明 P05 规范布局能力")
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",
@@ -63,8 +63,25 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             raise
         return ready
 
-    def configure(self, *args, **kwargs):
-        out = super().configure(*args, **kwargs)
+    def configure(self, track, style, *, progress=None, **kwargs):
+        from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
+        from .skia_text import SkiaTextMetricsProcess
+        from .skia_fonts import resolve_skia_font
+        from .protocol import apply_resolved_font_faces
+        try:
+            with SkiaTextMetricsProcess(self.executable_path) as metrics:
+                ir = build_skia_render_ir(track, style, measure=metrics.measure,
+                                          resolve_font=resolve_skia_font, **kwargs)
+            apply_resolved_font_faces(ir)
+        except (ValueError, OSError) as exc:
+            raise NativeRendererError(str(exc)) from exc
+        if progress is not None:
+            progress()
+        self._send({"cmd": "configure", "ir": ir})
+        out = self._expect_ok(self._read_until_event("configured", timeout_s=self.configure_timeout_s,
+                                                    heartbeat_lease_s=heartbeat_lease_s()))
+        if out.get('metrics_identity') != ir['skia_layout']['metrics_identity']:
+            raise NativeRendererError('Skia 场景未确认规范度量快照')
         self.skia_info = out.get("backend_info", {})
         info = self.skia_info
         target = "GPU" if info.get("execution_target") == "gpu" else "Raster CPU"

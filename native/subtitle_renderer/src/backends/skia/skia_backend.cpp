@@ -19,6 +19,7 @@ struct SkiaBackend::Impl {
     // Reverse destruction: prepared paths, surface, then the owning GPU session.
     sk_sp<SkSurface> surface;
     std::unique_ptr<::subtitle::skia::PreparedScene> prepared;
+    const char* profile = "p04_ascii_solid_wipe";
 };
 SkiaBackend::SkiaBackend(const SkiaOptions& options) : impl_(std::make_unique<Impl>()) {
     auto& caps = impl_->caps;
@@ -74,6 +75,21 @@ void SkiaBackend::configure(const RenderScene& scene) {
         surface = ::subtitle::skia::makeRasterSurface(scene.width, scene.height);
     impl_->surface = std::move(surface);
     impl_->prepared = std::move(prepared);
+    impl_->profile = "p04_ascii_solid_wipe";
+}
+const char* SkiaBackend::profile() const { requireOwner(); return impl_->profile; }
+void SkiaBackend::configureResolved(const ::subtitle::skia::ResolvedSubtitleInput& input) {
+    requireOwner();
+    auto prepared = std::make_unique<::subtitle::skia::PreparedScene>(input);
+    sk_sp<SkSurface> surface;
+#ifdef KROK_SKIA_GPU_ENABLED
+    if (impl_->gpu) surface = impl_->gpu->makeSurface(input.width, input.height);
+    else
+#endif
+        surface = ::subtitle::skia::makeRasterSurface(input.width, input.height);
+    impl_->surface = std::move(surface);
+    impl_->prepared = std::move(prepared);
+    impl_->profile = "p05_resolved_horizontal";
 }
 ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
     requireOwner();

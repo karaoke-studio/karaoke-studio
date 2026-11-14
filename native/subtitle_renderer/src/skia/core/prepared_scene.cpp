@@ -13,6 +13,21 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
+PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.width), height_(input.height) {
+    if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
+        throw std::runtime_error("Skia: invalid resolved canvas size");
+    for (const auto& source : input.lines) {
+        if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
+        Line line{{}, source.before, source.after, source.startMs, source.endMs};
+        for (const auto& cell : source.cells) {
+            if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
+                || cell.right < cell.left || cell.endMs < cell.startMs)
+                throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
+            line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs});
+        }
+        lines_.push_back(std::move(line));
+    }
+}
 PreparedScene::PreparedScene(const SubtitleInput& input) : width_(input.width), height_(input.height) {
     if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
         throw std::runtime_error("Skia P04: invalid canvas size");

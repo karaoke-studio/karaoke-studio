@@ -1,6 +1,7 @@
 #pragma once
 #include "../backend_selection.h"
 #include "../render_backend.h"
+#include "core/resolved_scene.h"
 #include <memory>
 namespace krok::subtitle::native {
 // Device ownership/readback boundary. All subtitle paths and drawing live in the common core.
@@ -12,6 +13,8 @@ public:
     BackendDiagnostics diagnostics() const override;
     ProbeResult renderProbe(const ProbeOptions&) override;
     void configure(const RenderScene&) override;
+    void configureResolved(const ::subtitle::skia::ResolvedSubtitleInput&);
+    const char* profile() const;
     ProbeResult renderFrame(int, bool = false) override;
     NativePreviewResult presentFrame(int, const NativePreviewTarget&, int) override;
     NativeRenderOnlyResult renderFrameOnly(int, int) override;

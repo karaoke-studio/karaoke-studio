@@ -1,6 +1,7 @@
 #include "text/shaped_cell.h"
 #include "include/core/SkMatrix.h"
 #include "include/core/SkPathBuilder.h"
+#include "include/core/SkTypeface.h"
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
 #include "modules/skunicode/include/SkUnicode_icu.h"
 #include <algorithm>
@@ -86,6 +87,23 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     result.advance = handler.advance * instance.horizontalScale();
     result.ascent = instance.ascent(); result.descent = instance.descent(); result.leading = instance.leading();
     result.glyphs = std::move(handler.output);
+    // Design-space bearings preserve the existing integer N3 cell-width rule.
+    // They are separate from the shaped pixel advance and actual outline ink.
+    auto designFont = font.makeWithSize(float(font.getTypeface()->getUnitsPerEm()));
+    for (const auto& glyph : result.glyphs) {
+        float width = 0;
+        designFont.getWidths({&glyph.id, 1}, {&width, 1});
+        result.designAdvance += width;
+    }
+    // SkFont::getBounds is a conservative raster bound (includes padding),
+    // not a design side bearing. Use the outline at the face's own em scale.
+    const auto firstPath = designFont.getPath(result.glyphs.front().id);
+    result.designLeftBearing = firstPath ? firstPath->computeTightBounds().left() : 0;
+    const auto last = result.glyphs.back().id;
+    float lastWidth = 0;
+    designFont.getWidths({&last, 1}, {&lastWidth, 1});
+    const auto lastPath = designFont.getPath(last);
+    result.designRightBearing = lastPath ? lastWidth - lastPath->computeTightBounds().right() : 0;
     std::vector<std::uint32_t> boundaries{std::uint32_t(utf8.size())};
     for (const auto& glyph : result.glyphs) {
         if (glyph.clusterStart >= utf8.size() || (std::uint8_t(utf8[glyph.clusterStart]) & 0xc0) == 0x80)
@@ -111,7 +129,12 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
         glyph.position.fX *= instance.horizontalScale();
     }
     result.outline = outlines.detach();
-    if (!std::isfinite(result.advance) || !result.ink.isFinite()) throw std::runtime_error("Skia shaping 返回非有限度量");
+    for (const auto value : {result.advance, result.ascent, result.descent, result.leading,
+                            result.designAdvance, result.designLeftBearing, result.designRightBearing})
+        if (!std::isfinite(value)) throw std::runtime_error("Skia shaping 返回非有限度量");
+    if (!result.ink.isFinite() || std::any_of(result.glyphs.begin(), result.glyphs.end(), [](const auto& glyph) {
+            return !std::isfinite(glyph.position.x()) || !std::isfinite(glyph.position.y());
+        })) throw std::runtime_error("Skia shaping 返回非有限字形坐标");
     return result;
 }
 }

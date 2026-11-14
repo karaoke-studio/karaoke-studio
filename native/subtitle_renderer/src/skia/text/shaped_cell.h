@@ -15,6 +15,7 @@ struct ShapedCell {
     std::string fontIdentity;
     std::size_t selectedFont = 0;
     float advance = 0;
+    float designAdvance = 0, designLeftBearing = 0, designRightBearing = 0;
     float ascent = 0, descent = 0, leading = 0;
     SkRect ink = SkRect::MakeEmpty();
     std::vector<ShapedGlyph> glyphs;

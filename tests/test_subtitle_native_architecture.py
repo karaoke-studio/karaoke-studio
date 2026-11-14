@@ -38,7 +38,7 @@ def check_closure(start: Path, *, adapter=False, public_runtime=False, core=Fals
             if target is not None and target.is_relative_to(SRC.resolve()):
                 relative = target.relative_to(SRC.resolve()).as_posix()
                 if adapter:
-                    allowed = ("model/", "scene/", "protocol/")
+                    allowed = ("model/", "scene/", "protocol/", "skia/text/")
                 elif core:
                     allowed = ("model/", "effects/", "skia/core/", "skia/text/")
                 else:

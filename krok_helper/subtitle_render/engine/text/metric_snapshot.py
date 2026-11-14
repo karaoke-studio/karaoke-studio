@@ -5,7 +5,8 @@ the calibrated width policy (P05.4), rather than silently treating advance as N3
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 import hashlib
 import math
 
@@ -62,9 +63,15 @@ class LineMetric:
 @dataclass(frozen=True)
 class TextMetricSnapshot:
     lines: tuple[LineMetric, ...]
+    _lookup: object = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, 'lines', tuple(self.lines))
+        lookup = {}
+        for line in self.lines:
+            key = (tuple(c.text for c in line.metrics), line.style_signature)
+            lookup.setdefault(key, []).append(line)
+        object.__setattr__(self, '_lookup', MappingProxyType({k: tuple(v) for k, v in lookup.items()}))
 
     @property
     def identity(self) -> str:
@@ -75,7 +82,7 @@ class TextMetricSnapshot:
     def resolve_intervals(self, line: TimingLine, style: Style) -> list[tuple[int, int]]:
         texts = tuple(c.text for c in line.chars)
         signature = value_signature(style_for_line(style, line))
-        candidates = [m for m in self.lines if tuple(c.text for c in m.metrics) == texts and m.style_signature == signature]
+        candidates = self._lookup.get((texts, signature), ())
         if not candidates or any(m != candidates[0] for m in candidates):
             raise ValueError("规范度量快照缺失、过期或存在冲突")
         measured = candidates[0]

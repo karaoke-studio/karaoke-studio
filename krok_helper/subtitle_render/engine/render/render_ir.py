@@ -261,6 +261,7 @@ def build_render_ir(
     duration_ms: int | None = None,
     relayout_scope: str | None = None,
     roll_shift_ms: int = 0,
+    layout_plan_builder=None,
 ) -> dict[str, Any]:
     """Build one JSON-friendly native snapshot from shared layout plans.
 
@@ -312,7 +313,8 @@ def build_render_ir(
         # timing_offset_ms + meta.offset_ms，见 gpu_scene_projection.cpp:483），
         # 使 GPU 的每轴有效偏移与 CPU painter 的 meta + 轴偏移一致。
         primary_style = style_for_track(style, track)
-        primary_plan = build_track_layout_plan(
+        plan_builder = layout_plan_builder or build_track_layout_plan
+        primary_plan = plan_builder(
             track,
             primary_style,
             logical_w=width,
@@ -322,7 +324,7 @@ def build_render_ir(
         extra_sources = list(extra_tracks or ())
         extra_styles = [style_for_track(style, source) for source in extra_sources]
         extra_plans = [
-            build_track_layout_plan(
+            plan_builder(
                 source,
                 source_style,
                 logical_w=width,
