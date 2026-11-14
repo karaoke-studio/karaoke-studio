@@ -1,7 +1,7 @@
 """CPU-only Skia/HarfBuzz metrics connection, independent of rendering sessions."""
 from __future__ import annotations
 
-from .backend import NativeRendererError, NativeRendererProcess
+from .backend import NativeRendererError, NativeRendererProcess, heartbeat_lease_s
 from .skia_backend import SkiaRendererProcess
 
 
@@ -17,7 +17,8 @@ class SkiaTextMetricsProcess(SkiaRendererProcess):
 
     def measure(self, fonts: dict, runs: list[dict]) -> list[dict]:
         self._send({"cmd": "measure_text", "metrics_schema": 1, "fonts": fonts, "runs": runs})
-        out = self._expect_ok(self._read_until_event("text_measured", timeout_s=self.configure_timeout_s))
+        out = self._expect_ok(self._read_until_event("text_measured", timeout_s=self.configure_timeout_s,
+                                                    heartbeat_lease_s=heartbeat_lease_s()))
         if out.get("gpu_initialized") is not False or out.get("execution_target") != "cpu_metrics":
             raise NativeRendererError("Skia 规范度量意外创建了 GPU session")
         return out["runs"]

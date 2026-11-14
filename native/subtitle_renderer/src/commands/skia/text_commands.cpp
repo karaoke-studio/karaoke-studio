@@ -70,8 +70,13 @@ QJsonObject measureSkiaText(const QJsonObject& request) {
         auto loaded = resource(it.value().toObject()); totalBytes += loaded->bytes.size();
         if (totalBytes > 256u * 1024 * 1024) throw std::runtime_error("Skia 字体批次超过 256 MiB");
         resources.emplace(it.key(), std::move(loaded));
+        protocol::emitProgress("skia_font_resources", resources.size(), table.size());
     }
     QJsonArray output;
+    std::uint64_t totalCells = 0, totalTextBytes = 0;
+    for (const auto& value : runs) totalCells += value.toObject().value("cells").toArray().size();
+    if (totalCells > 65536) throw std::runtime_error("Skia 度量单元数量超限");
+    std::uint64_t processedCells = 0;
     for (const auto& value : runs) {
         if (!value.isObject()) throw std::runtime_error("Skia 度量 run 必须为对象");
         const auto run = value.toObject();
@@ -92,11 +97,14 @@ QJsonObject measureSkiaText(const QJsonObject& request) {
         }
         QJsonArray cells;
         const auto inputCells = run.value("cells").toArray();
-        if (inputCells.size() > 65536) throw std::runtime_error("Skia 度量单元数量超限");
         for (const auto& cell : inputCells) {
             if (!cell.isString()) throw std::runtime_error("Skia 歌词单元必须为字符串");
-            cells.append(cellJson(::subtitle::skia::text::shapeCell(cell.toString().toUtf8().toStdString(), fonts,
+            const auto text = cell.toString().toUtf8();
+            totalTextBytes += text.size();
+            if (totalTextBytes > 4u * 1024 * 1024) throw std::runtime_error("Skia 度量文本批次超过 4 MiB");
+            cells.append(cellJson(::subtitle::skia::text::shapeCell(text.toStdString(), fonts,
                 run.value("language").toString("und").toStdString(), run.value("rtl").toBool())));
+            protocol::emitProgress("skia_text_metrics", ++processedCells, totalCells);
         }
         output.append(QJsonObject{{"cells", cells}});
     }

@@ -10,6 +10,16 @@ import pytest
 from krok_helper.subtitle_render.native.backend import NativeRendererError
 from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
 
+_TEXT_APPLICATION = None
+
+
+@pytest.fixture(scope='module', autouse=True)
+def application():
+    global _TEXT_APPLICATION
+    from PyQt6.QtWidgets import QApplication
+    _TEXT_APPLICATION = QApplication.instance() or QApplication([])
+    return _TEXT_APPLICATION
+
 
 @pytest.fixture
 def binary():
@@ -151,3 +161,93 @@ def test_native_snapshot_drives_semantic_plan_without_qt_widths(binary, font, mo
     assert plan2.lines[0].resolved_intervals != plan.lines[0].resolved_intervals
     with pytest.raises(ValueError, match='快照'):
         snapshot.resolve_intervals(line, replace(style, font_weight=700))
+
+
+def test_portable_font_has_exact_metrics_and_cell_cluster_boundaries(binary, tmp_path):
+    import hashlib
+    import json
+    from skia_text_fixture import make_font
+    path = make_font(tmp_path / 'canonical.ttf')
+    duplicate = make_font(tmp_path / 'canonical-copy.ttf')
+    assert path.read_bytes() == duplicate.read_bytes()
+    with SkiaTextMetricsProcess(binary) as process:
+        cells = run(process, path, ['A', '字', '한', 'a\u0301', 'fi', 'f', 'i'], size=50)
+        # FreeType's normalized fixed-point scale may round by < 1e-4 pixel.
+        assert [cells[0][k] for k in ('advance', 'ascent', 'descent')] == pytest.approx([30, 40, 10], abs=1e-4)
+        # SkFont paths normalize at 64px and FreeType uses 26.6 coordinates.
+        # The returned bounds describe that actual path, within one quantum.
+        assert cells[0]['ink'] == pytest.approx([2.5, -35, 27.5, 0], abs=50 / (64 * 64) + 1e-4)
+        assert [cells[1]['advance'], cells[2]['advance']] == pytest.approx([50, 50], abs=1e-4)
+        assert len(cells[4]['glyphs']) == 1 and cells[4]['glyphs'][0]['cluster_end'] == 2
+        assert len(cells[5]['glyphs']) + len(cells[6]['glyphs']) == 2
+    (tmp_path / 'canonical-metrics.json').write_text(json.dumps({'font_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                                                              'cells': cells}, sort_keys=True), encoding='utf-8')
+
+
+def test_portable_variable_font_interpolates_and_rejects_out_of_range_axes(binary, tmp_path):
+    from skia_text_fixture import make_variable_font
+    font = make_variable_font(tmp_path)
+    with SkiaTextMetricsProcess(binary) as process:
+        result = []
+        for weight in (100, 500, 900):
+            cells = process.measure({'font': {'path': str(font), 'axes': {'wght': weight}}},
+                                    [{'font_ids': ['font'], 'size': 50, 'cells': ['A']}])[0]['cells']
+            result.append(cells[0])
+        assert [cell['advance'] for cell in result] == pytest.approx([30, 40, 50], abs=1e-4)
+        assert len({cell['font_identity'] for cell in result}) == 3
+        with pytest.raises(NativeRendererError):
+            process.measure({'font': {'path': str(font), 'axes': {'wght': 901}}},
+                            [{'font_ids': ['font'], 'size': 50, 'cells': ['A']}])
+
+
+def test_registered_unicode_family_exports_physical_snapshot_and_invalidates_on_registry_change(binary, tmp_path):
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtGui import QFontDatabase
+    from skia_text_fixture import make_font
+    from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache, resolve_font_instance
+    app = QApplication.instance() or QApplication([])
+    path = make_font(tmp_path / 'application-only.ttf')
+    previous = None
+    for width in (600, 800):
+        make_font(path, a_width=width)
+        font_id = QFontDatabase.addApplicationFont(str(path))
+        assert font_id >= 0
+        try:
+            clear_font_weight_cache()
+            family = QFontDatabase.applicationFontFamilies(font_id)[0]
+            assert 'P05' in family
+            instance = resolve_font_instance(family, 400)
+            assert instance.resource_path
+            with SkiaTextMetricsProcess(binary) as process:
+                cell = run(process, Path(instance.resource_path), ['A'], size=50)[0]
+            assert cell['advance'] == pytest.approx(width / 20, abs=1e-4)
+            if previous is not None: assert cell['font_identity'] != previous
+            previous = cell['font_identity']
+        finally:
+            QFontDatabase.removeApplicationFont(font_id)
+            clear_font_weight_cache()
+
+
+def test_cpu_only_and_gpu_builds_produce_identical_font_snapshots(binary, font):
+    directory = Path(binary).parent
+    cpu = directory.parent / (directory.name.rsplit('-', 1)[0] + '-raster') / Path(binary).name
+    if not cpu.is_file(): pytest.skip('Build the CPU-only sidecar')
+    results = []
+    for path in (binary, cpu):
+        with SkiaTextMetricsProcess(path) as process:
+            results.append(run(process, font, ['A', 'fi', 'a\u0301']))
+    assert results[0] == results[1]
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')])
+def test_numeric_sample_comparison_rejects_nonfinite_values(value):
+    from scripts.compare_skia_text_metrics import compare
+    with pytest.raises(ValueError, match='non-finite'): compare({'advance': value}, {'advance': value})
+
+
+def test_sample_comparison_keeps_resource_and_cluster_identity_exact():
+    from scripts.compare_skia_text_metrics import compare
+    assert compare({'advance': 20}, {'advance': 20.00001}) < 1e-4
+    for a, b in (({'id': 1}, {'id': 2}), ({'cluster_end': 1}, {'cluster_end': 2}),
+                 ({'font_identity': 'old'}, {'font_identity': 'new'})):
+        with pytest.raises(ValueError): compare(a, b)

@@ -109,7 +109,7 @@ jobs:
           KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE: '0'
         run: |
           export KROK_TEST_SKIA_SIDECAR="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal/krok_skia_subtitle_renderer"
-          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
+          python -m pytest --noconftest tests/test_subtitle_skia_protocol.py tests/test_subtitle_skia_text.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -139,6 +139,7 @@ jobs:
                   path = base / name
                   files += sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
           manifest = {"commit": os.environ["GITHUB_SHA"], "arch": arch, "run_id": os.environ["GITHUB_RUN_ID"],
+                      "text_metrics_schema": 1,
                       "files": {f"native/{p.relative_to(native).as_posix()}": hashlib.sha256(p.read_bytes()).hexdigest()
                                 for p in files}}
           out = Path(os.environ["RUNNER_TEMP"]) / f"mac-validation-{arch}.tar.gz"
@@ -187,3 +188,22 @@ jobs:
         with:
           name: mac-hardware-check-${{ matrix.arch }}-results
           path: build/mac-hardware-check-results.zip
+
+  text-metrics-compare:
+    needs: macos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: skia-protocol-*-evidence
+          path: metrics-artifacts
+      - name: Compare identical-font ARM64 and x64 metrics
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          paths = sorted(Path('metrics-artifacts').rglob('canonical-metrics.json'))
+          assert len(paths) == 2, paths
+          subprocess.run([sys.executable, 'scripts/compare_skia_text_metrics.py', *map(str, paths)], check=True)
+          PY

@@ -84,6 +84,19 @@ class CharIntervalsResolver(Protocol):
     def __call__(self, line: TimingLine, style: Style) -> list[tuple[int, int]]: ...
 
 
+@dataclass(frozen=True, eq=False)
+class _ResolverIdentity:
+    # Retain the callable while its plan is cached: a bare id can be reused
+    # after collection and incorrectly resurrect another resolver's geometry.
+    target: object
+
+    def __hash__(self):
+        return id(self.target)
+
+    def __eq__(self, other):
+        return isinstance(other, _ResolverIdentity) and self.target is other.target
+
+
 def _rebind_plan_line_styles(
     plan: TrackLayoutPlan,
     track: TimingTrack,
@@ -160,8 +173,8 @@ def resolve_track_layout_plan(
     永远是签名校验过的，调用方的 scope 只是性能提示而非正确性依据。
     """
     cache_key = (
-        resolvers.metrics_identity if resolvers.metrics_identity is not None else id(resolvers.char_intervals),
-        id(resolvers.display_lines), id(resolvers.page_offset_windows),
+        resolvers.metrics_identity if resolvers.metrics_identity is not None else _ResolverIdentity(resolvers.char_intervals),
+        _ResolverIdentity(resolvers.display_lines), _ResolverIdentity(resolvers.page_offset_windows),
         logical_w,
         logical_h,
         id(track),
