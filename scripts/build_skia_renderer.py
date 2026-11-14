@@ -89,7 +89,9 @@ def main(argv=None) -> int:
     gn_args, cmake_args, identity = configure(lock, root, system, options.arch, options.gpu_api,
                                              options.cpu_only, options.llvm_root)
     qt_identity = {}
-    if options.qt_root:
+    # The Quick preview draws through the GPU session; a CPU-only build has nothing to bridge.
+    preview = bool(options.qt_root) and not options.cpu_only
+    if preview:
         config = options.qt_root / "lib/cmake/Qt6/Qt6ConfigVersionImpl.cmake"
         if not config.exists() or f'set(PACKAGE_VERSION "{lock["qt_version"]}")' not in config.read_text():
             raise RuntimeError(f"Qt SDK must match {lock['qt_version']}: {options.qt_root}")
@@ -138,9 +140,9 @@ def main(argv=None) -> int:
         "KROK_SKIA_LIB_DIR": output.as_posix(), "KROK_SKIA_FINGERPRINT": native_fingerprint,
         "CMAKE_BUILD_TYPE": options.config, "CMAKE_MAKE_PROGRAM": binaries["ninja"].as_posix(),
         # Always explicit: a cached ON from an earlier --qt-root run must not survive without Qt.
-        "KROK_BUILD_SKIA_PREVIEW": "ON" if options.qt_root else "OFF",
+        "KROK_BUILD_SKIA_PREVIEW": "ON" if preview else "OFF",
     }
-    if options.qt_root:
+    if preview:
         cmake_args["CMAKE_PREFIX_PATH"] = options.qt_root.as_posix()
     run([cmake, "-S", REPO / "native/subtitle_renderer", "-B", native_output, "-G", "Ninja",
          *[f"-D{k}={v}" for k, v in cmake_args.items()]])

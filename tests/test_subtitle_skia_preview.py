@@ -33,6 +33,7 @@ print("alpha", item.property("alphaBlending") if item else None)
 SHOW_ITEM = r"""
 import sys
 from PyQt6.QtCore import QTimer, QUrl
+from PyQt6.QtGui import QImage
 from PyQt6.QtQuick import QQuickItem, QQuickView, QQuickWindow, QSGRendererInterface
 from PyQt6.QtWidgets import QApplication, QWidget
 from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import (
@@ -66,6 +67,23 @@ def poll():
     print("backend", item.property("graphicsBackend"))
     print("accepted", item.property("graphicsBackendAccepted"))
     print("host_check", verified)
+    # Two grabs 400 ms apart: test-only readback of what the scene graph actually composited.
+    QTimer.singleShot(300, lambda: grab(0))
+
+frames = []
+
+def grab(index):
+    image = view.grabWindow().convertToFormat(QImage.Format.Format_RGBA8888)
+    data = image.constBits().asstring(image.sizeInBytes())
+    pixels = [data[i:i + 3] for i in range(0, len(data), 4)]
+    frames.append(pixels)
+    if index == 0:
+        QTimer.singleShot(400, lambda: grab(1))
+        return
+    coloured = sum(1 for p in frames[1] if max(p) > 24) / len(frames[1])
+    moved = sum(1 for a, b in zip(frames[0], frames[1]) if a != b) / len(frames[1])
+    print("coloured", f"{coloured:.4f}")
+    print("moved", f"{moved:.4f}")
     app.quit()
 
 poller = QTimer()
@@ -151,10 +169,17 @@ def show_item(qml_dir, api):
 
 
 def test_item_runs_on_the_platform_skia_api(qml_dir):
-    lines, _ = show_item(qml_dir, "required")
+    lines, stderr = show_item(qml_dir, "required")
     assert lines["backend"] == ("Metal" if sys.platform == "darwin" else "Vulkan")
     assert lines["accepted"] == "True"
     assert lines["host_check"] == "ok"
+    if sys.platform == "darwin":
+        pytest.skip("Metal texture hand-off is not implemented yet")
+    # The shared Skia probe reached the composited window over the black QML background...
+    assert float(lines["coloured"]) > 0.05, stderr
+    # ...and it is animated by time, so later frames really were drawn by Skia.
+    assert float(lines["moved"]) > 0.01, stderr
+    assert "Skia" not in stderr, stderr
 
 
 def test_item_and_host_reject_other_scene_graph_apis(qml_dir):
