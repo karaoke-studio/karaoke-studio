@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 
 POSITION_TOLERANCE = 1e-4
-DISCRETE = {'id', 'cluster_start', 'cluster_end', 'selected_font'}
+DISCRETE = {'id', 'cluster_start', 'cluster_end', 'selected_font', 'run_index'}
 
 
 def compare(reference, candidate, path='$', field='') -> float:

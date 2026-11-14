@@ -1,6 +1,7 @@
 """Independent main/Latin font instances share one canonical baseline and batch."""
 from dataclasses import replace
 import json
+from pathlib import Path
 import sys
 import numpy as np
 import pytest
@@ -172,10 +173,16 @@ def test_mixed_font_gpu_and_raster_pixels_share_geometry(binary,mixed):
 
 
 @pytest.mark.skipif(sys.platform!='win32',reason='Direct2D GPU comparison')
-def test_mixed_font_baseline_matches_d2d_gpu(binary,mixed):
+@pytest.mark.parametrize('font_kind',['generated','installed'])
+def test_mixed_font_baseline_matches_d2d_gpu(binary,mixed,font_kind):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     track,style=mixed
-    source=replace(track,lines=[TimingLine(chars=[TimingChar(t,200+i*200) for i,t in enumerate(['字','A','한'])],end_ms=1800)])
+    texts=['字','A','한']
+    if font_kind=='installed':
+        if not Path('C:/Windows/Fonts/meiryo.ttc').is_file(): pytest.skip('Meiryo fixture')
+        style=replace(style,font_family='Meiryo',font_family_latin='Arial')
+        texts=['字','g','歌']
+    source=replace(track,lines=[TimingLine(chars=[TimingChar(t,200+i*200) for i,t in enumerate(texts)],end_ms=1800)])
     with NativeRendererProcess() as process:
         _,raw=_render_g1_frames(process,style,(1900,),force_warp=False,track=source)
     with SkiaRendererProcess(binary,selection=selection('gpu')) as process:
