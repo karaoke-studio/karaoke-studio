@@ -36,7 +36,8 @@ def arguments(argv=None):
     default_cache = Path.home() / ".cache/krok-helper/skia-deps"
     parser.add_argument("--cache-dir", type=Path, default=default_cache)
     parser.add_argument("--llvm-root", type=Path)
-    parser.add_argument("--qt-root", type=Path, help="Optional Qt SDK identity; not linked by P01")
+    parser.add_argument("--qt-root", type=Path,
+                        help="Qt 6.11.0 SDK; also builds the Qt Quick preview module (P03)")
     parser.add_argument("--jobs", type=int, default=min(8, os.cpu_count() or 1))
     parser.add_argument("--clean", action="store_true", help="Clean object files without deleting sources")
     parser.add_argument("--fetch-only", action="store_true")
@@ -87,18 +88,21 @@ def main(argv=None) -> int:
         os.environ["PATH"] = str(root / "tools") + os.pathsep + os.environ["PATH"]
     gn_args, cmake_args, identity = configure(lock, root, system, options.arch, options.gpu_api,
                                              options.cpu_only, options.llvm_root)
+    qt_identity = {}
     if options.qt_root:
         config = options.qt_root / "lib/cmake/Qt6/Qt6ConfigVersionImpl.cmake"
         if not config.exists() or f'set(PACKAGE_VERSION "{lock["qt_version"]}")' not in config.read_text():
             raise RuntimeError(f"Qt SDK must match {lock['qt_version']}: {options.qt_root}")
-        identity["qt_sdk_config_sha256"] = sha256(config)
+        # Qt only affects this project's preview module, never the Skia objects, so it belongs
+        # to the native fingerprint: switching Qt must not force a full Skia rebuild.
+        qt_identity = {"qt_sdk_config_sha256": sha256(config), "qt_root": options.qt_root.as_posix()}
     identity |= {"lock_sha256": sha256(LOCK), "gn_args": gn_args,
                  "gn_sha256": sha256(binaries["gn"]), "ninja_sha256": sha256(binaries["ninja"]),
                  "python_version": sys.version, "python_sha256": sha256(Path(sys.executable))}
     cmake = executable("cmake")
     native_identity = {"renderer_sources_sha256": renderer_digest(REPO),
                        "cmake_version": subprocess.check_output([cmake, "--version"], text=True).strip(),
-                       "cmake_sha256": sha256(Path(cmake))}
+                       "cmake_sha256": sha256(Path(cmake))} | qt_identity
     fingerprint = digest(identity)
     key = f"{system}-{options.arch}-{options.gpu_api or 'raster'}"
     output = root / "out" / key
@@ -133,7 +137,11 @@ def main(argv=None) -> int:
         "KROK_SKIA_GPU_API": options.gpu_api or "none", "KROK_SKIA_SOURCE": source.as_posix(),
         "KROK_SKIA_LIB_DIR": output.as_posix(), "KROK_SKIA_FINGERPRINT": native_fingerprint,
         "CMAKE_BUILD_TYPE": options.config, "CMAKE_MAKE_PROGRAM": binaries["ninja"].as_posix(),
+        # Always explicit: a cached ON from an earlier --qt-root run must not survive without Qt.
+        "KROK_BUILD_SKIA_PREVIEW": "ON" if options.qt_root else "OFF",
     }
+    if options.qt_root:
+        cmake_args["CMAKE_PREFIX_PATH"] = options.qt_root.as_posix()
     run([cmake, "-S", REPO / "native/subtitle_renderer", "-B", native_output, "-G", "Ninja",
          *[f"-D{k}={v}" for k, v in cmake_args.items()]])
     run([cmake, "--build", native_output, "--parallel", options.jobs,

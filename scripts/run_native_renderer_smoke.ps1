@@ -18,9 +18,12 @@ if (-not $qtVersion) {
 if (-not $QtRoot) {
     $QtRoot = "$env:LOCALAPPDATA\krok-helper\qt\$qtVersion\msvc2022_64"
 }
-if (-not (Test-Path $QtRoot)) {
+# The Skia preview module (P03) also needs Qt Quick/QML from qtdeclarative; an older
+# qtbase-only install is completed in place.
+$quickConfig = Join-Path $QtRoot "lib\cmake\Qt6Quick\Qt6QuickConfig.cmake"
+if (-not (Test-Path $quickConfig)) {
     if (-not $InstallQtIfMissing) {
-        throw "Qt not found at '$QtRoot'. Re-run with -InstallQtIfMissing."
+        throw "Qt with Qt Quick not found at '$QtRoot'. Re-run with -InstallQtIfMissing."
     }
     # aqtinstall 3.3.0 from PyPI cannot read the Qt 6.11 repository layout.
     # Pin the exact upstream commit that is verified with Qt 6.11.0 instead of
@@ -29,7 +32,7 @@ if (-not (Test-Path $QtRoot)) {
     $aqtRequirement = "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@$aqtCommit"
     python -m pip install --user cmake ninja $aqtRequirement
     python -m aqt install-qt windows desktop $qtVersion win64_msvc2022_64 `
-        --archives qtbase --outputdir "$env:LOCALAPPDATA\krok-helper\qt"
+        --archives qtbase qtdeclarative --outputdir "$env:LOCALAPPDATA\krok-helper\qt"
 }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
