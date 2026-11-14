@@ -1,0 +1,192 @@
+{
+  "schema": 1,
+  "skia": {
+    "url": "https://skia.googlesource.com/skia.git",
+    "revision": "29d30fe30aa2e86c44302297d063dd3190c2c880",
+    "branch": "chrome/m150",
+    "deps_sha256": "4b1f3d75be065998bd6e993158f04dfbd4f738d9a0a4b3b537c8a8b2f545d69e"
+  },
+  "dependencies": [
+    {
+      "path": "buildtools",
+      "url": "https://chromium.googlesource.com/chromium/src/buildtools.git",
+      "revision": "729495f2ffa69080907780591fa2a630b2556e98"
+    },
+    {
+      "path": "third_party/externals/freetype",
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/freetype2.git",
+      "revision": "264b5fbf5b912b39f98d038bf75d39be0a73f21b"
+    },
+    {
+      "path": "third_party/externals/harfbuzz",
+      "url": "https://chromium.googlesource.com/external/github.com/harfbuzz/harfbuzz.git",
+      "revision": "9cb1fee51069b206effb4736e443b038d230789d"
+    },
+    {
+      "path": "third_party/externals/highway",
+      "url": "https://chromium.googlesource.com/external/github.com/google/highway.git",
+      "revision": "424360251cdcfc314cfc528f53c872ecd63af0f0"
+    },
+    {
+      "path": "third_party/externals/icu",
+      "url": "https://chromium.googlesource.com/chromium/deps/icu.git",
+      "revision": "364118a1d9da24bb5b770ac3d762ac144d6da5a4"
+    },
+    {
+      "path": "third_party/externals/libjpeg-turbo",
+      "url": "https://chromium.googlesource.com/chromium/deps/libjpeg_turbo.git",
+      "revision": "e14cbfaa85529d47f9f55b0f104a579c1061f9ad"
+    },
+    {
+      "path": "third_party/externals/libpng",
+      "url": "https://skia.googlesource.com/third_party/libpng.git",
+      "revision": "d5515b5b8be3901aac04e5bd8bd5c89f287bcd33"
+    },
+    {
+      "path": "third_party/externals/libwebp",
+      "url": "https://chromium.googlesource.com/webm/libwebp.git",
+      "revision": "845d5476a866141ba35ac133f856fa62f0b7445f"
+    },
+    {
+      "path": "third_party/externals/vulkanmemoryallocator",
+      "url": "https://chromium.googlesource.com/external/github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+      "revision": "a6bfc237255a6bac1513f7c1ebde6d8aed6b5191"
+    },
+    {
+      "path": "third_party/externals/vulkan-headers",
+      "url": "https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Headers",
+      "revision": "015e25c3c91b70eb1a754d36fb14c4ba6ad9b0b9"
+    },
+    {
+      "path": "third_party/externals/wuffs",
+      "url": "https://skia.googlesource.com/external/github.com/google/wuffs-mirror-release-c.git",
+      "revision": "e3f919ccfe3ef542cfc983a82146070258fb57f8"
+    },
+    {
+      "path": "third_party/externals/zlib",
+      "url": "https://chromium.googlesource.com/chromium/src/third_party/zlib",
+      "revision": "646b7f569718921d7d4b5b8e22572ff6c76f2596"
+    }
+  ],
+  "tools": {
+    "windows-amd64": {
+      "gn": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/windows-amd64/+/git_revision:b2afae122eeb6ce09c52d63f67dc53fc517dbdc8",
+        "sha256": "7249f55d6f22b55affa68aaf19d2f597c39946299216e12d78eac6cc1469f8a1",
+        "binary_sha256": "cf28c1ea5c5c6c2ec1c2e4e12b360f276595ceea8de6a35368dfd1f9b39b527d",
+        "member": "gn.exe"
+      },
+      "ninja": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/windows-amd64/+/version:2@1.12.1.chromium.4",
+        "member": "ninja.exe",
+        "sha256": "887dc0900b956d218a669bfadc1f8e1285dab34c61320fd27696a41ffd540c68",
+        "binary_sha256": "88183e82fa843360b8f64c2a94b9035157e529120cce2de1a3d14bf5e0f179c0"
+      }
+    },
+    "linux-amd64": {
+      "gn": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/git_revision:b2afae122eeb6ce09c52d63f67dc53fc517dbdc8",
+        "sha256": "6a3bfc53d825bccac5e5b4b7bdcc10ce9396a04a689ac684ec3308ca5c7f3d9c",
+        "binary_sha256": "8fa12442a4d0fc4d754e89ec732aa015cdaf8d4bcbbedf68468c652531ea482c",
+        "member": "gn"
+      },
+      "ninja": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/linux-amd64/+/version:2@1.12.1.chromium.4",
+        "member": "ninja",
+        "sha256": "3f1f1cc0f69a1bcfdf67fb6c2bc7419b1dd812bb8d0e79afa9bfa8a3553b5082",
+        "binary_sha256": "09f0e5a8a2cf762b24b4d3ed464ffb2529e650d2efc36bab31da36aa93791efc"
+      }
+    },
+    "mac-arm64": {
+      "gn": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-arm64/+/git_revision:b2afae122eeb6ce09c52d63f67dc53fc517dbdc8",
+        "sha256": "cbb260f2cf999f7d74da96b3828a061299c6337354dd6db642e778828576025c",
+        "binary_sha256": "76c4542d5ad22fc944a5d50f4db5f2ad2ff3792ac48afb08d4415f0da41ce570",
+        "member": "gn"
+      },
+      "ninja": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/mac-arm64/+/version:2@1.12.1.chromium.4",
+        "member": "ninja",
+        "sha256": "c5e9b4ffab3b2edefbc41849fc81f116c8d047b258906becc061be9ecaf04afd",
+        "binary_sha256": "6c03e94e3ee141301a7e5151227508ac8cec05c12d79ed9240062a86a0e2d14f"
+      }
+    },
+    "mac-amd64": {
+      "gn": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-amd64/+/git_revision:b2afae122eeb6ce09c52d63f67dc53fc517dbdc8",
+        "member": "gn",
+        "sha256": "4bea817159f060980f1ca1d0400ef6cd2e0ab0ade66bb34e91aab9c2cffc9d83",
+        "binary_sha256": "0b1824f7863cec37b61c8a4a8e4a6a04f93ff297168e0b573ced5c8e901dd181"
+      },
+      "ninja": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/mac-amd64/+/version:2@1.12.1.chromium.4",
+        "member": "ninja",
+        "sha256": "9866e69dc0d1efccac019697213b5ab2e0332dcc629682f13733e0792ea95119",
+        "binary_sha256": "49876d36b01735eb8a1b6e8a02c435761e3964807930fdef3ba30c9f66f809f6"
+      }
+    }
+  },
+  "toolchains": {
+    "windows-x64": {
+      "msvc": "14.50.35717",
+      "sdk": "10.0.26100.0",
+      "crt": "MD",
+      "llvm_version": "21.1.8",
+      "llvm_url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-win64.exe",
+      "llvm_sha256": "7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113"
+    },
+    "linux-x64": {
+      "compiler": "clang++",
+      "major": 21,
+      "version": "21.1.8"
+    },
+    "macos-arm64": {
+      "compiler": "AppleClang",
+      "xcode": "26.1.1"
+    },
+    "macos-x64": {
+      "compiler": "AppleClang",
+      "xcode": "26.1.1"
+    }
+  },
+  "qt_version": "6.11.0",
+  "libraries": [
+    "skia",
+    "skshaper",
+    "skunicode_core",
+    "skunicode_icu"
+  ],
+  "common_args": {
+    "is_official_build": true,
+    "is_debug": false,
+    "is_component_build": false,
+    "is_trivial_abi": false,
+    "skia_enable_tools": false,
+    "skia_enable_pdf": false,
+    "skia_enable_skottie": false,
+    "skia_enable_svg": false,
+    "skia_enable_graphite": false,
+    "skia_enable_precompile": false,
+    "skia_use_gl": false,
+    "skia_use_freetype": true,
+    "skia_enable_fontmgr_win": false,
+    "skia_enable_fontmgr_win_gdi": false,
+    "skia_use_fonthost_mac": false,
+    "skia_use_fontconfig": false,
+    "skia_enable_fontmgr_custom_directory": false,
+    "skia_enable_fontmgr_custom_embedded": false,
+    "skia_use_partition_alloc": false,
+    "skia_use_dng_sdk": false,
+    "skia_use_piex": false,
+    "skia_use_expat": false,
+    "skia_use_perfetto": false,
+    "skia_use_x11": false,
+    "skia_use_system_freetype2": false,
+    "skia_use_system_harfbuzz": false,
+    "skia_use_system_icu": false,
+    "skia_use_system_libjpeg_turbo": false,
+    "skia_use_system_libpng": false,
+    "skia_use_system_libwebp": false,
+    "skia_use_system_zlib": false
+  }
+}
