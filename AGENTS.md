@@ -284,9 +284,10 @@ git submodule status
    `KROK_SUBTITLE_SKIA_FALLBACK=none|raster`、`KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE=1|0`
    控制目标和回退，`KROK_SUBTITLE_SKIA_RENDERER` 可指定新 sidecar。关闭 GPU 仍走
    Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前产品配置使用 P05
-   `p05_resolved_horizontal`：legacy / n3_1074 单行横排，左/中/右与顶/中/底定位、
+   `p05_resolved_horizontal`：legacy / n3_1074 横排，左/中/右与顶/中/底定位、
    主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
-   彩色/位图字形、注音与多行等仍拒绝。单行 N3 不代表完整 N3 页级布局已实现。
+   多行固定网格已接入共享分页和显示计划，但须允许跨页重叠、关闭段内填充，且不能启用
+   智能水平避让。彩色/位图字形、注音等仍拒绝；完整 N3 页级避让尚未实现。
    旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
@@ -324,6 +325,11 @@ git submodule status
    before/after 实色，不再用一个行颜色覆盖所有角色；核心不解析角色名或查字体。
    客户端还须检查 `p05_inline_roles` 能力；规范字体资源以 `skia_layout.fonts/runs`
    为准，不依赖旧 D2D 字体提示。角色描边、渐变、装饰与特效仍由门禁拒绝。
+   P05 固定行网格子集见 §14.15：`engine/layout/display/skia_schedule.py` 注入共享显示
+   求解器，不能自行分页或重写 show-time 规则。`place_horizontal_line` 仅消费最终 lane
+   与规范主字体行框，跨页碰撞测量/段内填充端口仍明确拒绝；后续扩展必须提供真实几何。
+   客户端检查 `p05_fixed_row_grid`，Skia IR 入口须在旧解析器归一化之前校验 lane 为
+   0–31 的整数，不能把负数/小数静默改成第 0 行。不要修改共享解析器的 D2D 兼容行为。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

@@ -518,7 +518,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；完整槽位/fallback 绘制与字体校准尚未完成，见 §14.10/§14.11。
 - [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
-- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行产品链路已接通，复用共享计划并校验最终几何/区间；完整布局和 D2D 画质验收仍未完成，见 §14.11/§14.13。
+- [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行及多行固定网格已接通，复用共享计划并校验最终几何/区间；完整避让布局和 D2D 画质验收仍未完成，见 §14.11/§14.13/§14.15。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 328484ea
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43615588038 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 4d7837ad
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43617970560 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1346,6 +1346,31 @@ native 源码身份：`0588887388e7f062fbdfbf9c2292c12cf66e6c6a9d5225c96c16acc72
 **严格画质门槛仍按 §14.13 保留，本轮没有修改覆盖策略或放宽 P00 阈值。** 角色实色支持不代表描边、渐变、特效或完整 D2D 替代已完成。下一步仍在 P05 内推进多行/页级几何与 ruby，并继续完成字体/画质校准，不能越过门槛宣布旧后端退役。
 
 最终 native 源码身份：`88b2fb3b69fc7f5983bb672dbbfafc8c97950d9d94fdaa3de8736c0018c1914c`。本机证据：`build/p05-roles-native.log`、`build/p05-roles-linux-xcb.log`、`build/p05-roles-linux-wayland.log`、`build/p05-roles-final.log`、`build/p05-roles-linux-final.log`、`build/p05-roles-regression.log`、`build/p05-roles-python-regression.log`、`build/p05-roles-d2d.log`、`build/p05-roles-d2d-regression.log`；原生构建日志为 `build/p05-roles-{build,cpu-build,linux-build}.log`。未做 4K 或 QPainter 画面对照；新 Mac 功能需本轮验收包真机补验。
+
+### 14.15 P05 固定行网格首批：横排多行、共享分页与显示时段（2026-11-15）
+
+**本批为多行固定网格子集，不关闭 P05.4/P05.7。** 实现提交 `4d7837ad`。支持 legacy / n3_1074 横排、最多 32 行网格、完整页和短页、顶中底位置、左右/居中/per_row 定位、逐行偏移、持久化页计划、空行与逐页布局覆盖。复用既有角色字体/实色和基础走字。必须开启 `allow_inter_page_line_overlap`、关闭 `auto_fill_section_time`；asymmetric 模式还要求 `smart_horizontal=none`。不满足时明确失败，不修改用户设置或静默省略效果。跨页避让/碰撞收口、段内填充、ruby、竖排/RTL、完整 fallback 与特效仍待完成；生产 D2D 默认与 C++ 实现未变。
+
+实现边界：
+
+- 新 `engine/layout/display/skia_schedule.py` 只组装共享 `DisplayResolutionPorts` / `AnimationGuardPorts`：继续由既有 show-time 求解器处理分页、短页 reflow、提前/延后、同页同步、页内退出顺序和手工显示时段覆盖，没有实现第二个分页器。无几何避让的模式复用共享早返回分支；仍需测量的碰撞/段内填充端口明确报错，不能传空几何冒充完成。字体度量和计划只在配置期生成。
+- `skia_placement.py` 的入口改为 `place_horizontal_line`，单行回归保留。每行网格取行样式的主字 ascent/descent；legacy 以主字行高加 gap 为步长，顶部保留样式 ruby allowance，N3 以 em 框加 gap 为步长。角色字形可溢出，但不参与改动单行的网格步长。legacy 单行居中的 ruby allowance 规则与多行居中规则分开，保持既有 GPU 语义。
+- 消费共享显示计划的最终 lane，而非自行按行号取模。非对称底部短页的对齐和 X 偏移使用共享尾部槽位；per_row 的第一/二行 Y 仅作用于对应 lane，其余 lane 不套用第一行 Y。布局覆盖和作者偏移各应用一次。所有最终字形位置、wipe 边界和区间仍在 IR 配置期物化。
+- native Skia 投影保留实际 lane，按每行解析后的网格验证范围；旧 P04 原始输入仍拒绝多行。新增 `p05_fixed_row_grid` 能力握手。Skia 入口在共享解析器之前验证 lane 为 0–31 的整数，拒绝负数、小数、字符串和 null，避免共享兼容解析器把负数归零；拒绝配置后旧场景保持可渲染，不修改共享解析器或 D2D。
+- 帧绘制核心无需新增多行排版逻辑：仍只消费已经解析的单元路径、颜色、时间和行显示窗口，Vulkan/Metal/Raster 共享同一核心。
+
+本机验证：
+
+- Windows Skia/架构/进度组合 **174 通过**，其中多行网格 **26 项**。新增 `tests/test_subtitle_skia_grid.py` 覆盖页/短页/覆盖/空行、同步显示计划、基线与二维包络、GPU/Raster/DPR 1.5、角色溢出、无效 lane 和旧能力拒绝。负数 lane 测试先复现共享解析器归零行为，再补上 Skia 边界校验通过；不更改旧解析策略。
+- 三行整页、两行短页、一行短页 × 顶/中/底 × legacy/N3，共 **18 组 D2D GPU 对照**；每行二维 alpha bbox 的四条边均满足原有 **1px** 门槛，不只比较整幅图的总包络。固定网格和角色溢出测试均不拿实际墨迹高度决定相邻行的基线。
+- Linux X11/Wayland 各 **148 通过、13 跳过**。六份规范样例（单字体、最终布局、双字体、定位、角色、多行网格）的字体身份、glyph/cluster、实例索引、区间精确一致；Windows/X11/Wayland 几何最大误差 **0**。
+- Windows/Linux Vulkan 与 CPU-only 均干净重建，各 CTest **3/3 通过**。相关渲染/传输/导出/构建/布局回归 **411 通过**，包含一次 `tracks-window-refresh` 在线程结束时触及已销毁窗口的 warning；对应布局用例真实 Windows 单跑 **1 通过、无 warning**。本轮未修改该 UI 线程路径。D2D shared realization/G6 零回读专项另 **3 通过**。
+- Mac CI [43617970560](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43617970560)（`4d7837ad`）**5 项全部成功**：arm64/x64 构建和产品测试、跨架构六份样例比较、两个干净环境验收包。产品/字体/网格组合各 **144 通过、17 跳过**，预览/原生能力各 **21 通过、1 跳过**；17 项跳过为 Vulkan 故障注入、Windows D2D/实装字体等平台专用用例，便携网格与 GPU/Raster 测试均执行。
+- 验收包 manifest 新增 `fixed_row_grid=1`，一键脚本的新增步骤在两个干净 Mac 均退出 **0**，功能项全部通过；托管虚拟 Metal 的真硬件门槛正确保留。§14.6 的朋友说明已更新到本轮提交与验收包。下载的 arm64 六份规范样例与 Windows/X11/Wayland 再比较，几何最大误差也均为 **0**；两架构 Metal/Raster 构建指纹均核对为本节同一 native 源码身份。
+
+**严格画质预算仍按 §14.13 保留，不以网格几何通过代替全部画质通过。** 本批不是完整 N3 布局兼容，也不宣布 Skia 可以替代当前 D2D；下一块需接入规范碰撞几何，再按共享求解器完成避让/段内填充与 ruby。
+
+native 源码身份：`a78a07f84c779d0f7910c934c4c5afbcf5fc966d2e7e8b81857ffd3a4bb5c025`。本机证据在 `build/p05-grid-*`；未做 4K 或 QPainter 画面对照，Linux 仍是 llvmpipe，Mac 新功能真机门槛继续保留。
 
 ## 15. 前期探针清理范围
 
