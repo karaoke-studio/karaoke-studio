@@ -1,17 +1,24 @@
 #include "runtime/owner_backend_session.h"
 #include "runtime/work_admission.h"
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <iostream>
 
 using namespace krok::subtitle::native;
 using namespace krok::subtitle::native::runtime;
 void require(bool v, const char* text) { if (!v) throw std::runtime_error(text); }
-struct State { std::thread::id created, worked, destroyed; };
+struct State {
+    std::thread::id created, worked, destroyed;
+    std::promise<std::thread::id>* destroyedSignal = nullptr;
+};
 class TestBackend final : public RenderBackend {
 public:
     explicit TestBackend(std::shared_ptr<State> s) : state(std::move(s)) { state->created = std::this_thread::get_id(); }
-    ~TestBackend() override { state->destroyed = std::this_thread::get_id(); }
+    ~TestBackend() override {
+        state->destroyed = std::this_thread::get_id();
+        if (state->destroyedSignal) state->destroyedSignal->set_value(state->destroyed);
+    }
     BackendCaps capabilities() const override { return {}; }
     BackendDiagnostics diagnostics() const override { return {}; }
     ProbeResult renderProbe(const ProbeOptions&) override { return {}; }
@@ -74,6 +81,30 @@ int main() {
         }
         require(state->created == state->worked && state->created == state->destroyed, "single owner lifecycle");
         require(!session.submit(17, [](RenderBackend&) {}, {}), "closed rejects");
+        {
+            // Dropping the last owner inside a completion callback must neither deadlock nor
+            // terminate; the backend is still destroyed on its owner thread afterwards.
+            auto selfState = std::make_shared<State>();
+            std::promise<std::thread::id> destroyedOn;
+            selfState->destroyedSignal = &destroyedOn;
+            auto destroyedFuture = destroyedOn.get_future();
+            std::promise<std::thread::id> callbackOn;
+            auto callbackFuture = callbackOn.get_future();
+            auto holder = std::make_unique<OwnerBackendSession>(
+                [selfState] { return std::make_unique<TestBackend>(selfState); });
+            bool closeRejected = false;
+            require(holder->submit(1, [](RenderBackend&) {}, [&](JobCompletion) {
+                try { holder->close(); } catch (const BackendError&) { closeRejected = true; }
+                callbackOn.set_value(std::this_thread::get_id());
+                holder.reset();
+            }), "self-destroy submit");
+            const auto callbackThread = callbackFuture.get();
+            require(closeRejected, "close from owner callback stays an explicit error");
+            require(destroyedFuture.wait_for(std::chrono::seconds(10)) == std::future_status::ready,
+                    "owner thread finished after session destruction from its callback");
+            require(destroyedFuture.get() == callbackThread && selfState->created == callbackThread,
+                    "self-destroyed session still destroys backend on owner");
+        }
         bool startupFailed = false;
         try { OwnerBackendSession broken([]() -> std::unique_ptr<RenderBackend> { throw BackendError("init failed"); }); }
         catch (const BackendError&) { startupFailed = true; }
