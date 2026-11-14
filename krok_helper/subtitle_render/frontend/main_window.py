@@ -9736,8 +9736,9 @@ class SubtitleRenderWindow(QWidget):
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
         # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
+        from krok_helper.subtitle_render.native.skia_backend import skia_requested
         InfoBar.warning(
-            title="GPU 预览已回退",
+            title="Skia 字幕渲染" if skia_requested() else "GPU 预览已回退",
             content=str(message),
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,

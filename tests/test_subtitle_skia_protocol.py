@@ -1,5 +1,6 @@
 """P04 product IR, shared-memory preview and export acceptance (opt-in native binary)."""
 import copy
+from dataclasses import replace
 import os
 import sys
 from pathlib import Path
@@ -214,6 +215,23 @@ def test_full_hd_shared_frame_does_not_depend_on_legacy_sysv_size_limit(binary, 
             assert events[0]["shm_key"].startswith("posix:")
 
 
+def test_unicode_font_resource_path(binary, tmp_path):
+    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+    from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+    with SkiaRendererProcess(binary, selection=selection("raster")) as process:
+        process.configure(*sample(), width=640, height=360, fps=60, duration_ms=1600)
+        ir = build_render_ir(*sample(), width=640, height=360, fps=60, duration_ms=1600)
+        apply_resolved_font_faces(ir)
+        font = tmp_path / "字幕-font-🎵.otf"
+        shutil.copy2(ir["style"]["font_resolved"]["resource_path"], font)
+        for slot in ("font_resolved", "latin_font_resolved"):
+            ir["style"][slot]["resource_path"] = str(font)
+        process._send({"cmd": "configure", "ir": ir})
+        process._expect_ok(process._read_until_event("configured"))
+        frames, _ = collect(process, [550])
+        assert frames[0][..., 3].max() > 0
+
+
 @pytest.mark.parametrize("mutation", ["schema", "required", "dimensions", "effect", "text", "font", "missing_guide"])
 def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
     from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
@@ -258,12 +276,15 @@ def test_cancel_and_reconfigure_remain_usable(binary):
         assert frames[0].shape == (180, 320, 4)
 
 
-@pytest.mark.parametrize("gpu", [True, False])
-def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, supported_project, gpu):
+@pytest.mark.parametrize("gpu,missing_loader", [(True, False), (False, False), (True, True)])
+def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader):
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.skia_async import SkiaAsyncSubtitleRenderer
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
     monkeypatch.setenv("KROK_SUBTITLE_GPU_PREVIEW", "1" if gpu else "0")
+    if missing_loader:
+        if sys.platform == "darwin": pytest.skip("Vulkan loader failure injection")
+        monkeypatch.setenv("KROK_SKIA_VULKAN_LIBRARY", str(tmp_path / "missing"))
     monkeypatch.setattr(pg, "paint_frame_to_painter", lambda *a, **k: pytest.fail("subtitle QPainter was called"))
     canvas = pg.PreviewGraphicsView()
     frames, errors = [], []
@@ -286,6 +307,7 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, supp
         assert frames and frames[-1][1] == 550 and not frames[-1][0].isNull()
         assert canvas._subtitle_item._async_image is not None
         assert "Skia" in canvas.render_backend_label()
+        assert canvas._async_renderer.current_backend_mode == ("gpu" if gpu and not missing_loader else "cpu")
         canvas.set_gpu_preview_enabled(not gpu)
         assert canvas._async_renderer.selection.target == ("raster" if gpu else "gpu")
     finally:
@@ -294,8 +316,8 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, supp
         canvas.deleteLater()
 
 
-@pytest.mark.parametrize("gpu", [True, False])
-def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, supported_project, gpu):
+@pytest.mark.parametrize("gpu,missing_loader", [(True, False), (False, False), (True, True)])
+def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader):
     from krok_helper.subtitle_render.engine import renderer
     from krok_helper.subtitle_render.engine.export.render_job import RenderJob
     from krok_helper.subtitle_render.domain.background import BackgroundSource
@@ -307,6 +329,9 @@ def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, suppo
         ffmpeg = str(tools / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg"))
         shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), ffmpeg)
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
+    if missing_loader:
+        if sys.platform == "darwin": pytest.skip("Vulkan loader failure injection")
+        monkeypatch.setenv("KROK_SKIA_VULKAN_LIBRARY", str(tmp_path / "missing"))
     monkeypatch.setattr(renderer, "paint_frame", lambda *a, **k: pytest.fail("subtitle QPainter export was called"))
     monkeypatch.setattr(renderer, "paint_frame_to_painter", lambda *a, **k: pytest.fail("subtitle QPainter export was called"))
     track, style = supported_project
@@ -315,7 +340,7 @@ def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, suppo
                     duration_ms=1500, include_audio=False, gpu_export_enabled=gpu, preset="ultrafast")
     logs = []
     result = renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent, logger=logs.append)
-    assert any("Skia 字幕后端" in line and ("GPU" if gpu else "Raster CPU") in line for line in logs)
+    assert any("Skia 字幕后端" in line and ("GPU" if gpu and not missing_loader else "Raster CPU") in line for line in logs)
     assert result.is_file() and result.stat().st_size > 1000
     decoded = subprocess.run([ffmpeg, "-v", "error", "-i", str(result), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
                              capture_output=True, timeout=30)
@@ -323,3 +348,21 @@ def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, suppo
     frames = np.frombuffer(decoded.stdout, np.uint8).reshape(-1, 360, 640, 3)
     assert len(frames) == 90
     assert np.mean(frames[33].max(axis=-1) > 150) > 0.003
+
+
+def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monkeypatch, tmp_path, supported_project):
+    from krok_helper.errors import ProcessingError
+    from krok_helper.subtitle_render.engine import renderer
+    from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+    from krok_helper.subtitle_render.domain.background import BackgroundSource
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg: pytest.skip("Covered by the MP4 fixture on hosts without a system ffmpeg")
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
+    monkeypatch.setattr(renderer, "paint_frame", lambda *a, **k: pytest.fail("subtitle QPainter fallback was called"))
+    track, style = supported_project
+    job = RenderJob(track, replace(style, stroke_width_px=7), tmp_path / "unused", tmp_path / "unsupported.mp4",
+                    background_source=BackgroundSource(kind="solid"), width=640, height=360, fps=60,
+                    duration_ms=1500, include_audio=False, gpu_export_enabled=False)
+    with pytest.raises(ProcessingError):
+        renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent)
+    assert not job.output_path.exists()

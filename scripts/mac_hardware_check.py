@@ -25,7 +25,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 WORK = REPO / "build/mac-hardware-check"
 FONT = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
-PYQT = ["PyQt6==6.11.0", "PyQt6-Qt6==6.11.0", "pytest", "numpy", "fonttools", "PyQt6-Fluent-Widgets", "imageio-ffmpeg==0.6.0"]
+PYQT = ["PyQt6==6.11.0", "PyQt6-Qt6==6.11.0", "pytest", "numpy", "fonttools", "charset-normalizer", "PyQt6-Fluent-Widgets", "imageio-ffmpeg==0.6.0"]
 # Only these system_profiler display fields are kept: no serial numbers or hardware UUIDs.
 GPU_FIELDS = ("sppci_model", "sppci_cores", "spdisplays_mtlgpufamilysupport", "spdisplays_vendor",
               "sppci_device_type", "spdisplays_metal")
