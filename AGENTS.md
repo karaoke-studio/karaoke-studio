@@ -285,8 +285,8 @@ git submodule status
    控制目标和回退，`KROK_SUBTITLE_SKIA_RENDERER` 可指定新 sidecar。关闭 GPU 仍走
    Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前产品配置使用 P05
    `p05_resolved_horizontal`：legacy / n3_1074 单行横排，左/中/右与顶/中/底定位、
-   主字/英数独立字体实例、实色填充和基础走字，已支持显式字体的 Unicode 塑形单元；
-   彩色/位图字形、注音、角色与多行等仍拒绝。单行 N3 不代表完整 N3 页级布局已实现。
+   主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
+   彩色/位图字形、注音与多行等仍拒绝。单行 N3 不代表完整 N3 页级布局已实现。
    旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
@@ -317,6 +317,13 @@ git submodule status
    不要改回 `SkFont::getPath` 的默认 64px 归一化再放大，它会使接近整数边界的单元宽度
    被截断多丢 1px。字体几何身份已升为 `skia-m150-hb-ft-v2`；COLR 字形即使有非空
    单色基底也仍属未支持的彩色绘制，不能把基底当成完整结果。
+   P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯
+   `engine/style/style_semantics.py`，旧 text/layout 入口保留导出；角色视觉覆盖必须保留
+   当前布局的字间距、空格和 AllowBiting。度量快照键必须含逐字角色标签，不能把
+   同文不同角色的行混为一份度量；基线仍由行主字字体决定。`ResolvedCell` 持有最终
+   before/after 实色，不再用一个行颜色覆盖所有角色；核心不解析角色名或查字体。
+   客户端还须检查 `p05_inline_roles` 能力；规范字体资源以 `skia_layout.fonts/runs`
+   为准，不依赖旧 D2D 字体提示。角色描边、渐变、装饰与特效仍由门禁拒绝。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

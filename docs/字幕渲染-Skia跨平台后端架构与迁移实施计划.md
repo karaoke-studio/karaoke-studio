@@ -519,7 +519,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行产品链路已接通，复用共享计划并校验最终几何/区间；完整布局和 D2D 画质验收仍未完成，见 §14.11/§14.13。
-- [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例、字号/字重/斜体/stretch 与主字基线见 §14.12；单行九种锚点与规范轮廓精度见 §14.13。角色、完整 N3 布局与严格画质门槛仍待完成。
+- [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 59de016c
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43611797825 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 328484ea
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43615588038 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1320,6 +1320,32 @@ native 源码身份：`b53f73f466b01bbf159362712446f8b8b311f8e52d36b2ec5bc1a2c8f
 **P00 严格画质预算仍未过。** 用新轮廓再次运行同一 Arial 50px / 640×360 / `AWi` 样例，alpha 阈值仍为 16：Skia GPU / Raster 对 D2D 的 IoU 均为 **0.971068**、P95 均为 **17**，union channel MAE 约 **3.575 / 3.583**，alpha 总量差均约 **0.679%**。本次修复解决单元设计几何精度，没有关闭该抗锯齿/覆盖画质差异，也没有修改 P00 阈值；不能宣布已经可以替代 D2D。
 
 native 源码身份：`0588887388e7f062fbdfbf9c2292c12cf66e6c6a9d5225c96c16acc727a8f494`。本机日志：`build/p05-placement-native.log`、`build/p05-placement-linux-xcb.log`、`build/p05-placement-linux-wayland.log`、`build/p05-placement-linux-outline.log`、`build/p05-placement-regression.log`、`build/p05-placement-regression-final.log`、`build/p05-placement-d2d.log`、`build/p05-placement-arial-budget.json`。Linux 仍为 llvmpipe，Mac 新功能需新版验收包真机补验；未做 4K 或 QPainter 画面对照。
+
+### 14.14 P05.5 第三批：行内角色字体、度量身份与逐字实色（2026-11-15）
+
+**本批交付行内角色基础子集，仍不关闭 P05/P06。** 实现提交 `d58c437a`；首字角色和标签过期断言补强 `5c54885a`，新诊断中文化 `328484ea`。legacy / n3_1074 的单行正文现可消费角色主字/英数字体、字号、字重、斜体和 stretch，逐字显示角色的 before/after 实色（含 alpha），并支持歌手方案后再叠加字符角色。未知标签按既有模型语义继承行样式。多行页级网格、ruby、竖排/RTL、完整 fallback、角色描边/渐变/装饰及动画/粒子/走字线仍明确拒绝；生产 D2D 默认和 C++ 实现未变。
+
+实现：
+
+- 将既有 `style_for_role_in_layout` 原样移到纯 `engine/style/style_semantics.py`，旧 `engine/text/layout.py` 继续导出同名入口。角色覆盖字体和外观，字间距、空格宽度、AllowBiting、ruby 间距/对齐仍取活动布局；不新增第二份角色继承规则。
+- `skia_metrics.py` 在配置期先解析行样式，再缓存角色样式，最后使用原英数槽分类。相同字体实例/单元仍整轨一次批量去重。角色再大、首字角色不同或整行都是角色，都不改用角色字体去决定行基线；行主字字体仍是页级基线口径。N3 方案显式清空全局 Latin 槽时，沿用模型既有的继承/清空规则。
+- `LineMetric` 与 `TextMetricSnapshot` 的匹配键新增逐字角色标签。相同文本、同一布局但角色不同的行可以具有不同宽度和源区间分配，不能因文本一样而报快照冲突或复用另一角色的时间。`None` 与空标签按既有无角色语义归一；原区间分配器和分页/显示计划仍共用，native 不重新分配时间。
+- Skia Qt/IR 边界复用既有协议解析的歌手/角色样式，配置期按解析缓存去重为字符样式索引；只验证实际使用的角色。`resolved_input` 在边界把 before/after 实色物化到每个 `ResolvedCell`，`PreparedScene` 不再保留一份会覆盖所有角色的行颜色，也不解析角色名、方案字典或平台字体。旧 P04 构造入口也将行颜色物化为单元颜色，保持原兼容测试行为。
+- 规范字体只认已校验摘要和实例参数的 `skia_layout.fonts/runs`，不依赖 D2D 兼容字段中的字体提示。仅改颜色的方案可能清空旧提示；这不应阻止已有显式字体资源的 Skia 绘制。旧 P04 原始配置仍要求其原字体提示，不借此放开 P04 字体查找。
+- 布局 schema 仍为 v2；新增 `p05_inline_roles` 握手能力，旧 sidecar 在选择执行目标前明确拒绝。角色中实际使用的描边、渐变或装饰仍逐项经过既有能力门禁，拒绝配置后保留原场景像素，不默默丢效果或退到 QPainter。
+
+本地验证：
+
+- Windows Skia/架构/进度组合 **148 通过**；新增角色文件 **19 项**，覆盖双字体角色、合成实例、N3 Latin 清空继承、未知角色、歌手叠加角色、整行基线稳定、同文不同角色快照、逐字 alpha/颜色、DPR 1.5、GPU/Raster、回访 seek、三类未支持外观的事务拒绝和旧能力握手拒绝。后续补强的首字大角色与标签过期断言，在 Windows/Linux 各 **3 项复验通过**，不改 native 源码。
+- legacy / N3 两组 D2D GPU 角色几何比较均满足原有 **1px** alpha bbox 门槛。便携应用字体比较为 D2D 提供显式完整字体槽，避免仅改颜色的旧兼容方案清空物理字体提示后改选系统字体；没有修改 D2D 或放宽门槛。仅改色角色、无提示的继承分支由 Skia 产品测试单独覆盖。这是几何回归，不是完整画质验收。
+- Linux X11/Wayland 各 **124 通过、11 跳过**；相同字体的规范度量、最终布局、双字体、定位和角色五份 JSON 已与 Windows 比较，字体身份、glyph/cluster、实例索引和区间精确一致，几何最大误差 **0**。Linux 仍是 llvmpipe，不能代替真实 Vulkan 硬件验收。
+- 相关 Python 渲染/传输/导出/构建回归 **406 通过**，字体/布局回归 **68 通过、15 跳过**，既有 D2D shared realization 与 G6 零回读另 **3 通过**。Windows/Linux Vulkan 和 CPU-only 均干净重建，各 CTest **3/3 通过**。
+- Mac CI 与验收包新增角色文件、`roles-layout.json` 比较及 `inline_roles=1` manifest 标志，一键脚本据此增加 `inline_roles` 步骤。第一轮 CI [43614736444](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43614736444)（`d58c437a`）5 项全部成功；arm64/x64 产品/文本/角色组合各 **120 通过、15 跳过**，预览/原生能力各 **21 通过、1 跳过**，两个干净环境验收包功能项全部通过。15 项跳过为 Vulkan 故障注入、Windows D2D/实装字体等平台专用项；角色便携字体与 GPU/Raster 测试均执行。该轮 arm64 五份样例与 Windows/Linux 再比较均为 **0**，两架构 Metal/Raster 源码身份均为 `6d960374915d7dfded3ea250927787a020d39f2762f8bbd866ec6cef25a6e2de`。
+- 收尾补强与中文诊断后的角色专项，Windows **19 通过**、Linux **17 通过、2 跳过**；四种本机构建再次干净重建、CTest 各 **3/3 通过**。最终 Mac CI [43615588038](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43615588038)（`328484ea`）**5 项全部成功**，两架构产品组合各 **120 通过、15 跳过**、预览各 **21 通过、1 跳过**，两个干净环境验收包功能项全部通过，真硬件门槛正确保留。最终 arm64 五份样例与 Windows/Linux 再比较均为 **0**，两架构 Metal/Raster 指纹均核对为本节最终源码身份。§14.6 的朋友验收入口已更新到该轮提交和验收包。
+
+**严格画质门槛仍按 §14.13 保留，本轮没有修改覆盖策略或放宽 P00 阈值。** 角色实色支持不代表描边、渐变、特效或完整 D2D 替代已完成。下一步仍在 P05 内推进多行/页级几何与 ruby，并继续完成字体/画质校准，不能越过门槛宣布旧后端退役。
+
+最终 native 源码身份：`88b2fb3b69fc7f5983bb672dbbfafc8c97950d9d94fdaa3de8736c0018c1914c`。本机证据：`build/p05-roles-native.log`、`build/p05-roles-linux-xcb.log`、`build/p05-roles-linux-wayland.log`、`build/p05-roles-final.log`、`build/p05-roles-linux-final.log`、`build/p05-roles-regression.log`、`build/p05-roles-python-regression.log`、`build/p05-roles-d2d.log`、`build/p05-roles-d2d-regression.log`；原生构建日志为 `build/p05-roles-{build,cpu-build,linux-build}.log`。未做 4K 或 QPainter 画面对照；新 Mac 功能需本轮验收包真机补验。
 
 ## 15. 前期探针清理范围
 
