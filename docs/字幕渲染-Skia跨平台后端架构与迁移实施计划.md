@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 119ee949
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43633277739 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout c0e72070
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43636069404 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1440,7 +1440,7 @@ native 源码身份：`da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e781
 - Windows 完整 Skia 产品组合 **241 通过**；Linux X11/Wayland 各 **216 通过、25 跳过**（WSLg/软件 Vulkan，不代替真硬件门槛）。九份规范样例在 Windows/X11/Wayland 比较，身份、glyph/cluster、实例、时间精确一致，几何最大误差 **0**；原有八份 Windows 样例与修改前也逐值一致。
 - 相关架构、渲染、lower ruby、字体字重、N3 导入、时间线、构建和验收工具回归 **538 通过、12 跳过**。D2D GPU 自身的注音 stretch、共享 realization、完成后 wipe 释放和干涉网格缓存回归 **12 通过**；未改 D2D C++ 或二进制，未以 QPainter 画面对照作为 Skia 迁移判据。
 - 对照提取前提交 `9c1ad578` 的实际函数，固定随机种子生成字体槽与单元排布输入：**3,000 组字体槽、1,500 组排布结果逐值一致**。这是纯规则差分，不是以 QPainter 栅格化当画质 oracle。适配器类型签名和注释整理后，准备层/架构组合另 **172 通过**。
-- Mac 双架构构建、产品/验收包及九份样例比较已加入 CI，结果待回收。native 源码未改，指纹仍为 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`；本批不需要重建本机 C++ 产物。
+- Mac CI [43636069404](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43636069404)（`c0e72070`）**5 项全部成功**：arm64/x64 产品组合各 **212 通过、29 跳过**，预览/原生能力各 **21 通过、1 跳过**，九份跨架构样例最大误差 **0**；两个干净 Mac 的验收包均 `ruby_metrics=0`、全部功能通过，虚拟 Metal 真硬件门槛正确保留。下载的 arm64 九份样例与 Windows/X11/Wayland 再比较，最大误差也均为 **0**。两架构 Metal/Raster 的四份 native 指纹均核对为 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`；本批未改 native 源码，不需重建本机 C++。§14.6 的朋友入口已更新到本轮提交与验收包。
 
 下一步按以下依赖顺序接通，不能跳过中间语义：
 
