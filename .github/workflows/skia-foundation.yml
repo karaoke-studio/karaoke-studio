@@ -86,6 +86,7 @@ jobs:
         env:
           KROK_SKIA_NATIVE_TEST_ARCH: ${{ matrix.arch }}
           KROK_SKIA_NATIVE_TEST_FONT: /System/Library/Fonts/Supplemental/Arial.ttf
+          KROK_METAL_VALIDATION: '1'
         run: |
           export KROK_SKIA_NATIVE_TEST_ROOT="$HOME/.cache/krok-helper/skia-deps/native"
           # The app's conftest imports the whole application; these tests need only PyQt6.
@@ -111,6 +112,7 @@ jobs:
           arch = os.environ["ARCH"]
           native = Path.home() / ".cache/krok-helper/skia-deps/native"
           keep = {"metal": ["krok_skia_gpu_smoke", "krok_skia_raster_smoke", "subtitle_skia_backend_tests",
+                            "krok_metal_validation_probe",
                             "build-fingerprint.json", ".cmake/api/v1/reply", "qml"],
                   "raster": ["krok_skia_raster_smoke", "subtitle_skia_backend_tests",
                              "build-fingerprint.json", ".cmake/api/v1/reply"]}

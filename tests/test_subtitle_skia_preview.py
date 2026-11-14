@@ -156,12 +156,13 @@ def test_pyqt_host_loads_native_quick_module(qml_dir):
     assert lines["alpha"] == "True"
 
 
-def show_item(qml_dir, api):
+def show_item(qml_dir, api, extra_env=None):
     # A real window: Vulkan/Metal need the platform's windowing system, not offscreen.
     env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     # Without a console, Qt on Windows logs to the debugger instead of the stderr pipe.
     env["QT_FORCE_STDERR_LOGGING"] = "1"
+    env.update(extra_env or {})
     result = subprocess.run([sys.executable, "-c", SHOW_ITEM, str(qml_dir), api], env=env,
                             capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert result.returncode == 0, result.stderr
@@ -251,3 +252,25 @@ def test_texture_handoff_is_clean_under_vulkan_validation(qml_dir, tmp_path):
     reported = re.findall(r"^Validation (?:Error|Warning): \[ ([^\]]+?) \]", text, re.M)
     assert not [r for r in reported if r.startswith("SYNC-")], text[:4000]
     assert set(reported) <= QT_OWNED_VALIDATION_IDS, text[:4000]
+
+
+def test_metal_preview_under_active_api_validation(qml_dir):
+    if sys.platform != "darwin":
+        pytest.skip("Metal API validation")
+    if not os.environ.get("KROK_METAL_VALIDATION"):
+        pytest.skip("Set KROK_METAL_VALIDATION=1 to run under Apple's Metal API validation")
+    probe = qml_dir.parent / "krok_metal_validation_probe"
+    base = {k: v for k, v in os.environ.items() if not k.startswith("MTL_")}
+    layer = {"MTL_DEBUG_LAYER": "1", "MTL_DEBUG_LAYER_ERROR_MODE": "assert",
+             "MTL_DEBUG_LAYER_WARNING_MODE": "nslog"}
+    plain = subprocess.run([str(probe)], env=base, capture_output=True, text=True, timeout=60)
+    assert plain.returncode == 0 and "validation inactive" in plain.stdout, plain.stdout + plain.stderr
+    # Positive control: the same invalid call must be stopped once the layer is requested.
+    checked = subprocess.run([str(probe)], env=base | layer, capture_output=True, text=True, timeout=60)
+    assert checked.returncode != 0, checked.stdout + checked.stderr
+    assert "validation inactive" not in checked.stdout
+    assert "assert" in (checked.stdout + checked.stderr).lower(), checked.stdout + checked.stderr
+    # The real preview under that same environment: any Metal API error would abort it.
+    lines, stderr = show_item(qml_dir, "required", layer)
+    assert lines["backend"] == "Metal" and lines["accepted"] == "True", stderr
+    assert float(lines["coloured"]) > 0.05 and float(lines["moved"]) > 0.01, stderr

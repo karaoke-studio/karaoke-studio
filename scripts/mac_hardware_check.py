@@ -134,7 +134,9 @@ def main(argv=None) -> int:
     cpu = native / f"macos-{arch}-raster"
     env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"} | {
         "KROK_SKIA_NATIVE_TEST_ROOT": str(native), "KROK_SKIA_NATIVE_TEST_ARCH": arch,
-        "KROK_SKIA_NATIVE_TEST_FONT": str(FONT), "PYTHONPATH": str(REPO)}
+        "KROK_SKIA_NATIVE_TEST_FONT": str(FONT), "PYTHONPATH": str(REPO),
+        # Adds the preview test under Apple's Metal API validation, with its own positive control.
+        "KROK_METAL_VALIDATION": "1"}
     steps = {
         "metal_hardware_smoke": [gpu / "krok_skia_gpu_smoke", FONT, logs / "metal", "--require-hardware", "--frames", "120"],
         "raster_smoke": [cpu / "krok_skia_raster_smoke", FONT, logs / "raster", "--frames", "120"],
@@ -143,10 +145,6 @@ def main(argv=None) -> int:
         "native_capabilities": [python, "-m", "pytest", "--noconftest", "-rs", "-v", "tests/test_subtitle_skia_native.py"],
     }
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
-    # Metal API validation: the same preview tests with Apple's debug layer on.
-    results["quick_preview_metal_validation"] = run(
-        steps["quick_preview"], logs / "quick_preview_metal_validation.log",
-        env | {"MTL_DEBUG_LAYER": "1", "MTL_DEBUG_LAYER_WARNING_MODE": "nslog"})
 
     metal_report = logs / "metal.json"
     hardware = json.loads(metal_report.read_text()).get("hardware") if metal_report.exists() else None
