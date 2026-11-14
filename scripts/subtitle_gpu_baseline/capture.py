@@ -19,6 +19,18 @@ def require_hardware(caps: dict) -> None:
         raise RuntimeError(f"基线要求真实 D2D GPU，拒绝软件设备或 fallback：{caps}")
 
 
+def delivered_event(request, transitions: list, *, attempts: int = 3) -> dict:
+    """A prewarm publication may intentionally discard its first raw-path frame."""
+    for _ in range(attempts):
+        event = request()
+        if event.get("event") == "gpu_frame_ready":
+            return event
+        if event.get("event") != "gpu_frame_dropped" or event.get("reason") != "realization_ready":
+            raise RuntimeError(f"GPU 请求未交付参考帧：{event}")
+        transitions.append(event)
+    raise RuntimeError("GPU realization 路径切换后仍未交付参考帧")
+
+
 def wait_for_prewarm(renderer, render_first, *, timeout_s: float = 90) -> dict:
     """The production wait flag does not imply publication is already complete.
 
@@ -97,18 +109,18 @@ def capture_cases(*, root: Path, output: Path, executable: Path, cases,
                 record = {"id": case.case_id, "features": case.features, "source": case.source,
                     "configure_ms": configure_ms, "configure_result": configured,
                     "scene_sha256": digest(json.dumps(portable, sort_keys=True, ensure_ascii=False).encode()),
-                    "frames": [], "seek_mismatches": [], "scope": case.scope}
+                    "frames": [], "seek_mismatches": [], "path_transition_drops": [], "scope": case.scope}
                 manifest["cases"].append(record)
                 key = f"gpu_baseline_{uuid.uuid4().hex}"
 
                 def render(t, index):
-                    nonlocal request_serial
-                    request_serial += 1
-                    event = renderer.render_gpu_frame(t, frame_index=index, shm_key=key,
-                        generation=number, request_serial=request_serial,
-                        force_warp=False, readback_bands=False)
-                    if event.get("event") != "gpu_frame_ready":
-                        raise RuntimeError(f"GPU 请求未交付参考帧：{event}")
+                    def request():
+                        nonlocal request_serial
+                        request_serial += 1
+                        return renderer.render_gpu_frame(t, frame_index=index, shm_key=key,
+                            generation=number, request_serial=request_serial,
+                            force_warp=False, readback_bands=False)
+                    event = delivered_event(request, record["path_transition_drops"])
                     with SharedFrameRingReader.from_event(event) as reader:
                         image = reader.read_qimage(event)
                     return image, event

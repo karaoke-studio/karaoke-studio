@@ -9,7 +9,7 @@
 
 // FontInstanceHint (Python-resolved font instance for one style slot) lives
 // with the scene model because the IR parser and the projection carry it.
-#include "../../model/render_types.h"
+#include "../../model/glyph_resources.h"
 
 namespace krok::subtitle::native::direct2d {
 

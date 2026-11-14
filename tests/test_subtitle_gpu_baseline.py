@@ -229,3 +229,40 @@ def test_product_suite_uses_actual_export_and_background_contracts(cases):
     result = inventory(cases)
     assert result["suites"]["export"]["formats"] == list(OUTPUT_FORMATS)
     assert {"BackgroundSource", "RenderJob", "ScreenSettings", "RollSegmentConfig"} <= result["models"].keys()
+
+
+def test_capture_records_and_retries_only_explicit_realization_transition():
+    from scripts.subtitle_gpu_baseline.capture import delivered_event
+    dropped = {"event": "gpu_frame_dropped", "reason": "realization_ready"}
+    ready = {"event": "gpu_frame_ready"}
+    events = iter([dropped, ready])
+    transitions = []
+    assert delivered_event(lambda: next(events), transitions) == ready
+    assert transitions == [dropped]
+    with pytest.raises(RuntimeError, match="仍未交付"):
+        delivered_event(lambda: dropped, [], attempts=2)
+    with pytest.raises(RuntimeError, match="未交付参考帧"):
+        delivered_event(lambda: {"event": "gpu_frame_dropped", "reason": "queue_full"}, [])
+
+
+def test_before_after_gpu_comparison_is_exact_and_requires_identical_ir(tmp_path):
+    from PyQt6.QtGui import QImage
+    from scripts.compare_subtitle_gpu_baselines import compare
+    from scripts.subtitle_gpu_baseline.artifacts import write_json
+    for side, color in (("before", 0), ("after", 0)):
+        image = QImage(8, 6, QImage.Format.Format_RGBA8888_Premultiplied)
+        image.fill(color)
+        frame = {"t_ms": 0, "native_event": {}, **save_frame(tmp_path / side / "cases/sample", "frame", image)}
+        case = {"id": "sample", "scene_sha256": "same-ir", "frames": [frame], "seek_mismatches": []}
+        write_json(tmp_path / side / "manifest.json", {"width": 8, "height": 6, "fps": 60,
+            "reference_backend": "direct2d", "gpu_api": "d3d11", "render_settings": {}, "cases": [case], "source": {}})
+    assert compare(tmp_path / "before", tmp_path / "after")["status"] == "passed"
+    path = tmp_path / "after/manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["cases"][0]["frames"][0]["pixel_sha256"] = "changed"
+    write_json(path, manifest)
+    assert compare(tmp_path / "before", tmp_path / "after")["status"] == "failed"
+    manifest["cases"][0]["scene_sha256"] = "different-ir"
+    write_json(path, manifest)
+    with pytest.raises(ValueError, match="Render IR differs"):
+        compare(tmp_path / "before", tmp_path / "after")

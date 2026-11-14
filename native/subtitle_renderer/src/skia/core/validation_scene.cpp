@@ -1,4 +1,5 @@
 #include "core/validation_scene.h"
+#include "effects/particles.h"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkData.h"
@@ -14,6 +15,7 @@
 #include "include/encode/SkPngEncoder.h"
 #include "include/ports/SkFontMgr_empty.h"
 #include <fstream>
+#include <algorithm>
 #include <iterator>
 #include <stdexcept>
 #include <vector>
@@ -69,5 +71,19 @@ void ValidationScene::draw(SkCanvas& canvas) const {
     canvas.drawPath(*outline, paint);
     canvas.restore();
     canvas.drawImageRect(image_, SkRect::MakeXYWH(470, 180, 80, 80), SkSamplingOptions(), nullptr);
+    // Same deterministic evaluator as Direct2D; platform adapters supply only the canvas.
+    krok::subtitle::native::ParticleBurst burst;
+    burst.kind = "sparkle";
+    burst.seed = 7;
+    burst.startMs = 100;
+    burst.endMs = 1600;
+    burst.count = 6;
+    burst.sizePx = 9;
+    burst.travelPx = 30;
+    for (const auto& particle : krok::subtitle::native::effects::burstParticlesAt(burst, 450, 590, 300, 30, 20)) {
+        paint.setColor(SK_ColorWHITE);
+        paint.setAlphaf(std::clamp(particle.alpha, 0.0f, 1.0f));
+        canvas.drawCircle(particle.x, particle.y, particle.sizePx * 0.5f, paint);
+    }
 }
 }

@@ -12,6 +12,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(KROK_BUILD_LEGACY_SIDECAR "Build the current Windows Direct2D sidecar" ${WIN32})
 option(KROK_BUILD_SKIA "Build the independent Skia renderer foundation" OFF)
+if(KROK_BUILD_LEGACY_SIDECAR)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+endif()
+include(cmake/SubtitleScene.cmake)
 if(KROK_BUILD_SKIA)
     include(cmake/SkiaRenderer.cmake)
 endif()
@@ -21,8 +25,6 @@ endif()
 if(NOT WIN32)
     message(FATAL_ERROR "The legacy Direct2D sidecar requires Windows; disable KROK_BUILD_LEGACY_SIDECAR")
 endif()
-
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 # Version fingerprint: the native sidecar must be built against the same Qt that
 # PyQt6 bundles, otherwise the sidecar and the Python fallback renderer rasterize
@@ -69,7 +71,7 @@ add_executable(krok_subtitle_renderer
     src/protocol/render_config.h
     src/protocol/render_config_parser.cpp
     src/protocol/render_config_parser.h
-    src/model/render_types.h
+    src/model/render_scene.h
     src/runtime/checksum.cpp
     src/runtime/checksum.h
     src/runtime/gpu_backend_runtime.cpp
@@ -172,6 +174,7 @@ target_include_directories(krok_subtitle_renderer
 
 target_link_libraries(krok_subtitle_renderer
     PRIVATE
+        subtitle_scene_adapter
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets

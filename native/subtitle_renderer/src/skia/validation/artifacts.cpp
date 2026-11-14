@@ -55,6 +55,10 @@ void checkCapabilities(const std::vector<unsigned char>& rgba) {
     for (int y = 30; y < 105; ++y)
         for (int x = 490; x < 560; ++x) if (alpha(x, y)) ++outlinePixels;
     if (outlinePixels < 50) throw std::runtime_error("Glyph outline drawing failed");
+    int particlePixels = 0;
+    for (int y = 260; y < 330; ++y)
+        for (int x = 560; x < 635; ++x) if (alpha(x, y)) ++particlePixels;
+    if (particlePixels < 5) throw std::runtime_error("Shared particle evaluator drawing failed");
     for (size_t i = 0; i < rgba.size(); i += 4)
         for (int c = 0; c < 3; ++c)
             if (rgba[i + c] > rgba[i + 3]) throw std::runtime_error("Invalid premultiplied RGBA");
@@ -75,7 +79,7 @@ void saveArtifacts(const std::filesystem::path& prefix, const std::vector<unsign
          << ",\n  \"frames\": " << report.frames << ",\n  \"elapsed_ms\": " << report.elapsedMs
          << ",\n  \"width\": " << ValidationScene::width << ",\n  \"height\": " << ValidationScene::height
          << ",\n  \"format\": \"RGBA8888_premul_sRGB\",\n  \"fingerprint\": " << quote(fingerprint)
-         << ",\n  \"checks\": [\"transparent\", \"path\", \"font\", \"glyph_outline\", \"png\", \"blur\", \"runtime_effect\", \"repeat_exact\"]\n}\n";
+         << ",\n  \"checks\": [\"transparent\", \"path\", \"font\", \"glyph_outline\", \"png\", \"blur\", \"runtime_effect\", \"shared_particles\", \"repeat_exact\"]\n}\n";
     auto text = json.str();
     write(prefix.native() + std::filesystem::path(".json").native(), text.data(), text.size());
 }

@@ -1,4 +1,7 @@
 #include "gpu_scene_projection.h"
+#include "../../scene/paint_projection.h"
+#include "../../scene/style_projection.h"
+#include "../../scene/line_layout_projection.h"
 
 #include "../text_semantics.h"
 #include "qt_character_animation.h"
@@ -26,6 +29,13 @@
 
 namespace krok::subtitle::native::legacy_qt {
 
+using scene::applyResolvedStyle;
+using scene::applyLineLayout;
+using scene::alignmentIndexForLane;
+using scene::projectColor;
+using scene::projectPaint;
+using scene::latinStrokesDiffer;
+
 using protocol::LineBandConfig;
 using protocol::PaintFillSpec;
 using protocol::RenderConfig;
@@ -41,633 +51,6 @@ using protocol::resolvedStyleFromTitle;
 using protocol::resolvedStyleKey;
 using protocol::intValue;
 using protocol::stringValue;
-
-namespace {
-
-krok::subtitle::native::RgbaColor gpuColor(const QString &value, const QString &fallback) {
-    QColor color(value);
-    if (!color.isValid()) {
-        color = QColor(fallback);
-    }
-    return krok::subtitle::native::RgbaColor{
-        static_cast<std::uint8_t>(color.red()),
-        static_cast<std::uint8_t>(color.green()),
-        static_cast<std::uint8_t>(color.blue()),
-        static_cast<std::uint8_t>(color.alpha()),
-    };
-}
-
-krok::subtitle::native::PaintStyle gpuPaint(
-    const PaintFillSpec &source,
-    const QString &fallback
-) {
-    using krok::subtitle::native::PaintStop;
-    using krok::subtitle::native::PaintStyle;
-    PaintStyle paint;
-    paint.mode = source.mode.toStdString();
-    paint.color = gpuColor(source.color, fallback);
-    paint.imagePath = source.imagePath.toStdWString();
-    paint.imageScale = static_cast<float>(
-        std::clamp(source.imageScalePct, 1, 1000) / 100.0
-    );
-    if (!source.imagePath.isEmpty()) {
-        const QFileInfo info(source.imagePath);
-        if (info.exists() && info.isFile()) {
-            paint.imageModifiedMs = static_cast<std::uint64_t>(
-                std::max<qint64>(info.lastModified().toMSecsSinceEpoch(), 0)
-            );
-            paint.imageSize = static_cast<std::uint64_t>(
-                std::max<qint64>(info.size(), 0)
-            );
-        }
-    }
-    const auto &sourceStops = source.mode == QStringLiteral("split_vertical")
-        ? source.splitStops
-        : source.gradientStops;
-    paint.stops.reserve(sourceStops.size());
-    for (const auto &[position, color] : sourceStops) {
-        paint.stops.push_back(PaintStop{
-            static_cast<float>(std::clamp(position / 100.0, 0.0, 1.0)),
-            gpuColor(color, source.color),
-        });
-    }
-    if (paint.stops.empty()) {
-        if (source.mode == QStringLiteral("split_vertical")) {
-            paint.stops = {
-                {0.0f, gpuColor(source.splitTopColor, source.color)},
-                {
-                    static_cast<float>(std::clamp(
-                        source.splitPositionPct / 100.0, 0.0, 1.0
-                    )),
-                    gpuColor(source.splitBottomColor, source.color),
-                },
-                {1.0f, gpuColor(source.splitBottomColor, source.color)},
-            };
-        } else {
-            paint.stops = {
-                {0.0f, gpuColor(source.startColor, source.color)},
-                {1.0f, gpuColor(source.endColor, source.color)},
-            };
-        }
-    }
-    return paint;
-}
-
-void applyGpuResolvedStyle(
-    krok::subtitle::native::TextStyle &target,
-    const ResolvedStyle &source,
-    double scale
-) {
-    target.fontFamily = source.fontFamily.toStdWString();
-    target.latinFontFamily = source.fontFamilyLatin.isEmpty()
-        ? std::nullopt
-        : std::optional<std::wstring>(source.fontFamilyLatin.toStdWString());
-    target.fontSize = static_cast<float>(source.fontSizePx * scale);
-    target.latinFontSize = source.latinFontSizePx.has_value()
-        ? std::optional<float>(static_cast<float>(*source.latinFontSizePx * scale))
-        : std::nullopt;
-    target.fontWeight = source.fontWeight;
-    target.fontAxis = source.fontAxis;
-    target.fontHint = source.fontHint;
-    target.latinFontWeight = source.latinFontWeight;
-    target.latinFontAxis = source.latinFontAxis;
-    target.latinFontHint = source.latinFontHint;
-    target.latinFontStretchPct = source.latinFontStretchPct;
-    target.italic = source.italic;
-    // Per-slot italic: the same inheritance chain as the stroke2 switch
-    // (latin/ruby follow the main text; ruby-latin follows the resolved ruby
-    // value).  Resolved here once so every backend consumes plain bools.
-    target.latinItalic = source.latinItalic.value_or(source.italic);
-    target.rubyItalic = source.rubyItalic.value_or(source.italic);
-    target.rubyLatinItalic = source.rubyLatinItalic.value_or(target.rubyItalic);
-    target.allowBiting = source.allowBiting;
-    target.affectsRubyAnchor = source.affectsRubyAnchor;
-    target.spaceWidthPercent = source.spaceWidthPercent;
-    target.letterSpacing = static_cast<float>(source.letterSpacingPx * scale);
-    target.beforeFill = gpuColor(source.baseFill.color, source.baseColor);
-    target.afterFill = gpuColor(source.afterFill.color, source.fillColor);
-    target.beforeStroke = gpuColor(source.beforeStrokeFill.color, source.beforeStrokeColor);
-    target.afterStroke = gpuColor(source.afterStrokeFill.color, source.afterStrokeColor);
-    target.beforeStroke2 = gpuColor(source.beforeStroke2Fill.color, source.beforeStroke2Color);
-    target.afterStroke2 = gpuColor(source.afterStroke2Fill.color, source.afterStroke2Color);
-    target.beforeDecor = gpuColor(source.beforeShadowFill.color, source.beforeShadowColor);
-    target.afterDecor = gpuColor(source.afterShadowFill.color, source.afterShadowColor);
-    target.beforeFillPaint = gpuPaint(source.baseFill, source.baseColor);
-    target.afterFillPaint = gpuPaint(source.afterFill, source.fillColor);
-    target.beforeStrokePaint = gpuPaint(source.beforeStrokeFill, source.beforeStrokeColor);
-    target.afterStrokePaint = gpuPaint(source.afterStrokeFill, source.afterStrokeColor);
-    target.beforeStroke2Paint = gpuPaint(source.beforeStroke2Fill, source.beforeStroke2Color);
-    target.afterStroke2Paint = gpuPaint(source.afterStroke2Fill, source.afterStroke2Color);
-    target.beforeDecorPaint = gpuPaint(source.beforeShadowFill, source.beforeShadowColor);
-    target.afterDecorPaint = gpuPaint(source.afterShadowFill, source.afterShadowColor);
-    target.strokeWidth = static_cast<float>(source.strokeWidthPx * scale);
-    target.stroke2Width = static_cast<float>(source.stroke2WidthPx * scale);
-    // Latin-track strokes for alnum characters (CPU: main_script_stroke_style):
-    // an unset or non-positive latin width follows the Japanese-track value;
-    // the latin stroke2 flag follows the main flag when unset and gates the
-    // width exactly once, inheriting the ungated raw width so an explicitly
-    // enabled latin stroke2 survives a switched-off main track.
-    {
-        const int latinStrokePx =
-            (source.latinStrokeWidthPx.has_value()
-                && *source.latinStrokeWidthPx > 0)
-                ? *source.latinStrokeWidthPx
-                : source.strokeWidthPx;
-        const bool latinStroke2On = source.latinStroke2Enabled.value_or(
-            source.stroke2Enabled
-        );
-        const int latinStroke2RawPx =
-            (source.latinStroke2WidthPx.has_value()
-                && *source.latinStroke2WidthPx > 0)
-                ? *source.latinStroke2WidthPx
-                : source.stroke2RawWidthPx;
-        const int latinStroke2Px = latinStroke2On ? latinStroke2RawPx : 0;
-        target.latinStrokeWidth = static_cast<float>(latinStrokePx * scale);
-        target.latinStroke2Width = static_cast<float>(latinStroke2Px * scale);
-    }
-    target.decorationKind = source.decorationKind.toStdString();
-    target.decorationKindBefore = source.decorationKindBefore.isEmpty()
-        ? target.decorationKind
-        : source.decorationKindBefore.toStdString();
-    target.decorationBeforeSync = source.decorationBeforeSync;
-    target.glowBeforeRadius = static_cast<float>(source.glowBeforeRadiusPx * scale);
-    target.glowAfterRadius = static_cast<float>(source.glowAfterRadiusPx * scale);
-    target.glowConcentrationLevel = source.glowConcentrationLevel;
-    target.glowBeforeConcentrationLevel =
-        source.glowBeforeConcentrationLevel.value_or(
-            source.glowConcentrationLevel
-        );
-    const int beforeShadowX = source.shadowBeforeOffsetX.value_or(
-        source.shadowOffsetX
-    );
-    const int beforeShadowY = source.shadowBeforeOffsetY.value_or(
-        source.shadowOffsetY
-    );
-    target.shadowOffsetX = static_cast<float>(source.shadowOffsetX * scale);
-    target.shadowOffsetY = static_cast<float>(source.shadowOffsetY * scale);
-    target.shadowBeforeOffsetX = static_cast<float>(beforeShadowX * scale);
-    target.shadowBeforeOffsetY = static_cast<float>(beforeShadowY * scale);
-    // 扫字线参数：随布局缩放；颜色走纯色画刷（gpuColor 的 paint/fallback 同源）。
-    target.scanlineWidth = static_cast<float>(
-        std::max(source.scanlineWidthPx, 1) * scale
-    );
-    if (source.scanlineMode == QStringLiteral("brighten")) {
-        target.scanlineMode = "brighten";
-    } else if (source.scanlineMode == QStringLiteral("follow_before")) {
-        target.scanlineMode = "follow_before";
-    } else if (source.scanlineMode == QStringLiteral("follow_after")) {
-        target.scanlineMode = "follow_after";
-    } else if (source.scanlineMode == QStringLiteral("role")) {
-        target.scanlineMode = "role";
-        target.scanlineRolePaint = gpuPaint(
-            source.scanlineRolePaint, source.scanlineColor
-        );
-    } else if (source.scanlineMode == QStringLiteral("default")) {
-        target.scanlineMode = "default";
-    } else {
-        target.scanlineMode = "color";
-    }
-    target.scanlineColor = gpuColor(source.scanlineColor, source.scanlineColor);
-    target.scanlineBrightness = std::clamp(
-        static_cast<float>(source.scanlineBrightnessPct) / 100.0f, 0.0f, 1.0f
-    );
-    target.scanlineGlowRadius = static_cast<float>(
-        std::max(source.scanlineGlowPx, 0) * scale
-    );
-    target.scanlineShape = (
-        source.scanlineShape == QStringLiteral("flame")
-        || source.scanlineShape == QStringLiteral("bubble")
-        || source.scanlineShape == QStringLiteral("image")
-    )
-        ? source.scanlineShape.toStdString()
-        : "band";
-    // 自定义图片形态：路径为空 = 素材缺失（渲染端回退普通高亮带）；
-    // (mtime, size) 失效签名与 PaintStyle.image* / litImage* 同口径，
-    // configure 据此缓存解码位图。偏移随 dpr 缩放成场景像素。
-    target.scanlineImagePath = source.scanlineImagePath.toStdWString();
-    if (!source.scanlineImagePath.isEmpty()) {
-        const QFileInfo info(source.scanlineImagePath);
-        if (info.exists() && info.isFile()) {
-            target.scanlineImageModifiedMs = static_cast<std::uint64_t>(
-                std::max<qint64>(info.lastModified().toMSecsSinceEpoch(), 0)
-            );
-            target.scanlineImageSize = static_cast<std::uint64_t>(
-                std::max<qint64>(info.size(), 0)
-            );
-        }
-    }
-    target.scanlineImageBandEnabled = source.scanlineImageBandEnabled;
-    target.scanlineImageOffsetX = static_cast<float>(
-        source.scanlineImageOffsetXPx * scale
-    );
-    target.scanlineImageOffsetY = static_cast<float>(
-        source.scanlineImageOffsetYPx * scale
-    );
-    {
-        const QStringList tokens = source.scanlineImageColorLayers.split(
-            ',', Qt::SkipEmptyParts
-        );
-        target.scanlineImageTint = tokens.contains(
-            QStringLiteral("solid"), Qt::CaseSensitive
-        );
-        target.scanlineImageStroke = tokens.contains(
-            QStringLiteral("stroke"), Qt::CaseSensitive
-        );
-        target.scanlineImageDecor = tokens.contains(
-            QStringLiteral("decor"), Qt::CaseSensitive
-        );
-    }
-    target.scanlineImageScale = static_cast<float>(
-        std::clamp(source.scanlineImageScalePct, 10, 400)
-    ) / 100.0f;
-    target.scanlineImageTintStrength = std::clamp(
-        source.scanlineImageTintStrengthPct, 0, 100
-    );
-    // role 模式装饰几何（Python 物化值，输出像素 → 场景像素；< 0 未下发）。
-    if (source.scanlineImageRoleFontSizePx >= 0.0) {
-        target.scanlineImageRoleStrokeWidth = static_cast<float>(
-            std::max(source.scanlineImageRoleStrokeWidthPx, 0.0) * scale
-        );
-        target.scanlineImageRoleStroke2Width = static_cast<float>(
-            std::max(source.scanlineImageRoleStroke2WidthPx, 0.0) * scale
-        );
-        target.scanlineImageRoleFontSize = static_cast<float>(
-            std::max(source.scanlineImageRoleFontSizePx, 1.0) * scale
-        );
-        target.scanlineImageRoleGlowRadius = static_cast<float>(
-            std::max(source.scanlineImageRoleGlowRadiusPx, 0.0) * scale
-        );
-        target.scanlineImageRoleShadowOffsetX = static_cast<float>(
-            source.scanlineImageRoleShadowOffsetXPx * scale
-        );
-        target.scanlineImageRoleShadowOffsetY = static_cast<float>(
-            source.scanlineImageRoleShadowOffsetYPx * scale
-        );
-        target.scanlineImageRoleDecorationKind = (
-            source.scanlineImageRoleDecorationKind == QStringLiteral("shadow")
-            || source.scanlineImageRoleDecorationKind
-                == QStringLiteral("glow")
-        )
-            ? source.scanlineImageRoleDecorationKind.toStdString()
-            : "none";
-    }
-    // 整字放大缓动档位与峰值倍数：无量纲，不随布局缩放。
-    target.zoomPulseCurveLevel = std::clamp(source.zoomPulseCurveLevel, 0, 5);
-    target.zoomPulsePeakPct = std::clamp(source.zoomPulsePeakPct, 100, 200);
-
-    const bool rubyUsesMainFont = source.rubyFontFollowMain
-        && source.rubyFontFamily.isEmpty()
-        && source.rubyFontFamilyLatin.isEmpty()
-        && !source.rubyFontWeight.has_value()
-        && !source.rubyLatinFontSizePx.has_value()
-        && !source.rubyLatinFontWeight.has_value()
-        && source.rubyFontSizePx == 45;
-    target.rubyFontFamily = (
-        rubyUsesMainFont || source.rubyFontFamily.isEmpty()
-            ? source.fontFamily
-            : source.rubyFontFamily
-    ).toStdWString();
-    const QString rubyLatinFamily = source.rubyFontFamilyLatin.isEmpty()
-        ? (source.fontFamilyLatin.isEmpty()
-            ? QString::fromStdWString(target.rubyFontFamily)
-            : source.fontFamilyLatin)
-        : source.rubyFontFamilyLatin;
-    target.rubyLatinFontFamily = rubyLatinFamily.isEmpty()
-        ? std::nullopt
-        : std::optional<std::wstring>(rubyLatinFamily.toStdWString());
-    target.rubyFontSize = static_cast<float>(source.rubyFontSizePx * scale);
-    target.rubyLatinFontSize = source.rubyLatinFontSizePx.has_value()
-        ? std::optional<float>(static_cast<float>(*source.rubyLatinFontSizePx * scale))
-        : std::nullopt;
-    target.rubyFontWeight = rubyUsesMainFont
-        ? source.fontWeight
-        : source.rubyFontWeight.value_or(source.fontWeight);
-    target.rubyFontAxis = rubyUsesMainFont
-        ? source.fontAxis
-        : source.rubyFontAxis;
-    target.rubyFontHint = rubyUsesMainFont
-        ? source.fontHint
-        : source.rubyFontHint;
-    target.rubyLatinFontWeight = source.rubyLatinFontWeight;
-    target.rubyLatinFontAxis = source.rubyLatinFontAxis;
-    target.rubyLatinFontHint = source.rubyLatinFontHint;
-    target.rubyLatinFontStretchPct = source.rubyLatinFontStretchPct.value_or(
-        source.latinFontStretchPct
-    );
-    target.rubyGap = static_cast<float>(source.rubyGapPx * scale);
-    target.rubyInterval = static_cast<float>(source.rubyIntervalPx * scale);
-    target.rubyAlignment = source.rubyAlignment.toStdString();
-    target.rubyMainProgressMode = source.rubyMainProgressMode.toStdString();
-    target.rubyHorizontalGradientWithMain = source.rubyHorizontalGradientWithMain;
-    target.rubyBeforeFill = gpuColor(source.rubyBaseFill.color, source.rubyBaseColor);
-    target.rubyAfterFill = gpuColor(source.rubyAfterFill.color, source.rubyFillColor);
-    target.rubyBeforeStroke = gpuColor(
-        source.rubyBeforeStrokeFill.color, source.rubyBeforeStrokeColor
-    );
-    target.rubyAfterStroke = gpuColor(
-        source.rubyAfterStrokeFill.color, source.rubyAfterStrokeColor
-    );
-    target.rubyBeforeStroke2 = gpuColor(
-        source.rubyBeforeStroke2Fill.color, source.rubyBeforeStroke2Color
-    );
-    target.rubyAfterStroke2 = gpuColor(
-        source.rubyAfterStroke2Fill.color, source.rubyAfterStroke2Color
-    );
-    target.rubyBeforeDecor = gpuColor(
-        source.rubyBeforeShadowFill.color, source.rubyBeforeShadowColor
-    );
-    target.rubyAfterDecor = gpuColor(
-        source.rubyAfterShadowFill.color, source.rubyAfterShadowColor
-    );
-    target.rubyBeforeFillPaint = gpuPaint(source.rubyBaseFill, source.rubyBaseColor);
-    target.rubyAfterFillPaint = gpuPaint(source.rubyAfterFill, source.rubyFillColor);
-    target.rubyBeforeStrokePaint = gpuPaint(
-        source.rubyBeforeStrokeFill, source.rubyBeforeStrokeColor
-    );
-    target.rubyAfterStrokePaint = gpuPaint(
-        source.rubyAfterStrokeFill, source.rubyAfterStrokeColor
-    );
-    target.rubyBeforeStroke2Paint = gpuPaint(
-        source.rubyBeforeStroke2Fill, source.rubyBeforeStroke2Color
-    );
-    target.rubyAfterStroke2Paint = gpuPaint(
-        source.rubyAfterStroke2Fill, source.rubyAfterStroke2Color
-    );
-    target.rubyBeforeDecorPaint = gpuPaint(
-        source.rubyBeforeShadowFill, source.rubyBeforeShadowColor
-    );
-    target.rubyAfterDecorPaint = gpuPaint(
-        source.rubyAfterShadowFill, source.rubyAfterShadowColor
-    );
-    // Ruby stroke/decoration/glow that a scheme left unset follow this scheme's
-    // effective main text (same derivation the base parser used to bake from the
-    // global main). Resolving here — against the role-resolved ``source`` — is
-    // what keeps each role's ruby tied to its own main instead of the global.
-    const double rubyScale = static_cast<double>(source.rubyFontSizePx)
-        / static_cast<double>(std::max(source.fontSizePx, 1));
-    auto scaledFromMain = [&](int mainPx) {
-        return std::max(0, static_cast<int>(std::lround(mainPx * rubyScale)));
-    };
-    const int rubyStrokePx = source.rubyStrokeWidthPx.value_or(
-        scaledFromMain(source.strokeWidthPx)
-    );
-    // Same split as the CPU painter's _ruby_stroke2_enabled/_ruby_stroke2_width_value:
-    // the flag and the width inherit along separate chains, and the flag gates
-    // the width exactly once at the end.  Letting the width answer first made a
-    // saved ruby width draw stroke2 even though the main text had it switched
-    // off; gating the inherited width a second time made an explicitly enabled
-    // ruby with no width of its own collapse to 0.
-    const bool rubyStroke2On = source.rubyStroke2Enabled.value_or(source.stroke2Enabled);
-    const int rubyStroke2RawPx = source.rubyStroke2WidthPx.value_or(
-        scaledFromMain(source.stroke2RawWidthPx)
-    );
-    const int rubyStroke2Px = rubyStroke2On ? rubyStroke2RawPx : 0;
-    target.rubyStrokeWidth = static_cast<float>(rubyStrokePx * scale);
-    target.rubyStroke2Width = static_cast<float>(rubyStroke2Px * scale);
-    // Ruby-latin strokes for alnum readings (CPU: ruby_script_stroke_style):
-    // an unset or non-positive latin width follows the ruby Japanese-track
-    // value; the latin stroke2 flag follows the ruby flag when unset, and the
-    // ungated ruby width keeps an explicitly enabled latin stroke2 from
-    // collapsing when the ruby track itself is switched off.
-    const int rubyLatinStrokePx =
-        (source.rubyLatinStrokeWidthPx.has_value()
-            && *source.rubyLatinStrokeWidthPx > 0)
-            ? *source.rubyLatinStrokeWidthPx
-            : rubyStrokePx;
-    const bool rubyLatinStroke2On = source.rubyLatinStroke2Enabled.value_or(
-        rubyStroke2On
-    );
-    const int rubyLatinStroke2RawPx =
-        (source.rubyLatinStroke2WidthPx.has_value()
-            && *source.rubyLatinStroke2WidthPx > 0)
-            ? *source.rubyLatinStroke2WidthPx
-            : rubyStroke2RawPx;
-    const int rubyLatinStroke2Px = rubyLatinStroke2On ? rubyLatinStroke2RawPx : 0;
-    target.rubyLatinStrokeWidth = static_cast<float>(rubyLatinStrokePx * scale);
-    target.rubyLatinStroke2Width = static_cast<float>(rubyLatinStroke2Px * scale);
-    target.rubyDecorationKind = (
-        source.rubyDecorationKind.isEmpty()
-            ? source.decorationKind
-            : source.rubyDecorationKind
-    ).toStdString();
-    target.rubyDecorationKindBefore = source.rubyDecorationKindBefore.isEmpty()
-        ? (source.rubyDecorationKind.isEmpty()
-            ? target.decorationKindBefore
-            : source.rubyDecorationKind.toStdString())
-        : source.rubyDecorationKindBefore.toStdString();
-    target.rubyGlowBeforeRadius = static_cast<float>(
-        source.rubyGlowBeforeRadiusPx.value_or(
-            source.rubyGlowAfterRadiusPx.value_or(
-                scaledFromMain(source.glowBeforeRadiusPx)
-            )
-        ) * scale
-    );
-    target.rubyGlowAfterRadius = static_cast<float>(
-        source.rubyGlowAfterRadiusPx.value_or(scaledFromMain(source.glowAfterRadiusPx))
-        * scale
-    );
-    target.rubyGlowConcentrationLevel = source.rubyGlowConcentrationLevel.value_or(
-        source.glowConcentrationLevel
-    );
-    target.rubyGlowBeforeConcentrationLevel =
-        source.rubyGlowBeforeConcentrationLevel.value_or(
-            source.rubyGlowConcentrationLevel.value_or(
-                source.glowBeforeConcentrationLevel.value_or(
-                    source.glowConcentrationLevel
-                )
-            )
-        );
-    target.rubyShadowOffsetX = static_cast<float>(
-        source.rubyShadowOffsetX.value_or(source.shadowOffsetX) * scale
-    );
-    target.rubyShadowOffsetY = static_cast<float>(
-        source.rubyShadowOffsetY.value_or(source.shadowOffsetY) * scale
-    );
-    target.rubyShadowBeforeOffsetX = static_cast<float>(
-        source.rubyShadowBeforeOffsetX.value_or(
-            source.rubyShadowOffsetX.value_or(beforeShadowX)
-        ) * scale
-    );
-    target.rubyShadowBeforeOffsetY = static_cast<float>(
-        source.rubyShadowBeforeOffsetY.value_or(
-            source.rubyShadowOffsetY.value_or(beforeShadowY)
-        ) * scale
-    );
-    target.litEnabled = source.litEnabled;
-    target.litStyle = source.litStyle.toStdString();
-    target.litAppearanceMode = source.litAppearanceMode.toStdString();
-    target.litImagePath = source.litImagePath.toStdWString();
-    if (!source.litImagePath.isEmpty()) {
-        // 与 PaintStyle.image* 同口径：QFileInfo 探测 (mtime, size) 作失效
-        // 签名，configure 按它缓存解码位图。
-        const QFileInfo info(source.litImagePath);
-        if (info.exists() && info.isFile()) {
-            target.litImageModifiedMs = static_cast<std::uint64_t>(
-                std::max<qint64>(info.lastModified().toMSecsSinceEpoch(), 0)
-            );
-            target.litImageSize = static_cast<std::uint64_t>(
-                std::max<qint64>(info.size(), 0)
-            );
-        }
-    }
-    target.litNumber = source.litNumber;
-    target.litSize = static_cast<float>(source.litSize * scale);
-    target.litOffsetX = static_cast<float>(source.litOffsetX * scale);
-    target.litOffsetY = static_cast<float>(source.litOffsetY * scale);
-    target.litTracking = static_cast<float>(source.litTracking * scale);
-    target.litFill = gpuColor(source.litFillColor, QStringLiteral("#0000FF"));
-    target.litStroke = gpuColor(source.litStrokeColor, QStringLiteral("#FFFFFF"));
-    target.litStrokeWidth = static_cast<float>(source.litStrokeWidth * scale);
-    target.litStrokeSoften = static_cast<float>(source.litStrokeSoften * scale);
-    target.litOpacity = static_cast<float>(source.litOpacityPct) / 100.0f;
-    target.litEdgeBrightness = static_cast<float>(source.litEdgeBrightnessPct) / 100.0f;
-    target.litShadow = source.litShadow;
-    target.litTimeOffsetMs = source.litTimeOffsetMs;
-    target.litWaitingTimeMs = source.litWaitingTimeMs;
-    target.litTransitionMode = source.litTransitionMode.toStdString();
-    target.litTransitionRatioPct = source.litTransitionRatioPct;
-    target.litTransitionAngleDeg = static_cast<float>(source.litTransitionAngleDeg);
-    target.litTransitionDistance = static_cast<float>(source.litTransitionDistance * scale);
-    target.signalsDurationMs = source.signalsDurationMs;
-    target.volumeEnabled = source.volumeEnabled;
-    target.volumeAppearanceMode = source.volumeAppearanceMode.toStdString();
-    target.volumeDurationMs = source.volumeDurationMs;
-    target.volumeWaitingTimeMs = source.volumeWaitingTimeMs;
-    target.volumeTimeOffsetMs = source.volumeTimeOffsetMs;
-    target.volumeStrokeWidth = static_cast<float>(source.volumeStrokeWidth * scale);
-    target.volumeOpacity = static_cast<float>(source.volumeOpacityPct) / 100.0f;
-    target.volumeSize = static_cast<float>(source.volumeSize * scale);
-    target.volumeOffsetX = static_cast<float>(source.volumeOffsetX * scale);
-    target.volumeOffsetY = static_cast<float>(source.volumeOffsetY * scale);
-    target.volumeColumnWidth = static_cast<float>(source.volumeColumnWidth * scale);
-    target.volumeColumnCount = source.volumeColumnCount;
-    target.volumeColumnSpacing = static_cast<float>(source.volumeColumnSpacing * scale);
-    target.volumeAlign = source.volumeAlign;
-    target.volumeRatio = static_cast<float>(source.volumeRatio);
-    target.volumeFill = gpuColor(source.volumeFillColor, QStringLiteral("#FFFFFF"));
-    target.volumeStroke = gpuColor(source.volumeStrokeColor, QStringLiteral("#0000FF"));
-    target.volumeOverlayFill = gpuColor(source.volumeOverlayFillColor, QStringLiteral("#0000FF"));
-    target.volumeOverlayStroke = gpuColor(source.volumeOverlayStrokeColor, QStringLiteral("#FFFFFF"));
-    target.volumeFlashTimes = source.volumeFlashTimes;
-    target.volumeFlashDurationRatio = static_cast<float>(source.volumeFlashDurationRatio);
-    target.volumeTransitionRatioPct = source.volumeTransitionRatioPct;
-}
-
-// N3 CalcHorizontalAlignment: Top/Middle count forward from the page's first
-// line, Bottom counts backward from its last one.  The two agree on a full
-// page and diverge on a short one, where Bottom takes the tail of the list --
-// a 2-line page under [left, center, right] is "center + right".
-int alignmentIndexForLane(
-    int lane,
-    int alignmentCount,
-    int pageLineCount,
-    const QString &verticalPosition
-) {
-    if (alignmentCount <= 0) {
-        return 0;
-    }
-    int index = std::max(lane, 0);
-    if (verticalPosition == QStringLiteral("bottom")
-        && pageLineCount > 0
-        && pageLineCount < alignmentCount) {
-        index = std::max(alignmentCount - pageLineCount + index, 0);
-    }
-    return std::clamp(index, 0, alignmentCount - 1);
-}
-
-void applyGpuLineLayout(
-    krok::subtitle::native::TextStyle &target,
-    const ResolvedLineLayout &layout,
-    int lane,
-    bool centerOverride,
-    int pageLineCount,
-    double scale
-) {
-    if (!layout.present) {
-        return;
-    }
-    target.bottomMargin = static_cast<float>(layout.lineYMarginPx * scale);
-    target.lineGap = static_cast<float>(layout.lineGapPx * scale);
-    target.dualLineLayout = layout.dualLineLayout;
-    target.laneCount = layout.dualLineLayout
-        ? std::max(static_cast<int>(layout.lineAlignments.size()), 1)
-        : 1;
-    target.verticalPosition = layout.lineYPosition.toStdString();
-    target.smartHorizontal = layout.lineHorizontalLayout == QStringLiteral("asymmetric")
-        ? layout.smartHorizontal.toStdString()
-        : "none";
-    target.letterSpacing = static_cast<float>(layout.letterSpacingPx * scale);
-    target.spaceWidthPercent = layout.spaceWidthPercent;
-    target.allowBiting = layout.allowBiting;
-    target.rubyInterval = static_cast<float>(layout.rubyIntervalPx * scale);
-    target.rubyAlignment = layout.rubyAlignment.toStdString();
-    target.rubyGap = static_cast<float>(layout.rubyGapPx * scale);
-    const int offsetIndex = alignmentIndexForLane(
-        lane, static_cast<int>(layout.lineAlignments.size()),
-        layout.dualLineLayout && layout.lineHorizontalLayout == QStringLiteral("asymmetric")
-            ? pageLineCount : 0,
-        layout.lineYPosition
-    );
-    target.laneOffsetX = offsetIndex < static_cast<int>(layout.lineOffsetsX.size())
-        ? static_cast<float>(layout.lineOffsetsX[offsetIndex] * scale) : 0.0f;
-    target.layoutOffsetX = 0.0f;
-    target.layoutOffsetY = 0.0f;
-
-    if (centerOverride || layout.lineHorizontalLayout == QStringLiteral("center")) {
-        target.alignment = "center";
-    } else if (layout.lineHorizontalLayout == QStringLiteral("per_row")) {
-        const bool secondRow = lane == 1;
-        target.alignment = (
-            secondRow ? layout.row2Align : layout.row1Align
-        ).toStdString();
-        target.horizontalMargin = 0.0f;
-        target.layoutOffsetX = static_cast<float>(
-            (secondRow ? layout.row2OffsetX : layout.row1OffsetX) * scale
-        );
-    } else if (!layout.lineAlignments.empty()) {
-        const int alignmentIndex = alignmentIndexForLane(
-            lane,
-            static_cast<int>(layout.lineAlignments.size()),
-            pageLineCount,
-            layout.lineYPosition
-        );
-        target.alignment = layout.lineAlignments[
-            static_cast<std::size_t>(alignmentIndex)
-        ].toStdString();
-        target.horizontalMargin = static_cast<float>(
-            layout.horizontalMarginPx * scale
-        );
-    }
-
-    if (layout.lineHorizontalLayout == QStringLiteral("per_row")) {
-        if (lane == 0) {
-            target.layoutOffsetY = static_cast<float>(layout.row1OffsetY * scale);
-        } else if (lane == 1) {
-            target.layoutOffsetY = static_cast<float>(layout.row2OffsetY * scale);
-        }
-    }
-}
-}  // namespace
-
-// CPU 对齐（engine/text/layout.py main_script_stroke_style）：拉丁描边
-// 覆盖（未设或非正值跟日文轨）是否与日文轨实际不同——只有不同才需要
-// 为英数字符派生脚本变体样式，未设置的工程保持原 styleIndex 路径不变。
-bool latinStrokesDiffer(const protocol::ResolvedStyle &style) {
-    const int japaneseStroke2 = style.stroke2Enabled ? style.stroke2RawWidthPx : 0;
-    const int latinStroke =
-        (style.latinStrokeWidthPx.has_value() && *style.latinStrokeWidthPx > 0)
-            ? *style.latinStrokeWidthPx
-            : style.strokeWidthPx;
-    const bool latinStroke2On = style.latinStroke2Enabled.value_or(
-        style.stroke2Enabled
-    );
-    const int latinStroke2Raw =
-        (style.latinStroke2WidthPx.has_value() && *style.latinStroke2WidthPx > 0)
-            ? *style.latinStroke2WidthPx
-            : style.stroke2RawWidthPx;
-    const int latinStroke2 = latinStroke2On ? latinStroke2Raw : 0;
-    return latinStroke != style.strokeWidthPx || latinStroke2 != japaneseStroke2;
-}
 
 krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &config) {
     using krok::subtitle::native::RenderScene;
@@ -686,7 +69,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     scene.viewportOffsetX = static_cast<float>(config.viewportOffsetX * scale);
     scene.viewportOffsetY = static_cast<float>(config.viewportOffsetY * scale);
     scene.viewportAlign = config.viewportAlign.toStdString();
-    applyGpuResolvedStyle(scene.style, sourceStyle, scale);
+    applyResolvedStyle(scene.style, sourceStyle, scale);
     scene.style.layoutSemantics = config.layoutSemantics.toStdString();
     scene.style.smartHorizontal = config.lineHorizontalLayout == QStringLiteral("asymmetric")
         ? config.smartHorizontal.toStdString()
@@ -840,11 +223,11 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             continue;
         }
         TextStyle lineStyle = scene.style;
-        applyGpuResolvedStyle(
+        applyResolvedStyle(
             lineStyle, resolvedStyleForLine(config, sourceLine), scale
         );
         if (sourceLine.layout.present) {
-            applyGpuLineLayout(
+            applyLineLayout(
                 lineStyle, sourceLine.layout, sourceLine.lane,
                 sourceLine.centerOverride, sourceLine.pageLineCount, scale
             );
@@ -972,20 +355,20 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 burst.front = source.front;
                 burst.reverse = source.reverse;
                 burst.sweep = source.sweep;
-                burst.color = gpuColor(source.color, QStringLiteral("#FFFFFF"));
+                burst.color = projectColor(source.color, QStringLiteral("#FFFFFF"));
                 // 2026-10 装饰规格：PaintFillSpec → PaintStyle（文本填充
                 // 同一转换），描边宽随 scale 同比缩放。
                 burst.charColors.reserve(source.charColors.size());
                 for (const QString &hex : source.charColors) {
                     burst.charColors.push_back(
-                        gpuColor(hex, QStringLiteral("#FFFFFF"))
+                        projectColor(hex, QStringLiteral("#FFFFFF"))
                     );
                 }
                 burst.hasPaint = source.hasPaint;
                 if (source.hasPaint) {
-                    burst.fill = gpuPaint(source.fill, source.color);
-                    burst.stroke = gpuPaint(source.stroke, source.color);
-                    burst.stroke2 = gpuPaint(source.stroke2, source.color);
+                    burst.fill = projectPaint(source.fill, source.color);
+                    burst.stroke = projectPaint(source.stroke, source.color);
+                    burst.stroke2 = projectPaint(source.stroke2, source.color);
                     burst.strokeWidth = static_cast<float>(
                         source.strokeWidthPx * scale
                     );
@@ -997,7 +380,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     burst.hasDecor = source.hasDecor;
                     if (source.hasDecor) {
                         burst.decorKind = source.decorKind.toStdString();
-                        burst.decor = gpuPaint(source.decor, source.color);
+                        burst.decor = projectPaint(source.decor, source.color);
                         burst.decorOffsetX = static_cast<float>(
                             source.decorOffsetX * scale
                         );
@@ -1072,12 +455,12 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     styleIndex = existing.value();
                 } else {
                     TextStyle charStyle = scene.lineStyles.back();
-                    applyGpuResolvedStyle(
+                    applyResolvedStyle(
                         charStyle,
                         resolvedStyleForCharacter(config, sourceLine, sourceChar),
                         scale
                     );
-                    applyGpuLineLayout(
+                    applyLineLayout(
                         charStyle, sourceLine.layout, sourceLine.lane,
                         sourceLine.centerOverride, sourceLine.pageLineCount, scale
                     );
@@ -1113,12 +496,12 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     styleIndex = existing.value();
                 } else {
                     TextStyle charStyle = scene.lineStyles.back();
-                    applyGpuResolvedStyle(
+                    applyResolvedStyle(
                         charStyle,
                         resolvedStyleForCharacter(config, sourceLine, sourceChar),
                         scale
                     );
-                    applyGpuLineLayout(
+                    applyLineLayout(
                         charStyle, sourceLine.layout, sourceLine.lane,
                         sourceLine.centerOverride, sourceLine.pageLineCount, scale
                     );
@@ -1249,7 +632,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     sceneRuby.styleIndex = existing.value();
                 } else {
                     TextStyle lowerStyle = scene.lineStyles.back();
-                    applyGpuResolvedStyle(lowerStyle, protocol::resolvedRubyStyle(
+                    applyResolvedStyle(lowerStyle, protocol::resolvedRubyStyle(
                         resolvedStyleForCharacter(config, sourceLine,
                             sourceLine.chars[static_cast<std::size_t>(rubyRoleIndex)]),
                         sourceRuby.lowerStyle), scale);
@@ -1323,7 +706,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             continue;
         }
         TextStyle titleStyle;
-        applyGpuResolvedStyle(
+        applyResolvedStyle(
             titleStyle,
             resolvedStyleFromTitle(sourceStyle, title),
             scale
@@ -1402,7 +785,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 continue;
             }
             TextStyle roleStyle = titleStyle;
-            applyGpuResolvedStyle(
+            applyResolvedStyle(
                 roleStyle,
                 resolvedStyleFromTitle(sourceStyle, it.value().toObject()),
                 scale
@@ -1616,7 +999,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 return std::nullopt;
             }
             TextStyle decorStyle = scene.style;
-            applyGpuResolvedStyle(
+            applyResolvedStyle(
                 decorStyle,
                 protocol::resolvedStyleForRole(config, config.baseStyle, name),
                 scale

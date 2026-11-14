@@ -117,6 +117,9 @@ def main(argv=None) -> int:
     run([binaries["ninja"], "-C", output, "-j", options.jobs, *lock["libraries"]])
     native_output = root / "native" / key
     native_output.mkdir(parents=True, exist_ok=True)
+    query = native_output / ".cmake/api/v1/query"
+    query.mkdir(parents=True, exist_ok=True)
+    (query / "codemodel-v2").write_text("")
     native_identity["dependency_fingerprint"] = fingerprint
     native_fingerprint = digest(native_identity)
     clean_native = native_needs_clean(native_output / "source-request.json", native_fingerprint)
@@ -130,6 +133,8 @@ def main(argv=None) -> int:
          *[f"-D{k}={v}" for k, v in cmake_args.items()]])
     run([cmake, "--build", native_output, "--parallel", options.jobs,
          *(["--clean-first"] if options.clean or clean_native else [])])
+    ctest = str(Path(cmake).with_name("ctest.exe" if system == "windows" else "ctest"))
+    run([ctest, "--test-dir", native_output, "--output-on-failure"])
     if renderer_digest(REPO) != native_identity["renderer_sources_sha256"] or sha256(LOCK) != identity["lock_sha256"]:
         raise RuntimeError("Build inputs changed during compilation; rerun before publishing evidence")
     artifacts = {}

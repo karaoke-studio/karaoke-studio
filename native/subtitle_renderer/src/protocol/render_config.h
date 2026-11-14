@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../model/render_types.h"
+#include "../model/text_line.h"
 
 #include <QtCore/QHash>
 #include <QtCore/QJsonArray>

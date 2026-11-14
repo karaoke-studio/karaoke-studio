@@ -29,7 +29,7 @@ namespace krok::subtitle::native {
 using diagnostics::nativeTrace;
 
 using Clock = direct2d::RuntimeClock;
-using direct2d::burstParticlesAt;
+using effects::burstParticlesAt;
 using direct2d::checkHr;
 using direct2d::createPaintBrush;
 using direct2d::createNoiseMaskBrush;
@@ -37,23 +37,23 @@ using direct2d::createScanlineColumnBitmap;
 using direct2d::createScanlineMaskBrush;
 using direct2d::createScanlinePillarBrush;
 using direct2d::elapsedMs;
-using direct2d::fallEntryLeadMs;
-using direct2d::fxSpriteForKind;
-using direct2d::fxUnitHash;
-using direct2d::FxParticle;
-using direct2d::GlowHaloStroke;
-using direct2d::kGlowEchoCopies;
-using direct2d::kGlowEchoDecay;
-using direct2d::kGlowEchoPitchEm;
-using direct2d::kGlowHaloStrokes;
-using direct2d::GeoCharState;
+using effects::fallEntryLeadMs;
+using effects::fxSpriteForKind;
+using effects::fxUnitHash;
+using effects::FxParticle;
+using effects::GlowHaloStroke;
+using effects::kGlowEchoCopies;
+using effects::kGlowEchoDecay;
+using effects::kGlowEchoPitchEm;
+using effects::kGlowHaloStrokes;
+using effects::GeoCharState;
 using direct2d::geoCharMatrix;
-using direct2d::geoCharState;
-using direct2d::kStrokeFlashAlpha;
-using direct2d::scanlineColumnPixels;
-using direct2d::kStrokeFlashMinWidthEm;
-using direct2d::kStrokeFlashMs;
-using direct2d::kStrokeFlashWidthBoost;
+using effects::geoCharState;
+using effects::kStrokeFlashAlpha;
+using effects::scanlineColumnPixels;
+using effects::kStrokeFlashMinWidthEm;
+using effects::kStrokeFlashMs;
+using effects::kStrokeFlashWidthBoost;
 using direct2d::OpacityLayerScope;
 using direct2d::rectAreaPx;
 using direct2d::rubyPaintBounds;
@@ -382,7 +382,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     auto noiseMask = [&](int level, bool streaks) -> ID2D1Bitmap1 * {
         auto &bitmap = impl_->noiseMasks[streaks ? 65 : level];
         if (!bitmap) {
-            const auto pixels = direct2d::noiseMaskPixels(level, streaks);
+            const auto pixels = effects::noiseMaskPixels(level, streaks);
             const auto properties = D2D1::BitmapProperties1(
                 D2D1_BITMAP_OPTIONS_NONE,
                 D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
@@ -1637,7 +1637,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const auto window = std::find_if(line->displayWindows.begin(), line->displayWindows.end(),
                 [&](const DisplayWindow &w) { return tMs >= w.startMs && tMs < w.endMs; });
             if (window != line->displayWindows.end()) {
-                noiseCoverage = direct2d::noiseLevel(line->entryAnimation, line->exitAnimation,
+                noiseCoverage = effects::noiseLevel(line->entryAnimation, line->exitAnimation,
                     line->entryDurationMs, line->exitDurationMs, window->startMs,
                     window->endMs, line->endMs, tMs);
             }
@@ -8909,7 +8909,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             );
                             return std::clamp(srcPx, 1, static_cast<int>(srcCap));
                         };
-                        direct2d::ScanlineImageDecor decor;
+                        effects::ScanlineImageDecor decor;
                         decor.tint = style.scanlineImageTint;
                         decor.tintColor = slotColor(tintPtr, baseColor);
                         decor.tintStrength = std::clamp(
@@ -8959,9 +8959,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 || !(mutableCache.decorParams == decor)
                                 || !mutableCache.decorBitmap) {
                                 mutableCache.decorBitmap.Reset();
-                                const direct2d::ScanlineImageComposite
+                                const effects::ScanlineImageComposite
                                     composite =
-                                        direct2d::scanlineImageCompositePixels(
+                                        effects::scanlineImageCompositePixels(
                                             sourceFrame, sourceStride,
                                             sourceWidth, sourceHeight, decor
                                         );

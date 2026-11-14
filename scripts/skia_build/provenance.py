@@ -9,7 +9,9 @@ from pathlib import Path
 def renderer_digest(repo: Path) -> str:
     native = repo / "native/subtitle_renderer"
     paths = [native / "CMakeLists.txt", repo / "scripts/build_skia_renderer.py"]
-    for directory in (native / "src/skia", native / "cmake", repo / "scripts/skia_build"):
+    for directory in (native / "src/skia", native / "src/model", native / "src/effects",
+                      native / "src/scene", native / "src/runtime", native / "src/backends/skia",
+                      native / "tests", native / "cmake", repo / "scripts/skia_build"):
         paths += [p for p in directory.rglob("*") if p.suffix in {".h", ".cpp", ".mm", ".cmake", ".py"}]
     result = hashlib.sha256()
     # WindowsPath compares case-insensitively; fingerprints must use the same order on every OS.

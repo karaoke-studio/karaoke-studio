@@ -114,7 +114,7 @@ struct Direct2DGpuBackend::Impl {
         int decorFrame = -1;
         int decorAnchorX = -1;
         int decorAnchorY = -1;
-        direct2d::ScanlineImageDecor decorParams;
+        effects::ScanlineImageDecor decorParams;
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> decorBitmap;
         int decorMargin = 0;
     };
