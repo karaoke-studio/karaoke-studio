@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 
 from PyQt6.QtGui import QFont, QFontMetrics
@@ -28,14 +27,13 @@ from krok_helper.subtitle_render.engine.text import (
     char_glyph_ink_box,
     char_layout_width,
     char_path_left_offset,
-    letter_spacing,
 )
-from krok_helper.subtitle_render.engine.text import char_left_positions
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 
 
+from .interference import RubySpacingSpan, resolve_ruby_spacing
 from .unit_layout import (
     ruby_interval_px,
     resolve_ruby_alignment,
@@ -303,8 +301,6 @@ def _ruby_char_gaps_uncached(
         return zero, 0, 0
     if intervals is None:
         intervals = compute_char_intervals(line, char_widths)
-    spacing = letter_spacing(style)
-    interval = ruby_interval_px(style)
 
     lower_rubies = []
     if style.lower_ruby_enabled:
@@ -333,76 +329,17 @@ def _ruby_char_gaps_uncached(
         )
     if not entries:
         return zero, 0, 0
-    entries.sort(key=lambda item: (item[3] in lower_rubies, item[0]))
+    spans = [RubySpacingSpan(first, last, ruby in lower_rubies, index)
+             for index, (first, last, _paint, ruby, _style) in enumerate(entries)]
 
-    gaps = [0] * len(char_widths)
+    def draw_bounds(span, left, target_width):
+        _first, _last, paint_ruby, ruby, ruby_style = entries[span.key]
+        metrics = QFontMetrics(build_ruby_font_for_text(ruby_style, paint_ruby.reading))
+        return ruby_layout_draw_bounds(_ruby_utopia_visual_units(paint_ruby.reading), metrics,
+                                       left, target_width, style=ruby_style, base_text=ruby.kanji)
 
-    def char_span(first: int, last: int) -> tuple[float, float]:
-        lefts = char_left_positions(
-            char_widths,
-            0,
-            False,
-            spacing,
-            char_gaps=gaps,
-            n3_no_backtracking=style.layout_semantics == "n3_1074",
-        )
-        return float(lefts[first]), float(lefts[last] + char_widths[last])
+    return resolve_ruby_spacing(char_widths, style, spans, draw_bounds=draw_bounds)
 
-    previous_right: float | None = None
-    min_ruby_left = 0.0
-    max_ruby_right = 0.0
-    previous_lower = False
-    for first, last, paint_ruby, ruby, ruby_style in entries:
-        is_lower = ruby in lower_rubies
-        if is_lower != previous_lower:
-            previous_right = None
-        previous_lower = is_lower
-        span_left, span_right = char_span(
-            first,
-            min(last, len(char_widths) - 1),
-        )
-        target_width = max(span_right - span_left, 1.0)
-        ruby_metrics = QFontMetrics(
-            build_ruby_font_for_text(ruby_style, paint_ruby.reading)
-        )
-        ruby_left, ruby_right = ruby_layout_draw_bounds(
-            _ruby_utopia_visual_units(paint_ruby.reading),
-            ruby_metrics,
-            span_left,
-            target_width,
-            style=ruby_style,
-            base_text=ruby.kanji,
-        )
-        if previous_right is not None and first > 0:
-            deficit = (previous_right + interval) - ruby_left
-            if deficit > 0:
-                push = int(math.ceil(deficit))
-                gaps[first] += push
-                ruby_left += push
-                ruby_right += push
-        previous_right = ruby_right
-        min_ruby_left = min(min_ruby_left, ruby_left)
-        max_ruby_right = max(max_ruby_right, ruby_right)
-
-    if style.layout_semantics == "n3_1074":
-        lefts = char_left_positions(
-            char_widths,
-            0,
-            False,
-            spacing,
-            char_gaps=gaps,
-            n3_no_backtracking=True,
-        )
-        text_width = float(lefts[-1] + char_widths[-1])
-    else:
-        text_width = float(
-            sum(char_widths)
-            + spacing * max(len(char_widths) - 1, 0)
-            + sum(gaps)
-        )
-    left_overflow = max(0, int(math.ceil(-min_ruby_left)))
-    right_overflow = max(0, int(math.ceil(max_ruby_right - text_width)))
-    return gaps, left_overflow, right_overflow
 
 
 __all__ = [

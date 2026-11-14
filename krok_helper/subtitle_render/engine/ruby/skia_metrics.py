@@ -12,6 +12,7 @@ from strange_uta_game.backend.domain.graphemes import split_graphemes
 
 from krok_helper.subtitle_render.engine.text.skia_batch import TextMeasurementBatch
 from krok_helper.subtitle_render.engine.text.skia_width import cell_geometry
+from krok_helper.subtitle_render.engine.text.metric_snapshot import CellMetric
 from .style_semantics import font_style_for_ruby_cell, ruby_script_stroke_style, ruby_stroke_width
 
 
@@ -55,6 +56,7 @@ def measure_readings(readings, *, resolve_font, measure) -> MeasuredRubyReadings
         cells, indices, layouts = [], [], []
         for unit, run, index, selected, stroke in units:
             cell = measured[run]['cells'][index]
+            CellMetric.from_payload(unit, cell)
             width, offset = cell_geometry(unit, cell, selected, edge_size=stroke)
             left, top, right, bottom = cell['ink']
             ink_left, ink_right = ((offset + left, offset + right) if right > left and bottom > top

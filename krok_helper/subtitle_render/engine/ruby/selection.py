@@ -273,15 +273,23 @@ def timed_ruby_matches_line(
 def active_rubies_for_line(
     rubies: list[RubyAnnotation],
     line: TimingLine,
+    *,
+    intervals: list[tuple[int, int]] | None = None,
 ) -> list[RubyAnnotation]:
-    """Return annotations active on one line through the layout-pass cache."""
+    """Select annotations using the caller's authoritative intervals if supplied.
+
+    Existing callers retain the original default timing and cache namespace.
+    Canonical layout must pass its resolved intervals, including shared spans.
+    """
     cache = getattr(_LAYOUT_PASS, "active_rubies", None)
     if cache is None:
-        return _active_rubies_for_line_uncached(rubies, line)
+        return _active_rubies_for_line_uncached(rubies, line, intervals=intervals)
     cache_key = (id(rubies), id(line))
+    if intervals is not None:
+        cache_key += (tuple(intervals),)
     hit = cache.get(cache_key)
     if hit is None:
-        hit = tuple(_active_rubies_for_line_uncached(rubies, line))
+        hit = tuple(_active_rubies_for_line_uncached(rubies, line, intervals=intervals))
         cache[cache_key] = hit
         _LAYOUT_PASS.lines.append(line)
         _LAYOUT_PASS.ruby_lists.append(rubies)
@@ -291,6 +299,8 @@ def active_rubies_for_line(
 def _active_rubies_for_line_uncached(
     rubies: list[RubyAnnotation],
     line: TimingLine,
+    *,
+    intervals: list[tuple[int, int]] | None = None,
 ) -> list[RubyAnnotation]:
     # Reverse-wipe compatibility intentionally covers the main text only.
     # Ruby timing can carry its own per-reading clock and is left unsupported
@@ -299,7 +309,8 @@ def _active_rubies_for_line_uncached(
         return []
     line_start = line.chars[0].start_ms
     line_end = line.end_ms if line.end_ms is not None else line.chars[-1].start_ms
-    intervals = compute_char_intervals(line)
+    if intervals is None:
+        intervals = compute_char_intervals(line)
     return [
         ruby
         for ruby in rubies

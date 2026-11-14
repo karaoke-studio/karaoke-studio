@@ -349,6 +349,12 @@ git submodule status
    获取规范几何和日文注音槽基线。全英数/空读音也不能改用实际字形基线。
    这仍是准备层，产品含 ruby 的 Skia 配置继续拒绝；间距/锚点、两层 timing、最终
    IR/native 绘制、上下 ruby 和完整 reading parts 验收尚未完成，不要提前解除门禁。
+   注音目标/几何准备见 §14.19：`active_rubies_for_line(intervals=...)` 必须消费规范
+   区间，不能回到默认宽度时钟；`ruby/interference.py` 与 `text/cell_positions.py`
+   是共用空间规则，gaps 不改变主字时间。`ruby/skia_geometry.py` 返回局部主字与
+   注音坐标，实际 ruby 基线须取读音各槽最大 box descent，不能直接套日文度量基线。
+   产品门禁仍未解除；应用内字体/隐式 Latin hint 和 N3 干涉后锚点三项严格 GPU
+   对照仍为未关闭门槛，不要把测试中的 xfail 统计成通过，也不要放宽 1px 条件。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import math
 from .skia_placement import place_horizontal_line
+from ...text.cell_positions import char_left_positions
 
 
 @dataclass(frozen=True)
@@ -11,10 +12,18 @@ class LocalLineGeometry:
     layout_width: float
 
 
-def local_line_geometry(measured, style):
+def local_line_geometry(measured, style, *, char_gaps=None):
     cursor = 0
     cells, ink_boxes = [], []
+    lefts = None
+    if char_gaps is not None:
+        if len(char_gaps) != len(measured.cells):
+            raise ValueError('Skia 注音间距与正文单元数量不一致')
+        lefts = char_left_positions(measured.widths, 0, False, style.letter_spacing_px,
+            char_gaps=char_gaps, n3_no_backtracking=style.layout_semantics == 'n3_1074')
     for i, (metrics, width, offset) in enumerate(zip(measured.cells, measured.widths, measured.offsets, strict=True)):
+        if lefts is not None:
+            cursor = lefts[i]
         x = cursor + offset
         ink = metrics['ink']
         visible = ink[2] > ink[0] and ink[3] > ink[1]
@@ -24,7 +33,8 @@ def local_line_geometry(measured, style):
                       'wipe_left': x + ink[0] if visible else cursor,
                       'wipe_right': x + ink[2] if visible else cursor + width})
         if width > 0:
-            cursor += max(width + style.letter_spacing_px, 0) if i + 1 < len(measured.cells) else width
+            cursor += (max(width + style.letter_spacing_px, 0)
+                       if lefts is None and i + 1 < len(measured.cells) else width)
     ink = (min(b[0] for b in ink_boxes), min(b[1] for b in ink_boxes),
            max(b[2] for b in ink_boxes), max(b[3] for b in ink_boxes)) if ink_boxes else None
     return LocalLineGeometry(tuple(cells), ink, cursor)

@@ -1451,6 +1451,26 @@ native 源码身份：`da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e781
 
 P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出入场/粒子/走字线和正式预览压力恢复仍待后续阶段。
 
+### 14.19 P05.6 注音几何准备：规范目标、主字间距与局部锚点（2026-11-15）
+
+**本批接通主字规范度量 → 注音目标/间距/局部几何的准备链路，尚未开启产品注音绘制。** 不把几何准备等同于最终 IR/绘制验收，P05.6 继续未勾选；三项实际 D2D GPU 边界对照仍明确保留为严格预期失败，见下方。
+
+- `ruby/selection.py::active_rubies_for_line` 新增可选 `intervals` 端口。旧调用者保留原默认时钟和缓存键；规范调用者传入 `TextMetricSnapshot.resolve_intervals` 的区间，缓存追加区间值，不能复用默认宽度分配的结果。`ruby/skia_geometry.py::prepare_ruby_geometry` 据此调用原 target/effective-ruby 规则，处理显式行/字符归属、同文重复、共享时间块、子字符串落在一个作者单元内和角色继承。手工构造轨道缺少行号时仍用真实源行索引隔离注音，不修改源对象。
+- 原 `text/layout.py::char_left_positions` 原样提取到纯 `text/cell_positions.py`，旧入口保留导出；`ruby/interference.py` 接收目标 span 和已度量 bounds provider，复用原稳定排序、上下组隔离、逐项推开、负间距和悬垂取整。旧 Qt 适配器与 Skia 都调用此规则，没有第二套避让算法。主字区间先固定，插入 gaps 只改变空间，不重新分配演唱时间。
+- 准备结果包括主字局部路径位置、gaps/溢出、注音 target span 和相对主字基线的逐 grapheme 坐标。主字高度按 `affects_ruby_anchor` 的有效角色/脚本字体取值，没有候选时退到目标字符，再退行主字槽。注音实际基线取各读音字体的 N3 box descent 最大值；§14.18 的日文槽基线是独立字体度量，不能误当成混合读音的最终基线。
+- 字体实例表仍区分主字与读音，最终 IR 合并时必须显式映射。时间 parts/checkpoints 进入准备身份，但此处不求 wipe 轨迹。`skia_geometry.py` 的 `char_gaps` 端口消费该准备结果，未传参数时原有无注音行为不变。反向/竖排/RTL、下 ruby 和带描边主字明确拒绝；产品的 ruby 门禁仍在 `skia_ir.py` 与 native 中保留。
+- 注音单元同时用既有 `CellMetric` 契约校验有限 ink/advance/基线和 cluster，NaN/Infinity 不能经空墨迹判断静默传播。新 `ruby-geometry.json` 和验收包 `ruby_geometry=1` 加入跨平台比较/一键检查。
+
+验证与未通过项：
+
+- 专项 Windows **29 通过、3 严格预期失败**；27 项准备测试覆盖所有权/时钟隔离、重复与部分目标、真实 shared span、角色/锚点、混合 descent、负间距/零宽单元、空行、NaN/Infinity、时序变化不移动几何及禁止 Qt 测量。另两项用明确指定的 Meiryo/Arial、单个混合读音目标比较实际 D2D GPU 画面包络，legacy/N3 均满足 **1px** 门槛；这仅是几何核对，不代替 P00 严格栅格化画质预算。
+- 三项严格 `xfail` 是迁移的未关闭门槛，不算验收通过，也未放宽比较：应用内测试字体且隐式 ruby Latin 继承时，边缘差最大 **32px**；显式指定两槽后仍有约 **5px** 垂直差；N3 多条注音发生干涉后，现有整行锚点与准备的扩展网格也存在偏移。测试保留 `strict=True` 与原 **1px** 条件，意外通过必须移除对应未通过标记。
+- 已定位的证据：`native/protocol.py::_font_face_slot_overrides` 的 ruby Latin resource hint 使用 `ruby_latin → ruby → main`，而 `font_style_for_ruby_cell` 与 C++ `scene/style_projection.cpp` 还会继承 main Latin，隐式槽因此可携带另一字体的 hint。应用内字体的 D2D ruby box 度量调用也未沿用绘制 face 的全部 hint；其与规范字体 box 的差异仍须查证。未为匹配这些结果去修改 Skia 的继承规则，也未在本批修改 D2D 源码/二进制或旧字体提示链。
+- 原有完整 Skia 组合（新增 GPU 核对前）Windows **268 通过**、Linux X11/Wayland 各 **243 通过、25 跳过**；十份规范字体/布局/注音几何样例在三环境比较均为 **0**，原九份 Windows 样例与 §14.18 逐值一致。新增平台专用用例只影响跳过/未通过计数，最终组合与 Mac 结果回收后补记。
+- 相关架构/渲染/lower ruby/字重/N3 导入/时间线/显示/分页回归 **612 通过、12 跳过**；构建/验收工具 **26 通过**；原 D2D 注音 GPU 回归 **12 通过**。对照提取前 `a2628ee8` 的函数，固定随机种子各生成 **2,000 组字符流位置、2,000 组注音避让**，结果逐值一致。Windows/Linux CPU-only 准备层亦通过；本批 native 源码未变。
+
+下一批先核实并解决上述三项边界差异、接入整行/页面锚点，再把 reading parts、空 pause、checkpoint 和主字显式内部边界规则物化为两层分段轨迹；当前 native 线性 start/end 单元不足以表达这些规则。最终 IR、共享 C++ 绘制与 GPU/Raster 回归完成前，不能宣布注音可用。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
