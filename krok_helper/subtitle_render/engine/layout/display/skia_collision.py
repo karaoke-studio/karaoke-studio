@@ -8,15 +8,26 @@ from ..page.pagination import line_center_override
 from ..page.skia_smart_horizontal import SmartHorizontalPages
 from ..plan.page_offsets import MeasuredPageLine
 from ...render_progress import report_display_measure_progress, report_render_progress
+from ...ruby.skia_geometry import ruby_line_position
 
 
 class SkiaCollisionGeometry:
-    def __init__(self, track, style, styles, measured):
+    def __init__(self, track, style, styles, measured, *, ruby_geometry=None):
         self.track, self.style, self.styles, self.measured = track, style, tuple(styles), measured
-        self.identity = ('skia', measured.identity)
+        self.ruby = ruby_geometry
+        if ruby_geometry is not None and (ruby_geometry.main_identity != measured.identity
+                or len(ruby_geometry.lines) != len(track.lines)):
+            raise ValueError('Skia 注音几何与正文度量不一致或已过期')
+        if self.ruby is not None and any(tuple(measured.snapshot.resolve_intervals(line, style)) != ruby.intervals
+                for line, ruby in zip(track.lines, self.ruby.lines, strict=True)):
+            raise ValueError('Skia 注音几何与正文时间区间不一致或已过期')
+        self.identity = (('skia', measured.identity) if self.ruby is None
+                         else ('skia-ruby', measured.identity, self.ruby.identity))
         self.indices = {id(line): i for i, line in enumerate(track.lines)}
-        self.locals = tuple(local_line_geometry(m, s) for m, s in zip(measured.lines, styles, strict=True))
-        self.smart = SmartHorizontalPages(track, style, styles, self.locals)
+        self.locals = (tuple(line.main for line in self.ruby.lines) if self.ruby is not None
+                       else tuple(local_line_geometry(m, s) for m, s in zip(measured.lines, styles, strict=True)))
+        self.smart = SmartHorizontalPages(track, style, styles, self.locals,
+            anchors=tuple(line.anchor for line in self.ruby.lines) if self.ruby is not None else None)
         self.cache = {}
 
     def set_lanes(self, items):
@@ -25,7 +36,8 @@ class SkiaCollisionGeometry:
 
     def position(self, item, width, height):
         i = self.indices[id(item.line)]
-        position = line_position(item, self.measured.lines[i], self.locals[i], width, height)
+        position = (ruby_line_position(item, self.measured.lines[i], self.ruby.lines[i], width, height)
+                    if self.ruby is not None else line_position(item, self.measured.lines[i], self.locals[i], width, height))
         return replace(position, offset_x=position.offset_x + self.smart.shift(item, width))
 
     def geometry(self, item, width, height):

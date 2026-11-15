@@ -53,6 +53,7 @@ class RubyTrackGeometry:
     measured: MeasuredRubyReadings
     lines: tuple[RubyLineGeometry, ...]
     identity: str
+    main_identity: str
 
 
 def _box_height(metrics, size, stroke, side):
@@ -158,14 +159,14 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                                       local, tuple(rubies), anchor))
     signature = (measured.identity, ruby_metrics.identity, value_signature(track.rubies), value_signature(line_styles))
     identity = hashlib.sha256(repr(signature).encode('utf-8')).hexdigest()
-    return RubyTrackGeometry(ruby_metrics, tuple(lines), identity)
+    return RubyTrackGeometry(ruby_metrics, tuple(lines), identity, measured.identity)
 
 
 def ruby_line_position(item, main_metrics, prepared, width, height):
     """Place an entire prepared line using its semantic anchor, including ruby.
 
-    Page/smart policies must consume this same anchor width when integrated;
-    applying a ruby-only shift would detach the main text and its wipe clips.
+    Page/smart policies consume this same anchor width; applying a ruby-only
+    shift would detach the main text and its wipe clips.
     """
     left, right = prepared.anchor
     position = place_horizontal_line(item, main_metrics.baseline_metrics, width=width, height=height,

@@ -7,11 +7,7 @@ from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
 from krok_helper.subtitle_render.engine.layout.display.section_edges import section_edge_context
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
-from krok_helper.subtitle_render.engine.layout.display.skia_schedule import display_lines
-from krok_helper.subtitle_render.engine.layout.display.skia_collision import SkiaCollisionGeometry
-from krok_helper.subtitle_render.engine.layout.plan.semantic import LayoutPlanResolvers, build_track_layout_plan
-from krok_helper.subtitle_render.engine.layout.plan.page_offsets import PageOffsetResolvers, resolve_page_offset_windows
-from krok_helper.subtitle_render.engine.text.skia_metrics import measure_track
+from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from .render_ir import build_render_ir
 
 
@@ -37,25 +33,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             raise ValueError('Skia 当前规范布局尚不支持注音或导唱符')
         with layout_pass():
             section_edge_context(source, source_style)
-            styles = []
             for line in source.lines:
-                resolved = style_for_line(source_style, line)
-                _validate_style(resolved)
-                styles.append(resolved)
-            measured = measure_track(source, source_style, styles, measure=measure, resolve_font=resolve_font)
-            geometry = SkiaCollisionGeometry(source, source_style, styles, measured)
-            def display(track, style, **size):
-                return display_lines(track, style, geometry, **size)
-            def offsets(w, h, track, style):
-                return resolve_page_offset_windows(w, h, track, style,
-                    PageOffsetResolvers(display, geometry.page_lines), metrics_identity=geometry.identity)
-            ports = LayoutPlanResolvers(display, offsets, measured.snapshot.resolve_intervals, measured.identity)
-            plan = build_track_layout_plan(source, source_style, ports, **plan_kwargs)
-            prepared.append((plan, measured, geometry))
-            return plan
+                _validate_style(style_for_line(source_style, line))
+            result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font, **plan_kwargs)
+        prepared.append(result)
+        return result.plan
 
     ir = build_render_ir(track, style, layout_plan_builder=build_plan, **kwargs)
-    plan, measured, geometry = prepared[0]
+    plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     lines = []
     for index, item in enumerate(plan.lines):

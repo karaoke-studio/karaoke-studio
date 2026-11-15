@@ -373,6 +373,12 @@ git submodule status
    必须保持已有 GPU 语义；不得在帧循环分配时长。此批仅接通最终主字曲线执行，产品 ruby
    门禁仍保留，注音字形/组裁剪与页面锚点整体接入尚未完成。
 
+   P05.6 注音页面桥接见 §14.22：`layout/plan/skia_plan.py` 统一规范度量与共享计划编排，
+   `SkiaCollisionGeometry` 可注入已准备的 ruby 几何；SmartHorizon 和最终摆放须消费同一
+   legacy 墨迹/N3 单元盒并集锚点。碰撞仍仅取最终正文墨迹，不能把注音顶加入旧策略。
+   页面/显示/计划缓存身份须包含注音字体内容，行位改变须清整页统计；注入时检查正文度量
+   和时间区间，拒绝过期准备。该入口只接通准备几何，产品 ruby 绘制门禁仍保留。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的

@@ -188,6 +188,9 @@ def main(argv=None) -> int:
     if manifest.get("segmented_wipe", 0) >= 1:
         steps["segmented_wipe"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                    "tests/test_subtitle_skia_wipe.py", "--basetemp", logs / "segmented-wipe-tests"]
+    if manifest.get("ruby_pages", 0) >= 1:
+        steps["ruby_pages"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                               "tests/test_subtitle_skia_ruby_pages.py", "--basetemp", logs / "ruby-page-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

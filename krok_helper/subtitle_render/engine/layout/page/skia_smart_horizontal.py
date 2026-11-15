@@ -31,8 +31,9 @@ def smart_horizontal_shift(mode, *, width, own_width, own_font, alignment, margi
 
 
 class SmartHorizontalPages:
-    def __init__(self, track, style, styles, locals):
+    def __init__(self, track, style, styles, locals, *, anchors=None):
         self.track, self.styles, self.locals = track, tuple(styles), locals
+        self.anchors = anchors
         self.indices = {id(line): i for i, line in enumerate(track.lines)}
         self.pages = renderable_page_map(track, style)
         self.lanes = {}
@@ -50,6 +51,9 @@ class SmartHorizontalPages:
         return True
 
     def anchor_width(self, index):
+        if self.anchors is not None:
+            left, right = self.anchors[index]
+            return max(right - left, 1)
         local, style = self.locals[index], self.styles[index]
         if style.layout_semantics == 'n3_1074' or local.ink is None:
             return max(local.layout_width, 1)
