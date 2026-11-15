@@ -188,19 +188,38 @@ def _capability(job):
     import pymss
     from pymss import MSSeparator  # noqa: F401  仅验证可导入
     from pymss.model_registry import list_models
+    from pymss import download_model
+    from pymss.server.models import catalog_model_card, catalog_model_detail
+    from importlib.metadata import version
+    import inspect
+
+    # Importing the separator alone misses catalog/API drift between releases.
+    rows = list_models(supported=True)
+    if rows:
+        card = catalog_model_card(rows[0], model_dir=job.get("model_dir") or None)
+        catalog_model_detail(card["id"], model_dir=job.get("model_dir") or None)
+    inspect.signature(download_model).bind("probe", model_dir=None, source="modelscope",
+                                          verify=True, progress_callback=None)
+    inspect.signature(MSSeparator.from_model_name).bind(
+        "probe", model_dir=None, download=False, device="auto", output_format="wav",
+        store_dirs={}, progress_callback=None)
+    if not callable(getattr(MSSeparator, "process_folder", None)):
+        raise RuntimeError("PyMSS 缺少文件分离接口")
 
     try:
         import torch
 
         torch_version = torch.__version__
         cuda = bool(torch.cuda.is_available())
+        mps = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
     except Exception:
-        torch_version, cuda = "", False
+        torch_version, cuda, mps = "", False, False
     return {
-        "pymss_version": getattr(pymss, "__version__", ""),
-        "models": len(list_models(supported=True)),
+        "pymss_version": version("pymss"),
+        "models": len(rows),
         "torch": torch_version,
         "cuda": cuda,
+        "mps": mps,
     }
 
 
@@ -307,6 +326,8 @@ class PyMSSWorker:
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONNOUSERSITE"] = "1"
+        # Do not create bytecode inside an externally owned, signed .app bundle.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         process = popen_factory(
             [str(python), str(bridge)],
             cwd=str(work),
@@ -513,7 +534,7 @@ class PyMSSBridgeEngine:
 
         models = int(info.get("models") or 0)
         torch_version = str(info.get("torch") or "")
-        device = "CUDA 可用" if info.get("cuda") else "仅 CPU"
+        device = "CUDA 可用" if info.get("cuda") else ("Apple MPS 可用" if info.get("mps") else "仅 CPU")
         # 版本不在这里查：调用方（_probe_executable）已经用解释器直接问过并核对了
         # 兼容范围；pymss 包本身没有 __version__，在这里再查一次只会假失败。
         return [

@@ -1068,6 +1068,10 @@ class KrokHelperQtApp(QMainWindow):
             settings_provider=lyrics_timing_settings,
             ai_timing_host=ai_timing_host,
         )
+        if sys.platform == "darwin":
+            from krok_helper.audio_processing.separation.studio_ai import install_editor_adapter
+
+            install_editor_adapter(self.lyrics_timing_page.editorInterface)
         # Qt 6 的 Windows 字体库只登记「当前 locale + en-US」名字的族：名字表里
         # 只有 ja-JP 等其它 locale 的字体（典型是旧日文字体）整族不可见，字体
         # 列表、CPU 与 GPU 都会静默回退。这里把它们补注册成应用字体——注册后

@@ -74,6 +74,7 @@ from .runtime import (
     validate_runtime,
 )
 from .pymss_service import BridgeServiceProcess
+from .studio_runtime import prepare_ai_python, prepared_ai_python, resolve_external_python
 from .service import ManagedServiceProcess, build_server_command
 from .states import (
     STAGE_DOWNLOAD,
@@ -298,10 +299,10 @@ class RealSeparationBackend(SeparationBackend):
                 or ""
             )
             self._snap.pymss_version = recorded
-            if recorded and recorded != PYMSS_VERSION:
+            if recorded and not self._external_version_supported(recorded):
                 self._snap.state = ServiceState.EXTERNAL_VERSION_INCOMPATIBLE
                 self._snap.error = (
-                    f"外部环境为 PyMSS {recorded}，当前工作台需要 {PYMSS_VERSION}。"
+                    f"外部环境为 PyMSS {recorded}，请重新检测兼容性。"
                 )
             else:
                 self._snap.state = ServiceState.INSTALLED_STOPPED
@@ -1226,6 +1227,10 @@ class RealSeparationBackend(SeparationBackend):
         configured = str(self._settings.get("external_work_dir", "")).strip()
         if configured:
             return Path(configured)
+        if sys.platform == "darwin":
+            from krok_helper.settings import get_settings_path
+
+            return get_settings_path().parent / "PyMSSExternal"
         appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         root = Path(appdata) if appdata else Path.cwd()
         current = root / APP_NAME / "PyMSSExternal"
@@ -1392,7 +1397,8 @@ class RealSeparationBackend(SeparationBackend):
         return Path(
             configured
             or environment
-            or (Path.home() / ".cache" / "pymss" / "user_models.json")
+            or (self._external_work_root() / "external-models.json" if sys.platform == "darwin"
+                else Path.home() / ".cache" / "pymss" / "user_models.json")
         )
 
     def _intermediate_cache(self) -> IntermediateResultCache | None:
@@ -1464,6 +1470,21 @@ class RealSeparationBackend(SeparationBackend):
         }
 
     @staticmethod
+    def _external_version_supported(version: str) -> bool:
+        # Managed runtime manifests remain pinned. Only validated external
+        # releases enter this list; a newer major/minor is not assumed compatible.
+        return version == PYMSS_VERSION or (sys.platform == "darwin" and version == "2.3.5")
+
+    def external_ai_python(self) -> str | None:
+        selected = str(self._settings.get("external_executable", "")).strip()
+        if sys.platform != "darwin" or not selected:
+            return None
+        try:
+            return prepared_ai_python(resolve_external_python(selected), self._external_work_root())
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
     def _version_command(executable: str) -> list[str]:
         path = Path(executable)
         python = path
@@ -1480,6 +1501,8 @@ class RealSeparationBackend(SeparationBackend):
         return [str(path), "--help"]
 
     def _require_external_version(self, executable: str) -> str:
+        if sys.platform == "darwin":
+            executable = str(resolve_external_python(executable))
         completed = subprocess.run(
             self._version_command(executable),
             capture_output=True,
@@ -1487,6 +1510,7 @@ class RealSeparationBackend(SeparationBackend):
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             **hidden_subprocess_kwargs(),
         )
         output = (completed.stdout + " " + completed.stderr).strip()
@@ -1494,14 +1518,14 @@ class RealSeparationBackend(SeparationBackend):
         version = match.group(1) if match else ""
         if completed.returncode != 0 or not version:
             raise _ExternalVersionMismatch("无法获取外部 PyMSS 环境版本，请重新检测环境。")
-        if version != PYMSS_VERSION:
+        if not self._external_version_supported(version):
             raise _ExternalVersionMismatch(
-                f"外部环境为 PyMSS {version}，当前工作台需要 {PYMSS_VERSION}。"
+                f"外部环境为 PyMSS {version}，尚未通过兼容性验证。"
             )
         return version
 
-    def _probe_executable(self, executable: str) -> tuple[list[tuple[str, bool, str]], str]:
-        path = Path(executable)
+    def _probe_executable(self, executable: str, *, model_dir: str = "") -> tuple[list[tuple[str, bool, str]], str]:
+        path = resolve_external_python(executable) if sys.platform == "darwin" else Path(executable)
         if not path.is_file():
             return [("PyMSS 可执行环境", False, "所选文件不存在")], ""
         completed = subprocess.run(
@@ -1511,6 +1535,7 @@ class RealSeparationBackend(SeparationBackend):
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             **hidden_subprocess_kwargs(),
         )
         output = (completed.stdout + " " + completed.stderr).strip()
@@ -1518,14 +1543,14 @@ class RealSeparationBackend(SeparationBackend):
         version = match.group(1) if match else ""
         checks = [
             ("获取 PyMSS 版本", completed.returncode == 0 and bool(version), version or output),
-            ("版本在兼容范围内", version == PYMSS_VERSION, version or "无法识别版本"),
+            ("版本在兼容范围内", self._external_version_supported(version), version or "无法识别版本"),
         ]
         if not all(ok for _name, ok, _detail in checks):
             return checks, version
         service = self._service_factory.start(
             self._external_work_root(),
             executable=path,
-            model_dir=self._existing_model_dir(),
+            model_dir=Path(model_dir).expanduser() if model_dir else self._existing_model_dir(),
             user_models_path=self._existing_user_models_path(),
             source=self._download_source(),
             device=str(self._settings.get("device", "auto")),
@@ -1534,20 +1559,32 @@ class RealSeparationBackend(SeparationBackend):
             capability = service.client.capability_checks()
         finally:
             service.stop()
+        if not capability:
+            capability = [("PyMSS 推理环境", False, "能力检测未返回结果")]
+        if sys.platform == "darwin" and all(ok for _, ok, _ in capability):
+            try:
+                overlay = prepare_ai_python(path, self._external_work_root())
+                capability.append(("AI 打轴增量环境", True, overlay))
+            except Exception as exc:
+                capability.append(("AI 打轴增量环境", False, str(exc)))
         return [*checks, *capability], version
 
     def start_existing_check(
-        self, *, executable: str = "", server_url: str = "", api_key: str = ""
+        self, *, executable: str = "", server_url: str = "", api_key: str = "", model_dir: str = ""
     ) -> None:
         self.existingCheckStarted.emit()
         key = (str(executable).strip(), str(server_url).strip(), str(api_key))
+        if model_dir:
+            key += (str(Path(model_dir).expanduser()),)
         self._existing_check_cache = None
 
         def operation():
             if server_url:
                 client = PyMSSClient(server_url, api_key=api_key)
                 return client.capability_checks(), "", client
-            checks, version = self._probe_executable(executable)
+            if model_dir and not Path(model_dir).expanduser().is_dir():
+                raise ValueError("所选模型目录不存在。")
+            checks, version = self._probe_executable(executable, model_dir=model_dir)
             return checks, version, None
 
         def success(result) -> None:
@@ -1565,9 +1602,11 @@ class RealSeparationBackend(SeparationBackend):
         )
 
     def connect_existing(
-        self, *, executable: str = "", server_url: str = "", api_key: str = ""
+        self, *, executable: str = "", server_url: str = "", api_key: str = "", model_dir: str = ""
     ) -> None:
         key = (str(executable).strip(), str(server_url).strip(), str(api_key))
+        if model_dir:
+            key += (str(Path(model_dir).expanduser()),)
         cached = self._existing_check_cache
         if cached is None or cached[0] != key:
             raise RuntimeError("连接信息尚未通过能力检测，请重新检测。")
@@ -1587,6 +1626,7 @@ class RealSeparationBackend(SeparationBackend):
             self._snap.device = str(info.get("device") or "外部服务")
             self._set_ready_state()
         elif executable:
+            self._settings["external_model_dir"] = str(Path(model_dir).expanduser()) if model_dir else ""
             self._settings["external_executable"] = str(Path(executable).resolve())
             self._settings.pop("external_server_url", None)
             self._settings.pop("install_dir", None)
@@ -1634,15 +1674,24 @@ class RealSeparationBackend(SeparationBackend):
                 if validation.status is not RuntimeStatus.READY:
                     return None, "", validation
             external_version = self._require_external_version(executable) if executable else ""
+            resolved_executable = executable
+            if executable and sys.platform == "darwin":
+                resolved_executable = str(resolve_external_python(executable))
+                prepare_ai_python(Path(resolved_executable), self._external_work_root())
             service = self._service_factory.start(
                 root,
-                executable=executable,
+                executable=resolved_executable,
                 model_dir=self._existing_model_dir() if executable else None,
                 user_models_path=self._existing_user_models_path() if executable else None,
                 source=self._download_source(),
                 device=str(self._settings.get("device", "auto")),
                 cancelled=self._service_cancel,
             )
+            if executable and sys.platform == "darwin":
+                checks = service.client.capability_checks()
+                if not checks or not all(ok for _, ok, _ in checks):
+                    service.stop()
+                    raise RuntimeError('PyMSS 运行时已变化或能力检测失败，请重新关联环境。')
             if self._service_cancel.is_set():
                 service.stop(timeout_seconds=2.0)
                 raise InterruptedError("PyMSS 服务启动已取消。")
