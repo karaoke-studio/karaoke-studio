@@ -290,7 +290,9 @@ git submodule status
    `p05_resolved_horizontal`：legacy / n3_1074 横排，左/中/右与顶/中/底定位、
    主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
    多行网格已接入共享分页、碰撞时间压缩、整页平移、段内填充及两种智能水平布局。
-   已接入 §14.24 的基础实色上注音产品子集；彩色/位图字形、下方注音、描边/装饰与
+   已接入 §14.24 的基础实色上注音产品子集；§14.25 的下方罗马音仅交付纯语义与规范度量
+   准备端口，尚未开放绘制。源布局行框已按 §14.26 使用规范字体度量，Skia 不查询旧 Qt 行框。
+   彩色/位图字形、下方注音、描边/装饰与
    特效等组合仍拒绝，完整 N3 几何兼容尚未验收。
    旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
@@ -311,8 +313,9 @@ git submodule status
    `gpu/context_options.h` 统一 owned/borrowed Vulkan/Metal 的精细覆盖策略，禁用
    Ganesh 内部 MSAA 与距离场路径近似；不能把低档覆盖或宽松的冒烟比较当最终画质验收。
    P05.5 字体槽子集见实施计划 §14.12：`engine/text/font_slots.py` 复用既有整歌词单元
-   英数分类与继承，`skia_metrics.py` 按字体实例/文本去重，一次批量获取度量；基线始终
-   取主字字体，不能依行内实际字形的最大 descent 或首字字体改变。布局子协议已为 v2：
+   英数分类与继承，`skia_metrics.py` 按字体实例/文本去重，一次批量获取度量；字体基线度量
+   始终查询主字字体，不能用实际字形墨迹或首字字体代替。外部源布局行框现按 §14.26
+   取整源实际使用的槽位；所有单元仍共享同一最终基线。布局子协议已为 v2：
    根级 `runs` 表、逐字 `run_index`，客户端须检查 `resolved_layout_schema=2`；旧 sidecar
    明确拒绝。主字无实际字形时也必须查询其独立 `font_metrics`，并将其内容身份纳入缓存键。
    P05.5 单行定位扩展见 §14.13：`engine/layout/line/skia_placement.py` 只计算最终锚点，
@@ -325,7 +328,7 @@ git submodule status
    P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯
    `engine/style/style_semantics.py`，旧 text/layout 入口保留导出；角色视觉覆盖必须保留
    当前布局的字间距、空格和 AllowBiting。度量快照键必须含逐字角色标签，不能把
-   同文不同角色的行混为一份度量；基线仍由行主字字体决定。`ResolvedCell` 持有最终
+   同文不同角色的行混为一份度量；字体基线度量与外部行框分开，后者以 §14.26 为准。`ResolvedCell` 持有最终
    before/after 实色，不再用一个行颜色覆盖所有角色；核心不解析角色名或查字体。
    客户端还须检查 `p05_inline_roles` 能力；规范字体资源以 `skia_layout.fonts/runs`
    为准，不依赖旧 D2D 字体提示。角色描边、渐变、装饰与特效仍由门禁拒绝。

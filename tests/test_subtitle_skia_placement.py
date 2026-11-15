@@ -96,8 +96,55 @@ def test_layout_override_and_negative_margins_use_resolved_line_style(binary,mix
     source=replace(track,lines=[replace(track.lines[0],layout_index=1)])
     ir=ir_for(binary,(source,style))
     cells=ir['skia_layout']['lines'][0]['cells']
-    assert cells[0]['baseline_y']==pytest.approx(35,abs=1e-4) # ascent 40, no ruby reserve after clamping.
+    assert cells[0]['baseline_y']==pytest.approx(67,abs=1e-4) # used Latin slot ascent 72; no ruby reserve.
     assert max(c['wipe_right'] for c in cells)==pytest.approx(644,abs=1e-4)
+
+
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+def test_source_row_frames_ignore_unused_defaults_and_include_hidden_peer_pages(binary, project, semantics):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.engine.text.skia_metrics import measure_track
+    from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+    track, style = project
+    style = replace(style, layout_semantics=semantics, font_size_px=300, line_y_position='top',
+        line_y_margin_px=40, ruby_font_size_px=45, ruby_gap_px=0,
+        custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=60),
+                              'big': SubtitleStyleScheme(font_size_px=120),
+                              'unused': SubtitleStyleScheme(font_size_px=1000)})
+    lines = [TimingLine(chars=[TimingChar('字', 1000, role_label='lead')], end_ms=1500),
+             TimingLine(chars=[TimingChar('字', 10000, role_label='big')], end_ms=11000)]
+    source = replace(track, lines=lines)
+    with SkiaTextMetricsProcess(binary) as process:
+        def metrics(t):
+            return measure_track(t, style, [style_for_line(style, l) for l in t.lines],
+                                 measure=process.measure, resolve_font=resolve_skia_font)
+        both = metrics(source)
+        single = metrics(replace(source, lines=lines[:1]))
+        isolated = metrics(replace(source, lines=[lines[0], replace(lines[1], layout_index=1)]))
+    assert both.lines[0].row_frame == both.lines[1].row_frame
+    assert both.lines[0].row_frame.ascent == 96
+    assert both.lines[0].row_frame.descent == 24
+    assert single.lines[0].row_frame.ascent == isolated.lines[0].row_frame.ascent == 48
+    assert single.lines[0].row_frame.descent == isolated.lines[0].row_frame.descent == 12
+    assert both.identity != isolated.identity
+    # The canonical main-font metrics stay available; only the outer row frame
+    # ignores the unused 300px default and the unused 1000px role.
+    assert both.lines[0].baseline_metrics['ascent'] == pytest.approx(240)
+    ir = ir_for(binary, (source, style))
+    extra = 55 if semantics == 'legacy' else 0  # role's effective 10px ruby gap + 45px reading.
+    assert both.lines[0].row_frame.ruby_extra == extra
+    assert ir['skia_layout']['lines'][0]['cells'][0]['baseline_y'] == 40+extra+96
+
+
+def test_canonical_source_rows_never_query_the_qt_row_adapter(binary, mixed, monkeypatch):
+    from krok_helper.subtitle_render.engine.layout.line import qt_geometry
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import layout
+    fail = lambda *a, **k: pytest.fail('Qt source row measurement invoked')
+    monkeypatch.setattr(qt_geometry, 'source_layout_row_geometry', fail)
+    monkeypatch.setattr(layout, 'QFontMetrics', fail)
+    ir = ir_for(binary, mixed)
+    assert all('resolved_baseline_y' not in line for line in ir['track']['lines'])
+    assert ir['skia_layout']['lines'][0]['cells']
 
 
 def test_old_sidecar_without_placement_capability_is_rejected(monkeypatch,tmp_path):

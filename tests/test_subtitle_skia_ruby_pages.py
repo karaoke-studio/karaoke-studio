@@ -51,7 +51,7 @@ def prepare(binary, track, style, *, resolve_font=resolve_skia_font, **kwargs):
 def main_probe_ir(track, style, prepared):
     # Test adapter: omit annotations to isolate the final main-text geometry.
     ir = build_render_ir(replace(track, rubies=[]), style, width=641, height=720, fps=60,
-                         layout_plan_builder=lambda *a, **k: prepared.plan)
+                         layout_plan_builder=lambda *a, **k: prepared.plan, serialize_source_baselines=False)
     geometry = prepared.geometry
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_segmented_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'metrics_identity': prepared.measured.identity,

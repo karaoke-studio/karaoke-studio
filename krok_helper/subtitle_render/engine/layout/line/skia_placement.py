@@ -14,7 +14,7 @@ class LinePosition:
     baseline_y: float
 
 
-def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, layout_width):
+def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, layout_width, row_frame=None):
     style = item.layout_style
     mode = style.line_horizontal_layout
     if mode not in {'center', 'asymmetric', 'per_row'}:
@@ -38,6 +38,8 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
         ascent, extra = size - descent, 0
     else:
         raise ValueError('Skia 不支持此布局语义')
+    if row_frame is not None:
+        ascent, descent, extra = row_frame.ascent, row_frame.descent, row_frame.ruby_extra
     row_align, row_x, row_y = row_layout_params(style, item.lane)
     margin = style.horizontal_margin_px
     x_extra, y_extra = 0, 0
@@ -68,6 +70,11 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
         baseline = (height - block) / 2 + ascent
         if lanes == 1:
             baseline += extra / 2
+        if row_frame is not None:
+            # Shared source row frames use integer block placement, while the
+            # default-only native path retains its fractional sampling.
+            baseline = ((height-block-extra)//2+extra+ascent if lanes == 1
+                        else (height-block)//2+ascent)
     else:
         baseline = height - style.line_y_margin_px - descent - step * (lanes - 1)
     # Match the shared native projection's distinct alignment/offset slots.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from .font_slots import main_script_stroke_style
 
 from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFont, QFontMetrics
@@ -54,44 +55,6 @@ class TextLayout:
     descent: int
     height: int
     line_rect: QRectF
-
-
-def main_script_stroke_style(style: Style, text: str) -> Style:
-    """Materialize the active script font slot's outlines into common fields."""
-    if is_n3_latin_text(text):
-        width = (
-            style.stroke_width_px
-            if style.latin_stroke_width_px is None
-            or int(style.latin_stroke_width_px) <= 0
-            else int(style.latin_stroke_width_px)
-        )
-        enabled = (
-            style.stroke2_enabled
-            if style.latin_stroke2_enabled is None
-            else bool(style.latin_stroke2_enabled)
-        )
-        width2 = (
-            style.stroke2_width_px
-            if style.latin_stroke2_width_px is None
-            or int(style.latin_stroke2_width_px) <= 0
-            else int(style.latin_stroke2_width_px)
-        )
-    else:
-        width = style.stroke_width_px
-        enabled = style.stroke2_enabled
-        width2 = style.stroke2_width_px
-    effective_width2 = max(int(width2), 0) if enabled else 0
-    if (
-        int(style.stroke_width_px) == int(width)
-        and int(style.stroke2_width_px) == effective_width2
-    ):
-        return style
-    return replace(
-        style,
-        stroke_width_px=max(int(width), 0),
-        stroke2_enabled=True,
-        stroke2_width_px=effective_width2,
-    )
 
 
 def build_text_layout(

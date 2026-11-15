@@ -43,7 +43,8 @@ def ir_for(binary, source, *, roll_shift_ms=0, dpr=1):
     # Isolate final-group execution from product source compilation. The
     # product upper-ruby tests separately exercise the retained annotations.
     ir = build_render_ir(replace(track, rubies=[]), style, width=641, height=720, fps=60, dpr=dpr,
-                         roll_shift_ms=roll_shift_ms, layout_plan_builder=lambda *a, **k: prepared.plan)
+                         roll_shift_ms=roll_shift_ms, layout_plan_builder=lambda *a, **k: prepared.plan,
+                         serialize_source_baselines=False)
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_segmented_wipe', 'p05_resolved_ruby']
     ir['skia_layout'] = prepared_ruby_layout(prepared, width=641, height=720)
     apply_resolved_font_faces(ir)
@@ -151,7 +152,17 @@ def test_roles_multiline_page_offsets_and_ruby_fonts_are_resolved_before_draw(bi
             configure(process, shifted)
             moved, _ = collect(process, [1900, 3000], generation=2)
         assert np.array_equal(frames[0], moved[0])
-        assert np.array_equal(frames[1][30:], moved[1][:-30])
+        delta = np.abs(frames[1][30:].astype(np.int16)-moved[1][:-30].astype(np.int16))
+        # Vulkan coverage quantization can differ by one alpha level when
+        # translating fractional ruby outlines. Color and opaque interiors
+        # must remain exact; Raster remains byte-for-byte identical.
+        assert not delta[..., :3].any(), (target, delta.max(axis=(0, 1)).tolist())
+        alpha = frames[1][30:, :, 3]
+        if target == 'gpu':
+            assert delta[..., 3].max() <= 1
+            assert not delta[..., 3][(alpha == 0) | (alpha == 255)].any()
+        else:
+            assert not delta.any()
         outputs.append(frames[0])
     for output in outputs:
         assert (output[..., 1] > 200).any() and (output[..., 2] > 200).any()

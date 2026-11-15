@@ -45,3 +45,40 @@ def font_style_for_cell(style: Style, text: str) -> tuple[Style, float]:
                    italic=latin_italic(style)), max(50, min(200, int(style.latin_font_stretch_pct))) / 100
 
 
+def main_script_stroke_style(style: Style, text: str) -> Style:
+    """Materialize the active script font slot's outlines into common fields."""
+    if is_n3_latin_text(text):
+        width = (
+            style.stroke_width_px
+            if style.latin_stroke_width_px is None
+            or int(style.latin_stroke_width_px) <= 0
+            else int(style.latin_stroke_width_px)
+        )
+        enabled = (
+            style.stroke2_enabled
+            if style.latin_stroke2_enabled is None
+            else bool(style.latin_stroke2_enabled)
+        )
+        width2 = (
+            style.stroke2_width_px
+            if style.latin_stroke2_width_px is None
+            or int(style.latin_stroke2_width_px) <= 0
+            else int(style.latin_stroke2_width_px)
+        )
+    else:
+        width = style.stroke_width_px
+        enabled = style.stroke2_enabled
+        width2 = style.stroke2_width_px
+    effective_width2 = max(int(width2), 0) if enabled else 0
+    if (
+        int(style.stroke_width_px) == int(width)
+        and int(style.stroke2_width_px) == effective_width2
+    ):
+        return style
+    return replace(
+        style,
+        stroke_width_px=max(int(width), 0),
+        stroke2_enabled=True,
+        stroke2_width_px=effective_width2,
+    )
+

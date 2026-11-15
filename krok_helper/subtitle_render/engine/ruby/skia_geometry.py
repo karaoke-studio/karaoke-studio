@@ -170,6 +170,7 @@ def ruby_line_position(item, main_metrics, prepared, width, height):
     """
     left, right = prepared.anchor
     position = place_horizontal_line(item, main_metrics.baseline_metrics, width=width, height=height,
-                                     ink_left=left, ink_right=right, layout_width=right-left)
+                                     ink_left=left, ink_right=right, layout_width=right-left,
+                                     row_frame=main_metrics.row_frame)
     return (replace(position, offset_x=position.offset_x-left)
             if item.layout_style.layout_semantics == 'n3_1074' else position)

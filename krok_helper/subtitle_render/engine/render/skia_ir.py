@@ -43,7 +43,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         prepared.append(result)
         return result.plan
 
-    ir = build_render_ir(track, style, layout_plan_builder=build_plan, **kwargs)
+    ir = build_render_ir(track, style, layout_plan_builder=build_plan,
+                         serialize_source_baselines=False, **kwargs)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     lines = []

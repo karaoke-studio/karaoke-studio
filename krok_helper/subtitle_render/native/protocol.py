@@ -899,9 +899,13 @@ def track_to_ir(
     fx_table: FxPayloadTable | None = None,
     layout_table: LineLayoutTable | None = None,
     time_offset_delta_ms: int = 0,
+    serialize_source_baselines: bool = True,
 ) -> dict[str, Any]:
     """Serialize one track; ``time_offset_delta_ms`` folds a per-track style
     timing offset into the per-source ``meta.offset_ms`` channel.
+
+    ``serialize_source_baselines=False`` is for canonical final geometry;
+    its consumer owns baseline positions and must not query the Qt adapter.
 
     C++ 侧每行窗口偏移 = 全局 ``style.timing_offset_ms`` + 每源
     ``meta.offset_ms``（gpu_scene_projection.cpp:483）。主轨/跟随副轨
@@ -955,7 +959,7 @@ def track_to_ir(
     # Painter resolves the authored baseline once per source/layout. G5/G6
     # consume this same value before adding animation and page translations.
     row_baselines = {}
-    if style is not None and not style.vertical:
+    if serialize_source_baselines and style is not None and not style.vertical:
         from krok_helper.subtitle_render.engine.guide import render_line_with_guide_symbols
         from krok_helper.subtitle_render.engine.text.metrics import latin_slot_differs
         from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import resolve_display_baselines

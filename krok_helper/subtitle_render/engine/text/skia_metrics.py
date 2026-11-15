@@ -3,7 +3,7 @@
 Discovery and IPC are supplied capabilities. Main-font baseline metrics remain
 independent of the line's glyph contents, including an all-Latin or empty line.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace, asdict
 import hashlib
 import json
 
@@ -11,6 +11,7 @@ from .skia_batch import TextMeasurementBatch
 from .font_slots import font_style_for_cell
 from .metric_snapshot import CellMetric, LineMetric, TextMetricSnapshot
 from .skia_width import cell_geometry
+from ..layout.line.skia_rows import RowFrame, source_row_frames
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 
 
@@ -21,6 +22,7 @@ class MeasuredLine:
     widths: tuple[int, ...]
     offsets: tuple[float, ...]
     baseline_metrics: dict
+    row_frame: RowFrame | None = None
 
 
 @dataclass(frozen=True)
@@ -60,8 +62,11 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
         snapshots.append(LineMetric.capture(line, style,
             [CellMetric.from_payload(c.text, m) for c, m in zip(line.chars, cells, strict=True)], layout_widths=widths))
     snapshot = TextMetricSnapshot(tuple(snapshots))
+    rows = source_row_frames(track, style, line_styles, lines)
+    lines = [replace(line, row_frame=row) for line, row in zip(lines, rows, strict=True)]
     # A main-font replacement must invalidate even a line with only Latin glyphs.
-    signature = {'cells': snapshot.identity, 'fonts': [r['font_metrics'] for r in measured]}
+    signature = {'cells': snapshot.identity, 'fonts': [r['font_metrics'] for r in measured],
+                 'rows': [asdict(row) if row is not None else None for row in rows]}
     identity = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     return MeasuredTrack(batch.fonts, batch.resolved_runs(),
                          tuple(lines), snapshot, identity)

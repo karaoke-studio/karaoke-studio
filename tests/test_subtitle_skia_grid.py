@@ -136,7 +136,7 @@ def test_invalid_native_grid_lane_keeps_the_live_scene(binary,grid,lane):
         assert np.array_equal(before[0],after[0])
 
 
-def test_role_size_overflow_does_not_change_row_grid(binary,grid,roles):
+def test_used_role_sizes_change_the_source_grid_consistently_across_pages(binary,grid,roles):
     track,style=grid
     _,role_style=roles
     style=replace(style,custom_style_schemes=role_style.custom_style_schemes,
@@ -145,8 +145,13 @@ def test_role_size_overflow_does_not_change_row_grid(binary,grid,roles):
                                 for i,l in enumerate(track.lines)])
     a=ir_for(binary,(source,style))
     b=ir_for(binary,(track,style))
-    for left,right in zip(a['skia_layout']['lines'],b['skia_layout']['lines']):
-        assert left['cells'][0]['baseline_y']==right['cells'][0]['baseline_y']
+    left=[l['cells'][0]['baseline_y'] for l in a['skia_layout']['lines']]
+    right=[l['cells'][0]['baseline_y'] for l in b['skia_layout']['lines']]
+    assert left[1]-left[0] == 111  # used role box 63+28, plus 20px row gap.
+    assert right[1]-right[0] == 85  # used plain slots 45+20, plus 20px row gap.
+    for index in range(6):
+        assert left[index] == left[index%3]
+        assert right[index] == right[index%3]
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(source,style,width=640,height=480,fps=60)
         frames,_=collect(process,[1400,3400])

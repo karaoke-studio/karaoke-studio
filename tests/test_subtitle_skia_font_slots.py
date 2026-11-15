@@ -92,15 +92,13 @@ def test_one_batch_deduplicates_instances_and_repeated_cells(binary, mixed):
     assert cells[0]['run_index'] == cells[1]['run_index'] != cells[2]['run_index']
 
 
-def test_latin_size_and_content_do_not_change_main_font_baseline(binary,mixed):
+def test_used_latin_slots_control_source_rows_with_one_shared_baseline(binary,mixed):
     track,style=mixed
-    baselines=[]
-    for texts,size in ((['A','fi'],80),(['字','A'],100),(['한'],40)):
+    for texts,size,descent in ((['A','fi'],80,32),(['字','A'],100,40),(['한'],40,10)):
         source=replace(track,lines=[TimingLine(chars=[TimingChar(t,200+i*200) for i,t in enumerate(texts)],end_ms=1000)])
         ir=ir_for(binary,(source,replace(style,latin_font_size_px=size)))
         cells=ir['skia_layout']['lines'][0]['cells']
-        baselines.extend(c['baseline_y'] for c in cells)
-    assert baselines == pytest.approx([360-style.line_y_margin_px-10]*len(baselines),abs=1e-4)
+        assert all(c['baseline_y'] == 360-style.line_y_margin_px-descent for c in cells)
 
 
 @pytest.mark.parametrize('target',['gpu','raster'])
@@ -136,7 +134,8 @@ def test_synthetic_instances_are_explicit_and_do_not_move_baseline(binary,mixed)
     runs=ir['skia_layout']['runs']
     latin=runs[ir['skia_layout']['lines'][0]['cells'][0]['run_index']]
     assert latin['synthetic_bold'] and latin['synthetic_italic'] and latin['scale_x']==1.5
-    assert ir['skia_layout']['lines'][0]['cells'][0]['baseline_y']==pytest.approx(290,abs=1e-4)
+    plain=ir_for(binary,mixed)
+    assert ir['skia_layout']['lines'][0]['cells'][0]['baseline_y']==plain['skia_layout']['lines'][0]['cells'][0]['baseline_y']
 
 
 def test_main_font_content_invalidates_an_all_latin_line(binary,mixed,tmp_path):
@@ -156,7 +155,9 @@ def test_main_font_content_invalidates_an_all_latin_line(binary,mixed,tmp_path):
     assert old['metrics_identity']!=new['metrics_identity']
     a,b=old['lines'][0]['cells'][0],new['lines'][0]['cells'][0]
     assert a['metrics']==b['metrics']
-    assert a['baseline_y']-b['baseline_y']==pytest.approx(5,abs=1e-4)
+    # The unused main resource still invalidates its canonical identity, while
+    # an all-Latin source frame uses the unchanged actual Latin font metrics.
+    assert a['baseline_y']==b['baseline_y']
 
 
 def test_mixed_font_gpu_and_raster_pixels_share_geometry(binary,mixed):
