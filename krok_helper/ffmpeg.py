@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from krok_helper.errors import ExportCancelled, ProcessingError
+from krok_helper.macos_environment import macos_shell_path
 from krok_helper.models import MediaInfo
 from krok_helper.types import Logger
 
@@ -51,6 +52,13 @@ def find_tool(tool_name: str, ffmpeg_dir: Path | None = None) -> str:
         resolved = shutil.which(candidate_name)
         if resolved:
             return resolved
+
+    shell_path = macos_shell_path()
+    if shell_path:
+        for candidate_name in _tool_name_candidates(tool_name):
+            resolved = shutil.which(candidate_name, path=shell_path)
+            if resolved:
+                return resolved
 
     raise ProcessingError(
         f"找不到 {tool_name}。请先确认系统环境变量 PATH 中可用，"

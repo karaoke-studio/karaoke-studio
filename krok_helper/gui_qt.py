@@ -412,6 +412,8 @@ class KrokHelperQtApp(QMainWindow):
         # _track_normal_geometry 的采样是否已排队（QTimer.singleShot(0)）。
         # 同一批事件里 resize/move 反复来只排一次，settle 后统一落值。
         self._normal_geometry_capture_pending = False
+        self._macos_fullscreen_transition = False
+        self._macos_fullscreen_observers: list[object] = []
         self._page_transition_overlay: PageTransitionOverlay | None = None
         self._page_switch_anim: QPropertyAnimation | None = None
         self._settings_dialogs = SettingsDialogs(host=self, parent=self)
@@ -667,13 +669,17 @@ class KrokHelperQtApp(QMainWindow):
         return list(dict.fromkeys(labels))
 
     def showEvent(self, event) -> None:  # noqa: N802
+        self._install_macos_fullscreen_observers()
         if not self._startup_geometry_applied:
             self._startup_geometry_applied = True
             QTimer.singleShot(0, self._apply_startup_window_geometry)
         super().showEvent(event)
 
     def changeEvent(self, event) -> None:  # noqa: N802
-        if event.type() == QEvent.Type.WindowStateChange:
+        # Cocoa restores native geometry; forcing it here also undoes live resizing.
+        if event.type() == QEvent.Type.WindowStateChange and not (
+            sys.platform == "darwin" and QApplication.platformName() == "cocoa"
+        ):
             old_state = event.oldState() if hasattr(event, "oldState") else Qt.WindowState.WindowNoState
             current_state = self.windowState()
             was_large = bool(
@@ -686,6 +692,56 @@ class KrokHelperQtApp(QMainWindow):
                 self._restoring_from_maximized = True
                 QTimer.singleShot(0, self._restore_windowed_geometry_centered)
         super().changeEvent(event)
+
+    def _install_macos_fullscreen_observers(self) -> None:
+        if (
+            sys.platform != "darwin"
+            or QApplication.platformName() != "cocoa"
+            or self._macos_fullscreen_observers
+        ):
+            return
+        observers = self._macos_fullscreen_observers
+        try:
+            from ctypes import c_void_p
+            import AppKit
+            import objc
+
+            native_window = objc.objc_object(c_void_p=c_void_p(int(self.winId()))).window()
+            if native_window is None:
+                raise RuntimeError("主窗口尚未创建 NSWindow")
+            center = AppKit.NSNotificationCenter.defaultCenter()
+
+            def remove_observers(*_args) -> None:
+                for observer in observers:
+                    center.removeObserver_(observer)
+                observers.clear()
+
+            for name, callback in (
+                (AppKit.NSWindowWillEnterFullScreenNotification, self._begin_macos_fullscreen_transition),
+                (AppKit.NSWindowWillExitFullScreenNotification, self._begin_macos_fullscreen_transition),
+                (AppKit.NSWindowDidEnterFullScreenNotification, self._end_macos_fullscreen_transition),
+                (AppKit.NSWindowDidExitFullScreenNotification, self._end_macos_fullscreen_transition),
+            ):
+                observers.append(center.addObserverForName_object_queue_usingBlock_(
+                    name, native_window, None, callback
+                ))
+            self.destroyed.connect(remove_observers)
+        except Exception:
+            if observers:
+                remove_observers()
+            logging.getLogger(__name__).exception("无法监听 macOS 全屏状态")
+
+    def _begin_macos_fullscreen_transition(self, _notification) -> None:
+        self._commit_normal_geometry()
+        self._macos_fullscreen_transition = True
+
+    def _end_macos_fullscreen_transition(self, _notification) -> None:
+        # Qt receives the same native notification; sample after its state update.
+        QTimer.singleShot(0, self._finish_macos_fullscreen_transition)
+
+    def _finish_macos_fullscreen_transition(self) -> None:
+        self._macos_fullscreen_transition = False
+        self._track_normal_geometry()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -718,7 +774,7 @@ class KrokHelperQtApp(QMainWindow):
         """
         if not getattr(self, "_startup_geometry_applied", False):
             return
-        if self._restoring_from_maximized:
+        if self._restoring_from_maximized or self._macos_fullscreen_transition:
             return
         if not self._normal_geometry_capture_pending:
             self._normal_geometry_capture_pending = True
@@ -733,7 +789,7 @@ class KrokHelperQtApp(QMainWindow):
         self._normal_geometry_capture_pending = False
         if not getattr(self, "_startup_geometry_applied", False):
             return
-        if self._restoring_from_maximized:
+        if self._restoring_from_maximized or self._macos_fullscreen_transition:
             return
         state = self.windowState()
         if state & (
@@ -820,7 +876,7 @@ class KrokHelperQtApp(QMainWindow):
     def _restore_windowed_geometry_centered(self) -> None:
         """回到窗口化几何：有记住的矩形就恢复它，否则按默认尺寸居中。
 
-        退出最大化/全屏也走这里（见 :meth:`changeEvent`）。落点必须由我们
+        非 Cocoa 平台退出最大化/全屏也走这里（见 :meth:`changeEvent`）。落点必须由我们
         显式 ``setGeometry`` 而不是信 Qt 自己恢复 —— 后者曾出现恢复后窗口
         落到屏幕右侧的问题（c2a8fe85）。两条路都会重新夹一遍当前屏幕
         可用区，会话中显示器布局同样可能变化。
@@ -1787,7 +1843,7 @@ class KrokHelperQtApp(QMainWindow):
         持久化几何冲掉 —— 所以用 ``_startup_geometry_applied`` 把首帧显示前
         的保存全部跳过。同时这也让更新强退（不走 ``closeEvent``）能带上几何。
         """
-        if not self._startup_geometry_applied:
+        if not self._startup_geometry_applied or self._macos_fullscreen_transition:
             return
         state = self.windowState()
         geo = _valid_window_geometry(self._last_normal_geometry)
