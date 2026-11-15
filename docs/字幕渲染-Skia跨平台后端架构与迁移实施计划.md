@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 1a87fc4e
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43674177045 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 2a2ca93e
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43677499749 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1521,7 +1521,7 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 ### 14.22 P05.6 注音锚点接入共享页面布局（2026-11-15）
 
-**注音准备几何已接入共享页面、SmartHorizon 和碰撞端口，产品注音绘制门禁继续保留。** 本批完成 §14.21 剩余项中的页面锚点桥接，没有接入注音字形/组裁剪，也不表示 P05.6 或完整迁移完成。
+**注音准备几何已接入共享页面、SmartHorizon 和碰撞端口，产品注音绘制门禁继续保留。** 实现提交 `2a2ca93e`。本批完成 §14.21 剩余项中的页面锚点桥接，没有接入注音字形/组裁剪，也不表示 P05.6 或完整迁移完成。
 
 - 新增 `layout/plan/skia_plan.py`，收拢既有规范度量→共享显示窗口→页面偏移→不可变布局计划编排。普通产品 IR 改为使用这个入口，原行为保留；入口内部在存在注音时准备 `RubyTrackGeometry`，供后续最终 IR 使用。分页、时间压缩、填充与整页平移仍由既有共享策略求解，不增加另一套分页规则。
 - `SkiaCollisionGeometry(ruby_geometry=...)` 接收准备结果，采用插入注音间距后的正文局部几何。最终整行位置使用同一 `ruby_line_position`；SmartHorizon 同时消费同一锚点宽度：legacy 取正文墨迹，N3 取正文网格与注音单元盒的并集。不可见同行仍参与页统计，持久化短页仍以 `TrackPagePlan` 为准。
@@ -1530,9 +1530,11 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 - 新增 `tests/test_subtitle_skia_ruby_pages.py`：覆盖两种布局语义和智能布局、不可见同行、短页/行位变化、相邻注音避让、整页 lift、共享 source-span 时钟、过期准备和只换注音字体字节；用现有公共绘制核心实际执行准备后的正文位置，GPU/Raster seek 稳定。该正文探针是测试适配，显式不带源注音；另断言真实产品含 ruby 的输入仍拒绝，不能将其当作产品注音近似路径。
 - 六组实际 D2D GPU 正文位置比较（legacy/N3 × none/center_position/equal_margins）保留原 **1px** 条件。多行重叠样例显式携带加载器契约的 `track_line_index`：旧 native 对缺失行身份的人工轨道不会按目标行过滤，不能用其跨行附着结果校准 Skia；规范准备层继续按源行索引隔离。
 
-本机验证：Windows 完整 Skia 组合 **344 通过**，含新增页面专项 **22 项**；Linux WSLg X11/Wayland 各 **301 通过、43 跳过**，含新增专项 **16 通过、6 项 D2D 专用跳过**。相关架构/显示/字体/时间回归（不含工具）**200 通过、10 跳过**，共享分页/整页摆放/下方注音回归 **95 通过**；构建/验收工具 **26 通过**（工具测试需 ASCII 临时目录，中文工作区下部分子进程默认编码与测试缓存写入编码不一致，重跑使用 `%TEMP%/p05-ruby-page-tools`）。十二份规范样例在 Linux X11/Wayland 比较均为 **0**。日志与样例为 `build/p05-ruby-pages-*`。Mac 结果在本轮 CI 完成后补录。
+本机验证：Windows 完整 Skia 组合 **344 通过**，含新增页面专项 **22 项**；Linux WSLg X11/Wayland 各 **301 通过、43 跳过**，含新增专项 **16 通过、6 项 D2D 专用跳过**。相关架构/显示/字体/时间回归（不含工具）**200 通过、10 跳过**，共享分页/整页摆放/下方注音回归 **95 通过**；构建/验收工具 **26 通过**（工具测试需 ASCII 临时目录，中文工作区下部分子进程默认编码与测试缓存写入编码不一致，重跑使用 `%TEMP%/p05-ruby-page-tools`）。十二份规范样例在 Windows/X11/Wayland 比较均为 **0**；原十一份样例与 §14.21 的结果也逐值一致。日志与样例为 `build/p05-ruby-pages-*`。
 
-C++/D2D 源码和二进制均未修改，native 源码摘要仍为 `9903249b4cbda1320f03fd9ef64e005207286b1162922f86d5a6851e95d8e189`，未改生产默认后端或 SUG。下一步把两层时钟、最终注音字形和组裁剪合并进版本化 IR，并在公共 C++ GPU/Raster 核心消费；上下 ruby 与描边等组合验收完成前不能解除门禁。Linux 真硬件、新 Mac 真机验收与严格画质门槛仍保留；未做 4K。
+Mac CI [43677499749](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43677499749)（`2a2ca93e`）**5 项全部成功**：arm64/x64 产品组合各 **297 通过、47 跳过**，含新增页面专项各 **16 通过、6 项 D2D 专用跳过**；字体契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。十二份跨架构样例最大误差 **0**；下载的 arm64 十二份样例与 Windows/X11/Wayland 再比较亦为 **0**。两架构 Metal/Raster 四份 native 指纹均核对为本节同一源码身份。验收包 manifest 新增 `ruby_pages=1`，两份干净 Mac 的该步骤均退出 **0**、全部功能项通过，托管虚拟 Metal 的真硬件门槛正确保留。§14.6 朋友测试入口已更新到本轮提交与验收包。
+
+本批未修改 C++/D2D 源码或二进制，native 源码摘要仍为 `9903249b4cbda1320f03fd9ef64e005207286b1162922f86d5a6851e95d8e189`，未改生产默认后端或 SUG。下一步把两层时钟、最终注音字形和组裁剪合并进版本化 IR，并在公共 C++ GPU/Raster 核心消费；上下 ruby 与描边等组合验收完成前不能解除门禁。Linux 真硬件、新 Mac 真机验收与严格画质门槛仍保留；未做 4K。
 
 ## 15. 前期探针清理范围
 
