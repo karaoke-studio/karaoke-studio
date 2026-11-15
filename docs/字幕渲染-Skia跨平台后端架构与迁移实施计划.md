@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 2a2ca93e
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43677499749 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 41add588
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43680422676 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1538,7 +1538,7 @@ Mac CI [43677499749](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 
 ### 14.23 P05.6 最终注音组协议与公共绘制核心（2026-11-15）
 
-**显式最终注音组已能在同一 C++ GPU/Raster 核心绘制；产品源注音入口仍拒绝，尚未完成 P05.6。** 本批承接 §14.22，把规范字体、最终坐标、两层时钟接入实际 native 绘制，不把尚未验收的源注音组合降级为近似画面。
+**显式最终注音组已能在同一 C++ GPU/Raster 核心绘制；产品源注音入口仍拒绝，尚未完成 P05.6。** 实现提交 `41add588`。本批承接 §14.22，把规范字体、最终坐标、两层时钟接入实际 native 绘制，不把尚未验收的源注音组合降级为近似画面。
 
 - `render/skia_ruby_ir.py::prepared_ruby_layout` 仅序列化已准备的页面几何与时钟：合并显式字体资源和主字/读音字体实例表，物化主字分段曲线、逐组 `style_cell` 与逐单元文本/度量快照/位置/最终 `interval_ms`。它不调用 Qt 度量、不选择目标、不重新分配时长。产品 `build_skia_render_ir` 的源 ruby 门禁仍保留；测试探针单独消费准备结果，不能把删掉源注音的探针当作生产 fallback。
 - 新能力 `p05_resolved_ruby`、`resolved_ruby_schema=1` 与最终布局 `ruby_schema=1` 同时门控 `lines[].ruby_groups`；既有几何 schema 仍为 2。Python 客户端在选择后端之前拒绝旧 sidecar。组字段为 `style_cell`、`units`；单元含 `text`、`run_index`、`metrics`、`origin_x`、`baseline_y`、`wipe_left/right` 与 `[start,end]` 的 `interval_ms`。原始 `track.rubies` 仍由旧门禁拒绝，不让 Qt ruby 投影再次分配时长。
@@ -1546,7 +1546,9 @@ Mac CI [43677499749](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 - `skia/core/wipe_group.*` 只持有路径、实色和最终单元时钟，所有平台与 Raster 共用。基础注音使用**整组锋面裁剪全部路径**，不采用独立字形裁剪；暂停维持上一单元右边界，下一单元开始时才切换锋面。before/after 用互斥裁剪，避免半透明 alpha 叠加；全组完成释放裁剪，保留 overhang。全零时长在起始时刻仍为 before，后一毫秒完成。组随同一行的半开显示窗口和页面位移一起移动，帧循环不塑形、不分配时间。
 - 当前显式最终协议子集限正向横排上注音、实色、无描边/装饰和基础走字。空读音/`^` 短语标记、跨 parts 塑形单元边界等未验收组合明确拒绝；下方注音、no_wipe/反向、出入场/utopia 与描边等仍按原阶段门禁处理。不能因最终组能画就解除产品源注音门禁。
 
-已完成本机验证：Windows 完整 Skia 组合 **391 通过**，最终注音组专项 **41 通过**（包含随后补充的 DPR 1.5）；八组 D2D GPU 对照为两种语义 × 两种主字时钟 × 主字显示/隐藏，每组十时刻，均满足原 **1px** 条件。架构边界与构建/验收工具 **178 通过**。本地完整组还包含另一批工作区中已有的七项下方注音规则回归，这些代码和测试不纳入本批提交；Mac CI 按具体提交独立验收。Linux 最终 X11 完整组 **341 通过、51 跳过**；Wayland 最终重跑与 Mac 结果待补录。首次 Wayland 仅一项既有 G5 用例在 30 秒未出帧，三种 G5 模式独立复跑全部通过；没有放宽断言或超时。四种本地 Skia 原生构建均完整重建，CTest 各 **3/3**，native 源码摘要统一为 `86b38409f8be3439e88cb493950015ace03d4e390132380e4b95219583aad952`。
+已完成本机验证：Windows 完整 Skia 组合 **391 通过**，最终注音组专项 **41 通过**（包含随后补充的 DPR 1.5）；八组 D2D GPU 对照为两种语义 × 两种主字时钟 × 主字显示/隐藏，每组十时刻，均满足原 **1px** 条件。架构边界与构建/验收工具 **178 通过**。本地完整组还包含另一批工作区中已有的七项下方注音规则回归，这些代码和测试不纳入本批提交；Mac CI 按具体提交独立验收。Linux 最终 X11/Wayland 完整组各 **341 通过、51 跳过**。首次 Wayland 仅一项既有 G5 用例在 30 秒未出帧，三种 G5 模式独立复跑和最终完整重跑均通过；没有放宽断言或超时。十三份规范样例在 Windows/X11/Wayland 比较均为 **0**，既有布局样例与 §14.22 也逐值一致。四种本地 Skia 原生构建均完整重建，CTest 各 **3/3**，native 源码摘要统一为 `86b38409f8be3439e88cb493950015ace03d4e390132380e4b95219583aad952`。
+
+Mac CI [43680422676](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43680422676)（`41add588`）**5 项全部成功**：arm64/x64 产品组合各 **330 通过、55 跳过**，含最终注音组专项各 **33 通过、8 项 D2D 专用跳过**；字体契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。十三份跨架构规范样例最大误差 **0**；下载的 arm64 十三份样例与 Windows/X11/Wayland 再比较亦均为 **0**。两架构 Metal/Raster 四份 native 指纹均核对为本节同一源码身份。验收包 manifest 新增 `ruby_groups=1`，两份干净 Mac 的该步骤均退出 **0**、全部功能项通过，托管虚拟 Metal 的真硬件门槛正确保留。§14.6 朋友测试入口已更新到本轮提交与验收包。
 
 日志/样例前缀 `build/p05-ruby-groups-*`；新增第十三份规范样例 `ruby-group-layout.json`，覆盖最终路径快照、主字曲线、组/单元时钟与无机器路径的字体实例参数。此批仅修改 Skia 私有核心/适配模块及其协议，不修改 D2D 源码或默认后端。Linux 真硬件、新 Mac 真机与完整画质门槛仍保留，未做 4K。
 
