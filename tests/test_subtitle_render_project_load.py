@@ -6,6 +6,8 @@ from dataclasses import replace
 from itertools import product
 from pathlib import Path
 
+import pytest
+
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.project.load import (
@@ -575,6 +577,113 @@ def _emoji_label_avatar(name: str = "N3 Emoji 【主唱】") -> GuideSymbol:
         bitmap_before_path="avatar.png",
         bitmap_no_decor=True,
     )
+
+
+@pytest.mark.parametrize("storage", ["line", "inline", "table"])
+def test_project_replay_keeps_complete_source_emoji_parameters(storage, tmp_path):
+    from dataclasses import replace
+    from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
+
+    # Source loading already resolved the actual files. Even if an old image
+    # still exists, the saved copy must not override source-owned resources.
+    old_image = tmp_path / "old.png"
+    old_image.write_bytes(b"old")
+    fresh = replace(
+        _emoji_label_avatar(),
+        bitmap_before_path=str(tmp_path / "source" / "new.png"),
+        bitmap_after_path=None,
+        bitmap_zoom_percent=80,
+        bitmap_margin_right_px=-999,
+        bitmap_margin_bottom_px=-80,
+    )
+    saved = replace(
+        fresh,
+        bitmap_before_path=str(old_image),
+        bitmap_after_path=str(tmp_path / "old_after.png"),
+        bitmap_zoom_percent=75,
+        bitmap_margin_right_px=0,
+        bitmap_margin_bottom_px=0,
+        bitmap_no_decor=False,
+        duration_ms=450,
+    )
+    line = _line_with_synthetic_label()
+    line.inline_guide_symbols[0] = fresh
+    track = TimingTrack(lines=[line])
+    if storage == "line":
+        payload = {"line_guide_symbols": [guide_symbol_to_dict(saved)]}
+    elif storage == "inline":
+        payload = {"line_inline_guide_symbols": [{"0": guide_symbol_to_dict(saved)}]}
+    else:
+        payload = {
+            "guide_symbol_table": {"g0": guide_symbol_to_dict(saved)},
+            "line_inline_guide_symbols": [{"0": "g0"}],
+        }
+
+    apply_track_project_data(track, Style(), payload)
+
+    restored = line.guide_symbol if storage == "line" else line.inline_guide_symbols[0]
+    assert restored == fresh
+
+
+def test_project_replay_keeps_custom_bitmap_resources(tmp_path):
+    from dataclasses import replace
+    from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
+
+    line = _line_with_synthetic_label()
+    custom = replace(
+        _emoji_label_avatar(), name="手动添加的图标",
+        bitmap_before_path=str(tmp_path / "custom.png"),
+    )
+
+    apply_track_project_data(TimingTrack(lines=[line]), Style(), {
+        "line_inline_guide_symbols": [{
+            "0": guide_symbol_to_dict(line.inline_guide_symbols[0]),
+            "1": guide_symbol_to_dict(custom),
+        }],
+    })
+
+    assert line.inline_guide_symbols[1] == custom
+
+
+def test_moved_project_loads_source_emoji_before_replaying_project_settings(tmp_path):
+    from krok_helper.subtitle_render.project.store import load_render_project, save_render_project
+    from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
+
+    original = tmp_path / "original"
+    assets = original / "assets"
+    assets.mkdir(parents=True)
+    avatar = assets / "avatar.png"
+    avatar.write_bytes(b"avatar")
+    lyrics = original / "main.lrc"
+    lyrics.write_text(
+        "[00:01.00]【主唱】歌[00:02.00]\n"
+        "@Emoji=【主唱】,assets/avatar.png,,Zoom=80%,NoDecor,"
+        "MarginRight=-999,MarginBottom=-80.0\n",
+        encoding="utf-8",
+    )
+    project = original / "song.yurika"
+    save_render_project(project, {
+        "subtitle_path": str(lyrics),
+        "line_inline_guide_symbols": [{"0": {
+            "name": "N3 Emoji 【主唱】", "kind": "bitmap",
+            "bitmap_before_path": str(avatar),
+            "bitmap_zoom_percent": 100,
+            "bitmap_margin_bottom_px": 0,
+        }}],
+    })
+    moved = tmp_path / "moved"
+    original.rename(moved)
+    payload = load_render_project(moved / project.name)
+    track = SubtitleSourceLoader.load_file(Path(payload["subtitle_path"]))
+
+    apply_track_project_data(track, Style(), payload)
+
+    restored = track.lines[0].inline_guide_symbols[0]
+    assert restored.bitmap_before_path == str(moved / "assets" / "avatar.png")
+    assert restored.bitmap_zoom_percent == 80
+    assert restored.bitmap_margin_right_px == -999
+    assert restored.bitmap_margin_bottom_px == -80
+    assert restored.bitmap_no_decor is True
 
 
 def _user_vector_symbol() -> GuideSymbol:

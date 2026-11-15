@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.domain.roll import (
 )
 from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_from_dict,
+    guide_symbol_to_dict,
     line_animation_override_from_dict,
     subtitle_loading_settings_from_dict,
     track_page_plan_from_dict,
@@ -74,7 +75,7 @@ def apply_track_project_data(
     _apply_layout_indices(track, style, data.get("line_layout_indices"))
     _restore_page_state(track, style, data)
     roles_changed = _apply_char_role_labels(track, data.get("char_role_labels"))
-    resolve_guide_row = _guide_symbol_row_resolver(data)
+    resolve_guide_row = _guide_symbol_row_resolver(data, track)
     guide_mismatches = _apply_guide_symbols(
         track,
         data.get("line_guide_symbols"),
@@ -170,15 +171,27 @@ def _apply_display_timing(track: TimingTrack, payload: object) -> None:
     timing.overrides.update(overrides)
 
 
-def _guide_symbol_row_resolver(data: dict) -> Callable[[object], object]:
-    """解析 ``guide_symbol_table``：行数据里的字符串 ID 映射回符号字典。"""
+def _guide_symbol_row_resolver(data: dict, track: TimingTrack) -> Callable[[object], object]:
+    """Restore project symbols without overriding normally loaded source Emoji."""
     table = data.get("guide_symbol_table")
-    if not isinstance(table, dict):
-        return lambda value: value
+    source_emojis = {}
+    for line in track.lines:
+        for symbol in [line.guide_symbol, *line.inline_guide_symbols.values()]:
+            if (
+                symbol is not None
+                and symbol.kind == "bitmap"
+                and symbol.name.startswith(_EMOJI_SYMBOL_NAME_PREFIX)
+            ):
+                source_emojis[symbol.name] = guide_symbol_to_dict(symbol)
 
     def resolve(value: object) -> object:
-        if isinstance(value, str):
-            return table.get(value)
+        if isinstance(value, str) and isinstance(table, dict):
+            value = table.get(value)
+        if isinstance(value, dict) and value.get("kind") == "bitmap":
+            # SUG/LRC owns the entire @Emoji definition, including negative
+            # offsets. Older snapshots may contain stale paths AND values from
+            # an older parser; replaying either would undo normal source load.
+            return source_emojis.get(str(value.get("name") or ""), value)
         return value
 
     return resolve
