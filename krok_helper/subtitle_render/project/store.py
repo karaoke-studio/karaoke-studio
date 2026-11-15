@@ -8,8 +8,7 @@
 自动跟着长，且旧文件用新代码打开会缺字段取默认、新文件用旧代码打开会忽略未知
 key（前后兼容）。
 
-路径目前按**绝对路径**存；移动项目文件到别处后素材链接会失效（后续可加
-相对路径便携支持）。
+资源保留绝对路径并记录工程原目录；原路径失效时按工程相对位置寻找素材。
 """
 
 from __future__ import annotations
@@ -30,6 +29,10 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
 )
 from krok_helper.subtitle_render.domain.background import normalize_sequence_fps
 from krok_helper.subtitle_render.domain.models import PROJECT_FILE_SUFFIX
+from krok_helper.subtitle_render.project.resource_paths import (
+    resolve_resource_paths,
+    with_resource_base,
+)
 
 PROJECT_SCHEMA_VERSION = 4
 """v3：空格宽度/字间距归属布局域——保存时布局携带显式值，方案槽位不再存空格宽度。"""
@@ -168,6 +171,7 @@ def save_render_project(path: Path, data: dict) -> None:
     payload = {"schema_version": PROJECT_SCHEMA_VERSION}
     payload.update(data)
     path = Path(path)
+    payload = with_resource_base(payload, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     serialized = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -184,10 +188,11 @@ def save_render_project(path: Path, data: dict) -> None:
             pass
 
 
-def load_render_project(path: Path) -> dict:
+def load_render_project(path: Path, *, resolve_resources: bool = True) -> dict:
     """读取并解析 ``.yurika``，返回项目快照 dict。
 
     解析失败（非法 JSON / 非 dict）抛 :class:`ValueError`，由调用方弹错处理。
+    仅复制恢复快照时传 ``resolve_resources=False``，保留原始资源引用。
     """
     raw = Path(path).read_text(encoding="utf-8")
     try:
@@ -196,7 +201,7 @@ def load_render_project(path: Path) -> dict:
         raise ValueError(f"项目文件不是合法 JSON：{exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("项目文件内容不是对象")
-    return data
+    return resolve_resource_paths(data, Path(path)) if resolve_resources else data
 
 
 def save_recovery_project(path: Path, data: dict) -> bool:

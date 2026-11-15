@@ -3,10 +3,44 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from krok_helper.subtitle_render.project.resources import (
     find_missing_project_resources,
 )
+from krok_helper.subtitle_render.project import resource_paths
+
+
+def test_resource_capture_does_not_interrupt_debugger_with_generator_exit(tmp_path: Path) -> None:
+    exceptions = []
+
+    def trace(frame, event, arg):
+        if (
+            event == "exception"
+            and frame.f_globals.get("__name__") == resource_paths.__name__
+            and arg[0] is GeneratorExit
+        ):
+            exceptions.append(frame.f_code.co_name)
+        return trace
+
+    # Match an imported project after switching from video to solid color:
+    # lyrics are still linked and project snapshots check for media references.
+    data = {
+        "subtitle_path": str(tmp_path / "main.lrc"),
+        "video_path": None,
+        "audio_path": None,
+        "background": {"kind": "solid", "color": "#112233"},
+    }
+    previous_trace = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        payload = resource_paths.with_resource_base(data, tmp_path / "song.yurika")
+    finally:
+        sys.settrace(previous_trace)
+
+    assert payload["resource_base_dir"] == str(tmp_path)
+    assert payload["background"] == data["background"]
+    assert exceptions == []
 
 
 def test_project_resource_scan_preserves_asset_order_and_labels(tmp_path: Path) -> None:

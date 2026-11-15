@@ -85,7 +85,7 @@ class ProjectRecoveryController:
             if choice == 1:
                 if discard_backup_root is not None:
                     try:
-                        payload = load_render_project(candidate.path)
+                        payload = load_render_project(candidate.path, resolve_resources=False)
                     except ValueError:
                         payload = None  # 快照已损坏，无可备份内容
                     if payload is not None:
