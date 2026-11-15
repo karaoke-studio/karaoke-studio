@@ -110,6 +110,7 @@ jobs:
         run: |
           export KROK_TEST_SKIA_SIDECAR="$HOME/.cache/krok-helper/skia-deps/native/macos-${{ matrix.arch }}-metal/krok_skia_subtitle_renderer"
           python -m pytest --noconftest tests/test_subtitle_skia_protocol.py tests/test_subtitle_skia_text.py tests/test_subtitle_skia_resolved.py tests/test_subtitle_skia_font_slots.py tests/test_subtitle_skia_placement.py tests/test_subtitle_skia_outline.py tests/test_subtitle_skia_roles.py tests/test_subtitle_skia_grid.py tests/test_subtitle_skia_collision.py tests/test_subtitle_skia_smart.py tests/test_subtitle_skia_ruby_metrics.py tests/test_subtitle_skia_ruby_geometry.py -rs -v --basetemp build/skia-protocol-tests --junitxml build/skia-protocol.xml
+          python -m pytest --noconftest tests/test_subtitle_render_font_resolution.py -k "ir_font_slots or ruby_latin_resource_hint or partial_ruby_role" -rs -v --junitxml build/font-resource-contracts.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -148,6 +149,7 @@ jobs:
                       "smart_horizontal": 1,
                       "ruby_metrics": 1,
                       "ruby_geometry": 1,
+                      "font_resource_contracts": 1,
                       "files": {f"native/{p.relative_to(native).as_posix()}": hashlib.sha256(p.read_bytes()).hexdigest()
                                 for p in files}}
           out = Path(os.environ["RUNNER_TEMP"]) / f"mac-validation-{arch}.tar.gz"

@@ -2623,7 +2623,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : rubyStyle.rubyFontFamily,
                     rubyStyle.rubyFontWeight,
                     rubyStyle.rubyItalic,
-                    rubyStyle.rubyFontAxis
+                    rubyStyle.rubyFontAxis,
+                    rubyStyle.rubyFontHint
                 )
                 : rubyFace;
             const auto selectedRubyMetricsFace = hasRubyStyle
@@ -2633,13 +2634,15 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : rubyStyle.rubyFontFamily,
                     rubyStyle.rubyFontWeight,
                     rubyStyle.rubyItalic,
-                    rubyStyle.rubyFontAxis
+                    rubyStyle.rubyFontAxis,
+                    rubyStyle.rubyFontHint
                 )
                 : resolveMetricsFace(
                     style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
                     style.rubyFontWeight,
                     style.rubyItalic,
-                    style.rubyFontAxis
+                    style.rubyFontAxis,
+                    style.rubyFontHint
                 );
             const auto selectedRubyLatinFace = hasRubyStyle
                 ? resolveFace(
@@ -2649,7 +2652,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             : rubyStyle.rubyFontFamily
                     ),
                     rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight),
-                    rubyStyle.rubyLatinItalic
+                    rubyStyle.rubyLatinItalic,
+                    rubyStyle.rubyLatinFontAxis,
+                    rubyStyle.rubyLatinFontHint
                 )
                 : rubyLatinFace;
             struct RubyGlyph {
@@ -2705,7 +2710,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     latin ? rubyStyle.rubyLatinItalic : rubyStyle.rubyItalic,
                     latin
                         ? rubyStyle.rubyLatinFontAxis
-                        : rubyStyle.rubyFontAxis
+                        : rubyStyle.rubyFontAxis,
+                    latin ? rubyStyle.rubyLatinFontHint : rubyStyle.rubyFontHint
                 )->GetMetrics(&fontMetrics);
                 const float boxMetricTotal = static_cast<float>(std::max(
                     static_cast<int>(fontMetrics.ascent) + static_cast<int>(fontMetrics.descent),
@@ -2994,7 +3000,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 rubyIsLatin ? rubyStyle.rubyLatinItalic : rubyStyle.rubyItalic,
                 rubyIsLatin
                     ? rubyStyle.rubyLatinFontAxis
-                    : rubyStyle.rubyFontAxis
+                    : rubyStyle.rubyFontAxis,
+                rubyIsLatin ? rubyStyle.rubyLatinFontHint : rubyStyle.rubyFontHint
             )->GetMetrics(&rubyFillMetrics);
             const int rubyMetricTotal = std::max(
                 static_cast<int>(rubyFillMetrics.ascent)

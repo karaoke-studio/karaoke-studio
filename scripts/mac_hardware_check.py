@@ -181,6 +181,10 @@ def main(argv=None) -> int:
     if manifest.get("ruby_geometry", 0) >= 1:
         steps["ruby_geometry"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                   "tests/test_subtitle_skia_ruby_geometry.py", "--basetemp", logs / "ruby-geometry-tests"]
+    if manifest.get("font_resource_contracts", 0) >= 1:
+        steps["font_resource_contracts"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+            "tests/test_subtitle_render_font_resolution.py", "-k",
+            "ir_font_slots or ruby_latin_resource_hint or partial_ruby_role"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

@@ -225,7 +225,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
       控制 IR 体积。``italic_axis`` 携带 ital / slnt 轴值（多轴字体）。
 
     回退链与 C++ 解析端一一对应：latin→main、ruby→main、ruby_latin→
-    ruby_latin→ruby→main。
+    main_latin→ruby→main（首项均为槽位自身的显式字体族）。
     """
     from krok_helper.subtitle_render.engine.text.font_weight import (
         resolve_font_instance,
@@ -340,7 +340,8 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     if resolved is not None:
         payload["ruby_font_resolved"] = resolved
 
-    ruby_latin_family = payload.get("ruby_font_family_latin") or ruby_family
+    ruby_latin_family = (payload.get("ruby_font_family_latin")
+                         or payload.get("font_family_latin") or ruby_family)
     ruby_latin_weight = payload.get("ruby_latin_font_weight")
     if ruby_latin_weight is None:
         ruby_latin_weight = payload.get("ruby_font_weight")
@@ -349,6 +350,25 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     )
     if resolved is not None:
         payload["ruby_latin_font_resolved"] = resolved
+    # A partial role can override only ruby or colors. Null identity fields
+    # mean inherit, whereas emitting *_axis=False clears the parent's resource
+    # in applyFontInstanceHints. Do not turn untouched slots into empty hints.
+    # Explicit font edits and N3 slot resets keep the existing reset behavior.
+    main_fields = ("font_family", "font_weight", "italic")
+    ruby_fields = (*main_fields, "ruby_font_family", "ruby_font_weight", "ruby_italic",
+                   "ruby_font_follow_main")
+    identities = {
+        "font": main_fields,
+        "latin_font": (*main_fields, "font_family_latin", "latin_font_weight", "latin_italic"),
+        "ruby_font": ruby_fields,
+        "ruby_latin_font": (*ruby_fields, "font_family_latin", "ruby_font_family_latin",
+                             "ruby_latin_font_weight", "ruby_latin_italic"),
+    }
+    if not payload.get("n3_font_inheritance"):
+        for prefix, fields in identities.items():
+            if all(payload.get(field) is None for field in fields):
+                payload.pop(prefix + "_axis", None)
+                payload.pop(prefix + "_resolved", None)
     if errors:
         raise errors[0]
 

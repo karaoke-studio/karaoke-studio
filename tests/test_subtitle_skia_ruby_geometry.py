@@ -304,13 +304,21 @@ def _assert_gpu_bounds(binary,track,style):
 
 
 @pytest.mark.skipif(sys.platform!='win32',reason='Direct2D GPU geometry reference is Windows-only')
-@pytest.mark.xfail(strict=True,raises=AssertionError,
-                   reason='P05 open: inherited ruby Latin resource hints and application-font box metrics differ')
 @pytest.mark.parametrize('explicit',[False,True])
-def test_pending_application_font_ruby_gpu_parity(binary,annotated,explicit):
+@pytest.mark.parametrize('role',[False,True])
+def test_application_font_ruby_gpu_parity(binary,annotated,explicit,role):
     track,style=annotated
     if explicit:
         style=replace(style,ruby_font_family=style.font_family,ruby_font_family_latin=style.font_family_latin)
+    if role:
+        # Role faces previously lost both the physical resource and axis hint
+        # in Direct2D, independently of the root style's resource selection.
+        scheme=SubtitleStyleScheme(ruby_font_family=style.font_family_latin,
+            ruby_font_family_latin=style.font_family,ruby_font_size_px=35,
+            ruby_latin_font_size_px=29,ruby_latin_font_stretch_pct=110)
+        style=replace(style,custom_style_schemes={'lead':scheme})
+        track=replace(track,lines=[replace(l,chars=[replace(c,role_label='lead') for c in l.chars])
+                                   for l in track.lines])
     _assert_gpu_bounds(binary,track,style)
 
 

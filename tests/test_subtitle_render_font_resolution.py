@@ -71,6 +71,57 @@ def test_ir_font_slots_preserve_independent_card_families(monkeypatch):
         assert payload[f"{slot}_resolved"]["weight"] == weight
 
 
+def test_ruby_latin_resource_hint_uses_the_projected_family_inheritance(monkeypatch):
+    from krok_helper.subtitle_render.engine.text import font_weight
+    from krok_helper.subtitle_render.engine.text.weight_resolver import ResolvedFontInstance
+    from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+
+    def resolve(family, weight, italic=False):
+        return ResolvedFontInstance(requested=FontRequest(family, weight, italic), family=family,
+                                    face_weight=weight, resource_path=f"{family}.otf")
+
+    monkeypatch.setattr(font_weight, "resolve_font_instance", resolve)
+    for explicit, main_latin, ruby, expected in (
+        ("RubyLatin", "MainLatin", "Ruby", "RubyLatin"),
+        (None, "MainLatin", "Ruby", "MainLatin"),
+        (None, None, "Ruby", "Ruby"),
+        (None, None, None, "Main"),
+    ):
+        payload = {"font_family": "Main", "font_family_latin": main_latin,
+                   "font_weight": 400, "latin_font_weight": 900,
+                   "ruby_font_family": ruby, "ruby_font_family_latin": explicit,
+                   "ruby_font_weight": 600}
+        apply_resolved_font_faces(payload)
+        assert payload["ruby_latin_font_resolved"]["resource_path"] == f"{expected}.otf"
+        assert payload["ruby_latin_font_resolved"]["weight"] == 600
+
+
+def test_partial_ruby_role_keeps_untouched_main_font_hints_inherited(monkeypatch):
+    from krok_helper.subtitle_render.engine.text import font_weight
+    from krok_helper.subtitle_render.engine.text.weight_resolver import ResolvedFontInstance
+    from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+
+    monkeypatch.setattr(font_weight, "resolve_font_instance", lambda family, weight, italic=False:
+        ResolvedFontInstance(requested=FontRequest(family, weight, italic), family=family,
+                             face_weight=weight, resource_path=f"{family}.otf"))
+    role = {"font_family": None, "font_weight": None, "italic": None,
+            "ruby_font_family": "Ruby", "ruby_font_family_latin": "RubyLatin"}
+    apply_resolved_font_faces(role)
+    assert "font_axis" not in role and "latin_font_axis" not in role
+    assert role["ruby_font_resolved"]["resource_path"] == "Ruby.otf"
+    assert role["ruby_latin_font_resolved"]["resource_path"] == "RubyLatin.otf"
+    # This remains true when the same override is serialized again.
+    apply_resolved_font_faces(role)
+    assert "font_axis" not in role and "latin_font_axis" not in role
+    color_only = {"font_family": None, "font_weight": None, "base_color": "#FFFFFF"}
+    apply_resolved_font_faces(color_only)
+    assert not any(k.endswith(("_axis", "_resolved")) for k in color_only)
+    n3_reset = {"font_family": None, "font_weight": None, "n3_font_inheritance": True}
+    apply_resolved_font_faces(n3_reset)
+    assert all(n3_reset[prefix + "_axis"] is False
+               for prefix in ("font", "latin_font", "ruby_font", "ruby_latin_font"))
+
+
 def _cap(family: str, weights, italic_weights=(), **kwargs) -> FontCapabilities:
     faces = tuple(
         FontFace(w, f"w{w}", False) for w in sorted(weights)

@@ -1453,6 +1453,8 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 ### 14.19 P05.6 注音几何准备：规范目标、主字间距与局部锚点（2026-11-15）
 
+本节保留 `bac54165` 的历史验收记录；其中两项字体门槛的后续修复和当前状态见 §14.20。
+
 **本批接通主字规范度量 → 注音目标/间距/局部几何的准备链路，尚未开启产品注音绘制。** 初始提交 `0fee80d4`，并集锚点修正 `bac54165`；不把几何准备等同于最终 IR/绘制验收，P05.6 继续未勾选。后续补齐 N3 并集锚点后，实际 D2D GPU 边界对照由三项未通过减少为两项，见下方。
 
 - `ruby/selection.py::active_rubies_for_line` 新增可选 `intervals` 端口。旧调用者保留原默认时钟和缓存键；规范调用者传入 `TextMetricSnapshot.resolve_intervals` 的区间，缓存追加区间值，不能复用默认宽度分配的结果。`ruby/skia_geometry.py::prepare_ruby_geometry` 据此调用原 target/effective-ruby 规则，处理显式行/字符归属、同文重复、共享时间块、子字符串落在一个作者单元内和角色继承。手工构造轨道缺少行号时仍用真实源行索引隔离注音，不修改源对象。
@@ -1472,6 +1474,26 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 - 最终 Mac CI [43640232001](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43640232001)（`bac54165`）**5 项全部成功**：arm64/x64 产品组合各 **239 通过、35 跳过**，预览/原生能力各 **21 通过、1 跳过**；十份跨架构样例最大误差 **0**。下载的 arm64 十份样例与 Windows/X11/Wayland 再比较也均为 **0**，两架构 Metal/Raster 的四份指纹均核对为 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`。两份干净 Mac 验收包的 `ruby_metrics` / `ruby_geometry` 步骤均退出 **0**、功能项全部通过，托管虚拟 Metal 的真硬件门槛仍保留。§14.6 的朋友入口已更新到最终提交/验收包；初始 `0fee80d4` 的运行 `43639801887` 已取消，不作为最终证据。
 
 下一批先核实并解决上述两项字体边界差异、把准备的锚点接到页面/SmartHorizon 端口，再把 reading parts、空 pause、checkpoint 和主字显式内部边界规则物化为两层分段轨迹；当前 native 线性 start/end 单元不足以表达这些规则。最终 IR、共享 C++ 绘制与 GPU/Raster 回归完成前，不能宣布注音可用。
+
+### 14.20 P05.6 字体门槛闭环：资源继承、角色提示与 D2D box 度量（2026-11-15）
+
+**关闭 §14.19 的两项字体边界未通过项，尚未关闭 P05.6。** 本批确实修复了共享字体提示和 D2D 字体资源边界；没有改 Skia 字体继承去匹配错误的 D2D 画面，也未放宽原 **1px** 几何条件。Skia 的产品 ruby 门禁、P00 严格栅格化预算与后续分段走字仍保留。
+
+根因与改动：
+
+- `native/protocol.py::_font_face_slot_overrides` 的 ruby Latin family 现在与纯规则和 C++ 投影一致，按 `ruby Latin → main Latin → ruby → main` 解析实际资源；weight 仍沿 ruby 链继承，不能借用 main Latin weight。之前的 family/hint 分歧让 DirectWrite 载入另一张字体，即使请求的族名看起来正确。
+- `backends/direct2d/d2d_backend_configure.cpp` 的注音 box/fill 度量和角色注音绘制补齐已有 `FontInstanceHint` / axis 参数。`resolveFaces` 在无 resource hint 时只查系统字体目录，找不到应用内字体会换成 Segoe UI；绘制已有资源而度量遗漏资源，就会出现 §14.19 的约 **5px** 基线差。现在仍用资源加载器返回的 static/default metrics face 计算 box 比例，未改成直接借绘制路径的墨迹高度。
+- 新增“只改注音的角色”回归暴露出另一处继承问题：序列化 partial scheme 时，未设置的主字槽被写成 `font_axis=False`，C++ 将其解释为清除父样式的物理字体提示。现在对字体身份字段全部未改动的槽保留继承（不发空提示）；显式修改、空字符串和 `n3_font_inheritance` 槽重置仍保留旧清除行为。此处只判断身份字段，字号变化本身不会要求替换 physical face。
+- 原 `test_pending_application_font_ruby_gpu_parity` 移除两项严格 xfail 并改为普通回归，另覆盖角色注音两槽独立字体/字号/stretch。未使用 QPainter 画面对照；比较实际 D2D GPU 包络与规范几何，包含原隐式/显式 family 两种输入。
+
+已完成的本机验证：
+
+- Windows 完整 Skia 产品组合 **276 通过、无 xfail**；注音几何专项含 **35 项**，原两项字体门槛及新增角色输入均满足原 1px 条件。字体解析/提示/协议与几何组合 **195 通过**；新增三个平台无关字体契约单独运行 **3 通过**。
+- D2D 注音 stretch、共享 realization、完成后 wipe 释放、干涉网格缓存与 G6 零回读回归 **13 通过**。另保留修复前二进制，以明确的 Meiryo/Arial 比较 legacy/N3 × 有无角色 × 普通/发光 **8 组、24 帧**，GPU 原始 RGBA **逐字节一致**；应用内字体的错误资源/box 是本批有意修正的表现。
+- 独立 D2D 树和实际 `build/native-renderer` 均干净重建。按两个现有 CMake cache 写定的 BuildTools **14.50** 配套环境构建，未套用历史 Community 14.51 缓存的环境；两次构建均成功。Windows/Linux Vulkan 与 CPU-only 的 Skia 构建也分别验证，CTest 各 **3/3**。本批改动在 D2D 目录，Skia 的来源摘要按构建边界保持 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`，不是为了通过检查重写摘要。
+- Linux X11/Wayland、相关回归与新 Mac 双架构 CI 的结果回收后补记。Mac 验收包新增 `font_resource_contracts=1`，一键脚本按标志复验上述三个契约；没有把 D2D 专用检查伪装成 Metal 检查。
+
+边界：资源提示属于既有序列化/平台适配层，未并入 `skia/core`。当前 Skia 注音仍只有规范目标/空间几何准备；下一步把锚点接入页面/SmartHorizon，并物化 reading parts、空 pause、checkpoint 及显式主字边界的两层分段走字，再接最终 IR 校验和公共 C++ 绘制。关闭这两项字体门槛不代表注音已可用。
 
 ## 15. 前期探针清理范围
 

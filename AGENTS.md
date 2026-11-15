@@ -355,8 +355,11 @@ git submodule status
    注音坐标，实际 ruby 基线须取读音各槽最大 box descent，不能直接套日文度量基线。
    `RubyLineGeometry.anchor` / `ruby_line_position` 的 N3 锚点包含主字网格与全部注音
    单元盒并集，legacy 仍取主字墨迹；不要按注音 ink 单独平移。产品门禁未解除，
-   页面/SmartHorizon 仍待消费该锚点；应用内字体/隐式 Latin hint 两项严格 GPU
-   对照尚未通过，不要把 xfail 统计成通过，也不要放宽 1px 条件。
+   页面/SmartHorizon 仍待消费该锚点。§14.19 历史上的两项字体 GPU 对照已在
+   §14.20 闭环并移除 xfail，原 1px 条件不变：字体提示须与实际继承链一致，
+   D2D 注音度量/角色绘制须保留同一 physical resource/axis hint。部分角色没有
+   改动的字体身份槽不得发空 *_axis 清除父样式资源；显式字体修改与 N3 槽重置
+   仍遵守既有清除语义。此修复不代表已经接通 Skia 注音最终 IR/分段走字。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
