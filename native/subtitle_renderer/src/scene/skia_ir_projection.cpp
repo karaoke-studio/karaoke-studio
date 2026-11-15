@@ -1,4 +1,5 @@
 #include "skia_ir_projection.h"
+#include "skia_lower_projection.h"
 #include "style_projection.h"
 #include "line_layout_projection.h"
 #include "../protocol/render_config_parser.h"
@@ -25,7 +26,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_fixed_row_grid" && feature.toString() != "p05_page_collisions"
             && feature.toString() != "p05_smart_horizontal" && feature.toString() != "p05_segmented_wipe"
             && feature.toString() != "p05_resolved_ruby" && feature.toString() != "p05_upper_ruby"
-            && feature.toString() != "p05_overlap_wipe")
+            && feature.toString() != "p05_overlap_wipe" && feature.toString() != "p05_lower_ruby")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -83,6 +84,7 @@ void validateEnvelope(const QJsonObject& ir) {
 }
 RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     validateEnvelope(ir);
+    validateSkiaLowerLayout(ir);
     QString error;
     const auto parsed = protocol::parseRenderConfig(ir, &error);
     if (!parsed) throw BackendError(error.toStdString());
@@ -98,8 +100,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         for (const auto& value : lines.toArray())
             if (!value.isObject() || !value.toObject().value("ruby_groups").isArray())
                 throw BackendError("Skia 源注音缺少逐行最终注音组");
-        for (const auto& ruby : cfg.rubies)
-            if (ruby.lower) throw BackendError("Skia 当前尚不支持下方注音");
         // Source annotations remain provenance only. Their layout and clocks
         // were materialized by Python; never invoke legacy Qt ruby projection.
     }

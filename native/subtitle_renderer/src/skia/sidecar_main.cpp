@@ -27,6 +27,8 @@ int main(int argc, char** argv) {
     auto profiles = ready.value("profiles").toArray();
     profiles.append("p05_upper_ruby");
     profiles.append("p05_overlap_wipe");
+    profiles.append("p05_lower_ruby");
+    ready.insert("lower_ruby_schema", 1);
     ready.insert("overlap_schema", 1);
     ready.insert("profiles", profiles);
     ready.insert("fingerprint", KROK_SKIA_FINGERPRINT);

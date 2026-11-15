@@ -905,7 +905,8 @@ def track_to_ir(
     timing offset into the per-source ``meta.offset_ms`` channel.
 
     ``serialize_source_baselines=False`` is for canonical final geometry;
-    its consumer owns baseline positions and must not query the Qt adapter.
+    its consumer owns baseline positions and generated lower annotations and
+    must not query the Qt adapter for either projection.
 
     C++ 侧每行窗口偏移 = 全局 ``style.timing_offset_ms`` + 每源
     ``meta.offset_ms``（gpu_scene_projection.cpp:483）。主轨/跟随副轨
@@ -1008,7 +1009,7 @@ def track_to_ir(
     lower_styles = []
     lower_style_indices = {}
     lower_baselines = {}
-    if style is not None and style.lower_ruby_enabled and not style.vertical:
+    if serialize_source_baselines and style is not None and style.lower_ruby_enabled and not style.vertical:
         from krok_helper.subtitle_render.engine.ruby.lower import lower_rubies_for_line, lower_style_snapshot
         from krok_helper.subtitle_render.engine.ruby.selection import active_rubies_for_line
         from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import resolve_display_baselines, lower_ruby_baseline_offset

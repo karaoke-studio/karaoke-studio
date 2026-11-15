@@ -1,0 +1,228 @@
+"""Real lower-reading product IR, paints, preview/export and failure contracts."""
+from dataclasses import replace
+import copy
+import json
+import sys
+
+import numpy as np
+import pytest
+
+from test_subtitle_skia_lower_geometry import application, binary, prepared_source, source
+from test_subtitle_skia_lower_geometry import test_lower_geometry_matches_actual_d2d_gpu as run_d2d
+from test_subtitle_skia_protocol import collect, selection
+from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
+from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
+from test_subtitle_skia_roles import colors
+from test_subtitle_skia_ruby_groups import configure
+from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
+from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
+from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
+from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
+
+
+def ir_for(binary, source, **kwargs):
+    track, style, resolve = source
+    with SkiaTextMetricsProcess(binary) as metrics:
+        ir = build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve,
+                                  width=900, height=600, fps=60, **kwargs)
+    apply_resolved_font_faces(ir)
+    return ir
+
+
+@pytest.fixture
+def independent(source):
+    track, style, resolve = source
+    return track, replace(style, lower_ruby_follow_upper=False,
+        lower_ruby_style={'ruby_colors_follow_main': False,
+            'ruby_karaoke_colors': {'before': {'text': {'mode': 'solid', 'color': '#800000FF'}},
+                                   'after': {'text': {'mode': 'solid', 'color': '#80FFFF00'}}}}), resolve
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_product_lower_preserves_source_and_uses_independent_alpha_paints(binary, independent, target, monkeypatch, tmp_path):
+    from krok_helper.subtitle_render.engine.ruby import lower, style as qt_ruby
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import layout
+    fail = lambda *a, **k: pytest.fail('legacy lower font/baseline/derivation invoked')
+    for module, names in [(lower, ['lower_rubies_for_line', 'lower_style_snapshot']),
+            (qt_ruby, ['build_ruby_font_for_text']),
+            (layout, ['resolve_display_baselines', 'lower_ruby_baseline_offset'])]:
+        for name in names: monkeypatch.setattr(module, name, fail)
+    ir = ir_for(binary, independent)
+    assert len(ir['track']['rubies']) == 4 and not ir['track']['rubies'][0].get('lower')
+    assert sum(r.get('lower', False) for r in ir['track']['rubies']) == 3
+    assert 'p05_lower_ruby' in ir['required_features'] and ir['skia_layout']['lower_ruby_schema'] == 1
+    assert all('annotation_baseline_y' not in l for l in ir['track']['lines'])
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    lowers = [g for g in groups if g.get('lower')]
+    assert [g['source_index'] for g in lowers] == [1, 2, 3]
+    assert all(g['paint'] == {'before': [0, 0, 255, 128], 'after': [255, 255, 0, 128]} for g in lowers)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        track, style, _ = independent
+        process.configure(track, style, width=900, height=600, fps=60)
+        frames, _ = collect(process, [199, 350, 400, 450, 800, 1900, 400])
+    assert np.array_equal(frames[1], frames[2]) and np.array_equal(frames[2], frames[-1])
+    for frame, color in [(frames[0], [0, 0, 255]), (frames[-2], [255, 255, 0])]:
+        mask = np.all(frame[..., :3] == color, axis=-1) & (frame[..., 3] >= 120)
+        assert mask.sum() > 200 and frame[..., 3][mask].max() == 128
+    if target == 'gpu':
+        (tmp_path/'lower-ruby-product.json').write_text(json.dumps({
+            'sources': ir['track']['rubies'], 'layout': ir['skia_layout']['lines'],
+            'features': ir['required_features']}, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_product_lower_source_style_roll_offsets_and_dpr(binary, source, target):
+    track, style, _ = source
+    result = []
+    for shift in [False, True]:
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(replace(track, meta=replace(track.meta, offset_ms=137)) if shift else track,
+                replace(style, timing_offset_ms=229) if shift else style,
+                width=900, height=600, fps=60, dpr=1.5, roll_shift_ms=400 if shift else 0)
+            frames, _ = collect(process, [t+(766 if shift else 0) for t in [199,350,400,450,699,800,1200,1900]])
+        result.append(frames)
+    assert all(np.array_equal(a,b) for a,b in zip(*result, strict=True))
+
+
+def test_kana_only_lower_and_unused_lower_source_are_valid(binary, source):
+    track, style, resolve = source
+    track = replace(track, rubies=[])
+    ir = ir_for(binary, (track, style, resolve))
+    assert ir['track']['rubies'] and all(r['lower'] for r in ir['track']['rubies'])
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir); frames, _ = collect(process, [450])
+        assert frames[0].any()
+    # Lower-enabled ASCII produces no generated sources but keeps the new
+    # capability handshake; absence of romanizable text is not an error.
+    line = replace(track.lines[0], chars=[replace(c, text='A') for c in track.lines[0].chars])
+    ir = ir_for(binary, (replace(track, lines=[line]), style, resolve))
+    assert not ir['track']['rubies']
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process: configure(process, ir)
+
+
+def test_role_lower_paint_and_two_line_source_ownership(binary, source):
+    track, style, resolve = source
+    style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
+        ruby_colors_follow_main=False, ruby_karaoke_colors=colors('#0000FF', '#FFFF00'))})
+    line = replace(track.lines[0], chars=[replace(c, role_label='lead') for c in track.lines[0].chars], track_line_index=1)
+    ir = ir_for(binary, (replace(track, lines=[track.lines[0], line]), style, resolve))
+    groups = ir['skia_layout']['lines'][1]['ruby_groups']
+    assert all(g['paint'] == {'before': [0,0,255,255], 'after': [255,255,0,255]} for g in groups if g.get('lower'))
+    assert all(r['lower_line_index'] in [0,1] for r in ir['track']['rubies'] if r.get('lower'))
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process: configure(process, ir)
+
+
+@pytest.mark.parametrize('mutation', ['feature','schema','overlap','source_missing','source_duplicate',
+    'source_line','source_target','source_reading','source_clock','paint_missing','paint_size',
+    'paint_nan','paint_fraction','paint_bool','paint_range','lower_bool','upper_paint'])
+def test_invalid_lower_contract_keeps_previous_scene(binary, independent, mutation):
+    valid = ir_for(binary, independent)
+    ir = copy.deepcopy(valid)
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    group = next(g for g in groups if g.get('lower'))
+    source = ir['track']['rubies'][group['source_index']]
+    if mutation == 'feature': ir['required_features'].remove('p05_lower_ruby')
+    elif mutation == 'schema': ir['skia_layout']['lower_ruby_schema'] = 2
+    elif mutation == 'overlap': ir['required_features'].remove('p05_overlap_wipe')
+    elif mutation == 'source_missing': groups.remove(group)
+    elif mutation == 'source_duplicate': groups.append(copy.deepcopy(group))
+    elif mutation == 'source_line': source['lower_line_index'] = 1
+    elif mutation == 'source_target': source['target_char_end'] = 99
+    elif mutation == 'source_reading': source['reading'] += 'A'
+    elif mutation == 'source_clock': group['units'][0]['interval_ms'] = [-100, 200]
+    elif mutation == 'paint_missing': del group['paint']
+    elif mutation == 'paint_size': group['paint']['before'] = [0,0,0]
+    elif mutation == 'paint_nan': group['paint']['before'][0] = float('nan')
+    elif mutation == 'paint_fraction': group['paint']['before'][0] = .5
+    elif mutation == 'paint_bool': group['paint']['before'][0] = False
+    elif mutation == 'paint_range': group['paint']['after'][3] = 256
+    elif mutation == 'lower_bool': group['lower'] = 'true'
+    elif mutation == 'upper_paint': groups[0]['paint'] = group['paint']
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, valid); before, _ = collect(process, [400])
+        with pytest.raises(NativeRendererError): configure(process, ir)
+        after, _ = collect(process, [400], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('change', [{'ruby_stroke_width_px': 4}, {'ruby_decoration_kind': 'shadow'},
+    {'ruby_karaoke_colors': {'before': {'text': {'mode': 'gradient_horizontal'}}}}])
+def test_unsupported_independent_lower_appearance_is_explicit(binary, independent, change):
+    track, style, _ = independent
+    style = replace(style, lower_ruby_style={**style.lower_ruby_style, **change})
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        process.configure(independent[0], independent[1], width=900, height=600, fps=60)
+        before, _ = collect(process, [400])
+        with pytest.raises(NativeRendererError, match='实色|描边|装饰'):
+            process.configure(track, style, width=900, height=600, fps=60)
+        after, _ = collect(process, [400], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('gpu,missing_loader', [(True, False),(False, False),(True, True)])
+def test_real_lower_preview_uses_skia(binary, independent, monkeypatch, tmp_path, gpu, missing_loader):
+    run_preview(binary, monkeypatch, tmp_path, independent[:2], gpu, missing_loader)
+
+
+@pytest.mark.parametrize('gpu,missing_loader', [(True, False),(False, False),(True, True)])
+def test_real_lower_mp4_uses_skia(binary, independent, monkeypatch, tmp_path, gpu, missing_loader):
+    run_mp4(binary, monkeypatch, tmp_path, independent[:2], gpu, missing_loader)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('semantics', ['legacy','n3_1074'])
+@pytest.mark.parametrize('independent', [False,True])
+@pytest.mark.parametrize('dpr', [1,1.5])
+def test_real_lower_product_matches_d2d(binary, source, semantics, independent, dpr, monkeypatch):
+    import test_subtitle_skia_lower_geometry as probe
+    monkeypatch.setattr(probe, 'probe_ir', lambda source, value, dpr=1: ir_for(binary, source, dpr=dpr))
+    run_d2d(binary, source, semantics, independent, dpr)
+
+
+def test_old_upper_only_sidecar_rejected_before_selection(binary, monkeypatch):
+    # Obtain the actual ready envelope before selecting a backend.
+    process = SkiaRendererProcess(binary, selection=selection('raster'))
+    try: ready = NativeRendererProcess.start(process)
+    finally: process.abort(reason='handshake fixture')
+    ready['profiles'].remove('p05_lower_ruby')
+    monkeypatch.setattr(NativeRendererProcess, 'start', lambda _: ready)
+    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
+    sent=[]; monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self,value: sent.append(value))
+    with pytest.raises(NativeRendererError, match='下方注音'): SkiaRendererProcess(binary).start()
+    assert not sent
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('semantics', ['legacy','n3_1074'])
+@pytest.mark.parametrize('dpr', [1,1.5])
+def test_independent_lower_alpha_colors_match_d2d(binary, independent, semantics, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    track, style, _ = independent
+    style = replace(style, layout_semantics=semantics)
+    times = [199,350,400,450,699,800,1200,1900]
+    with NativeRendererProcess() as d2d:
+        _, raw = _render_g1_frames(d2d, style, tuple(times), force_warp=False,
+                                  track=track, width=900, height=600, dpr=dpr)
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as skia:
+        skia.configure(track, style, width=900, height=600, fps=60, dpr=dpr)
+        frames, _ = collect(skia, times)
+    references=[np.frombuffer(p,np.uint8).reshape(round(600*dpr),round(900*dpr),4) for p in raw]
+    # Only the lower layer has half-alpha; other layers have opaque interiors.
+    def bounds(p):
+        y,x=np.where((p[...,3]>=120) & (p[...,3]<=128) & (p[...,2]>200))
+        return None if not len(y) else np.array([x.min(),y.min(),x.max(),y.max()])
+    a,b=bounds(references[0]),bounds(frames[0])
+    assert a is not None and b is not None and np.max(np.abs(a-b))<=1
+    lo,hi=max(min(a[1],b[1])-2,0),max(a[3],b[3])+3
+    def sung(p): return (p[lo:hi,:,1].astype(float)*p[lo:hi,:,3]/255**2).sum()
+    full_a,full_b=sung(references[-1]),sung(frames[-1])
+    width=(full_a+full_b)/(2*(a[3]-a[1]+1)*(128/255))
+    for t,a,b in zip(times,references,frames,strict=True):
+        assert abs(sung(a)/full_a-sung(b)/full_b)*width<=1, t
+    for p in [references[-1],frames[-1]]:
+        mask=(p[lo:hi,:,0]>240)&(p[lo:hi,:,1]>240)&(p[lo:hi,:,2]<10)&(p[lo:hi,:,3]>=120)
+        # Negative intervals may overlap adjacent half-alpha glyph edges.
+        # Their source-over alpha exceeds 128; isolated interiors keep 128.
+        assert np.count_nonzero(mask & (p[lo:hi,:,3]==128))>200

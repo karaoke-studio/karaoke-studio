@@ -15,6 +15,14 @@ int integer(const QJsonValue& value, int minimum, int maximum) {
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
+std::uint32_t rgbaPaint(const QJsonValue& value) {
+    if (!value.isArray() || value.toArray().size() != 4)
+        throw BackendError("Skia 下方注音实色必须为 RGBA 字节");
+    const auto color = value.toArray();
+    const auto r = integer(color[0], 0, 255), g = integer(color[1], 0, 255);
+    const auto b = integer(color[2], 0, 255), a = integer(color[3], 0, 255);
+    return (std::uint32_t(a) << 24) | (std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) | b;
+}
 }
 std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
@@ -32,13 +40,17 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         if (!value.isObject() || ++totalGroups > 4096 || line.chars.empty())
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
+        const bool lower = object.value("lower").toBool();
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
         const auto& paint = line.chars[index].styleIndex >= 0
             ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
-        if (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"
+        if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"
             || paint.rubyStrokeWidth || paint.rubyStroke2Width || paint.rubyLatinStrokeWidth || paint.rubyLatinStroke2Width
-            || paint.rubyDecorationKindForState(false) != "none" || paint.rubyDecorationKindForState(true) != "none")
+            || paint.rubyDecorationKindForState(false) != "none" || paint.rubyDecorationKindForState(true) != "none"))
             throw BackendError("Skia 注音最终绘制当前仅支持实色、无描边和装饰");
+        const auto fill = object.value("paint").toObject();
+        const auto before = lower ? rgbaPaint(fill.value("before")) : argb(paint.rubyBeforeFillPaint.color);
+        const auto after = lower ? rgbaPaint(fill.value("after")) : argb(paint.rubyAfterFillPaint.color);
         const auto units = object.value("units");
         if (!units.isArray() || units.toArray().isEmpty() || units.toArray().size() > 4096
             || (totalCells += units.toArray().size()) > 65536)
@@ -58,7 +70,7 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
             if (shiftedStart < -172800000 || shiftedEnd > 172800000)
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, text.toString(), int(shiftedStart), int(shiftedEnd),
-                argb(paint.rubyBeforeFillPaint.color), argb(paint.rubyAfterFillPaint.color));
+                before, after);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
                 glyph.wipePoints = {{int(shiftedStart), 0.f}, {int(shiftedEnd), *end}};
                 glyph.adjustedWipeEnd = true;

@@ -520,7 +520,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
-- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音已完成纯语义、规范度量和几何/终端探针（§14.25–§14.27），产品下方绘制门禁仍保留，完整组合尚未验收。
+- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28；完整注音组合尚未验收。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
@@ -1611,6 +1611,20 @@ Mac CI [43705296882](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 本地完整 Skia 组合：Windows **490 通过**；Linux X11/Wayland 各 **423 通过、67 项平台专用跳过**（软件 Vulkan，不代表 Linux 真硬件验收）。Windows/Linux Vulkan 与 CPU-only 四份产物均按当前 native 源码完整重建，CTest 各 **3/3**，源码摘要统一为 `4aac675e67e9ec06452fc0355d6b90abd8cbf4178760886090376c3ace873731`。关联生产/架构/协议/字体/构建工具组合 **438 通过、3 失败**；收起本批全部改动后，在原始 `d4a316a2` 串行重跑同样三项全部失败：`test_lower_readings_force_page_displacement_clear_of_their_ink` 与两种语义的 `test_lower_long_reading_centers_its_slot`，确认为本轮前已存在的基线问题，未放宽断言或改写生产路径来掩盖。
 
 Mac 工作流与验收包加入 `lower_ruby_geometry=1`，新增 `lower-ruby-reference.json`、`lower-ruby-geometry.json`，跨架构规范样例共 **17 份**。Mac CI 结果待本批提交后补录；Linux 真硬件、Mac 本轮真机与 P05 完整门槛仍保留，未做 4K。日志/样例前缀 `build/p05-lower-geometry-*`。
+
+### 14.28 P05.6 基础实色下方注音产品接入（2026-11-16）
+
+**本批将 §14.27 的准备端口接入源码 opt-in 的 Skia 产品预览/导出；P05.6 和完整 P05 仍未完成。** 范围为 legacy/N3 正向横排、显式字体、基础实色上下读音、跟随或独立下方字体/配色、逐字角色、空暂停和既有规范分页。描边、渐变、装饰、空读音/短语标记、跨 parts 塑形边界、竖排/逆序、特效等继续明确拒绝。默认仍为 D2D，发布包排除规则不变。
+
+- `render/skia_lower_ir.py` 专门序列化生成下方读音的来源及最终 RGBA 实色；复用纯 `effective_ruby_karaoke_colors` 与已解析的下方样式，保留跟随、独立设置、角色和 alpha。它不查询 Qt 字体、不再调用旧 `lower_style_snapshot`，公共 C++ 核心不理解用户角色名或下方设置结构。
+- `build_skia_render_ir` 保留原 `track.rubies`，追加由规范区间派生的下方来源；每个最终下方组明确链接一个来源索引。正式 `prepared_ruby_layout` 输出最终坐标、原时间、重叠终点和独立实色，未提供完整来源映射时仍拒绝单独编译下方层。时间偏移只在 native 边界加一次，DPR 的终点补偿仍为一个物理像素。
+- 通用 `track_to_ir(..., serialize_source_baselines=False)` 现在同时跳过旧下方派生/基线投影，规范消费者负责这些结果；默认 `True` 的 D2D 序列化路径不变。新增测试把旧下方派生、字体快照和 Qt 基线入口替换为失败，直接运行真实产品配置，防止隐式绕回旧路径。
+- 新增 `p05_lower_ruby` / `lower_ruby_schema=1`，并要求 `p05_overlap_wipe` / `overlap_schema=1`。Python 在选择执行后端前拒绝旧的仅上注音 sidecar。Qt 边界小模块 `scene/skia_lower_projection` 校验来源的唯一覆盖、所属行、目标区间、最终文本和时钟范围；`resolved_ruby` 校验 RGBA 四个有限整数字节。缺组、重复、跨行、伪造索引/文本/时间、非法色值及不完整能力声明都失败并保留旧有效场景。
+- 公共 Skia 绘制核心没有新增下方注音专用算法；上/下组共用已验证的最终路径、分组裁剪和 GPU/Raster 绘制。独立下方不再借用上注音画刷。负字间距使半透明相邻字形边缘发生 source-over 叠加时，局部 alpha 可高于单字 128；测试保留单字内部的精确 128，并继续执行 1 物理像素的几何/已唱覆盖误差条件。
+
+新增产品专项 **45 项通过**：来源完整性与旧场景保留、独立半透明配色、角色/两行来源隔离、无上注音的假名自读、无可转换文本、GPU/Raster seek/暂停、源/style/roll 偏移与 DPR、真实异步 G5 预览、短 MP4、GPU 关闭和 Vulkan loader 失败后使用 Skia Raster。实际 D2D GPU 对照包括 §14.27 同样的 **8 组**基础布局，以及独立半透明实色的 **4 组**（两种语义 × DPR 1/1.5）；只比较 GPU，不使用 QPainter 图像 oracle。
+
+Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；native 源码摘要为 `653c415b8f7ef05f6c07fc516ef5dbf31b04751aaa29de0a938c9abf7806a43c`。本地 Windows 完整 Skia 组合 **534 通过**，关联生产/架构/协议/字体/构建工具组合 **438 通过**（显式排除 §14.27 已在原始 main 复现的 3 项基线失败）。Linux X11 完整组合 **455 通过、79 项平台专用跳过**；Wayland 与本批 Mac CI 待回归结束后补录。Mac 验收包加入 `lower_ruby_product=1`，新增第 **18** 份规范样例 `lower-ruby-product.json`。Linux 真硬件、Mac 本轮真机和完整画质预算仍保留；未做 4K。日志/样例前缀 `build/p05-lower-product-*`。
 
 ## 15. 前期探针清理范围
 

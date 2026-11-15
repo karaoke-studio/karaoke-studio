@@ -10,13 +10,13 @@ from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positio
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
+from .skia_lower_ir import lower_sources
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 
 
 def _validate_style(style):
-    if (style.vertical or style.right_to_left or style.layout_semantics not in {'legacy', 'n3_1074'}
-            or style.lower_ruby_enabled):
-        raise ValueError('Skia 当前规范布局仅支持横排，尚不支持下方注音或导唱符')
+    if style.vertical or style.right_to_left or style.layout_semantics not in {'legacy', 'n3_1074'}:
+        raise ValueError('Skia 当前规范布局仅支持正向横排')
     if style.dual_line_layout:
         if style.line_horizontal_layout == 'asymmetric' and style.smart_horizontal not in {'none','center_position','equal_margins'}:
             raise ValueError('Skia 智能水平布局模式无效')
@@ -56,6 +56,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
     if geometry.ruby is not None:
-        ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'])
+        lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
+        sources, indices = lower_sources(prepared[0])
+        ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
+            dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None)
+        ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
+        if lower_enabled:
+            ir['required_features'] += ['p05_lower_ruby', 'p05_overlap_wipe']
     return ir

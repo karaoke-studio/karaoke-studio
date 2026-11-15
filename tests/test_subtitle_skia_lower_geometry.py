@@ -217,12 +217,8 @@ def test_lower_geometry_probe_gpu_raster_seek_and_pause(binary, source, semantic
         assert np.max(np.abs(bounds(a)-bounds(b))) <= 1
 
 
-def test_product_lower_profile_and_final_compiler_remain_gated(binary, source):
-    track, style, resolve = source
-    with SkiaTextMetricsProcess(binary) as metrics:
-        with pytest.raises(ValueError, match='下方注音'):
-            build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve, width=900, height=600, fps=60)
-    with pytest.raises(ValueError, match='下方注音最终绘制'):
+def test_lower_final_compiler_requires_source_mapping(binary, source):
+    with pytest.raises(ValueError, match='完整来源映射'):
         prepared_ruby_layout(prepared(binary, source), width=900, height=600)
 
 

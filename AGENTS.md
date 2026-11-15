@@ -290,9 +290,8 @@ git submodule status
    `p05_resolved_horizontal`：legacy / n3_1074 横排，左/中/右与顶/中/底定位、
    主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
    多行网格已接入共享分页、碰撞时间压缩、整页平移、段内填充及两种智能水平布局。
-   已接入 §14.24 的基础实色上注音产品子集；§14.25 的下方罗马音仅交付纯语义与规范度量
-   准备端口，尚未开放绘制。源布局行框已按 §14.26 使用规范字体度量，Skia 不查询旧 Qt 行框。
-   彩色/位图字形、下方注音、描边/装饰与
+   已接入 §14.24 的基础实色上注音产品子集；§14.25–27 的下方罗马音准备已按 §14.28 接通基础实色产品子集。源布局行框已按 §14.26 使用规范字体度量，Skia 不查询旧 Qt 行框。
+   彩色/位图字形、复杂上下注音组合、描边/装饰与
    特效等组合仍拒绝，完整 N3 几何兼容尚未验收。
    旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
@@ -404,7 +403,11 @@ git submodule status
    `b6770aad` 的双侧居中槽位与下方墨迹碰撞规则；下方组不能覆盖主字时间。
    可选 `p05_overlap_wipe` / `overlap_schema=1` 的 `wipe_end_position` 只调整终点，
    补偿宽度是一个物理像素；无该能力的旧场景行为不变。终端探针不是产品支持，
-   下方源信息/独立外观/正式 IR 握手与完整验收前，产品下方注音门禁继续保留。
+   上述是 §14.27 的准备阶段；当前 §14.28 已接通基础实色产品入口，复杂组合仍拒绝。
+   `render/skia_lower_ir.py` 序列化来源和最终实色；产品保留原始上注音并追加下方来源，
+   逐组链接唯一来源索引，native 校验行/目标/文本/时钟范围和 RGBA 字节。客户端必须
+   检查 `p05_lower_ruby` / `lower_ruby_schema=1` 与重叠能力，拒绝旧 sidecar。
+   `serialize_source_baselines=False` 也跳过旧 Qt 下方派生/基线投影；默认 D2D 路径不变。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

@@ -203,6 +203,9 @@ def main(argv=None) -> int:
     if manifest.get("lower_ruby_geometry", 0) >= 1:
         steps["lower_ruby_geometry"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                        "tests/test_subtitle_skia_lower_geometry.py", "--basetemp", logs / "lower-geometry-tests"]
+    if manifest.get("lower_ruby_product", 0) >= 1:
+        steps["lower_ruby_product"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                      "tests/test_subtitle_skia_lower_product.py", "--basetemp", logs / "lower-product-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"
