@@ -658,7 +658,7 @@ def test_moved_project_loads_source_emoji_before_replaying_project_settings(tmp_
     lyrics.write_text(
         "[00:01.00]【主唱】歌[00:02.00]\n"
         "@Emoji=【主唱】,assets/avatar.png,,Zoom=80%,NoDecor,"
-        "MarginRight=-999,MarginBottom=-80.0\n",
+        "MarginRight=-999,MarginBottom=-80\n",
         encoding="utf-8",
     )
     project = original / "song.yurika"
