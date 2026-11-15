@@ -62,7 +62,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         position = geometry.position(item, kwargs['width'], kwargs['height'])
         lines.append({'cells': positioned_cells(geometry.locals[index], position)})
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles',
-                               'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal']
-    ir['skia_layout'] = {'version': 2, 'metrics_identity': measured.identity,
+                               'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe']
+    ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
     return ir

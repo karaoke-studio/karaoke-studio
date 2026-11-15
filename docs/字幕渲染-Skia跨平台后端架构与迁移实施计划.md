@@ -1496,6 +1496,28 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 边界：资源提示属于既有序列化/平台适配层，未并入 `skia/core`。当前 Skia 注音仍只有规范目标/空间几何准备；下一步把锚点接入页面/SmartHorizon，并物化 reading parts、空 pause、checkpoint 及显式主字边界的两层分段走字，再接最终 IR 校验和公共 C++ 绘制。关闭这两项字体门槛不代表注音已可用。
 
+### 14.21 P05.6 分段走字时钟与公共执行核心（2026-11-15）
+
+**已接通最终分段主字时钟的 GPU/Raster 执行，尚未解除产品注音门禁。** 本批继续 §14.20：物化两层时间准备结果并建立最终曲线协议；注音字形、组裁剪和页面锚点尚未整体接入。不能据此宣布 P05.6、P07 或完整 D2D 替代验收完成。
+
+职责与契约：
+
+- `ruby/timing.py` 的 checkpoint clamp 提为共用纯函数，原调用者保留行为。新增 `ruby/skia_timing.py` 仅消费已选定的注音目标和规范区间：`reading_units` 的空 part 成为暂停，`checkpoint_segments` 的空段仍占主字进度份额；读音单元时钟独立保留。主字按既有 GPU 的等 authored-cell 份额切分，不采用 Painter 的宽度权重；反求时间沿用 GPU 的 half-up duration 取整。
+- 显式主字内部 start/end 保留原主字区间，外侧边界不阻断注音时钟；按原目标顺序首个相交组整体拥有主字时钟，后续相交组不局部覆盖。空读音/`^` 标记不改主字时钟。该准备结果尚未由产品 IR 入口为 ruby 工程自动生成。
+- 最终 IR 在 `skia_layout.lines[].cells[]` 增加可选 `wipe_points=[{time_ms,position},...]`，另设 `wipe_schema=1` 与 `p05_segmented_wipe` 能力；几何 schema 仍为 2。Python 启动时检查能力和版本，拒绝旧 sidecar；普通无曲线单元保持 start/end 线性行为。源 `track.chars.wipe_points` 仍不受支持，不得借此绕过最终布局契约。
+- Qt 边界 `backends/skia/resolved_wipe.*` 校验 JSON 类型、有限值、整数时间及数量，统一叠加一次 style/media/roll 时差；公共 `skia/core` 再检查单调时刻/进度与精确 0/1 端点。每单元 2–4096 点、总计不超过 1,048,576 点，源时间 ±86,400,000ms，平移后 ±172,800,000ms。坏配置保留先前有效场景。
+- `model/wipe_point.h` 是唯一纯值类型，`effects/wipe_clock.h` 是无 Qt/平台依赖的公共插值函数。D2D 原非空曲线求值直接调用该函数，基本时钟/无走字分支保持原状；Skia GPU/Raster 同用公共 PreparedScene。配置期复制曲线，逐帧只查找和插值，不塑形、不分配时长、不重排。内部重复时间取最后同刻点；初始时间取首点，全零时长在该时刻仍取起点，后一毫秒完成，保持既有 GPU 边界。
+
+本机验证：
+
+- Windows 产品组合 **320 通过**；随后补充独立 CPU-only 构建对照，最终分段专项 **45 通过**。覆盖暂停/恢复、重复与零时长、随机 seek、DPR 1.5、三种时间偏移、GPU–Raster 画质预算、GPU 构建 Raster–CPU-only Raster 逐字节一致，以及 16 类坏曲线保留旧场景。两种模式 × 有无显式主字内部边界的四组实际 D2D GPU 对照，每组 10 时刻，保留原 **1px** 条件。
+- Linux WSLg X11/Wayland 的最终完整组合各 **284 通过、37 跳过**，包含独立 CPU-only 对照；跳过含四项 Windows D2D 专用样例。相关共享语义/渲染/布局回归 **638 通过、12 跳过**，构建/验收工具 **26 通过**，D2D 专项 **13 通过**。
+- 原 Python checkpoint 函数与重构后版本做 **78,000 次逐值比较**，全部一致；修改前后 D2D 二进制在 legacy/N3 × 两种时钟模式 × 普通/零时长共 **8 组、64 帧**原始 RGBA **逐字节一致**。未使用 QPainter 作为 Skia 画面对照。
+- Windows/Linux Vulkan 与独立 CPU-only 全部重建，四种构建 CTest 各 **3/3**。D2D 按 cache 的 BuildTools 14.50 干净编译；首次链接被 exe 占用阻止，检查时占用已结束，同工具链重试链接成功。native 源码身份统一为 `9903249b4cbda1320f03fd9ef64e005207286b1162922f86d5a6851e95d8e189`，日志/样例在 `build/p05-segmented-*`。
+- Mac 工作流、无 SDK 验收包接入相同专项，manifest 新增 `segmented_wipe=1`；规范样例增加 `wipe-layout.json`，跨架构比较共十一份。此批 Mac CI 结果待下面补录，不能引用上一轮结果代替新 native 验证。
+
+剩余：将已准备的注音锚点接入分页/SmartHorizon/碰撞几何，把注音单元的最终字形、组裁剪和独立读音时钟写入 IR，再在同一公共核心接通上下 ruby 并进行 GPU 对照。当前规范曲线仅单调 0→1；反向、完成后裁剪释放、装饰/描边和出入场/粒子仍按对应阶段门禁处理，不能静默近似。Linux 真硬件与本轮 Mac 真机验收仍保留；未补做 4K。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "../../diagnostics/native_trace.h"
+#include "../../effects/wipe_clock.h"
 #include "d2d_backend_internal.h"
 #include "d2d_fx.h"
 #include "d2d_geometry_resources.h"
@@ -3813,31 +3814,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ? ch.wipePoints.back().position
                     : ch.wipePoints.front().position;
             }
-            if (tMs <= ch.wipePoints.front().timeMs) {
-                return ch.wipePoints.front().position;
-            }
-            if (tMs >= ch.wipePoints.back().timeMs) {
-                return ch.wipePoints.back().position;
-            }
-            for (std::size_t index = 1; index < ch.wipePoints.size(); ++index) {
-                const WipePoint &previous = ch.wipePoints[index - 1];
-                const WipePoint &following = ch.wipePoints[index];
-                if (tMs >= following.timeMs) {
-                    continue;
-                }
-                const int duration = following.timeMs - previous.timeMs;
-                if (duration <= 0) {
-                    return following.position;
-                }
-                const float local = std::clamp(
-                    static_cast<float>(tMs - previous.timeMs)
-                        / static_cast<float>(duration),
-                    0.0f, 1.0f
-                );
-                return previous.position
-                    + (following.position - previous.position) * local;
-            }
-            return ch.wipePoints.back().position;
+            return effects::wipePositionAt(ch.wipePoints, tMs);
         };
         const auto wipeCoordinateAt = [&](const Impl::CachedChar &ch) {
             const float position = wipePositionAt(ch);

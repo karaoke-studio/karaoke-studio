@@ -2,16 +2,12 @@
 
 #include "glyph_resources.h"
 #include "particle_types.h"
+#include "wipe_point.h"
 #include <memory>
 #include <optional>
 
 namespace krok::subtitle::native {
 
-struct WipePoint {
-    int timeMs = 0;
-    float position = 0.0f;
-    bool operator==(const WipePoint &) const = default;
-};
 struct TextChar {
     std::wstring text;
     int startMs = 0;

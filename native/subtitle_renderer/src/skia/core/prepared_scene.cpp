@@ -1,4 +1,5 @@
 #include "core/prepared_scene.h"
+#include "../../effects/wipe_clock.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkData.h"
 #include "include/core/SkFont.h"
@@ -16,6 +17,7 @@ namespace subtitle::skia {
 PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.width), height_(input.height) {
     if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
         throw std::runtime_error("Skia: invalid resolved canvas size");
+    std::size_t totalPoints = 0;
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
@@ -31,7 +33,23 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
-            line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs, cell.before, cell.after});
+            if (!cell.wipePoints.empty()) {
+                if (cell.wipePoints.size() < 2 || cell.wipePoints.size() > 4096
+                    || (totalPoints += cell.wipePoints.size()) > 1048576
+                    || cell.wipePoints.front().position != 0 || cell.wipePoints.back().position != 1)
+                    throw std::runtime_error("Skia 分段走字端点或数量无效");
+                int previousTime = -172800000;
+                float previousPosition = 0;
+                for (const auto& point : cell.wipePoints) {
+                    if (point.timeMs < previousTime || point.timeMs > 172800000
+                        || !std::isfinite(point.position) || point.position < previousPosition || point.position > 1)
+                        throw std::runtime_error("Skia 分段走字包含无效、反向或非有限数据");
+                    previousTime = point.timeMs;
+                    previousPosition = point.position;
+                }
+            }
+            line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
+                                  cell.before, cell.after, cell.wipePoints});
         }
         lines_.push_back(std::move(line));
     }
@@ -94,8 +112,10 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
         }
         for (const auto& cell : line.cells) {
-            const float progress = cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)
-                : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f);
+            const float progress = !cell.wipePoints.empty()
+                ? krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, tMs)
+                : (cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)
+                   : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f));
             const float edge = cell.left + (cell.right - cell.left) * progress;
             // Two disjoint clips avoid painting translucent after color over before color.
             if (progress < 1) {

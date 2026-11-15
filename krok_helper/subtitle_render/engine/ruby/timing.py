@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PyQt6.QtGui import QFontMetrics
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from PyQt6.QtGui import QFontMetrics
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 
 from krok_helper.subtitle_render.domain.models import (
@@ -20,6 +22,32 @@ from krok_helper.subtitle_render.engine.ruby.selection import (
 _RUBY_COMBINING_CHARS = set(
     "ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A"
 )
+
+
+def _ruby_checkpoint_anchors(ruby: RubyAnnotation) -> list[int]:
+    start = int(ruby.pos_start_ms)
+    end = max(start, int(ruby.pos_end_ms))
+    anchors = [start]
+    for relative_ms in ruby.reading_part_ms:
+        anchors.append(max(anchors[-1], min(end, start + int(relative_ms))))
+    anchors.append(max(anchors[-1], end))
+    return anchors
+
+
+def ruby_main_wipe_intervals(ruby: RubyAnnotation, mode: str) -> list[tuple[int, int]]:
+    """GPU main-text progress segments; empty checkpoints retain their share.
+
+    reading_units uses only visible units, so empty exported parts become
+    pauses. checkpoint_segments keeps one equal share per checkpoint segment.
+    """
+    if mode not in {'reading_units', 'checkpoint_segments'}:
+        raise ValueError('无效的注音主字走字模式')
+    if mode == 'reading_units':
+        units = ruby_visual_units_and_intervals(ruby)
+        if units:
+            return [interval for _unit, interval in units]
+    anchors = _ruby_checkpoint_anchors(ruby)
+    return list(zip(anchors, anchors[1:]))
 
 
 def _ruby_progress_ratio(
@@ -69,13 +97,7 @@ def _ruby_progress_parts_and_intervals(
         and len(parts) == len(ruby.reading_part_ms) + 1
         and "".join(parts) == ruby.reading
     ):
-        start = int(ruby.pos_start_ms)
-        end = max(start, int(ruby.pos_end_ms))
-        anchors = [start]
-        for relative_ms in ruby.reading_part_ms:
-            timestamp = start + int(relative_ms)
-            anchors.append(max(anchors[-1], min(end, timestamp)))
-        anchors.append(max(anchors[-1], end))
+        anchors = _ruby_checkpoint_anchors(ruby)
         return parts, list(zip(anchors, anchors[1:]))
 
     units = _ruby_reading_units(ruby.reading)
@@ -236,11 +258,7 @@ def _main_text_ruby_progress_ratio(
 
     start = int(ruby.pos_start_ms)
     end = max(start, int(ruby.pos_end_ms))
-    anchors = [start]
-    for relative_ms in ruby.reading_part_ms:
-        timestamp = start + int(relative_ms)
-        anchors.append(max(anchors[-1], min(end, timestamp)))
-    anchors.append(max(anchors[-1], end))
+    anchors = _ruby_checkpoint_anchors(ruby)
 
     segment_count = len(anchors) - 1
     if segment_count <= 0:
@@ -280,11 +298,7 @@ def _main_text_ruby_progress_time_at_ratio(
     if not ruby.reading_part_ms:
         return int(round(start + (end - start) * target))
 
-    anchors = [start]
-    for relative_ms in ruby.reading_part_ms:
-        timestamp = start + int(relative_ms)
-        anchors.append(max(anchors[-1], min(end, timestamp)))
-    anchors.append(max(anchors[-1], end))
+    anchors = _ruby_checkpoint_anchors(ruby)
 
     segment_count = len(anchors) - 1
     if segment_count <= 0:

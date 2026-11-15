@@ -1,5 +1,6 @@
 #pragma once
 #include "include/core/SkPath.h"
+#include "../../model/wipe_point.h"
 #include <cstdint>
 #include <vector>
 
@@ -11,6 +12,7 @@ struct ResolvedCell {
     float left = 0, right = 0;
     int startMs = 0, endMs = 0;
     std::uint32_t before = 0, after = 0;
+    std::vector<krok::subtitle::native::WipePoint> wipePoints;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

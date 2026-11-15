@@ -185,6 +185,9 @@ def main(argv=None) -> int:
         steps["font_resource_contracts"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
             "tests/test_subtitle_render_font_resolution.py", "-k",
             "ir_font_slots or ruby_latin_resource_hint or partial_ruby_role"]
+    if manifest.get("segmented_wipe", 0) >= 1:
+        steps["segmented_wipe"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                   "tests/test_subtitle_skia_wipe.py", "--basetemp", logs / "segmented-wipe-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

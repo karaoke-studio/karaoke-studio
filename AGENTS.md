@@ -364,6 +364,14 @@ git submodule status
    改动的字体身份槽不得发空 *_axis 清除父样式资源；显式字体修改与 N3 槽重置
    仍遵守既有清除语义。此修复不代表已经接通 Skia 注音最终 IR/分段走字。
 
+   P05.6 分段时钟见 §14.21：`ruby/skia_timing.py` 消费已选目标和规范区间，按 GPU 等主字
+   单元份额准备两层时钟，不能使用 Painter 宽度权重；显式内部边界与首个相交组的所有权须保留。
+   最终 `cells[].wipe_points` 受 `p05_segmented_wipe` / `wipe_schema=1` 门控，公共
+   `effects/wipe_clock.h` 同供 D2D 和 Skia GPU/Raster；时差只在 Qt 边界叠加一次。
+   无曲线单元保持基本时钟，非法曲线拒绝且保留旧场景。初始时刻/内部重复点/零时长边界
+   必须保持已有 GPU 语义；不得在帧循环分配时长。此批仅接通最终主字曲线执行，产品 ruby
+   门禁仍保留，注音字形/组裁剪与页面锚点整体接入尚未完成。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的

@@ -4,6 +4,7 @@
 #include "effects/scanline_column.h"
 #include "effects/scanline_image.h"
 #include "effects/unit_hash.h"
+#include "effects/wipe_clock.h"
 #include "model/render_scene.h"
 #include <cmath>
 #include <iostream>
@@ -16,6 +17,15 @@ void require(bool condition, const char* reason) {
 }
 int main() {
     try {
+        const std::vector<WipePoint> pause{{100, 0}, {200, .4f}, {400, .4f}, {500, 1}};
+        require(fx::wipePositionAt(pause, 99) == 0, "wipe before");
+        require(fx::wipePositionAt(pause, 300) == .4f, "wipe pause plateau");
+        require(std::abs(fx::wipePositionAt(pause, 450) - .7f) < 1e-6f, "wipe resume");
+        require(fx::wipePositionAt(pause, 500) == 1, "wipe complete");
+        const std::vector<WipePoint> jump{{100, 0}, {200, .2f}, {200, .8f}, {300, 1}};
+        require(fx::wipePositionAt(jump, 200) == .8f, "wipe internal duplicate time");
+        const std::vector<WipePoint> zero{{100, 0}, {100, 1}};
+        require(fx::wipePositionAt(zero, 100) == 0 && fx::wipePositionAt(zero, 101) == 1, "wipe zero duration boundary");
         require(fx::fxUnitHash(0, 0) == 0, "hash zero");
         require(fx::fxUnitHash(0xffffffffu, 5) >= 0 && fx::fxUnitHash(0xffffffffu, 5) < 1, "unsigned hash");
         for (const auto* kind : {"ripple", "scanline", "sparkle", "twinkle", "twinkle_classic",

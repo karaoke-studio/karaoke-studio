@@ -44,6 +44,7 @@ private:
         float left, right;
         int startMs, endMs;
         std::uint32_t before, after;
+        std::vector<krok::subtitle::native::WipePoint> wipePoints;
     };
     struct Line {
         std::vector<Cell> cells;

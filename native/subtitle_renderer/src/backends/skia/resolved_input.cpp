@@ -1,4 +1,5 @@
 #include "resolved_input.h"
+#include "resolved_wipe.h"
 #include "scene_input.h"
 #include "../render_backend.h"
 #include "../../scene/skia_ir_projection.h"
@@ -66,7 +67,7 @@ std::uint32_t argb(const RgbaColor& c) {
     }
     const double dpr = ir.value("screen").toObject().value("dpr").toDouble(1);
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
-    std::size_t totalCells = 0;
+    std::size_t totalCells = 0, totalPoints = 0;
     for (int index = 0; index < lines.size(); ++index) {
         const auto source = lines[index].toObject();
         const auto& line = projected.lines[index];
@@ -107,7 +108,8 @@ std::uint32_t argb(const RgbaColor& c) {
             path = path.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
             prepared.cells.push_back({path, float(left * dpr), float(right * dpr), line.chars[j].startMs, line.chars[j].endMs,
-                argb(paint.beforeFillPaint.color), argb(paint.afterFillPaint.color)});
+                argb(paint.beforeFillPaint.color), argb(paint.afterFillPaint.color),
+                resolvedSkiaWipePoints(cell, ir, line.chars[j].startMs - int(interval[0].toDouble()), totalPoints)});
         }
         out.lines.push_back(std::move(prepared));
     }
