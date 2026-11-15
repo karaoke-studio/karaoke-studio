@@ -50,6 +50,11 @@ CODEC_HEVC = "hevc"
 VIDEO_CODECS: set[str] = {CODEC_H264, CODEC_HEVC}
 DEFAULT_VIDEO_BITRATE_MBPS = 10
 
+# Termux VAAPI 的质量→码率映射端点（Mbps）。UI 仍沿用 1-51 的 CRF 刻度，
+# 但在该模式下反向映射：crf 1 → 100 Mbps，crf 51 → 1 Mbps。
+_TERMUXVA_MAX_BITRATE_MBPS = 100
+_TERMUXVA_MIN_BITRATE_MBPS = 1
+
 # (codec, mode) → ffmpeg 编码器名。auto 解析成具体硬编模式后再查表。
 _CODEC_ENCODER_NAMES: dict[str, dict[str, str]] = {
     CODEC_H264: {
@@ -135,6 +140,22 @@ def amf_qvbr_quality_level(crf: int) -> int:
     return round(26 - (normalized_crf - 18) * 25 / 33)
 
 
+def termuxva_bitrate_mbps(crf: int) -> int:
+    """Map the UI quality slider (CRF 1-51) to VAAPI average bitrate.
+
+    The scale is inverted: lower CRF = higher quality = higher bitrate.
+    crf=1 → 100 Mbps, crf=51 → 1 Mbps, linear in between. The 0 endpoint
+    (which the UI normally never reaches for CRF) is clamped to 1.
+    """
+    normalized = max(1, min(51, int(crf)))
+    return round(
+        _TERMUXVA_MAX_BITRATE_MBPS
+        - (normalized - 1)
+        * (_TERMUXVA_MAX_BITRATE_MBPS - _TERMUXVA_MIN_BITRATE_MBPS)
+        / 50
+    )
+
+
 def video_encoder_options(
     ffmpeg_path: str,
     mode: str,
@@ -165,13 +186,13 @@ def video_encoder_options(
         # so preserve the shared UI range while translating only this endpoint.
         return ["-c:v", names[ENCODER_QSV], "-global_quality", str(max(1, crf)), *hevc_tag]
     if selected in (ENCODER_ADRENO_TERMUXVA, ENCODER_MAIL_TERMUXVA):
-        # VAAPI 走 CQP：-qp 是全局量化参数，与 QSV 一样把 0 钳到 1（部分驱动
-        # 视 0 为「由码控决定」）。不传 -pix_fmt / -b:v——输入格式由滤镜图里的
+        # VAAPI 的 h264_vaapi / hevc_vaapi 在 VBR 下由 -b:v 决定平均码率；
+        # UI 仍用 CRF 刻度，这里反向映射到 1-100 Mbps（crf 1 → 100M，
+        # crf 51 → 1M）。不传 -pix_fmt：输入格式由滤镜图里的
         # format=nv12,hwupload 决定，由 export_command 负责拼接。
         return [
             "-c:v", names[selected],
-            "-rc_mode", "CQP",
-            "-qp", str(max(1, crf)),
+            "-b:v", f"{termuxva_bitrate_mbps(crf)}M",
             *hevc_tag,
         ]
     if selected == ENCODER_AMF_CQP:

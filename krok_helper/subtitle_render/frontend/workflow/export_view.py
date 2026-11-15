@@ -830,12 +830,14 @@ class ExportWorkspaceView(QWidget):
         encoder_combo.addItem("Intel QSV", userData=ENCODER_QSV)
         encoder_combo.addItem("AMD AMF (QVBR)", userData=ENCODER_AMF_QVBR)
         encoder_combo.addItem("AMD AMF (CQP)", userData=ENCODER_AMF_CQP)
-        encoder_combo.addItem("骁龙安卓tva-va", userData=ENCODER_ADRENO_TERMUXVA)
-        encoder_combo.addItem("其他安卓tva-va", userData=ENCODER_MAIL_TERMUXVA)
+        encoder_combo.addItem("骁龙TermuxVA", userData=ENCODER_ADRENO_TERMUXVA)
+        encoder_combo.addItem("其他TermuxVA", userData=ENCODER_MAIL_TERMUXVA)
         encoder_combo.setToolTip(
             "AMD 显卡的两个档位：QVBR 把质量值换算成质量等级，体积更可控；"
             "CQP 与 NicoKaraMaker3 相同，质量值直接作为固定量化参数，"
             "画质上限更高，但数值越小文件越大，0 接近无损、体积会非常大。"
+            "TermuxVA两个档位仅限 安卓termux+任意容器linux+termux:X11前端。"
+            "高通可用骁龙选项，天玑等mail gpu可尝试其他"
         )
         encoder_combo.currentIndexChanged.connect(
             lambda _index: self.encoderChanged.emit()
@@ -872,6 +874,7 @@ class ExportWorkspaceView(QWidget):
             "AMD AMF (QVBR) 会在后台换算为对应质量等级，AMD AMF (CQP) 则直接"
             "作为固定量化参数直通；"
             "实际画质和文件大小会因显卡型号、编码器与画面内容而异。"
+            "Termux-va不支持质量控制，1-51映射为码率控制100M-1M"
         )
         bitrate_spin = make_export_spin(1, 2000, DEFAULT_VIDEO_BITRATE_MBPS, "")
         bitrate_spin.hide()
