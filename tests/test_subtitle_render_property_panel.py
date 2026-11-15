@@ -8956,6 +8956,190 @@ def test_apply_font_to_roles_cancel_keeps_target_schemes(qapp, monkeypatch):
     assert panel.subtitle_style.custom_style_schemes["B"] is before
 
 
+def _hover_style_preset(dialog, row, monkeypatch):
+    view = dialog._preset_list.viewport()
+    position = dialog._preset_list.visualItemRect(dialog._preset_list.item(row)).center()
+    global_position = view.mapToGlobal(position)
+    monkeypatch.setattr(preset_manager_module, "QCursor", type("Cursor", (), {
+        "pos": staticmethod(lambda: global_position),
+    }))
+    event = QMouseEvent(QEvent.Type.MouseMove, QPointF(position), QPointF(global_position),
+                        Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(view, event)
+
+
+def test_style_preset_hover_reuses_async_role_sample_without_selecting_or_applying(qapp, monkeypatch):
+    from threading import get_ident
+
+    calls = []
+    original = pp._FontSampleCanvas._render_sample_image.__func__
+
+    def render(cls, style, script):
+        calls.append((get_ident(), style, script))
+        return original(cls, style, script)
+
+    monkeypatch.setattr(pp._FontSampleCanvas, "_render_sample_image", classmethod(render))
+    colors = KaraokeColors(after=KaraokeColorState(text=PaintFill(
+        mode="gradient_vertical", gradient_stops=[(0, "#D28AF1"), (100, "#6D4187")],
+    )))
+    preset = StylePreset(name="浅紫渐变", preset_id="purple", scheme=SubtitleStyleScheme(
+        karaoke_colors=colors, stroke_width_px=6, stroke2_enabled=True, stroke2_width_px=2,
+        decoration_kind="shadow", shadow_offset_x=4,
+    ))
+    base = Style(font_family="Arial", font_size_px=100, ruby_font_size_px=40)
+    dialog = StylePresetManagerDialog(
+        {"first": StylePreset(name="first", preset_id="first"), "purple": preset},
+        SubtitleStyleScheme(), "当前角色", target_height=720, preview_style=base,
+    )
+    changes = []
+    dialog.presetLibraryChanged.connect(changes.append)
+    dialog.show()
+    qapp.processEvents()
+    current = dialog._preset_list.currentItem()
+    focus = QApplication.focusWidget()
+    _hover_style_preset(dialog, 1, monkeypatch)
+    assert dialog._hover_preview is None
+    QTest.qWait(350)
+    tip = dialog._hover_preview
+    assert tip is not None and tip.isVisible()
+    _wait_for_font_preview(tip.preview, qapp)
+    assert len(calls) == 1 and calls[0][0] != get_ident()
+    rendered = calls[0][1]
+    assert rendered.font_family == "Arial"
+    assert rendered.font_size_px == 100  # Unspecified font inherits the target's global font.
+    assert rendered.stroke_width_px == 4  # Preset geometry is resolved from 1080 to 720.
+    assert rendered.stroke2_enabled is True
+    assert rendered.decoration_kind == "shadow"
+    assert rendered.karaoke_colors == colors
+    assert tip.preview.canvas._sample.toImage() == original(pp._FontSampleCanvas, rendered, "japanese")
+    assert tip.preview._sample_text == "人" and tip.preview._ruby_text == "ひと"
+    assert tip.preview.target_caption.text() == "浅紫渐变"
+    assert dialog._preset_list.currentItem() is current
+    assert QApplication.focusWidget() is focus
+    assert dialog._checked_names() == [] and dialog.applied_scheme() is None
+    assert changes == []
+    dialog._hide_preset_preview()
+    _hover_style_preset(dialog, 1, monkeypatch)
+    QTest.qWait(350)
+    assert dialog._hover_preview is tip and tip.isVisible()
+    assert len(calls) == 1  # Returning to the last sample does not render again.
+    dialog.close()
+    assert not tip.isVisible()
+
+
+def test_style_preset_hover_debounces_fast_moves_and_suppresses_hex_tooltip(qapp, monkeypatch):
+    from PyQt6.QtGui import QHelpEvent
+    from PyQt6.QtWidgets import QToolTip
+
+    dialog = StylePresetManagerDialog({str(i): SubtitleStyleScheme() for i in range(5)}, SubtitleStyleScheme(), "目标")
+    dialog.show()
+    qapp.processEvents()
+    for row in range(5):
+        _hover_style_preset(dialog, row, monkeypatch)
+        QTest.qWait(20)
+        assert dialog._hover_preview is None
+    view = dialog._preset_list.viewport()
+    position = dialog._preset_list.visualItemRect(dialog._preset_list.item(4)).center()
+    help_event = QHelpEvent(QEvent.Type.ToolTip, position, view.mapToGlobal(position))
+    QApplication.sendEvent(view, help_event)
+    assert help_event.isAccepted() and not QToolTip.isVisible()
+    QTest.qWait(350)
+    assert dialog._hover_preview.isVisible()
+    assert dialog._hover_preview.preview.target_caption.text() == "4"
+    _wait_for_font_preview(dialog._hover_preview.preview, qapp)
+    dialog.close()
+
+
+def test_style_preset_hover_switch_discards_a_slow_previous_render(qapp, monkeypatch):
+    from threading import Event
+
+    started, release = Event(), Event()
+    original = pp._FontSampleCanvas._render_sample_image.__func__
+    calls = []
+
+    def slow_first_render(cls, style, script):
+        calls.append(style)
+        if len(calls) == 1:
+            started.set()
+            release.wait(3)
+        return original(cls, style, script)
+
+    monkeypatch.setattr(pp._FontSampleCanvas, "_render_sample_image", classmethod(slow_first_render))
+    dialog = StylePresetManagerDialog({
+        "first": SubtitleStyleScheme(fill_color="#FF0000"),
+        "second": SubtitleStyleScheme(fill_color="#00FF00"),
+    }, SubtitleStyleScheme(), "目标")
+    dialog.show()
+    qapp.processEvents()
+    try:
+        _hover_style_preset(dialog, 0, monkeypatch)
+        for _ in range(100):
+            QTest.qWait(10)
+            if started.is_set():
+                break
+        assert started.is_set()
+        tip = dialog._hover_preview
+        _hover_style_preset(dialog, 1, monkeypatch)
+        QTest.qWait(350)
+        assert dialog._hover_preview is tip
+        assert len(calls) == 1  # One worker at a time, with only the latest request pending.
+        assert tip.preview.target_caption.text() == "second"
+        release.set()
+        _wait_for_font_preview(tip.preview, qapp)
+        assert len(calls) == 2 and calls[-1].fill_color == "#00FF00"
+        assert tip.preview.canvas._sample.toImage() == original(pp._FontSampleCanvas, calls[-1], "japanese")
+    finally:
+        release.set()
+        dialog.close()
+
+
+def test_style_preset_hover_long_name_stays_within_screen(qapp, monkeypatch):
+    name = "渐变角色方案" * 30
+    dialog = StylePresetManagerDialog({"preset": StylePreset(name=name, preset_id="preset")}, SubtitleStyleScheme(), "目标")
+    available = dialog.screen().availableGeometry()
+    dialog.move(available.right() - dialog.width(), available.bottom() - dialog.height())
+    dialog.show()
+    qapp.processEvents()
+    _hover_style_preset(dialog, 0, monkeypatch)
+    QTest.qWait(350)
+    tip = dialog._hover_preview
+    assert tip is not None and tip.isVisible()
+    assert tip.width() < 200
+    assert available.contains(tip.geometry())
+    assert tip.preview.target_caption.accessibleName() == name
+    dialog.close()
+
+
+@pytest.mark.parametrize("action", ["leave", "press", "scroll", "filter", "reorder", "close"])
+def test_style_preset_hover_hides_during_other_list_operations(qapp, monkeypatch, action):
+    from PyQt6.QtCore import QModelIndex
+
+    dialog = StylePresetManagerDialog({str(i): SubtitleStyleScheme() for i in range(30)}, SubtitleStyleScheme(), "目标")
+    dialog.show()
+    qapp.processEvents()
+    _hover_style_preset(dialog, 0, monkeypatch)
+    QTest.qWait(350)
+    tip = dialog._hover_preview
+    assert tip is not None and tip.isVisible()
+    if action == "leave":
+        QApplication.sendEvent(dialog._preset_list.viewport(), QEvent(QEvent.Type.Leave))
+    elif action == "press":
+        pos = dialog._preset_list.visualItemRect(dialog._preset_list.item(0)).center()
+        QTest.mousePress(dialog._preset_list.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+        QTest.mouseRelease(dialog._preset_list.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    elif action == "scroll":
+        dialog._preset_list.verticalScrollBar().setValue(20)
+    elif action == "filter":
+        dialog._filter_edit.setText("29")
+    elif action == "reorder":
+        assert dialog._preset_list.model().moveRows(QModelIndex(), 0, 1, QModelIndex(), 3)
+    else:
+        dialog.close()
+    assert not tip.isVisible()
+    assert not dialog._hover_preview_timer.isActive()
+    dialog.close()
+
+
 def test_style_preset_manager_dialog_saves_current_scheme(qapp):
     dialog = StylePresetManagerDialog(
         presets={},

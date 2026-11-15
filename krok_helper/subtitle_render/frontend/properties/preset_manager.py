@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QEvent, QPoint, QRectF, QSize, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QCursor, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QAbstractItemView,
     QDialog,
     QFileDialog,
@@ -32,12 +34,14 @@ from qfluentwidgets import (
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
     SubtitleLabel,
+    ToolTip,
 )
 
 from krok_helper.qfluent_compat import ModelessDialog
 from krok_helper.subtitle_render.domain.models import (
     PRESET_REFERENCE_HEIGHT,
     StylePreset,
+    Style,
     SubtitleStyleScheme,
     rescale_scheme_font_sizes,
 )
@@ -49,6 +53,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.font_preview import _FontPreviewWidget
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.frontend.widgets.role_colors import (
     paint_fill_swatch,
@@ -68,6 +73,45 @@ from krok_helper.subtitle_render.n3.template_import import (
 
 
 _PRESET_NO_GROUP = "\x00ungrouped"
+
+
+class _PresetStylePreviewTip(ToolTip):
+    """One reusable asynchronous glyph preview, owned by the library dialog."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent=parent)
+        # A native tooltip must never become the active tool window; activating
+        # it would deactivate the library and immediately dismiss the preview.
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setDuration(0)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.label.hide()
+        self.preview = _FontPreviewWidget(self.container)
+        self.preview.target_caption.setFixedWidth(self.preview.canvas.width())
+        self.preview.target_caption.setTextFormat(Qt.TextFormat.PlainText)
+        self.containerLayout.addWidget(self.preview)
+
+    def set_preset(self, name: str, style: Style) -> None:
+        self.preview.canvas.apply_sample(QImage())
+        self.preview.set_preview_state(style, "custom:__preset_preview__", "japanese")
+        caption = self.preview.target_caption
+        caption.setText(caption.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, caption.width()))
+        caption.setAccessibleName(name)
+        self.setAccessibleName(f"样式预设预览：{name}")
+        self.container.adjustSize()
+        self.adjustSize()
+
+    def position_at(self, view: QWidget, row_rect) -> None:
+        anchor = view.mapToGlobal(row_rect.topRight())
+        screen = QApplication.screenAt(anchor) or view.screen()
+        available = screen.availableGeometry()
+        x = anchor.x() + 8
+        if x + self.width() > available.right():
+            x = view.mapToGlobal(row_rect.topLeft()).x() - self.width() - 8
+        y = anchor.y() - 8
+        x = max(available.left(), min(x, available.right() - self.width() + 1))
+        y = max(available.top(), min(y, available.bottom() - self.height() + 1))
+        self.move(x, y)
 
 
 class _PresetDropIndicatorStyle(QProxyStyle):
@@ -361,6 +405,7 @@ class StylePresetManagerDialog(ModelessDialog):
         existing_role_names: Optional[set[str]] = None,
         target_height: int = 1080,
         lyrics_dir: Optional[Path] = None,
+        preview_style: Optional[Style] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -382,6 +427,14 @@ class StylePresetManagerDialog(ModelessDialog):
         self._existing_role_names = set(existing_role_names or set())
         self._applied_scheme: Optional[SubtitleStyleScheme] = None
         self._imported_schemes: dict[str, StylePreset] = {}
+        self._preview_base_style = preview_style if preview_style is not None else Style()
+        self._hover_preview: Optional[_PresetStylePreviewTip] = None
+        self._hover_preview_id: Optional[str] = None
+        self._previewed_preset: Optional[StylePreset] = None
+        self._hover_preview_timer = QTimer(self)
+        self._hover_preview_timer.setSingleShot(True)
+        self._hover_preview_timer.setInterval(300)
+        self._hover_preview_timer.timeout.connect(self._show_hovered_preset_preview)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -426,6 +479,9 @@ class StylePresetManagerDialog(ModelessDialog):
         self._preset_list.model().rowsMoved.connect(self._on_preset_rows_moved)
         # 点行空白切换勾选（与布局预设库一致）；点勾选框本身由 Qt 原生处理。
         self._preset_list.itemClicked.connect(self._on_preset_row_clicked)
+        self._preset_list.viewport().installEventFilter(self)
+        self._preset_list.verticalScrollBar().valueChanged.connect(self._hide_preset_preview)
+        self._preset_list.horizontalScrollBar().valueChanged.connect(self._hide_preset_preview)
         layout.addWidget(self._preset_list, 1)
         layout.addWidget(CaptionLabel("拖动排序 · 色块：左侧走字前 / 右侧走字后", self))
 
@@ -481,6 +537,72 @@ class StylePresetManagerDialog(ModelessDialog):
 
         self._populate_list()
 
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self._preset_list.viewport():
+            kind = event.type()
+            if kind == QEvent.Type.ToolTip:
+                # Item tooltips remain available to accessibility clients, but
+                # the visual tooltip is the glyph sample rather than hex text.
+                event.accept()
+                return True
+            if kind == QEvent.Type.MouseMove:
+                if event.buttons() == Qt.MouseButton.NoButton:
+                    self._track_preset_hover(event.position().toPoint())
+                else:
+                    self._hide_preset_preview()
+            elif kind in {
+                QEvent.Type.Leave, QEvent.Type.MouseButtonPress,
+                QEvent.Type.Wheel, QEvent.Type.Hide, QEvent.Type.DragEnter,
+            }:
+                self._hide_preset_preview()
+        return super().eventFilter(watched, event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._hide_preset_preview()
+        super().hideEvent(event)
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
+            self._hide_preset_preview()
+        super().changeEvent(event)
+
+    def _track_preset_hover(self, position: QPoint) -> None:
+        item = self._preset_list.itemAt(position)
+        preset_id = str(item.data(Qt.ItemDataRole.UserRole)) if item is not None else None
+        if preset_id == self._hover_preview_id:
+            return
+        self._hide_preset_preview()
+        if preset_id is not None:
+            self._hover_preview_id = preset_id
+            self._hover_preview_timer.start()
+
+    def _hide_preset_preview(self, *_args: Any) -> None:
+        self._hover_preview_timer.stop()
+        self._hover_preview_id = None
+        if self._hover_preview is not None:
+            self._hover_preview.hide()
+
+    def _show_hovered_preset_preview(self) -> None:
+        if not self.isVisible() or QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            return
+        view = self._preset_list.viewport()
+        item = self._preset_list.itemAt(view.mapFromGlobal(QCursor.pos()))
+        if item is None or item.isHidden():
+            return
+        preset_id = str(item.data(Qt.ItemDataRole.UserRole))
+        preset = self._presets.get(preset_id)
+        if preset_id != self._hover_preview_id or preset is None:
+            return
+        if self._hover_preview is None:
+            self._hover_preview = _PresetStylePreviewTip(self)
+        if self._previewed_preset is not preset:
+            resolved = resolve_preset_for_target(preset, target_height=self._target_height, lyrics_dir=self._lyrics_dir)
+            style = replace(self._preview_base_style, custom_style_schemes={"__preset_preview__": resolved.scheme}, singer_style_overrides={})
+            self._hover_preview.set_preset(preset.name, style)
+            self._previewed_preset = preset
+        self._hover_preview.position_at(view, self._preset_list.visualItemRect(item))
+        self._hover_preview.show()
+
     def preset_schemes(self) -> dict[str, StylePreset]:
         return _normalize_style_presets(self._presets)
 
@@ -526,6 +648,7 @@ class StylePresetManagerDialog(ModelessDialog):
         self,
         selected: Optional[str] = None,
     ) -> None:
+        self._hide_preset_preview()
         checked = set(self._checked_names()) if self._preset_list.count() else set()
         current = selected or self._selected_name()
         self._refresh_group_filter()
@@ -587,6 +710,7 @@ class StylePresetManagerDialog(ModelessDialog):
         self._group_filter.blockSignals(blocked)
 
     def _apply_filter(self, *_args: Any) -> None:
+        self._hide_preset_preview()
         needle = self._filter_edit.text().strip().lower()
         group_filter = self._group_filter.currentData()
         visible_count = 0
@@ -649,6 +773,7 @@ class StylePresetManagerDialog(ModelessDialog):
         Hidden rows remain in the model, so filtering preserves their relative
         order while the dragged preset moves before/after a visible neighbour.
         """
+        self._hide_preset_preview()
         order = [
             str(self._preset_list.item(row).data(Qt.ItemDataRole.UserRole))
             for row in range(self._preset_list.count())

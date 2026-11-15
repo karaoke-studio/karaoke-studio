@@ -5780,6 +5780,7 @@ class PropertyPanel(QWidget):
             | {TITLE_SCHEME_NAME},
             target_height=self._n3_template_target_height,
             lyrics_dir=self._n3_template_lyrics_dir,
+            preview_style=self._style,
             parent=self,
         )
         dialog.presetLibraryChanged.connect(self._set_preset_schemes_from_dialog)
