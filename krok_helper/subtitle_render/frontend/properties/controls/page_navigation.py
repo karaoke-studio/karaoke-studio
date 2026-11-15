@@ -1,12 +1,90 @@
 """Theme-aware property tabs with generous hit targets and overflow scrolling."""
 
-from PyQt6.QtCore import QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QPainter, QPen
-from PyQt6.QtWidgets import QFrame, QScrollArea, QSizePolicy, QWidget
+from PyQt6.QtCore import (
+    QAbstractAnimation, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QSize,
+    Qt, QVariantAnimation,
+)
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtWidgets import QAbstractButton, QFrame, QScrollArea, QSizePolicy, QWidget
 from qfluentwidgets import SegmentedWidget
 from qfluentwidgets.components.navigation.segmented_widget import SegmentedItem
 
 from krok_helper.subtitle_render.frontend.widgets.theme import palette
+
+
+class PropertyNavigationScrollButton(QAbstractButton):
+    """Paint the same quiet chevron on every platform, independent of fonts."""
+
+    def __init__(self, direction, parent=None):
+        super().__init__(parent)
+        self._direction = direction
+        self._hover = 0.0
+        self._hover_animation = QVariantAnimation(self)
+        self._hover_animation.setDuration(120)
+        self._hover_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._hover_animation.valueChanged.connect(self._set_hover)
+        self.setFixedSize(28, 32)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        label = "向左滚动标签" if direction < 0 else "向右滚动标签"
+        self.setAccessibleName(label)
+        self.setToolTip(label)
+
+    def _set_hover(self, value):
+        self._hover = float(value)
+        self.update()
+
+    def enterEvent(self, event):  # noqa: N802
+        self._animate_hover(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._animate_hover(0.0)
+        super().leaveEvent(event)
+
+    def _animate_hover(self, target):
+        self._hover_animation.stop()
+        self._hover_animation.setStartValue(self._hover)
+        self._hover_animation.setEndValue(target)
+        self._hover_animation.start()
+
+    def changeEvent(self, event):  # noqa: N802
+        if event.type() == QEvent.Type.EnabledChange:
+            self._hover_animation.stop()
+            self._set_hover(1.0 if self.isEnabled() and self.underMouse() else 0.0)
+        super().changeEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802
+        p = palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bounds = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if self.isEnabled():
+            background = QColor(
+                p.secondary_button_pressed_bg if self.isDown()
+                else p.secondary_button_hover_bg
+            )
+            background.setAlphaF(1.0 if self.isDown() else self._hover)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(background)
+            painter.drawRoundedRect(bounds, 7, 7)
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(p.input_border_focus), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(bounds.adjusted(1, 1, -1, -1), 6, 6)
+        color = QColor(p.text_secondary if self.isEnabled() else p.text_disabled)
+        if not self.isEnabled():
+            color.setAlphaF(.55)
+        pen = QPen(color, 1.6, Qt.PenStyle.SolidLine,
+                   Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        x, y = self.width() / 2, self.height() / 2
+        path = QPainterPath()
+        path.moveTo(x - self._direction * 2, y - 4)
+        path.lineTo(x + self._direction * 2, y)
+        path.lineTo(x - self._direction * 2, y + 4)
+        painter.drawPath(path)
 
 
 class _PropertyNavigationItem(SegmentedItem):
@@ -123,6 +201,25 @@ class PropertyNavigationScrollArea(QScrollArea):
         self.setFixedHeight(40)
         self.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self.viewport().setAutoFillBackground(False)
+        self._scroll_animation = QPropertyAnimation(self.horizontalScrollBar(), b"value", self)
+        self._scroll_animation.setDuration(180)
+        self._scroll_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def scroll_by(self, distance):
+        bar = self.horizontalScrollBar()
+        target = bar.value()
+        if self._scroll_animation.state() == QAbstractAnimation.State.Running:
+            target = self._scroll_animation.endValue()
+        self._scroll_animation.stop()
+        self._scroll_animation.setStartValue(bar.value())
+        self._scroll_animation.setEndValue(
+            max(bar.minimum(), min(bar.maximum(), target + distance))
+        )
+        self._scroll_animation.start()
+
+    def ensureWidgetVisible(self, child, xMargin=50, yMargin=50):  # noqa: N802
+        self._scroll_animation.stop()
+        super().ensureWidgetVisible(child, xMargin, yMargin)
 
     def setWidget(self, widget):  # noqa: N802
         super().setWidget(widget)
@@ -131,6 +228,7 @@ class PropertyNavigationScrollArea(QScrollArea):
         widget.setAutoFillBackground(False)
 
     def wheelEvent(self, event):  # noqa: N802
+        self._scroll_animation.stop()
         bar = self.horizontalScrollBar()
         if bar.maximum() == 0:
             super().wheelEvent(event)

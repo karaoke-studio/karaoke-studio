@@ -75,6 +75,7 @@ from krok_helper.subtitle_render.frontend.widgets.role_colors import (
 from krok_helper.subtitle_render.frontend.properties.controls.page_navigation import (
     PropertyPageNavigation,
     PropertyNavigationScrollArea,
+    PropertyNavigationScrollButton,
 )
 
 from krok_helper.subtitle_render.domain.background import BackgroundSource
@@ -1127,14 +1128,9 @@ class PropertyPanel(QWidget):
         self._navigation.currentItemChanged.connect(self._on_navigation_changed)
         self._navigation_scroll = PropertyNavigationScrollArea(navigation_row)
         self._navigation_scroll.setWidget(self._navigation)
-        self._navigation_previous = FluentTransparentToolButton(navigation_row)
-        self._navigation_next = FluentTransparentToolButton(navigation_row)
-        for button, text in ((self._navigation_previous, "‹"), (self._navigation_next, "›")):
-            button.setText(text)
-            button.setFixedSize(24, 32)
-            button.setStyleSheet("QToolButton { font-size: 22px; }")
-            button.setAccessibleName("向左滚动标签" if text == "‹" else "向右滚动标签")
-            button.setToolTip(button.accessibleName())
+        self._navigation_previous = PropertyNavigationScrollButton(-1, navigation_row)
+        self._navigation_next = PropertyNavigationScrollButton(1, navigation_row)
+        for button in (self._navigation_previous, self._navigation_next):
             button.hide()
         navigation_layout.addWidget(self._navigation_previous)
         navigation_layout.addWidget(self._navigation_scroll, 1)
@@ -1142,8 +1138,8 @@ class PropertyPanel(QWidget):
         scroll_bar = self._navigation_scroll.horizontalScrollBar()
         scroll_bar.rangeChanged.connect(self._update_navigation_overflow)
         scroll_bar.valueChanged.connect(self._update_navigation_overflow)
-        self._navigation_previous.clicked.connect(lambda: scroll_bar.setValue(scroll_bar.value() - 160))
-        self._navigation_next.clicked.connect(lambda: scroll_bar.setValue(scroll_bar.value() + 160))
+        self._navigation_previous.clicked.connect(lambda: self._navigation_scroll.scroll_by(-160))
+        self._navigation_next.clicked.connect(lambda: self._navigation_scroll.scroll_by(160))
         root.addWidget(navigation_row, 0)
 
         self._stack = QStackedWidget(self)
