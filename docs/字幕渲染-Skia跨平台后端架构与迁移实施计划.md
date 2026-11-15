@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 15c06be1
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43687800504 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 23e4aa71
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43705296882 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1570,7 +1570,7 @@ Mac CI [43687800504](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 
 ### 14.25 P05.6 下方罗马音纯语义与规范度量准备（2026-11-15）
 
-**本批交付下方读音的配置期准备端口，尚未开放 Skia 下方注音绘制。** 不扩展 §14.24 的产品支持范围，也不改变 D2D 默认、发布包隔离或 Skia Raster 回退策略。
+**本批交付下方读音的配置期准备端口，尚未开放 Skia 下方注音绘制。** 实现提交 `cf3b5cc6`。不扩展 §14.24 的产品支持范围，也不改变 D2D 默认、发布包隔离或 Skia Raster 回退策略。
 
 - `ruby/lower_semantics.py` 持有 `LowerRuby`、上下层样式继承、SUG 罗马音转换和目标/停顿保真规则，不导入 Qt 字体、前端设置或旧渲染器。既有 `ruby/lower.py` 保留 Qt 外观编辑快照和设置读取，并重新导出旧入口；设置仍只在需要转换时延迟读取。
 - `ruby/skia_lower.py::prepare_lower_readings` 显式接收规范主字度量快照、字体解析和 CPU 度量端口。按源行身份选择上注音，优先从作者读音派生，再补未覆盖假名；使用规范主字区间进行目标筛选与裁切。缺少冻结的四项布尔罗马音选项时明确失败，工作线程不查询前端设置。
@@ -1578,11 +1578,11 @@ Mac CI [43687800504](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 - 源读音转罗马音仍采用既有分段语义，最终可视单元与上注音共用 `ruby_unit_clock`。**已生成的 parts 内按整数除法划分**：5ms 的 `na` 为 `[0,2],[2,5]`，不能误用无 parts fallback 的 half-up `[0,3],[3,5]`。这直接对应现有 GPU `qt_ruby_timing.cpp` 的整数算法。
 - 尚需后续接入：稳定字体参考墨迹/Latin cap height 的下方基线、上下两层干扰与可见净空、包含下层的源布局行框、最终 IR/能力握手，以及 D2D GPU—Skia GPU / Skia GPU—Raster 实际绘制验收。这些门槛完成前，产品入口仍明确拒绝 `lower_ruby_enabled`。
 
-新增专项 `tests/test_subtitle_skia_lower.py` 和规范样例 `lower-ruby-preparation.json`。Mac 工作流及验收包添加 `lower_ruby_preparation=1`，只表示上述准备端口，不表示产品已支持下方绘制。初步验证：Windows 下方/分段时钟/验收工具组合 **109 通过**；Linux X11/Wayland 下方/分段时钟/注音度量各 **84 通过、4 项 D2D 专用跳过**。完整回归发现发布提交 `4a94caf0` 引入的源布局行框规则尚未同步到 Skia，继续在下一批补齐后重新执行全组合验证。
+新增专项 `tests/test_subtitle_skia_lower.py` 和规范样例 `lower-ruby-preparation.json`。Mac 工作流及验收包添加 `lower_ruby_preparation=1`，只表示上述准备端口，不表示产品已支持下方绘制。初步验证：Windows 下方/分段时钟/验收工具组合 **109 通过**；Linux X11/Wayland 下方/分段时钟/注音度量各 **84 通过、4 项 D2D 专用跳过**。完整回归发现发布提交 `4a94caf0` 引入的源布局行框规则尚未同步到 Skia，已在 §14.26 补齐并重新完成全组合验证。
 
 ### 14.26 P05 适配发布后的源布局行框规则（2026-11-15）
 
-发布提交 `4a94caf0` 已将独立英数/角色/歌手源的外部行框改为整源实际使用字体的并集。Skia 原先仍用默认主字行框，回归中出现纵向偏移；本批仅在规范布局层同步新规则，不撤销生产修复，不修改 D2D C++ 绘制行为。
+发布提交 `4a94caf0` 已将独立英数/角色/歌手源的外部行框改为整源实际使用字体的并集。Skia 原先仍用默认主字行框，回归中出现纵向偏移；本批仅在规范布局层同步新规则，不撤销生产修复，不修改 D2D C++ 绘制行为。实现提交 `23e4aa71`。
 
 - `layout/line/skia_rows.py` 根据整源同一 layout 的规范字体度量生成 `RowFrame`。仅实际使用的非空文本槽参与，尚未上屏的同行也参与；未使用的全局/角色字体和导唱图形不撑大行框，不同 layout 分开统计。默认字体单槽源继续保留既有 native 小数采样，独立 Latin 或角色/歌手源采用整数行框及居中块定位。
 - 字体自身的 `font_metrics` 与外部行框分开保存。即使主字体没有实际字形，仍查询其度量并纳入内容身份，但不能让未使用的默认字体撑大源行框。同行所有字形仍共享最终基线，不能用逐字实际墨迹生成各自基线，也不能仅依当前可见行重算高度。
@@ -1590,7 +1590,11 @@ Mac CI [43687800504](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 - 共享 IR 序列化新增 `serialize_source_baselines=True`，默认保持既有 D2D 行为。Skia 显式关闭旧 Qt 行框序列化，只使用已解析的最终坐标；新增测试将 Qt 行框/字体测量入口替换为失败，确保规范路径不会偷偷查询它们。Skia 专用最终组/分页探针同样关闭旧投影。
 - 按新行框规则更新既有测试：独立英数和角色会改变整源行框；未用主字体内容变化仍使身份失效，但不再挪动全 Latin 源的行框。保留 D2D GPU 对照的 **1px** 几何要求。Linux 软件 Vulkan 的分数注音轮廓平移实测仅 **11 个 alpha 通道值差 1**；该平移专项要求颜色与透明/不透明区域完全一致，仅 GPU 抗锯齿边缘允许 1 级 alpha 量化差，Raster 仍逐字节一致。没有扩大其他画质门槛。
 
-本批无 C++、依赖锁或 GPU 初始化改动。Windows 使用真实 `windows` Qt 平台：完整 Skia 组合 **452 通过**，布局/下方注音/架构/协议/字体/验收工具相关组合 **442 通过**；§14.25 的改动前 **5,000 组**随机假名与罗马音对照亦全部逐值一致且不修改输入。Linux X11/Wayland 完整组合各 **393 通过、59 项 D2D 专用跳过**；十五份 Windows/X11 规范样例最大误差均为 **0**。Mac 与 Wayland 样例最终结果待本轮验证后补记。§14.12–15 关于“角色/英数字号不改变外部行框”的历史约束由本节更新；字体基线身份、显式字体资源和时钟权属约束继续保留。
+本批无 C++、依赖锁或 GPU 初始化改动。Windows 使用真实 `windows` Qt 平台：完整 Skia 组合 **452 通过**，布局/下方注音/架构/协议/字体/验收工具相关组合 **442 通过**；§14.25 的改动前 **5,000 组**随机假名与罗马音对照亦全部逐值一致且不修改输入。Linux X11/Wayland 完整组合各 **393 通过、59 项 D2D 专用跳过**。为纳入发布后的共享 native 头变化，四种本地 Vulkan/CPU-only 产物均按当前源码完整重建，CTest 各 **3/3**；重建后的完整产品组合再次得到同样结果。§14.12–15 关于“角色/英数字号不改变外部行框”的历史约束由本节更新；字体基线身份、显式字体资源和时钟权属约束继续保留。
+
+Mac CI [43705296882](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43705296882)（`23e4aa71`）**5 项全部成功**：arm64/x64 产品组合各 **387 通过、65 项平台专用跳过**，新增下方准备专项各 **15 通过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。十五份 arm64/x64 规范样例最大误差均为 **0**；下载的 arm64 样例与重建后的 Windows/X11/Wayland 再比较也全部为 **0**。八份 Windows/Linux/macOS arm64/x64 的 GPU/Raster native 指纹均核对为 `c2320b0fcbe84cd9a82863e2bca0495988f5e573c469a9a57d7e4ff05f84cbc0`。两份干净 Mac 验收包均退出 **0**，`lower_ruby_preparation` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能作为真机门槛通过。§14.6 朋友测试入口已更新到本次提交与验收包。
+
+日志/样例前缀 `build/p05-lower-*`。本节未开放下方注音产品能力；下一步仍是 §14.25 列出的稳定参考基线、两层干扰/净空和最终绘制接入，再做 GPU 对照验收。Linux 真硬件与本轮 Mac 真机结果仍待补齐，未做 4K。
 
 ## 15. 前期探针清理范围
 
