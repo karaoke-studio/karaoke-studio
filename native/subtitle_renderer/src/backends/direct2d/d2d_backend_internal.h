@@ -212,6 +212,7 @@ struct Direct2DGpuBackend::Impl {
     };
 
     struct CachedLine {
+        std::optional<float> resolvedBaselineY;
         std::optional<float> annotationBaselineY;
         int startMs = 0;
         int endMs = 0;

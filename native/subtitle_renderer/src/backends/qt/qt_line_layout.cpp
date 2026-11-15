@@ -112,7 +112,9 @@ LineLayout layoutLine(const RenderConfig &cfg, const ResolvedStyle &lineStyle, c
     const double visualPad = inlineStyles ? maxVisualPad : visualStrokeExtent(lineStyle);
     layout.x = lineXForLine(cfg, layout.width, visualPad, lane);
 
-    layout.baselineY = baselineYForLine(cfg, lineStyle, metrics, lane, visibleLineCount);
+    layout.baselineY = line.resolvedBaselineY.value_or(
+        baselineYForLine(cfg, lineStyle, metrics, lane, visibleLineCount)
+    );
 
     layout.charLefts.resize(line.chars.size());
     if (cfg.rightToLeft) {

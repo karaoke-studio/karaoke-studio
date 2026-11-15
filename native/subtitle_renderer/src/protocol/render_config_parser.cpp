@@ -2488,6 +2488,13 @@ static void parseSourceTracks(
         for (int sourceLineIndex = 0; sourceLineIndex < lines.size(); ++sourceLineIndex) {
             const QJsonObject lineObject = lines.at(sourceLineIndex).toObject();
             TimingLine line;
+            if (lineObject.value(QStringLiteral("resolved_baseline_y")).isDouble()) {
+                const double baseline = lineObject.value(QStringLiteral("resolved_baseline_y")).toDouble();
+                if (!std::isfinite(baseline)) {
+                    throw std::runtime_error("resolved_baseline_y must be finite");
+                }
+                line.resolvedBaselineY = baseline;
+            }
             if (lineObject.value(QStringLiteral("annotation_baseline_y")).isDouble()) {
                 line.annotationBaselineY = lineObject.value(QStringLiteral("annotation_baseline_y")).toDouble();
             }

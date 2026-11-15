@@ -573,18 +573,27 @@ def resolve_display_baselines(
     track: TimingTrack,
     display_lines: list[DisplayLine],
     style: Style,
+    *,
+    source_style: Style | None = None,
 ) -> dict[int, int]:
+    from krok_helper.subtitle_render.engine.layout.line.qt_geometry import source_layout_row_geometry
+
+    indices = {int(item.line.layout_index or 0) for item in display_lines}
+    layout_index = next(iter(indices)) if len(indices) == 1 else 0
+    main_h, main_ascent, main_descent, ruby_extra = source_layout_row_geometry(
+        track, source_style or style, layout_index, annotated_line_geometry,
+    )
     if not style.dual_line_layout:
-        font = build_font(style)
-        metrics = QFontMetrics(font)
-        # 单行 legacy 的注音预留已由 resolve_baseline_y 按样式恒定保留，
-        # 不再依赖当前行是否带注音。
-        baseline = resolve_baseline_y(metrics, img_h, style)
+        if style.line_y_position == "top":
+            baseline = style.line_y_margin_px + ruby_extra + main_ascent
+        elif style.line_y_position == "center":
+            baseline = (img_h - main_h - ruby_extra) // 2 + ruby_extra + main_ascent
+        else:
+            baseline = img_h - style.line_y_margin_px - main_descent
         if style.line_horizontal_layout == "per_row":
             baseline += style.row1_offset_y
         return {0: baseline}
 
-    main_h, main_ascent, main_descent, ruby_extra = annotated_line_geometry(style)
     gap = int(style.line_gap_px)
     margin = style.line_y_margin_px
     lanes = lane_count(style)

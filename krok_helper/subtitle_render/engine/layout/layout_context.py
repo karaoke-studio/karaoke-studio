@@ -50,6 +50,7 @@ def layout_pass():
         _LAYOUT_PASS.render_lines = {}
         _LAYOUT_PASS.signatures = {}
         _LAYOUT_PASS.char_layout_metrics = {}
+        _LAYOUT_PASS.row_geometries = {}
         _LAYOUT_PASS.char_advances = {}
         _LAYOUT_PASS.char_ink_widths = {}
         _LAYOUT_PASS.ink_rects = {}
@@ -79,6 +80,7 @@ def layout_pass():
             _LAYOUT_PASS.render_lines = None
             _LAYOUT_PASS.signatures = None
             _LAYOUT_PASS.char_layout_metrics = None
+            _LAYOUT_PASS.row_geometries = None
             _LAYOUT_PASS.char_advances = None
             _LAYOUT_PASS.char_ink_widths = None
             _LAYOUT_PASS.ink_rects = None

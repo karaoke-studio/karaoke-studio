@@ -2518,7 +2518,7 @@ def _resolve_sayatoo_line_layouts(
         if int(getattr(line, "layout_index", 0) or 0) > 0:
             # 行引用了额外布局 → 垂直几何（锚点/余白/行距/行数）按该布局单独解析。
             baseline_y = _resolve_display_baselines(
-                img_h, track, [display_line], line_style
+                img_h, track, [display_line], line_style, source_style=style,
             ).get(display_line.lane)
         else:
             baseline_y = baselines.get(display_line.lane)

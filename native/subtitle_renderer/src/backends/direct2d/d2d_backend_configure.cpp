@@ -1578,6 +1578,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             style.rubyLatinFontHint
         );
         Impl::CachedLine cached;
+        cached.resolvedBaselineY = sourceLine.resolvedBaselineY;
         cached.annotationBaselineY = sourceLine.annotationBaselineY;
         cached.style = style;
         cached.startMs = sourceLine.startMs;

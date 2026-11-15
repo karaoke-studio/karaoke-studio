@@ -86,6 +86,7 @@ struct PlacementWindow {
 inline constexpr int kTitleCompositeOrder = -1;
 
 struct TextLine {
+    std::optional<float> resolvedBaselineY;
     std::optional<float> annotationBaselineY;
     std::vector<TextChar> chars;
     std::vector<TextRuby> rubies;

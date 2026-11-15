@@ -5251,6 +5251,107 @@ def test_bitmap_avatar_font_does_not_expand_text_line_metrics(
         assert layouts[1].height == main_metrics.ascent() + main_metrics.descent()
 
 
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("position", ["top", "center", "bottom"])
+def test_role_row_grid_ignores_unreferenced_global_font(qapp, semantics, position):
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+        resolve_display_baselines,
+    )
+    from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+    from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+
+    lines = [TimingLine(chars=[TimingChar("歌", 1000, role_label="title")],
+                        end_ms=2000, layout_index=1) for _ in range(2)]
+    track = TimingTrack(lines=lines)
+    layout = LyricsLayout(line_y_position=position, line_y_margin_px=50,
+                          line_gap_px=22, line_alignments=["left", "left"])
+    base = Style(layout_semantics=semantics, layouts=[layout],
+                 custom_style_schemes={"title": SubtitleStyleScheme(
+                     font_family="Meiryo", font_size_px=36, stroke_width_px=5,
+                     stroke2_enabled=False, ruby_font_size_px=18,
+                 )})
+    display = [DisplayLine(line=line, lane=i, display_start_ms=0, display_end_ms=2000)
+               for i, line in enumerate(lines)]
+    resolved = []
+    for size in (60, 200):
+        style = replace(base, font_size_px=size, stroke_width_px=15)
+        resolved.append(resolve_display_baselines(1080, track, display,
+                                                 style_for_line(style, lines[0])))
+    assert resolved[0] == resolved[1]
+    if semantics == "n3_1074":
+        assert resolved[0][1] - resolved[0][0] == 36 + 5 + 22
+
+
+def test_role_row_grid_is_stable_across_pages_and_isolated_by_layout(qapp):
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+        resolve_display_baselines,
+    )
+    from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+    from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+
+    style = Style(layout_semantics="n3_1074", font_size_px=200, layouts=[
+        LyricsLayout(line_y_position="top", line_gap_px=22, line_alignments=["left", "left"]),
+        LyricsLayout(line_y_position="top", line_gap_px=22, line_alignments=["left", "left"]),
+    ], custom_style_schemes={
+        "small": SubtitleStyleScheme(font_size_px=36, stroke_width_px=5),
+        "large": SubtitleStyleScheme(font_size_px=70, stroke_width_px=5),
+        "other": SubtitleStyleScheme(font_size_px=150, stroke_width_px=5),
+    })
+    lines = [TimingLine(chars=[TimingChar("歌", t, role_label=role)],
+                        end_ms=t+1000, layout_index=index)
+             for t, role, index in [(1000, "small", 1), (5000, "large", 1),
+                                    (9000, "other", 2)]]
+    track = TimingTrack(lines=lines)
+    baselines = [resolve_display_baselines(1080, track,
+                 [DisplayLine(line=line, lane=0, display_start_ms=0, display_end_ms=2000)],
+                 style_for_line(style, line))
+                 for line in lines]
+    assert baselines[0] == baselines[1]
+    assert baselines[1] != baselines[2]
+    other_source = TimingTrack(lines=lines[:1])
+    assert resolve_display_baselines(1080, other_source,
+        [DisplayLine(line=lines[0], lane=0, display_start_ms=0, display_end_ms=2000)],
+        style_for_line(style, lines[0])) != baselines[0]
+
+
+def test_source_row_geometry_excludes_inline_replacement_and_invalidates_edits(qapp, tmp_path):
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+        resolve_display_baselines,
+    )
+    from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+    from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+
+    image_path = tmp_path / "avatar.png"
+    image = QImage(24, 24, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(image_path))
+    line = TimingLine(chars=[TimingChar("●", 1000, role_label="avatar"),
+                             TimingChar("歌", 1000, role_label="text")],
+                      end_ms=2000, layout_index=1, inline_guide_symbols={0: GuideSymbol(
+                          kind="bitmap", bitmap_before_path=str(image_path),
+                          bitmap_margin_bottom_px=-80,
+                      )})
+    track = TimingTrack(lines=[line])
+    style = Style(layout_semantics="n3_1074", font_size_px=200,
+        layouts=[LyricsLayout(line_y_position="top", line_gap_px=22,
+                              line_alignments=["left", "left"])],
+        custom_style_schemes={
+            "avatar": SubtitleStyleScheme(font_size_px=240, stroke_width_px=50),
+            "text": SubtitleStyleScheme(font_size_px=36, stroke_width_px=5),
+        })
+    def baselines():
+        return resolve_display_baselines(1080, track,
+            [DisplayLine(line=line, lane=0, display_start_ms=0, display_end_ms=2000)],
+            style_for_line(style, line), source_style=style)
+    reference = baselines()
+    assert reference[1] - reference[0] == 63
+    style.custom_style_schemes["avatar"] = SubtitleStyleScheme(font_size_px=300, stroke_width_px=80)
+    assert baselines() == reference
+    style.custom_style_schemes["text"] = SubtitleStyleScheme(font_size_px=60, stroke_width_px=5)
+    assert baselines()[1] - baselines()[0] == 87
+    assert baselines() != reference
+
+
 def test_main_horizontal_gradient_ink_bounds_include_svg_guide(qapp):
     from krok_helper.subtitle_render.domain.timing import (
         guide_symbol_with_role_labels,

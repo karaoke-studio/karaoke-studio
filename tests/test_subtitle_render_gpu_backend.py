@@ -2095,6 +2095,203 @@ def test_bitmap_avatar_preserves_text_vertical_gradient_and_height(
             assert np.array_equal(avatar_rows[1], avatar_rows[0] - offset)
 
 
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("position", ["top", "center", "bottom"])
+def test_cpu_gpu_role_row_grid_ignores_global_font(tmp_path, semantics, position):
+    track = TimingTrack(lines=[
+        TimingLine(chars=[TimingChar("H", 1000, role_label="title")], end_ms=2000,
+                   layout_index=1, display_start_override_ms=0, display_end_override_ms=3000),
+        TimingLine(chars=[TimingChar("H", 1000, role_label="title")], end_ms=2000,
+                   layout_index=1, display_start_override_ms=0, display_end_override_ms=3000),
+    ])
+    white = KaraokeColors(before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+                         after=KaraokeColorState(text=PaintFill(color="#FFFFFF")))
+    style = _g1_style(font_family="Meiryo", font_family_latin="Meiryo",
+        layout_semantics=semantics, decoration_kind="none", stroke2_enabled=False,
+        layouts=[LyricsLayout(line_y_position=position, line_y_margin_px=50,
+            line_gap_px=22, horizontal_margin_px=50, line_alignments=["left", "left"])],
+        custom_style_schemes={"title": SubtitleStyleScheme(font_family="Meiryo",
+            font_family_latin="Meiryo", font_size_px=36, stroke_width_px=0,
+            stroke2_enabled=False, decoration_kind="none", ruby_font_size_px=18,
+            karaoke_colors=white)})
+    painter = []
+    gpu = []
+    native_cpu = []
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        for size in (60, 200):
+            current = replace(style, font_size_px=size, stroke_width_px=15)
+            painter.append(_render_painter_oracle(current, t_ms=1500, track=track))
+            _, frames = _render_g1_frames(renderer, current, (1500,), force_warp=True, track=track)
+            gpu.append(frames[0])
+            native_cpu.append(renderer.render_frame_stats(1500)["checksum"])
+    assert painter[0] == painter[1]
+    assert gpu[0] == gpu[1]
+    assert native_cpu[0] == native_cpu[1]
+    cpu_bounds = _payload_alpha_bounds(painter[0])
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    assert all(abs(a-b) <= 2 for a, b in zip(cpu_bounds, gpu_bounds)), (cpu_bounds, gpu_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="G6 requires a Windows composition desktop")
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("position", ["top", "center", "bottom"])
+def test_g6_presented_role_rows_match_g5_pixels(qapp, semantics, position, tmp_path):
+    """Capture the real DComp child, not another shared-memory render."""
+    if QApplication.platformName().lower() != "windows":
+        pytest.skip("run with QT_QPA_PLATFORM=windows for real G6 presentation")
+    import queue
+    from ctypes import wintypes
+    from PIL import Image, ImageGrab
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("H", 1000, role_label="title")], end_ms=2000,
+        layout_index=1, display_start_override_ms=0, display_end_override_ms=3000,
+    ) for _ in range(2)])
+    white = KaraokeColors(before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+                         after=KaraokeColorState(text=PaintFill(color="#FFFFFF")))
+    style = _g1_style(font_family="Meiryo", font_family_latin="Meiryo",
+        layout_semantics=semantics, decoration_kind="none", stroke2_enabled=False,
+        layouts=[LyricsLayout(line_y_position=position, line_y_margin_px=35,
+            line_gap_px=22, horizontal_margin_px=50, line_alignments=["left", "left"])],
+        custom_style_schemes={"title": SubtitleStyleScheme(font_family="Meiryo",
+            font_family_latin="Meiryo", font_size_px=36, stroke_width_px=0,
+            stroke2_enabled=False, decoration_kind="none", ruby_font_size_px=18,
+            karaoke_colors=white)})
+    parent = QWidget()
+    parent.setStyleSheet("background: black;")
+    parent.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    parent.resize(660, 380)
+    parent.show()
+    parent.raise_()
+    parent.activateWindow()
+    QTest.qWait(100)
+    hwnd = int(parent.winId())
+    ready = queue.Queue()
+    captured = threading.Event()
+    failures = []
+    snapshots = []
+
+    def render():
+        try:
+            with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+                for size in (60, 200):
+                    current = replace(style, font_size_px=size, stroke_width_px=15)
+                    _, g5 = _render_g1_frames(renderer, current, (1500,),
+                                              force_warp=False, track=track,
+                                              wait_realizations=True)
+                    event = renderer.present_gpu_frame(1500, parent_hwnd=hwnd,
+                        x=0, y=0, width=640, height=360, force_warp=False)
+                    captured.clear()
+                    ready.put((g5[0], event))
+                    if not captured.wait(20):
+                        raise TimeoutError("G6 screenshot was not captured")
+                renderer.close_gpu_preview(force_warp=False)
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = threading.Thread(target=render, daemon=True)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 45
+        while len(snapshots) < 2 and time.monotonic() < deadline:
+            QTest.qWait(15)
+            if failures:
+                raise failures[0]
+            try:
+                g5, event = ready.get_nowait()
+            except queue.Empty:
+                continue
+            assert event["transport"] == "direct_composition"
+            child = int(event["child_hwnd"])
+            point = wintypes.POINT(0, 0)
+            user32 = ctypes.windll.user32
+            user32.ClientToScreen(wintypes.HWND(child), ctypes.byref(point))
+            user32.WindowFromPoint.argtypes = [wintypes.POINT]
+            user32.WindowFromPoint.restype = wintypes.HWND
+            user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetAncestor.restype = wintypes.HWND
+            # Shared desktops can briefly show system overlays above a test
+            # window. Capture only while the complete child is unobscured.
+            visible_until = time.monotonic() + 15
+            while time.monotonic() < visible_until:
+                QTest.qWait(100)
+                if all(user32.GetAncestor(user32.WindowFromPoint(
+                    wintypes.POINT(point.x+x, point.y+y)), 2) == hwnd
+                    for x in (5, 320, 635) for y in (5, 180, 355)):
+                    break
+            else:
+                raise AssertionError("G6 test window stayed covered by another window")
+            ctypes.windll.dwmapi.DwmFlush()
+            actual = np.asarray(ImageGrab.grab(
+                bbox=(point.x, point.y, point.x+640, point.y+360),
+                include_layered_windows=True, all_screens=True,
+            ).convert("RGB"))
+            pixels = np.frombuffer(g5, dtype=np.uint8).reshape(360, 640, 4).astype(np.uint16)
+            expected = ((pixels[:, :, :3] * pixels[:, :, 3:] + 127) // 255).astype(np.uint8)
+            snapshots.append((expected, actual))
+            captured.set()
+        assert len(snapshots) == 2
+    finally:
+        captured.set()
+        while worker.is_alive() and time.monotonic() < deadline:
+            QTest.qWait(15)
+        parent.close()
+    assert not failures, failures
+    for index, (expected, actual) in enumerate(snapshots):
+        Image.fromarray(expected).save(tmp_path / f"g5-{index}.png")
+        Image.fromarray(actual).save(tmp_path / f"g6-{index}.png")
+    def bounds(rgb):
+        y, x = np.nonzero(rgb.max(axis=2) > 32)
+        return (int(x.min()), int(y.min()), int(x.max()), int(y.max())) if len(y) else None
+    assert np.array_equal(snapshots[0][0], snapshots[1][0]), (
+        [bounds(pair[0]) for pair in snapshots],
+        int(np.abs(snapshots[0][0].astype(int)-snapshots[1][0].astype(int)).max()),
+        str(tmp_path),
+    )
+    for expected, actual in snapshots:
+        expected_mask = expected.max(axis=2) > 32
+        actual_mask = actual.max(axis=2) > 32
+        assert expected_mask.sum() > 100
+        assert np.count_nonzero(expected_mask ^ actual_mask) <= 8
+        assert np.abs(actual.astype(int) - expected.astype(int)).mean() < .1
+
+
+@pytest.mark.parametrize("dpr", [1.0, 1.5])
+@pytest.mark.parametrize("force_warp", [False, True])
+def test_role_row_grid_isolates_secondary_source_at_render_scale(dpr, force_warp):
+    red = KaraokeColors(before=KaraokeColorState(text=PaintFill(color="#FF0000")),
+                        after=KaraokeColorState(text=PaintFill(color="#FF0000")))
+    def line(role, start):
+        return TimingLine(chars=[TimingChar("H", start, role_label=role)],
+                          end_ms=start+1000, layout_index=1,
+                          display_start_override_ms=start,
+                          display_end_override_ms=start+1000)
+    primary = TimingTrack(lines=[line("large", 5000), line("large", 5000)])
+    secondary = TimingTrack(lines=[line("small", 1000), line("small", 1000)])
+    style = _g1_style(font_family="Meiryo", font_family_latin="Meiryo",
+        font_size_px=200, layout_semantics="n3_1074", stroke_width_px=0,
+        stroke2_enabled=False, decoration_kind="none",
+        layouts=[LyricsLayout(line_y_position="top", line_y_margin_px=35,
+            line_gap_px=22, horizontal_margin_px=50, line_alignments=["left", "left"])],
+        custom_style_schemes={
+            role: SubtitleStyleScheme(font_family="Meiryo", font_family_latin="Meiryo",
+                font_size_px=size, stroke_width_px=0, stroke2_enabled=False,
+                decoration_kind="none", karaoke_colors=red)
+            for role, size in [("small", 36), ("large", 100)]
+        })
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, reference = _render_g1_frames(renderer, style, (1500,), track=secondary,
+            force_warp=force_warp, dpr=dpr, wait_realizations=not force_warp)
+        _, combined = _render_g1_frames(renderer, style, (1500,), track=primary,
+            extra_tracks=[secondary], force_warp=force_warp, dpr=dpr,
+            worker_count=2, wait_realizations=not force_warp)
+    assert reference[0] == combined[0]
+    assert _render_painter_oracle(style, t_ms=1500, track=secondary) == (
+        _render_painter_oracle(style, t_ms=1500, track=primary, extra_tracks=[secondary]))
+
+
 def test_gpu_horizontal_ruby_gradient_uses_main_line_bounds_by_default(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

@@ -73,6 +73,7 @@ struct PaintFillSpec {
 };
 
 struct TimingLine {
+    std::optional<double> resolvedBaselineY;
     std::optional<double> annotationBaselineY;
     std::vector<TimingChar> chars;
     int endMs = 0;

@@ -53,7 +53,10 @@ QString layoutLineCacheKey(
         .arg(shadowOffsetXForState(lineStyle, false))
         .arg(shadowOffsetYForState(lineStyle, false))
         .arg(glowRadius(lineStyle, false))
-        .arg(lineStyle.letterSpacingPx);
+        .arg(lineStyle.letterSpacingPx)
+        + QStringLiteral("|baseline=%1").arg(line.resolvedBaselineY
+            ? QString::number(*line.resolvedBaselineY, 'g', 17)
+            : QStringLiteral("auto"));
 }
 
 LineLayout cachedLayoutLine(

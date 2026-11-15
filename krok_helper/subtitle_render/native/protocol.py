@@ -952,6 +952,42 @@ def track_to_ir(
         page_indices = {}
         section_indices = {}
         page_offset_windows = {}
+    # Painter resolves the authored baseline once per source/layout. G5/G6
+    # consume this same value before adding animation and page translations.
+    row_baselines = {}
+    if style is not None and not style.vertical:
+        from krok_helper.subtitle_render.engine.guide import render_line_with_guide_symbols
+        from krok_helper.subtitle_render.engine.text.metrics import latin_slot_differs
+        from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import resolve_display_baselines
+        from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+        # Default-only sources already use their actual font in native. Keep
+        # their established fractional sampling; role/singer and independent
+        # Latin fonts require the canonical box to remove the unrelated default.
+        shared_layouts = {
+            int(line.layout_index or 0)
+            for line in track.lines
+            if any(char.text.strip() and char.vector_glyph is None
+                   and (line.singer_id is not None or char.role_label)
+                   for char in render_line_with_guide_symbols(line).chars)
+        }
+        independent_latin = latin_slot_differs(style)
+        for index, item in enumerate(layout_plan.lines):
+            if not independent_latin and int(item.line.layout_index or 0) not in shared_layouts:
+                continue
+            lane = item.lane
+            baseline = resolve_display_baselines(
+                layout_plan.logical_height or 1080, track,
+                [DisplayLine(line=item.line, lane=lane, display_start_ms=0, display_end_ms=1)],
+                item.layout_style, source_style=style,
+            ).get(lane, 0)
+            # Native applies per-row offsets after the shared baseline, along
+            # with viewport/page translations. Keep that addition single.
+            if item.layout_style.line_horizontal_layout == "per_row":
+                if lane == 0:
+                    baseline -= item.layout_style.row1_offset_y
+                elif lane == 1:
+                    baseline -= item.layout_style.row2_offset_y
+            row_baselines[index] = baseline
     # 分模块宿主行（段首基线 + volume_head_override/lit_head_override 行级
     # 覆盖）：signal_head = 并集（任一模块挂载），volume_head/lit_head 供
     # native 分别门控柱组与形状灯（特效行开关）。
@@ -1030,6 +1066,7 @@ def track_to_ir(
             "custom": list(track.meta.custom),
         },
         "lines": [
+            ({"resolved_baseline_y": row_baselines[index]} if index in row_baselines else {}) |
             ({"annotation_baseline_y": lower_baselines[index]} if index in lower_baselines else {}) | timing_line_to_ir(
                 line,
                 render_line=(render_lines[index] if style is not None else None),

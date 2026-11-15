@@ -266,6 +266,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         );
         scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
+        if (sourceLine.resolvedBaselineY.has_value()) {
+            line.resolvedBaselineY = static_cast<float>(*sourceLine.resolvedBaselineY * scale);
+        }
         if (sourceLine.annotationBaselineY.has_value()) {
             line.annotationBaselineY = static_cast<float>(*sourceLine.annotationBaselineY * scale);
         }
