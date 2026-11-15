@@ -61,13 +61,17 @@ def test_persisted_page_membership_and_short_page_centering_use_authored_pages(s
     track,style=smart
     track=replace(track,page_plan=TrackPagePlan(sections=[TrackSection(pages=[TrackPage(2),TrackPage(1)])]))
     with layout_pass():
-        page=renderable_page_map(track,style)
+        page=renderable_page_map(track,style,respect_page_plan=True)
         assert len(page[id(track.lines[0])])==2 and len(page[id(track.lines[2])])==1
-        assert not line_center_override(track,track.lines[0],style)
-        assert line_center_override(track,track.lines[2],style)
-        track.page_plan=TrackPagePlan(sections=[TrackSection(pages=[TrackPage(1),TrackPage(2)])])
-        assert line_center_override(track,track.lines[0],style)
+        assert not line_center_override(track,track.lines[0],style,respect_page_plan=True)
+        assert line_center_override(track,track.lines[2],style,respect_page_plan=True)
+        # The production policy retains timing-derived membership, even when
+        # the experimental adapter populated the same pass's page cache first.
+        assert len(renderable_page_map(track,style)[id(track.lines[0])])==3
         assert not line_center_override(track,track.lines[2],style)
+        track.page_plan=TrackPagePlan(sections=[TrackSection(pages=[TrackPage(1),TrackPage(2)])])
+        assert line_center_override(track,track.lines[0],style,respect_page_plan=True)
+        assert not line_center_override(track,track.lines[2],style,respect_page_plan=True)
 
 
 @pytest.mark.parametrize('semantics',['legacy','n3_1074'])

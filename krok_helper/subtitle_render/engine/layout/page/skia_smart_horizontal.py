@@ -35,7 +35,7 @@ class SmartHorizontalPages:
         self.track, self.styles, self.locals = track, tuple(styles), locals
         self.anchors = anchors
         self.indices = {id(line): i for i, line in enumerate(track.lines)}
-        self.pages = renderable_page_map(track, style)
+        self.pages = renderable_page_map(track, style, respect_page_plan=True)
         self.lanes = {}
         self.maxima = {}
         self.fonts = tuple(max(int(style_for_role_in_layout(s, l.chars[0].role_label).font_size_px), 1)
@@ -63,7 +63,7 @@ class SmartHorizontalPages:
         i = self.indices[id(line)]
         style = self.styles[i]
         lane = self.lanes.get(id(line), natural_lane)
-        if line_center_override(self.track, line, style) or style.line_horizontal_layout == 'center':
+        if line_center_override(self.track, line, style, respect_page_plan=True) or style.line_horizontal_layout == 'center':
             return 'center'
         if style.line_horizontal_layout == 'per_row':
             return row_layout_params(style, lane)[0]

@@ -46,7 +46,7 @@ class SkiaCollisionGeometry:
         if key not in self.cache:
             style = self.styles[i]
             placement = SimpleNamespace(line=item.line, layout_style=style, lane=item.lane, page_line_count=item.page_line_count,
-                center_override=line_center_override(self.track, item.line, style))
+                center_override=line_center_override(self.track, item.line, style, respect_page_plan=True))
             position = self.position(placement, width, height)
             bounds = collision_bounds(self.locals[i], position)
             self.cache[key] = None if bounds is None else CollisionLineGeometry(

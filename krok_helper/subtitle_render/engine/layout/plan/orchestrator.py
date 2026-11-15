@@ -78,6 +78,7 @@ class LayoutPlanResolvers:
     page_offset_windows: PageOffsetWindowsResolver
     char_intervals: "CharIntervalsResolver"
     metrics_identity: Hashable | None = None
+    respect_page_plan: bool = False
 
 
 class CharIntervalsResolver(Protocol):
@@ -187,6 +188,8 @@ def resolve_track_layout_plan(
         # （layout_context 线程局部），同签名不同偏移必须各自成计划。
         current_roll_shift_ms(),
     )
+    if resolvers.respect_page_plan:
+        cache_key += (("authored_page_membership", True),)
     if use_cache and layout_cache_enabled():
         cached = cached_track_layout_plan(cache_key)
         if cached is not None:
@@ -266,6 +269,7 @@ def resolve_track_layout_plan(
             layout_styles=layout_styles,
             animation_styles=animation_styles,
             resolved_intervals=resolved_intervals,
+            respect_page_plan=resolvers.respect_page_plan,
         )
     if layout_cache_enabled():
         # Retain the mutable owners because the key contains track identity.

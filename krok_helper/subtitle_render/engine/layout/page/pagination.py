@@ -21,11 +21,11 @@ def _page_lines_style_key(style: Style) -> tuple:
 
 
 def renderable_page_map(
-    track: TimingTrack, style: Style
+    track: TimingTrack, style: Style, *, respect_page_plan: bool = False
 ) -> dict[int, tuple[tuple[TimingLine, int], ...]]:
     """Map each renderable line identity to the lines and lanes on its page."""
     cache = getattr(_LAYOUT_PASS, "page_maps", None)
-    cache_key = (id(track), _page_lines_style_key(style), page_plan_signature(track)) if cache is not None else None
+    cache_key = (id(track), _page_lines_style_key(style), page_plan_signature(track), respect_page_plan) if cache is not None else None
     if cache is not None:
         hit = cache.get(cache_key)
         if hit is not None:
@@ -38,7 +38,9 @@ def renderable_page_map(
         section_gap_ms=style.section_gap_ms,
     )
     page_map: dict[int, tuple[tuple[TimingLine, int], ...]] = {}
-    if track.page_plan is not None:
+    # Existing Qt/Direct2D layout uses timing-derived membership. The canonical
+    # experimental adapter opts into authored membership explicitly.
+    if respect_page_plan and track.page_plan is not None:
         for page in resolve_page_plan(track, style).pages:
             members = tuple((track.lines[index], lane) for lane, index in enumerate(page.track_line_indices))
             for item, _lane in members:
@@ -61,19 +63,23 @@ def renderable_page_lines(
     track: TimingTrack,
     line: TimingLine,
     style: Style,
+    *,
+    respect_page_plan: bool = False,
 ) -> list[tuple[TimingLine, int]] | None:
     """Return the renderable lines and lanes sharing one line's page."""
-    page = renderable_page_map(track, style).get(id(line))
+    page = renderable_page_map(track, style, respect_page_plan=respect_page_plan).get(id(line))
     return None if page is None else list(page)
 
 
-def line_center_override(track: TimingTrack, line: TimingLine, style: Style) -> bool:
+def line_center_override(
+    track: TimingTrack, line: TimingLine, style: Style, *, respect_page_plan: bool = False,
+) -> bool:
     """Return whether N3 SmartHorizon centers a single-line page."""
     if style.smart_horizontal == "none":
         return False
     if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
         return False
-    page = renderable_page_lines(track, line, style)
+    page = renderable_page_lines(track, line, style, respect_page_plan=respect_page_plan)
     return page is not None and len(page) == 1
 
 

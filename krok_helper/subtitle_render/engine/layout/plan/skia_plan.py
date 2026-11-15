@@ -40,7 +40,8 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
             return resolve_page_offset_windows(width, height, source, appearance,
                 PageOffsetResolvers(display, geometry.page_lines), metrics_identity=geometry.identity)
 
-        ports = LayoutPlanResolvers(display, offsets, measured.snapshot.resolve_intervals, geometry.identity)
+        ports = LayoutPlanResolvers(display, offsets, measured.snapshot.resolve_intervals, geometry.identity,
+                                    respect_page_plan=True)
         plan = build_track_layout_plan(track, style, ports, **plan_kwargs)
         geometry.set_lanes(plan.lines)
         return PreparedSkiaLayout(plan, measured, geometry)

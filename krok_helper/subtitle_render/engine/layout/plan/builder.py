@@ -38,6 +38,7 @@ def assemble_track_layout_plan(
     layout_styles: Sequence[Style],
     animation_styles: Sequence[Style],
     resolved_intervals: Sequence[Sequence[tuple[int, int]]],
+    respect_page_plan: bool = False,
 ) -> TrackLayoutPlan:
     """Assemble already-resolved timing and geometry into one shared plan."""
     renderable_lines = [
@@ -164,6 +165,7 @@ def assemble_track_layout_plan(
                     track,
                     line,
                     layout_styles[index],
+                    respect_page_plan=respect_page_plan,
                 ),
                 layout_offset_windows=tuple(page_offset_windows.get(index, ())),
                 displace_exit_ms=displace_exit,
