@@ -333,7 +333,12 @@ def test_painter_uses_shared_value_signature_boundary():
         for alias in node.names
     }
 
-    assert signature_imports == {("value_signature", "_value_signature")}
+    # Painter caches line layouts by the shared value signature and collision
+    # geometry by the layout-only signature (lower annotation identity).
+    assert signature_imports == {
+        ("value_signature", "_value_signature"),
+        ("lyric_layout_style_signature", "_lyric_layout_style_signature"),
+    }
 
 
 def test_native_parsed_render_config_has_single_header_owner():

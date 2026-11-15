@@ -74,30 +74,31 @@ def test_spacing_pushes_later_targets_and_preserves_overhang(semantics):
     assert char_left_positions([20,20],0,False,char_gaps=[0,42])==[0,62]
 
 
-def test_spacing_lower_group_resets_interference_and_negative_interval_is_honored():
-    style=Style(letter_spacing_px=0,ruby_interval_px=-3)
-    spans=[RubySpacingSpan(0,0,False,0),RubySpacingSpan(1,1,True,1)]
-    bounds=lambda span,x,width:(x-20,x+40)
-    assert resolve_ruby_spacing([20,20],style,spans,draw_bounds=bounds)==([0,0],20,20)
-    spans[1]=replace(spans[1],lower=False)
-    assert resolve_ruby_spacing([20,20],style,spans,draw_bounds=bounds)==([0,37],20,20)
+def test_lower_slots_center_readings_and_ignore_negative_interval():
+    style = Style(letter_spacing_px=0, ruby_interval_px=-3)
+    spans = [RubySpacingSpan(0, 0, True, 0), RubySpacingSpan(1, 1, True, 1)]
+    bounds = lambda span, x, width: (x - 20, x + 40)
+    # 60px readings over 20px cells need 20px on each side; interior boundary
+    # carries both neighbouring halves, trailing half is line overhang.
+    assert resolve_ruby_spacing([20, 20], style, spans, draw_bounds=bounds)[0] == [20, 40]
+    # Upper interference is unchanged by the lower slots.
+    upper_spans = [replace(span, lower=False) for span in spans]
+    assert resolve_ruby_spacing([20, 20], style, upper_spans, draw_bounds=bounds)[0] == [0, 37]
 
 
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('spacing', [-3, 0, 14])
-def test_lower_group_clearance_uses_main_letter_spacing(semantics, spacing):
+def test_lower_slot_halves_do_not_depend_on_main_letter_spacing(semantics, spacing):
     style = Style(layout_semantics=semantics, letter_spacing_px=spacing, ruby_interval_px=2)
     spans = [RubySpacingSpan(0, 0, True, 0), RubySpacingSpan(1, 1, True, 1)]
     bounds = lambda span, x, width: (x - 20, x + 40)
-    gaps, _, _ = resolve_ruby_spacing([20, 20], style, spans, draw_bounds=bounds)
-    lefts = char_left_positions([20, 20], 0, False, spacing, char_gaps=gaps)
-    assert (lefts[1] - 20) - (lefts[0] + 40) == spacing
+    gaps = resolve_ruby_spacing([20, 20], style, spans, draw_bounds=bounds)[0]
+    assert gaps == [20, 40]
 
 
-def test_lower_clearance_uses_frozen_main_ink_instead_of_raw_negative_spacing():
+def test_lower_slot_uses_half_boundaries_instead_of_frozen_ink_gaps():
     style = Style(letter_spacing_px=-2, ruby_interval_px=-2)
     spans = [RubySpacingSpan(i, i, True, i) for i in range(3)]
-    # The -2px cell spacing still leaves 18px between the main glyphs.
     original_ink = [(10, 90), (108, 188), (206, 286)]
     gaps, _, _ = resolve_ruby_spacing(
         [100, 100, 100], style, spans,
@@ -105,9 +106,7 @@ def test_lower_clearance_uses_frozen_main_ink_instead_of_raw_negative_spacing():
         lower_ink_bounds=lambda span, x, width: (x - 15, x + 115),
         main_ink_bounds=original_ink,
     )
-    assert gaps == [0, 50, 50]
-    positions = char_left_positions([100] * 3, 0, False, -2, char_gaps=gaps)
-    assert [(positions[i + 1] - 15) - (positions[i] + 115) for i in range(2)] == [18, 18]
+    assert gaps == [20, 40, 40]
 
 
 @pytest.mark.parametrize('value',[float('nan'),float('inf'),float('-inf')])

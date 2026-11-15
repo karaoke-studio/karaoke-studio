@@ -822,12 +822,31 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     };
     const auto lineAnchorBounds = [&](const Impl::CachedLine &line) {
         auto bounds = line.bounds;
-        if (line.style.layoutSemantics == "n3_1074" && !line.style.vertical) {
-            bounds = line.fillBounds;
-            for (const auto &ruby : line.rubies) {
-                for (const auto &unit : ruby.chars) {
-                    bounds.left = std::min(bounds.left, unit.layoutLeft);
-                    bounds.right = std::max(bounds.right, unit.layoutRight);
+        if (!line.style.vertical) {
+            if (line.style.layoutSemantics == "n3_1074") {
+                bounds = line.fillBounds;
+                for (const auto &ruby : line.rubies) {
+                    for (const auto &unit : ruby.chars) {
+                        bounds.left = std::min(bounds.left, unit.layoutLeft);
+                        bounds.right = std::max(bounds.right, unit.layoutRight);
+                    }
+                }
+            } else {
+                // Legacy line placement historically anchors the main glyphs
+                // only, so authored upper Ruby keeps its established position.
+                // Generated lower readings, however, are render-only text that
+                // the Painter's line_total_width already unions into the line
+                // box; excluding them here would right-align a legacy line by
+                // its main text and clip the lower overhang off-canvas in the
+                // GPU preview/export.  Union the lower units only.
+                for (const auto &ruby : line.rubies) {
+                    if (!ruby.lower) {
+                        continue;
+                    }
+                    for (const auto &unit : ruby.chars) {
+                        bounds.left = std::min(bounds.left, unit.layoutLeft);
+                        bounds.right = std::max(bounds.right, unit.layoutRight);
+                    }
                 }
             }
         }

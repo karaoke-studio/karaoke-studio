@@ -15168,7 +15168,11 @@ def test_collision_bands_ignore_glow_extent(qapp, lower_enabled):
 
 
 @pytest.mark.parametrize("lower_enabled", [False, True])
-def test_legacy_collision_box_uses_only_main_glyph_ink(qapp, lower_enabled):
+def test_legacy_collision_box_uses_main_glyph_ink_plus_lower_annotation(
+    qapp, lower_enabled
+):
+    """碰撞包络 = 主字形墨迹 ∪ 生成的下层注音墨迹；上注音/装饰仍不参与。"""
+
     line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
     ruby = RubyAnnotation(
         kanji="歌",
@@ -15203,29 +15207,77 @@ def test_legacy_collision_box_uses_only_main_glyph_ink(qapp, lower_enabled):
         decoration_kind="shadow",
         shadow_offset_y=30,
     )
+    # Both styles measure the same track: the authored upper Ruby is present so
+    # the lower reading exists, isolating decoration from content differences.
+    track = TimingTrack(lines=[line], rubies=[ruby])
 
     plain_band = subtitle_painter.measure_collision_bands(
         640,
         360,
-        TimingTrack(lines=[line]),
+        track,
         plain,
         display_lines,
     )[0][2]
     decorated_band = subtitle_painter.measure_collision_bands(
         640,
         360,
-        TimingTrack(lines=[line], rubies=[ruby]),
+        track,
         decorated,
         display_lines,
     )[0][2]
-    metrics = QFontMetrics(_build_font(plain))
-    baseline = subtitle_painter._resolve_baseline_y(metrics, 360, plain)
-    path = QPainterPath()
-    path.addText(0.0, float(baseline), _build_font(plain), "歌")
-    glyph_bounds = path.boundingRect()
+    baselines = subtitle_painter._resolve_display_baselines(
+        360, track, display_lines, plain
+    )
+    line_layouts = subtitle_painter._resolve_sayatoo_line_layouts(
+        640, 360, track, display_lines, baselines, 0, plain
+    )
+    line_layout = line_layouts[id(line)]
+    layout = _layout_line(
+        track,
+        line,
+        plain,
+        640,
+        360,
+        baseline_y=line_layout.baseline_y,
+        line_x=line_layout.text_x,
+        lane=0,
+    )
+    # Same composition as the placement helper: main glyph ink_box cells.
+    glyph = layout.text_layout.glyphs[0]
+    glyph_x = glyph.left + glyph.path_offset_x
+    expected = [
+        math.floor(glyph_x + glyph.ink_box[0]),
+        math.floor(layout.baseline_y + glyph.ink_box[1]),
+        math.ceil(glyph_x + glyph.ink_box[2]),
+        math.ceil(layout.baseline_y + glyph.ink_box[3]),
+    ]
+    lower_rects = [
+        item.gradient_rect
+        for item in layout.ruby_layouts
+        if getattr(item.ruby, "render_style", None) is not None
+    ]
+    if lower_enabled:
+        assert lower_rects
+        expected[0] = min(
+            expected[0], math.floor(min(rect.left() for rect in lower_rects))
+        )
+        expected[2] = max(
+            expected[2], math.ceil(max(rect.right() for rect in lower_rects))
+        )
+        expected[3] = max(
+            expected[3], math.ceil(max(rect.bottom() for rect in lower_rects))
+        )
+    else:
+        assert not lower_rects
+    expected_cross = (float(expected[0]), float(expected[2]))
+    expected_axis = (float(expected[1]), float(expected[3]))
 
-    assert plain_band.axis_min == math.floor(glyph_bounds.top())
-    assert plain_band.axis_max == math.ceil(glyph_bounds.bottom())
+    assert plain_band.axis_min == expected_axis[0]
+    assert plain_band.axis_max == expected_axis[1]
+    assert plain_band.cross_min == expected_cross[0]
+    assert plain_band.cross_max == expected_cross[1]
+    # Decoration (shadow) never enters placement, including below the lower
+    # annotation (its stroke-only envelope is the collision extent).
     assert decorated_band.axis_min == plain_band.axis_min
     assert decorated_band.axis_max == plain_band.axis_max
     assert decorated_band.cross_min == plain_band.cross_min

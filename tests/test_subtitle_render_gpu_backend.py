@@ -318,8 +318,9 @@ def test_gpu_lower_ruby_two_row_zero_gap_matches_painter(monkeypatch, semantics,
 
 
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
-@pytest.mark.parametrize("lower_spacing", [1, 7])
-def test_gpu_lower_ruby_group_spacing_matches_main_text(monkeypatch, semantics, lower_spacing):
+def test_gpu_lower_dominant_reading_pushes_main_text(monkeypatch, semantics):
+    """A kana-only line lets the generated reading drive the main text."""
+
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
 
@@ -327,92 +328,144 @@ def test_gpu_lower_ruby_group_spacing_matches_main_text(monkeypatch, semantics, 
                       end_ms=1500, track_line_index=0,
                       display_start_override_ms=0, display_end_override_ms=2000)
     track = TimingTrack(lines=[line])
+
     def colors(color):
         state = KaraokeColorState(text=PaintFill(color=color))
         return KaraokeColors(before=state, after=state)
-    style = _g1_style(layout_semantics=semantics, font_family="Meiryo", font_family_latin="Meiryo",
-        font_size_px=24, ruby_font_size_px=36, ruby_font_family="Meiryo",
-        ruby_font_family_latin="Meiryo", ruby_font_follow_main=False,
-        stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
-        ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_decoration_kind="none",
-        ruby_colors_follow_main=False, karaoke_colors=colors("#FF0000"),
-        ruby_karaoke_colors=colors("#0000FF"), lower_ruby_enabled=True,
-        lower_ruby_follow_upper=False, dual_line_layout=False, title_overlays=[],
-        letter_spacing_px=0, ruby_interval_px=2, lower_ruby_interval_px=lower_spacing,
+
+    style = _g1_style(layout_semantics=semantics, font_family="Meiryo",
+        font_family_latin="Meiryo", font_size_px=24, ruby_font_size_px=36,
+        ruby_font_family="Meiryo", ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False, stroke_width_px=0, stroke2_enabled=False,
+        decoration_kind="none", ruby_stroke_width_px=0, ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none", ruby_colors_follow_main=False,
+        karaoke_colors=colors("#FF0000"), ruby_karaoke_colors=colors("#0000FF"),
+        lower_ruby_enabled=True, lower_ruby_follow_upper=False,
+        dual_line_layout=False, title_overlays=[], letter_spacing_px=0,
+        ruby_interval_px=2, lower_ruby_interval_px=7,
         layout_reference_height=360, ruby_alignment="center")
     style = replace(style, lower_ruby_style=lower_style_snapshot(style))
-    starts = []
+
+    def main_bounds(payload):
+        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+        ys, xs = np.where((rgba[:, :, 0] > 150) & (rgba[:, :, 2] < 40)
+                          & (rgba[:, :, 3] > 100))
+        assert len(xs) > 0
+        return int(xs.max() - xs.min())
+
     with NativeRendererProcess(_renderer_path()) as renderer:
-        for current in (style, replace(style, letter_spacing_px=18),
-                        replace(style, letter_spacing_px=18, lower_ruby_interval_px=lower_spacing + 4)):
-            _, frames = _render_g1_frames(renderer, current, (750,), force_warp=True, track=track)
-            rgba = np.frombuffer(frames[0], dtype=np.uint8).reshape(360, 640, 4)
-            mask = ((rgba[:, :, 0] > 150) & (rgba[:, :, 2] < 40) & (rgba[:, :, 3] > 100))
-            xs = np.flatnonzero(mask.any(axis=0))
-            groups = np.r_[xs[0], xs[np.flatnonzero(np.diff(xs) > 1) + 1]]
-            assert len(groups) == 3
-            starts.append(groups)
-    # Changing the main spacing must increase each inter-group step by 18px;
-    # changing the internal spacing of three-letter "shi" by 4 adds 8px.
-    assert np.array_equal(np.diff(starts[1]) - np.diff(starts[0]), [18, 18])
-    assert np.array_equal(np.diff(starts[2]) - np.diff(starts[1]), [8, 8])
+        _, plain = _render_g1_frames(renderer, replace(style, lower_ruby_enabled=False),
+                                     (750,), force_warp=True, track=track)
+        _, annotated = _render_g1_frames(renderer, style, (750,), force_warp=True,
+                                         track=track)
+    # The lower reading is wider than its 24px cells, so it must move the main
+    # text (there is no authored upper layer to take the max instead).
+    assert main_bounds(annotated[0]) > main_bounds(plain[0]) + 2
 
 
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
-def test_gpu_lower_long_reading_keeps_visible_main_gap_at_negative_spacing(monkeypatch, semantics):
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+def test_gpu_lower_does_not_add_to_upper_dominant_push(monkeypatch, semantics):
+    """When the authored upper reading is wider, the lower layer adds nothing."""
 
-    palette = ("#00FF00", "#0000FF", "#FF00FF")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+
+    line = TimingLine(chars=[TimingChar(char, index * 500) for index, char in enumerate("国し")],
+                      end_ms=1000, track_line_index=0,
+                      display_start_override_ms=0, display_end_override_ms=2000)
+    upper = RubyAnnotation("国", "あ" * 40, pos_start_ms=0, pos_end_ms=500,
+                           target_line_index=0, target_char_start=0, target_char_end=1)
+    track = TimingTrack(lines=[line], rubies=[upper])
+
     def colors(color):
         state = KaraokeColorState(text=PaintFill(color=color))
         return KaraokeColors(before=state, after=state)
-    line = TimingLine(chars=[TimingChar(char, i * 500, role_label=str(i))
-                             for i, char in enumerate("す命と")],
-                      end_ms=1500, track_line_index=0,
-                      display_start_override_ms=0, display_end_override_ms=2000)
-    upper = RubyAnnotation("命", "いのち", pos_start_ms=500, pos_end_ms=1000,
-                           target_line_index=0, target_char_start=1, target_char_end=2)
-    track = TimingTrack(lines=[line], rubies=[upper])
-    style = _g1_style(layout_semantics=semantics, font_family="Meiryo", font_family_latin="Comic Sans MS",
-        font_size_px=100, ruby_font_size_px=45, ruby_font_family="Meiryo",
-        ruby_font_family_latin="Comic Sans MS", ruby_font_follow_main=False,
-        font_reference_height=540, layout_reference_height=540,
-        stroke_width_px=15, stroke2_enabled=False, decoration_kind="none",
-        ruby_stroke_width_px=10, ruby_stroke2_enabled=False, ruby_decoration_kind="none",
-        lower_ruby_enabled=True, dual_line_layout=False, title_overlays=[],
-        letter_spacing_px=-2, ruby_interval_px=-2,
-        custom_style_schemes={str(i): SubtitleStyleScheme(
-            karaoke_colors=colors(color), ruby_colors_follow_main=False, ruby_karaoke_colors=colors(color),
-        ) for i, color in enumerate(palette)})
-    baseline = build_render_ir(track, style, width=960, height=540, fps=60)["track"]["lines"][0]["annotation_baseline_y"]
+
+    style = _g1_style(layout_semantics=semantics, font_family="Meiryo",
+        font_family_latin="Meiryo", font_size_px=24, ruby_font_size_px=20,
+        ruby_font_family="Meiryo", ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False, stroke_width_px=0, stroke2_enabled=False,
+        decoration_kind="none", ruby_stroke_width_px=0, ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none", ruby_colors_follow_main=False,
+        karaoke_colors=colors("#FF0000"), ruby_karaoke_colors=colors("#0000FF"),
+        lower_ruby_enabled=True, lower_ruby_follow_upper=False,
+        dual_line_layout=False, title_overlays=[], letter_spacing_px=0,
+        ruby_interval_px=2, lower_ruby_interval_px=7,
+        layout_reference_height=360, ruby_alignment="center")
+    style = replace(style, lower_ruby_style=lower_style_snapshot(style))
+
+    def main_width(payload):
+        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+        ys, xs = np.where((rgba[:, :, 0] > 150) & (rgba[:, :, 2] < 40)
+                          & (rgba[:, :, 3] > 100))
+        assert len(xs) > 0
+        return int(xs.max() - xs.min())
+
     with NativeRendererProcess(_renderer_path()) as renderer:
-        _, natural = _render_g1_frames(renderer, replace(style, lower_ruby_enabled=False),
-            (750,), force_warp=True, track=TimingTrack(lines=[line]), width=960, height=540)
-        _, annotated = _render_g1_frames(renderer, style, (250, 750, 1250),
-            force_warp=True, track=track, width=960, height=540)
+        _, base = _render_g1_frames(renderer, style, (750,), force_warp=True,
+                                    track=track)
+        _, wider = _render_g1_frames(
+            renderer, replace(style, lower_ruby_interval_px=50), (750,),
+            force_warp=True, track=track,
+        )
+    # Both frames contain the same (dominant) authored upper layer; making the
+    # lower requirement larger must not add a second push on top of it.  The
+    # text advance width is unchanged (the lower slot may still centre the line
+    # by adding half a slot at the line edge).
+    assert abs(main_width(wider[0]) - main_width(base[0])) <= 2
 
-    def bounds(payload, lower=False):
-        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(540, 960, 4)
-        if lower:
-            rgba = rgba[int(baseline) + 10:]
-        result = []
-        for color in ((0, 255, 0), (0, 0, 255), (255, 0, 255)):
-            mask = rgba[:, :, 3] > 180
-            for channel, value in enumerate(color):
-                mask &= rgba[:, :, channel] > 180 if value else rgba[:, :, channel] < 40
-            xs = np.flatnonzero(mask.any(axis=0))
-            assert len(xs)
-            result.append((xs.min(), xs.max()))
-        return result
 
-    original = bounds(natural[0])
-    required = [original[i + 1][0] - original[i][1] - 1 for i in range(2)]
-    assert min(required) > 0
-    for frame in annotated:
-        lower = bounds(frame, lower=True)
-        actual = [lower[i + 1][0] - lower[i][1] - 1 for i in range(2)]
-        assert all(gap >= minimum - 2 for gap, minimum in zip(actual, required)), (actual, required)
+def test_gpu_legacy_lower_overhang_keeps_main_aligned_with_painter(monkeypatch):
+    """Legacy line placement must union the lower overhang, like line_total_width.
+
+    A legacy page with a wide generated reading used to anchor the native line
+    on the main glyphs only while the Painter anchored the main ∪ lower box,
+    shifting the whole GPU line by the lower overhang.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+
+    line = TimingLine(chars=[TimingChar("し", 0, explicit_start=True)],
+                      end_ms=1000, track_line_index=0,
+                      display_start_override_ms=0, display_end_override_ms=2000)
+    upper = RubyAnnotation("し", "あ" * 10, pos_start_ms=0, pos_end_ms=500,
+                           target_line_index=0, target_char_start=0, target_char_end=1)
+    track = TimingTrack(lines=[line], rubies=[upper])
+
+    def colors(color):
+        state = KaraokeColorState(text=PaintFill(color=color))
+        return KaraokeColors(before=state, after=state)
+
+    style = _g1_style(layout_semantics="legacy", font_family="Meiryo",
+        font_family_latin="Meiryo", font_size_px=24, ruby_font_size_px=24,
+        ruby_font_family="Meiryo", ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False, stroke_width_px=0, stroke2_enabled=False,
+        decoration_kind="none", ruby_colors_follow_main=False,
+        karaoke_colors=colors("#FF0000"), ruby_karaoke_colors=colors("#0000FF"),
+        lower_ruby_enabled=True, lower_ruby_follow_upper=False,
+        lower_ruby_interval_px=100, dual_line_layout=False,
+        line_horizontal_layout="per_row", row1_align="left", row1_offset_x=0,
+        line_y_position="bottom", horizontal_margin_px=40, title_overlays=[],
+        layout_reference_height=360, font_reference_height=360)
+    style = replace(style, lower_ruby_style=lower_style_snapshot(style))
+
+    def main_left(payload):
+        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+        ys, xs = np.where((rgba[:, :, 0] > 150) & (rgba[:, :, 1] < 40)
+                          & (rgba[:, :, 2] < 40) & (rgba[:, :, 3] > 100))
+        assert len(xs) > 0
+        return int(xs.min())
+
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        _, plain = _render_g1_frames(renderer, replace(style, lower_ruby_enabled=False),
+                                     (500,), force_warp=True, track=track)
+        _, annotated = _render_g1_frames(renderer, style, (500,), force_warp=True,
+                                         track=track)
+    # The lower reading overhangs the single main cell on the left; left
+    # anchoring must reserve that overhang and shift the main glyph right
+    # instead of clipping the annotation off-canvas.
+    assert main_left(annotated[0]) > main_left(plain[0]) + 5
 
 
 def test_gpu_lower_ruby_follow_colors_survive_style_patch(monkeypatch):

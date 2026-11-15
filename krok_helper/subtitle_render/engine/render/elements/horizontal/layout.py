@@ -129,6 +129,43 @@ def annotated_content_rect(rect: QRectF, rubies: tuple[RubyLayout, ...], style: 
     return rect
 
 
+def lower_ruby_layouts(layout: LineLayout) -> tuple[RubyLayout, ...]:
+    """Return the generated lower annotations inside one line's Ruby layouts.
+
+    Lower readings are derived per kana cell and carry their resolved render
+    style on the annotation (``LowerRuby.render_style``).  Authored upper Ruby
+    stays out of placement collisions, so callers that measure the lower
+    contribution must filter by that marker instead of using every layout.
+    """
+    return tuple(
+        ruby
+        for ruby in layout.ruby_layouts
+        if getattr(ruby.ruby, "render_style", None) is not None
+    )
+
+
+def lower_annotation_ink_rect(
+    layout: LineLayout,
+) -> tuple[int, int, int, int] | None:
+    """Static ink envelope of the generated lower annotation.
+
+    ``RubyLayout.gradient_rect`` is the reading ink expanded by the same
+    symmetric stroke allowance used to paint the annotation; glow, shadow and
+    effect pads are deliberately absent.  This is the lower-annotation
+    contribution to a line's placement/collision rectangle (top, bottom, left
+    and right), matching the main text's "ink + stroke, no FX" policy.
+    """
+    layouts = lower_ruby_layouts(layout)
+    if not layouts:
+        return None
+    return (
+        int(math.floor(min(float(ruby.gradient_rect.left()) for ruby in layouts))),
+        int(math.floor(min(float(ruby.gradient_rect.top()) for ruby in layouts))),
+        int(math.ceil(max(float(ruby.gradient_rect.right()) for ruby in layouts))),
+        int(math.ceil(max(float(ruby.gradient_rect.bottom()) for ruby in layouts))),
+    )
+
+
 def signal_band_left_local(
     track: TimingTrack, line: TimingLine, style: Style
 ) -> float | None:

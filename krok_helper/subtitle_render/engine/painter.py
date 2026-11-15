@@ -154,6 +154,7 @@ from krok_helper.subtitle_render.engine.render.frame_analysis import (
     frame_vertical_bounds as _analyze_frame_vertical_bounds,
 )
 from krok_helper.subtitle_render.engine.value_signature import (
+    lyric_layout_style_signature as _lyric_layout_style_signature,
     value_signature as _value_signature,
 )
 from krok_helper.subtitle_render.serialization.paint import (
@@ -635,6 +636,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     utopia_ruby_scope_layers as _utopia_ruby_scope_layers,
     utopia_ruby_scope_rect as _utopia_ruby_scope_rect,
     utopia_scope_id as _utopia_scope_id,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+    lower_annotation_ink_rect as _lower_annotation_ink_rect,
 )
 from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
     paint_scanline_image as _paint_scanline_image,
@@ -1838,11 +1842,14 @@ def _display_line_horizontal_ink_rect(
     *,
     layout_cache_sig: tuple | None,
 ) -> tuple[int, int, int, int] | None:
-    """Return the undecorated main-glyph rectangle used by collision checks.
+    """Return the static placement rectangle used by collision checks.
 
-    Ruby, glow, shadow, both strokes, layout cells and animation trajectories
-    are deliberately excluded.  Both layout semantics therefore collide on
-    the same simple quantity: the actual main-text glyph paths.
+    Content: the undecorated main-text glyph ink plus -- when enabled -- the
+    generated lower-annotation ink (reading ink and its stroke allowance) for
+    top/bottom/left/right.  Authored upper Ruby keeps its historical
+    main-glyph-only treatment so existing upper-Ruby projects do not regress.
+    Glow, shadow, both main strokes, layout cells and animation trajectories
+    stay excluded, so decoration parameters cannot move lyrics.
     """
 
     line = display_line.line
@@ -1884,7 +1891,7 @@ def _display_line_horizontal_ink_rect(
         lane=lane,
         cache_sig=layout_cache_sig,
     )
-    rect = None if layout is None else _line_main_text_ink_rect(layout)
+    rect = None if layout is None else _line_placement_ink_rect(layout)
     if cache_key is not None:
         cache[cache_key] = rect
         # 键里有 id()：对象被回收后地址会被复用，这里把它们按住。
@@ -1892,6 +1899,31 @@ def _display_line_horizontal_ink_rect(
         _LAYOUT_PASS.lines.append(line)
         _LAYOUT_PASS.styles.append(line_style)
     return rect
+
+
+def _line_placement_ink_rect(
+    layout: _LineLayout,
+) -> tuple[int, int, int, int] | None:
+    """Main-glyph ink unioned with the generated lower-annotation ink.
+
+    Upper authored Ruby is intentionally absent: its collision treatment stays
+    main-glyph-only.  The lower contribution comes from the already-built
+    ``ruby_layouts`` (no re-lowering or per-query text shaping) and only
+    extends the main rectangle, never shrinks it.
+    """
+
+    main = _line_main_text_ink_rect(layout)
+    lower = _lower_annotation_ink_rect(layout)
+    if lower is None:
+        return main
+    if main is None:
+        return lower
+    return (
+        min(main[0], lower[0]),
+        min(main[1], lower[1]),
+        max(main[2], lower[2]),
+        max(main[3], lower[3]),
+    )
 
 
 def _line_main_text_ink_rect(
@@ -2018,12 +2050,13 @@ def _line_static_vertical_ink_bounds(
     """Return the static painted Y envelope without layout line spacing.
 
     Counts main-text/Ruby glyph geometry plus stroke, shadow and glow
-    extents. Placement collisions deliberately do NOT consume this any
-    more: they measure undecorated main glyphs only
-    (``_display_line_horizontal_ink_rect`` / ``_display_line_vertical_ink_rect``),
-    so decoration parameters cannot move lyrics; this painted-ink envelope
-    stays as a test reference. Font metric cells and ``line_gap_px`` are
-    absent; consumers add the overlapped layout's line gap at most once.
+    extents. Placement collisions deliberately do NOT consume this: they
+    measure the undecorated main glyphs plus, for horizontal lines, the
+    generated lower-annotation ink (``_display_line_horizontal_ink_rect`` /
+    ``_display_line_vertical_ink_rect``), so main/upper decoration parameters
+    cannot move lyrics; this painted-ink envelope stays as a test reference.
+    Font metric cells and ``line_gap_px`` are absent; consumers add the
+    overlapped layout's line gap at most once.
     """
 
     bounds = _line_static_ink_rect(layout, include_glow=include_glow)
@@ -2736,19 +2769,22 @@ def _active_lit_indices(
 
 
 _MISSING_GEOMETRY = object()
+_MISSING_IDENTITY = object()
 
 
 class CollisionGeometryCache:
     """一次显示窗解析内共享的静态墨迹几何。
 
-    几何（无修饰主字形的墨迹矩形 / 锚点 / 行距）只依赖画布、字体、行
-    内容与 lane，**与显示时间无关且平移不变**——这正是守卫 ``retime``
-    复用矩形的前提。键 = (track 行索引, lane)；水平布局另存基线快照做
-    防御校验，基线变化即整体失效重测。生命周期 = 一次
+    几何（主字形 + 生成的下层注音墨迹矩形 / 锚点 / 行距）只依赖画布、字体、
+    行内容与 lane，**与显示时间无关且平移不变**——这正是守卫 ``retime``
+    复用矩形的前提。键 = (track 行索引, lane)；水平布局另存基线快照与
+    排版身份做防御校验，基线或布局身份变化即整体失效重测。下层注音墨迹
+    还会随 ``lower_ruby_enabled`` / 间隙 / 独立样式 / 罗马音选项变化，这些
+    字段都在排版身份（``layout_cache_signature``：轨道签名 + 布局样式签名）
+    里，因此旧缓存不会跨样式复用。生命周期 = 一次
     ``resolve_display_lines_for_style``（在其 ``build`` 闭包内创建），
-    跨解析不共享，不存在陈旧风险；同步 / 填充 / 三次发现 / 守卫与
-    retime 回落因此共享**一趟**几何测量，逐行样式解析与墨迹构建也
-    只发生一次。
+    跨解析不共享；同步 / 填充 / 三次发现 / 守卫与 retime 回落因此共享
+    **一趟**几何测量，逐行样式解析与墨迹构建也只发生一次。
     """
 
     def __init__(self) -> None:
@@ -2756,12 +2792,25 @@ class CollisionGeometryCache:
             tuple[int, int], CollisionLineGeometry | None
         ] = {}
         self._baselines: dict[int, int] | None = None
+        self._identity: object = _MISSING_IDENTITY
 
     def baselines_match(self, baselines: dict[int, int]) -> bool:
         if self._baselines is None:
             self._baselines = dict(baselines)
             return True
         return self._baselines == baselines
+
+    def identity_match(self, identity: Hashable) -> bool:
+        """Invalidate when layout inputs (track/lower style) changed."""
+
+        if self._identity is _MISSING_IDENTITY:
+            self._identity = identity
+            return True
+        if self._identity == identity:
+            return True
+        self._entries.clear()
+        self._identity = identity
+        return True
 
     def reset(self) -> None:
         self._entries.clear()
@@ -2775,6 +2824,28 @@ class CollisionGeometryCache:
         geometry: CollisionLineGeometry | None,
     ) -> None:
         self._entries[key] = geometry
+
+
+def _collision_geometry_identity(
+    track: TimingTrack,
+    style: Style,
+    layout_cache_sig: tuple | None,
+) -> Hashable:
+    """Identity guarding collision rectangles across measurement rounds.
+
+    ``layout_cache_sig`` already covers the track content (including Ruby
+    sources and page plan) and every layout-relevant style field
+    (``lower_ruby_*``, Ruby font/interval, ``_lower_romaji_options``).  Only
+    vertical text / disabled layout caching lack it, where the same signature
+    is rebuilt directly.
+    """
+
+    if layout_cache_sig is not None:
+        return layout_cache_sig
+    return (
+        _track_layout_signature(track),
+        _lyric_layout_style_signature(style, include_paint_fields=True),
+    )
 
 
 def measure_collision_bands(
@@ -2827,11 +2898,17 @@ def measure_collision_bands(
 
     # 基线防御校验：每次带缓存的水平测量都先快照/比对基线（首次调用
     # 本就全 miss、必然计算布局，无额外开销）。基线变化即整体失效重测，
-    # 杜绝跨轮陈旧几何。
-    if geometry_cache is not None and not style.vertical:
-        ensure_layouts()
-        if not geometry_cache.baselines_match(baselines):
-            geometry_cache.reset()
+    # 杜绝跨轮陈旧几何。排版身份校验再兜住「基线没变、下层注音样式/内容
+    # 变了」的情形（如 top 锚定下改 lower_ruby_gap_px / 切换 lower_ruby_enabled），
+    # 否则按 (行, lane) 缓存会继续返回旧包络。
+    if geometry_cache is not None:
+        if not style.vertical:
+            ensure_layouts()
+            if not geometry_cache.baselines_match(baselines):
+                geometry_cache.reset()
+        geometry_cache.identity_match(
+            _collision_geometry_identity(track, style, layout_cache_sig)
+        )
     track_index_of = {
         id(line): index for index, line in enumerate(track.lines)
     }

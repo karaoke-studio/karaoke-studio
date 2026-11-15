@@ -3420,63 +3420,97 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
             };
 
-            // Freeze the natural main-glyph gaps before either ruby layer
-            // pushes targets. Raw letterSpacing omits bearings and the main
-            // outline allowance (a -2px setting can still have a visible gap).
-            std::vector<std::pair<float, float>> mainInkBounds;
-            if (std::any_of(cached.rubies.begin(), cached.rubies.end(),
-                            [](const Impl::CachedRuby &ruby) { return ruby.lower; })) {
-                mainInkBounds.reserve(cached.chars.size());
-                for (const Impl::CachedChar &ch : cached.chars) {
-                    D2D1_RECT_F bounds = D2D1::RectF(ch.layoutLeft, ch.top, ch.layoutRight, ch.bottom);
-                    if (ch.geometry) {
-                        // CachedChar.left/right include wipe padding, whereas
-                        // ruby.bounds and the Python measurements are pure ink.
-                        checkHr(ch.geometry->GetBounds(nullptr, &bounds),
-                                "ID2D1Geometry::GetBounds(lower ruby clearance)", device_);
+            // Authored upper rubies keep N3's left-to-right push.  A generated
+            // lower reading wider than its cell opens half of the missing room
+            // on each side of that cell, so the main glyph stays at the centre
+            // of its romanization slot (not pushed to the slot's left edge).
+            // Boundary requirements are merged with the upper gaps via max, so
+            // the lower layer never stacks a second push on top of upper.
+            const std::size_t charCount = cached.chars.size();
+            std::vector<float> upperPushes(charCount, 0.0f);
+            {
+                float shift = 0.0f;
+                float previousRight = 0.0f;
+                bool hasPrevious = false;
+                for (const Impl::CachedRuby &ruby : cached.rubies) {
+                    if (ruby.lower || ruby.chars.empty()) {
+                        continue;
                     }
-                    mainInkBounds.emplace_back(bounds.left, bounds.right);
+                    if (ruby.firstCharIndex < 0
+                        || ruby.firstCharIndex >= static_cast<int>(charCount)) {
+                        continue;
+                    }
+                    const std::size_t first = static_cast<std::size_t>(ruby.firstCharIndex);
+                    const float currentLeft = ruby.chars.front().layoutLeft + shift;
+                    if (hasPrevious && ruby.firstCharIndex > 0) {
+                        const float deficit = previousRight + style.rubyInterval - currentLeft;
+                        if (deficit > 0.0f) {
+                            const float push = std::ceil(deficit);
+                            upperPushes[first] += push;
+                            shift += push;
+                        }
+                    }
+                    previousRight = ruby.chars.back().layoutRight + shift;
+                    hasPrevious = true;
                 }
             }
-            for (std::size_t rubyIndex = 1; rubyIndex < cached.rubies.size(); ++rubyIndex) {
-                const Impl::CachedRuby &previous = cached.rubies[rubyIndex - 1];
-                Impl::CachedRuby &current = cached.rubies[rubyIndex];
-                if (previous.lower != current.lower) {
+            std::vector<float> upperPrefix(charCount + 1, 0.0f);
+            for (std::size_t index = 0; index < charCount; ++index) {
+                upperPrefix[index + 1] = upperPrefix[index] + upperPushes[index];
+            }
+            std::vector<float> lowerBoundary(charCount, 0.0f);
+            for (const Impl::CachedRuby &ruby : cached.rubies) {
+                if (!ruby.lower || ruby.firstCharIndex < 0
+                    || ruby.firstCharIndex >= static_cast<int>(charCount)) {
                     continue;
                 }
-                if (previous.chars.empty() || current.chars.empty()) {
-                    continue;
-                }
-                const float minimumGap = current.lower
-                    ? std::max(style.letterSpacing,
-                        mainInkBounds[static_cast<std::size_t>(current.firstCharIndex)].first
-                        - mainInkBounds[static_cast<std::size_t>(previous.lastCharIndex)].second)
-                    : style.rubyInterval;
-                const float previousRight = current.lower ? previous.bounds.right : previous.chars.back().layoutRight;
-                const float currentLeft = current.lower ? current.bounds.left : current.chars.front().layoutLeft;
-                const float deficit = previousRight + minimumGap - currentLeft;
-                if (deficit <= 0.0f) {
-                    continue;
-                }
-                const float push = std::ceil(deficit);
-                const std::size_t firstChar = static_cast<std::size_t>(std::clamp(
-                    current.firstCharIndex,
-                    0,
-                    static_cast<int>(cached.chars.size())
+                const std::size_t first = static_cast<std::size_t>(ruby.firstCharIndex);
+                const std::size_t last = static_cast<std::size_t>(std::clamp(
+                    ruby.lastCharIndex, ruby.firstCharIndex,
+                    static_cast<int>(charCount) - 1
                 ));
-                for (std::size_t charIndex = firstChar;
-                     charIndex < cached.chars.size(); ++charIndex) {
-                    translateCharX(cached.chars[charIndex], push);
+                const float targetWidth = std::max(
+                    cached.chars[last].layoutRight + upperPrefix[last + 1]
+                        - cached.chars[first].layoutLeft - upperPrefix[first + 1],
+                    1.0f
+                );
+                const float readingWidth = std::max(
+                    ruby.bounds.right - ruby.bounds.left,
+                    ruby.chars.back().layoutRight - ruby.chars.front().layoutLeft
+                );
+                const float half = std::max(0.0f, readingWidth - targetWidth) / 2.0f;
+                lowerBoundary[first] += half;
+                if (last + 1 < charCount) {
+                    lowerBoundary[last + 1] += half;
                 }
-                for (std::size_t followingIndex = cached.annotationBaselineY.has_value() ? 0 : rubyIndex;
-                     followingIndex < cached.rubies.size(); ++followingIndex) {
-                    if (!cached.annotationBaselineY.has_value()
-                        || cached.rubies[followingIndex].firstCharIndex >= current.firstCharIndex) {
-                        translateRubyX(cached.rubies[followingIndex], push);
-                    }
-                }
-                cursor += push;
             }
+            std::vector<float> prefix(charCount + 1, 0.0f);
+            for (std::size_t index = 0; index < charCount; ++index) {
+                prefix[index + 1] = prefix[index]
+                    + std::max(upperPushes[index], std::ceil(lowerBoundary[index]));
+            }
+            for (std::size_t index = 0; index < charCount; ++index) {
+                // A push recorded at this cell moves this cell and every later
+                // one (N3 interference), so include prefix[index + 1].
+                if (prefix[index + 1] != 0.0f) {
+                    translateCharX(cached.chars[index], prefix[index + 1]);
+                }
+            }
+            for (Impl::CachedRuby &ruby : cached.rubies) {
+                if (ruby.firstCharIndex < 0
+                    || ruby.firstCharIndex >= static_cast<int>(charCount)) {
+                    continue;
+                }
+                const float offset = prefix[static_cast<std::size_t>(ruby.firstCharIndex) + 1];
+                if (offset != 0.0f) {
+                    translateRubyX(ruby, offset);
+                }
+            }
+            float finalRight = 1.0f;
+            for (const Impl::CachedChar &ch : cached.chars) {
+                finalRight = std::max(finalRight, ch.layoutRight);
+            }
+            cached.fillBounds.right = finalRight;
 
             cached.geometries.clear();
             cached.bounds = {};
@@ -3495,7 +3529,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     extendBounds(cached.bounds, lineHasBounds, ch.bitmapRect);
                 }
             }
-            cached.fillBounds.right = std::max(cursor, 1.0f);
         }
         if (cached.wipeReverse) {
             // Python 在源加载入口已把整行时间戳严格逆序的行镜像理顺为顺序，

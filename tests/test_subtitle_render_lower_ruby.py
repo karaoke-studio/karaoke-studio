@@ -98,13 +98,7 @@ def test_lower_grid_reserves_height_without_content_dependent_jumps(qapp, positi
 
 
 def test_lower_zero_gap_matches_upper_visual_clearance(qapp):
-    from pathlib import Path
-    from PyQt6.QtGui import QFontDatabase
     from krok_helper.subtitle_render.engine.painter import _line_main_text_ink_rect
-    for filename in ("meiryo.ttc", "comic.ttf"):
-        path = Path("C:/Windows/Fonts") / filename
-        if path.exists():
-            QFontDatabase.addApplicationFont(str(path))
     line = _line("国")
     upper = RubyAnnotation("国", "に", pos_start_ms=0, pos_end_ms=500,
                            target_line_index=0, target_char_start=0, target_char_end=1)
@@ -203,7 +197,7 @@ def test_lower_letter_spacing_is_independent_and_preserved(qapp, follows):
 
 
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
-def test_lower_letters_and_group_clearance_use_separate_settings(qapp, semantics):
+def test_lower_readings_center_slots_without_overlap(qapp, semantics):
     from krok_helper.subtitle_render.engine.ruby.layout import ruby_layout_draw_bounds
     from krok_helper.subtitle_render.engine.ruby.timing import _ruby_utopia_visual_units
 
@@ -212,46 +206,49 @@ def test_lower_letters_and_group_clearance_use_separate_settings(qapp, semantics
     style = replace(_style(), layout_semantics=semantics, font_size_px=24, ruby_font_size_px=36,
                     ruby_interval_px=2, letter_spacing_px=18, ruby_stroke_width_px=0,
                     ruby_stroke2_enabled=False)
-    from krok_helper.subtitle_render.engine.text import build_text_layout
-    glyphs = build_text_layout(line, style, x0=0, baseline_y=0, inline_styles=False).glyphs
-    expected_gap = (glyphs[1].left + glyphs[1].path_offset_x + glyphs[1].ink_box[0]
-                    - glyphs[0].left - glyphs[0].path_offset_x - glyphs[0].ink_box[2])
     widths = []
     for interval in (3, 9):
         current = replace(style, lower_ruby_interval_px=interval)
         layout = _layout_line(track, line, current, 960, 540, baseline_y=200)
         readings = list(layout.ruby_layouts)
         assert [ruby.ruby.reading for ruby in readings] == ["shi", "shi"]
-        bounds = [ruby_layout_draw_bounds(
-            _ruby_utopia_visual_units(ruby.ruby.reading), ruby.metrics, ruby.x,
-            ruby.target_width, style=ruby.style, base_text=ruby.ruby.kanji,
-        ) for ruby in readings]
-        ink_gap = readings[1].gradient_rect.left() - readings[0].gradient_rect.right()
-        assert expected_gap <= ink_gap < expected_gap + 2
-        widths.append(bounds[0][1] - bounds[0][0])
+        first_bounds = ruby_layout_draw_bounds(
+            _ruby_utopia_visual_units(readings[0].ruby.reading),
+            readings[0].metrics, readings[0].x, readings[0].target_width,
+            style=readings[0].style, base_text=readings[0].ruby.kanji,
+        )
+        widths.append(first_bounds[1] - first_bounds[0])
+        # Each reading is centred under its own main cell and the widened slot
+        # is split equally on both sides of that cell.
+        for ruby in readings:
+            assert abs(ruby.gradient_rect.center().x()
+                       - (ruby.x + ruby.target_width / 2)) <= 1
+        assert readings[0].gradient_rect.right() <= readings[1].gradient_rect.left() + 1
         assert [(ruby.ruby.pos_start_ms, ruby.ruby.pos_end_ms) for ruby in readings] == [(0, 500), (500, 1000)]
     assert widths[1] - widths[0] == pytest.approx(12)
 
 
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
-def test_lower_long_reading_retains_main_ink_clearance_with_negative_spacing(qapp, semantics):
-    from krok_helper.subtitle_render.engine.text import build_text_layout
+def test_lower_long_reading_centers_its_slot(qapp, semantics):
     line = _line("す命と")
     upper = RubyAnnotation("命", "いのち", pos_start_ms=500, pos_end_ms=1000,
                            target_line_index=0, target_char_start=1, target_char_end=2)
     style = replace(_style(), layout_semantics=semantics, font_size_px=100, ruby_font_size_px=45,
                     letter_spacing_px=-2, ruby_interval_px=-2, stroke_width_px=15,
                     ruby_stroke_width_px=10, ruby_stroke2_enabled=False)
-    original = build_text_layout(line, style, x0=0, baseline_y=0, inline_styles=False)
-    ink = [(g.left + g.path_offset_x + g.ink_box[0], g.left + g.path_offset_x + g.ink_box[2])
-           for g in original.glyphs]
-    expected = [ink[i + 1][0] - ink[i][1] for i in range(2)]
-    assert min(expected) > 0
     layout = _layout_line(TimingTrack(lines=[line], rubies=[upper]), line, style, 960, 540, baseline_y=250)
     lower = [r for r in layout.ruby_layouts if isinstance(r.ruby, LowerRuby)]
     assert [r.ruby.reading for r in lower] == ["su", "inochi", "to"]
-    actual = [lower[i + 1].gradient_rect.left() - lower[i].gradient_rect.right() for i in range(2)]
-    assert all(gap >= minimum for gap, minimum in zip(actual, expected)), (actual, expected)
+    glyphs = {glyph.index: glyph for glyph in layout.text_layout.glyphs}
+    for ruby in lower:
+        cell = (layout.char_x_ranges[ruby.indices[0]][0],
+                layout.char_x_ranges[ruby.indices[-1]][1])
+        assert abs(ruby.gradient_rect.center().x() - (cell[0] + cell[1]) / 2) <= 1
+        glyph = glyphs[ruby.indices[0]]
+        assert abs((glyph.left + glyph.width / 2)
+                   - ruby.gradient_rect.center().x()) <= 1
+    for previous, current in zip(lower, lower[1:]):
+        assert previous.gradient_rect.right() <= current.gradient_rect.left() + 1
 
 
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
@@ -506,6 +503,86 @@ def test_sug_romaji_snapshot_is_runtime_only_and_survives_worker_pickle(qapp, mo
     assert [r.reading for r in lower_rubies_for_line(line, [], [(0, 500), (500, 1000)], worker_style)] == ["KA", "NA"]
     disabled = replace(original, lower_ruby_enabled=False)
     assert lower.snapshot_lower_romaji_options(disabled) is disabled
+
+
+def test_sug_romaji_style_changes_refresh_live_snapshot(qapp, monkeypatch):
+    """Changing SUG's 罗马音风格 must reach the next render without reopen."""
+
+    from strange_uta_game.backend.infrastructure.parsers.romaji import RomajiOptions
+    from strange_uta_game.frontend.settings.app_settings import AppSettings
+    from krok_helper.subtitle_render.engine.ruby import lower
+
+    monkeypatch.setattr(
+        AppSettings, "_default_provider", object(), raising=False
+    )
+    monkeypatch.setattr(
+        lower, "read_sug_romaji_options",
+        lambda: RomajiOptions(repeat_long_vowels=True, link_sokuon=False),
+    )
+    first = lower.snapshot_lower_romaji_options(
+        replace(_style(), _lower_romaji_options=None)
+    )
+    assert first._lower_romaji_options == (True, False, False, False)
+    monkeypatch.setattr(
+        lower, "read_sug_romaji_options",
+        lambda: RomajiOptions(repeat_long_vowels=True, link_sokuon=True),
+    )
+    refreshed = lower.snapshot_lower_romaji_options(first)
+    assert refreshed._lower_romaji_options == (True, False, True, False)
+    # Grouping reads the refreshed style: っ links to the following kana.
+    line = _line("カッター")
+    assert [
+        ruby.reading
+        for ruby in lower_rubies_for_line(
+            line, [], [(i * 500, (i + 1) * 500) for i in range(4)], refreshed
+        )
+    ] == ["ka", "tta", "a"]
+
+
+def test_lower_reads_sug_romaji_style_from_embedded_provider(qapp):
+    """The real SUG settings backend drives 促音链接 / 长音复写."""
+
+    from strange_uta_game.frontend.settings.app_settings import AppSettings
+
+    class Provider:
+        def load(self):
+            return {
+                "auto_check": {
+                    "romaji_repeat_long_vowels": True,
+                    "romaji_link_long_vowels": False,
+                    "romaji_link_sokuon": True,
+                    "romaji_uppercase": False,
+                }
+            }
+
+        def save(self, data):
+            pass
+
+        def load_extra(self, key, default):
+            return default
+
+        def save_extra(self, key, data):
+            pass
+
+    AppSettings.set_default_provider(Provider())
+    try:
+        from krok_helper.subtitle_render.engine.ruby import lower
+        style = lower.snapshot_lower_romaji_options(
+            replace(_style(), _lower_romaji_options=None)
+        )
+        line = _line("カッター")
+        assert style._lower_romaji_options == (True, False, True, False)
+        assert [
+            ruby.reading
+            for ruby in lower_rubies_for_line(
+                line, [], [(i * 500, (i + 1) * 500) for i in range(4)], style
+            )
+        ] == ["ka", "tta", "a"]
+        linked = replace(style, _lower_romaji_options=None)
+        refreshed = lower.snapshot_lower_romaji_options(linked)
+        assert refreshed._lower_romaji_options == (True, False, True, False)
+    finally:
+        AppSettings.set_default_provider(None)
 
 
 def test_sug_romaji_options_invalidate_lower_layout_patch_key(qapp, monkeypatch):

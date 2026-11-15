@@ -31,6 +31,11 @@ LOWER_APPEARANCE_FIELDS = frozenset(
 
 
 def _timed_parts(parts: list[str], original: list[str]) -> list[str]:
+    if len(parts) != len(original):
+        raise ValueError(
+            "lower romaji source units do not align with converter output: "
+            f"{len(parts)} units for {len(original)} converted parts"
+        )
     timed = list(original)
     # The SUG converter groups digraphs/long marks on the leading part. Keep
     # its spelling and group, but retain the original checkpoint inside it.
@@ -42,6 +47,24 @@ def _timed_parts(parts: list[str], original: list[str]) -> list[str]:
         elif parts[index] in "ゃゅょぁぃぅぇぉャュョァィゥェォ":
             timed[index - 1], timed[index] = timed[index - 1][:-1], timed[index - 1][-1:]
     return timed
+
+
+def _aligned_converted_parts(converted: list[str], unit_count: int) -> list[str]:
+    """Map converter output onto one source group's visual units losslessly.
+
+    ``romanize_sentence_in_place`` keeps one part per input part, so both lists
+    normally have the same length.  If a converter revision ever returns extra
+    parts, their text is folded into the tail unit instead of being zipped away;
+    a shorter list is padded so every cell keeps its own checkpoint.  Reading
+    text is therefore never silently truncated.
+    """
+    if unit_count <= 0:
+        return []
+    if len(converted) == unit_count:
+        return list(converted)
+    if len(converted) > unit_count:
+        return list(converted[: unit_count - 1]) + ["".join(converted[unit_count - 1:])]
+    return list(converted) + [""] * (unit_count - len(converted))
 
 
 def lower_style(style: Style) -> Style:
@@ -65,6 +88,13 @@ def _romanized(
 ) -> LowerRuby | None:
     if not units:
         return None
+    if len(converted) != len(units):
+        # ``_aligned_converted_parts`` guarantees this; failing loudly keeps a
+        # future converter change from silently dropping reading text or time.
+        raise ValueError(
+            "lower romaji reading parts do not align with source cells: "
+            f"{len(converted)} converted parts for {len(units)} cells"
+        )
     parts: list[str] = []
     starts: list[int] = []
     cursor = ruby.pos_start_ms
@@ -131,8 +161,13 @@ def lower_rubies_for_line(
     options = (RomajiOptions(*style._lower_romaji_options)
                if style._lower_romaji_options is not None else read_options())
     romanize_sentence_in_place(sentence, options=options)
-    converted_groups = [[part.text for part in sentence.characters[min(indices)].ruby.parts]
-                        for _source, indices, _authored in sources]
+    converted_groups = [
+        _aligned_converted_parts(
+            [part.text for part in sentence.characters[min(indices)].ruby.parts],
+            len(units),
+        )
+        for (_source, indices, _authored), units in zip(sources, unit_groups)
+    ]
     result: list[LowerRuby] = []
     run_start = 0
     while run_start < len(sources):
