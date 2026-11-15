@@ -159,6 +159,13 @@ echo Building Windows package...
     --hidden-import colorsys ^
     --hidden-import sudachipy ^
     --hidden-import sudachidict_small ^
+    --exclude-module krok_helper.subtitle_render.native.skia_backend ^
+    --exclude-module krok_helper.subtitle_render.native.skia_process ^
+    --exclude-module krok_helper.subtitle_render.native.skia_text ^
+    --exclude-module krok_helper.subtitle_render.native.skia_fonts ^
+    --exclude-module krok_helper.subtitle_render.frontend.preview.skia_async ^
+    --exclude-module krok_helper.subtitle_render.engine.render.skia_ir ^
+    --exclude-module krok_helper.subtitle_render.engine.render.skia_ruby_ir ^
     --exclude-module krok_helper.updater.macos_controller ^
     --exclude-module krok_helper.updater.macos_transport ^
     --exclude-module krok_helper.updater.macos_sparkle ^

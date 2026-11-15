@@ -52,6 +52,13 @@ _ABANDONED_SHARED_MEMORY_LOCK = threading.Lock()
 _log = logging.getLogger(__name__)
 
 
+def skia_requested() -> bool:
+    """Allow the experimental backend only in an explicitly opted-in source run."""
+    return not getattr(sys, "frozen", False) and (
+        os.environ.get("KROK_SUBTITLE_RENDER_BACKEND", "").strip().lower() == "skia"
+    )
+
+
 def shared_memory_detach_timeout_s() -> float:
     """``KROK_SUBTITLE_SHM_DETACH_TIMEOUT_S`` 覆盖的 detach 等待上限（秒）。"""
     raw = os.environ.get("KROK_SUBTITLE_SHM_DETACH_TIMEOUT_S")

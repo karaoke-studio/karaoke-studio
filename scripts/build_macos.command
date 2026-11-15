@@ -20,6 +20,13 @@ PYQT6_BINDING_VERSION="6.11.0"
 PYQT6_QT_VERSION="6.11.0"
 
 EXCLUDED_MODULES=(
+  krok_helper.subtitle_render.native.skia_backend
+  krok_helper.subtitle_render.native.skia_process
+  krok_helper.subtitle_render.native.skia_text
+  krok_helper.subtitle_render.native.skia_fonts
+  krok_helper.subtitle_render.frontend.preview.skia_async
+  krok_helper.subtitle_render.engine.render.skia_ir
+  krok_helper.subtitle_render.engine.render.skia_ruby_ir
   PySide6
   PyQt5
   PyQt6.Qt3DAnimation

@@ -8,12 +8,8 @@ from dataclasses import dataclass
 import logging
 import os
 from typing import Any
-from .backend import NativeRendererError, heartbeat_lease_s
+from .backend import NativeRendererError, heartbeat_lease_s, skia_requested
 from .skia_process import SkiaSidecarProcess, resolve_skia_renderer_path
-
-
-def skia_requested() -> bool:
-    return os.environ.get("KROK_SUBTITLE_RENDER_BACKEND", "").strip().lower() == "skia"
 
 
 @dataclass(frozen=True)

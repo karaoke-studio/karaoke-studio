@@ -4619,6 +4619,31 @@ def test_preview_window_drag_uses_system_move_with_manual_fallback(
         qapp.processEvents()
 
 
+def test_packaged_preview_does_not_import_experimental_skia(qapp, monkeypatch):
+    import builtins
+    import sys
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+
+    original_import = builtins.__import__
+
+    def without_skia(name, *args, **kwargs):
+        assert "skia" not in name, f"Packaged preview imported {name}"
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(builtins, "__import__", without_skia)
+    canvas = pg.PreviewGraphicsView()
+    try:
+        canvas.set_gpu_preview_enabled(False)
+        assert type(canvas._async_renderer) is pg.AsyncSubtitleRenderer
+        canvas.set_gpu_preview_enabled(True)
+        assert type(canvas._async_renderer) is pg.GpuAsyncSubtitleRenderer
+    finally:
+        canvas.close()
+        canvas.deleteLater()
+
+
 def test_preview_controls_stay_at_bottom_through_frames_and_window_changes(qapp, monkeypatch):
     from PyQt6.QtCore import QPoint, QRect, QSize
     from PyQt6.QtGui import QCursor

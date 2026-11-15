@@ -5410,3 +5410,13 @@ def test_font_preparation_resolves_other_slots_before_reporting_failure(monkeypa
     with pytest.raises(ValueError, match="unavailable: Main"):
         _font_face_slot_overrides(payload)
     assert calls == ["Main", "Latin", "Ruby", "Ruby Latin"]
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+@pytest.mark.parametrize("requested", ["", "d2d", "skia", " SKIA "])
+def test_experimental_skia_selection_is_source_only(monkeypatch, frozen, requested):
+    from krok_helper.subtitle_render.native.backend import skia_requested
+
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", requested)
+    assert skia_requested() is (not frozen and requested.strip().lower() == "skia")

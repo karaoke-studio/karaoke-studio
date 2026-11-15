@@ -2829,7 +2829,7 @@ class SubtitleRenderWindow(QWidget):
         if gpu_env_override is not None or gpu_default_version < GPU_PREVIEW_DEFAULT_VERSION:
             gpu_preview_on = gpu_preview_enabled()
         else:
-            from krok_helper.subtitle_render.native.skia_backend import skia_requested
+            from krok_helper.subtitle_render.native.backend import skia_requested
             gpu_preview_on = (sys.platform == "win32" or skia_requested()) and bool(
                 output.get("gpu_preview_enabled", True)
             )
@@ -2839,7 +2839,7 @@ class SubtitleRenderWindow(QWidget):
             )
         except (TypeError, ValueError):
             gpu_export_default_version = 0
-        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        from krok_helper.subtitle_render.native.backend import skia_requested
         gpu_platform = sys.platform == "win32" or skia_requested()
         if gpu_export_default_version < GPU_EXPORT_DEFAULT_VERSION:
             gpu_export_enabled = gpu_platform
@@ -4192,7 +4192,7 @@ class SubtitleRenderWindow(QWidget):
             self._project_shortcuts.append(shortcut)
 
     def _make_export_tab(self) -> QWidget:
-        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        from krok_helper.subtitle_render.native.backend import skia_requested
         page = ExportWorkspaceView(
             fps_options=SCREEN_FPS_OPTIONS,
             render_worker_options=RENDER_WORKER_OPTIONS,
@@ -9748,7 +9748,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
         # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
-        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        from krok_helper.subtitle_render.native.backend import skia_requested
         InfoBar.warning(
             title="Skia 字幕渲染" if skia_requested() else "GPU 预览已回退",
             content=str(message),
@@ -11491,7 +11491,7 @@ class SubtitleRenderWindow(QWidget):
         # GPU 两个开关的出厂值与 _apply_output_settings 读空配置的分支一致；
         # 静默置位 + 直接下发给面板，同样不走用户点击的 apply 路径。
         gpu_preview_factory = gpu_preview_enabled()
-        from krok_helper.subtitle_render.native.skia_backend import skia_requested
+        from krok_helper.subtitle_render.native.backend import skia_requested
         gpu_export_factory = sys.platform == "win32" or skia_requested()
         blocked_preview = self._gpu_preview_check.blockSignals(True)
         try:

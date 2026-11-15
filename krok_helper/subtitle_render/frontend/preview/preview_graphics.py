@@ -451,10 +451,10 @@ class PreviewGraphicsView(QGraphicsView):
         self._render_busy_timer = QTimer(self)
         self._render_busy_timer.setInterval(_RENDER_BUSY_POLL_MS)
         self._render_busy_timer.timeout.connect(self._update_render_busy_badge)
-        from krok_helper.subtitle_render.native.skia_backend import skia_requested
-        from .skia_async import SkiaAsyncSubtitleRenderer
+        from krok_helper.subtitle_render.native.backend import skia_requested
         if async_preview_enabled() or skia_requested():
             if skia_requested():
+                from .skia_async import SkiaAsyncSubtitleRenderer
                 renderer_cls = lambda w, h, parent: SkiaAsyncSubtitleRenderer(w, h, parent, gpu_enabled=gpu_preview_enabled())
             elif gpu_preview_enabled():
                 renderer_cls = GpuAsyncSubtitleRenderer
@@ -614,10 +614,14 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_gpu_preview_enabled(self, enabled: bool) -> None:
         """Switch the subtitle worker between GPU and Painter at runtime."""
-        from krok_helper.subtitle_render.native.skia_backend import skia_requested, SkiaSelection
-        from .skia_async import SkiaAsyncSubtitleRenderer
+        from krok_helper.subtitle_render.native.backend import skia_requested
         skia = skia_requested()
-        target_cls = SkiaAsyncSubtitleRenderer if skia else GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
+        if skia:
+            from krok_helper.subtitle_render.native.skia_backend import SkiaSelection
+            from .skia_async import SkiaAsyncSubtitleRenderer
+            target_cls = SkiaAsyncSubtitleRenderer
+        else:
+            target_cls = GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
         if type(self._async_renderer) is target_cls:
             if not skia or self._async_renderer.selection == SkiaSelection.from_environment(gpu_enabled=enabled):
                 return

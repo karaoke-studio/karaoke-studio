@@ -379,8 +379,10 @@ def _render_subtitle_video_prepared(
         )
     job = replace(job, **freeze_kwargs)
     total_frames = _frame_count(duration_ms, job.fps)
-    from krok_helper.subtitle_render.native.skia_backend import skia_requested, resolve_skia_renderer_path
+    from krok_helper.subtitle_render.native.backend import skia_requested
     skia_active = skia_requested()
+    if skia_active:
+        from krok_helper.subtitle_render.native.skia_backend import resolve_skia_renderer_path
     native_export_requested = skia_active or _native_export_requested(job)
     native_renderer_path = (resolve_skia_renderer_path() if skia_active else resolve_native_renderer_path()) if native_export_requested else None
     native_export_active = native_renderer_path is not None
@@ -1298,9 +1300,10 @@ def _write_frames_native(
     monitor = active_export_monitor()
     written = 0
     from functools import partial
-    from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection, skia_requested
+    from krok_helper.subtitle_render.native.backend import skia_requested
     factory = None
     if skia_requested():
+        from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
         enabled = job.gpu_export_enabled
         if enabled is None:
             enabled = os.environ.get("KROK_SUBTITLE_GPU_EXPORT", "1").lower() not in {"0", "false", "off", "no"}
