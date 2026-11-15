@@ -17646,3 +17646,85 @@ def test_equal_state_glow_keeps_full_halo_across_wipe(qapp):
         assert glow_span > plain_span + 6, (
             f"t={t_ms} 走字中光晕被切断：glow={glow_span} plain={plain_span}"
         )
+
+
+# Left dot of 心 in A-SK Nakafree Min2 B at 100px.  The cubic starting at
+# (24.5, 106.4) has a 0.1px first handle pointing right while the curve heads
+# down; Qt's analytic cubic offsetting cut that corner and left a hole in the
+# wide stroke (D2D flattens before widening and was unaffected).
+_DEGENERATE_HANDLE_DOT = [
+    ("M", 27.0, 112.8),
+    ("C", 28.7, 112.8, 38.1, 101.9, 39.5, 100.1),
+    ("C", 40.5, 98.8, 42.0, 97.0, 42.0, 95.2),
+    ("C", 42.0, 94.2, 41.6, 93.1, 41.4, 92.1),
+    ("C", 41.2, 91.4, 41.1, 89.7, 40.2, 89.7),
+    ("C", 39.5, 89.7, 39.0, 90.2, 38.7, 90.8),
+    ("C", 36.2, 94.5, 32.7, 97.6, 29.4, 100.6),
+    ("C", 27.9, 101.9, 24.5, 104.4, 24.5, 106.4),
+    ("C", 24.6, 106.4, 25.3, 108.9, 25.5, 110.2),
+    ("C", 25.5, 110.8, 25.8, 111.4, 26.1, 111.9),
+    ("C", 26.3, 112.2, 26.6, 112.8, 27.0, 112.8),
+]
+
+
+def _degenerate_handle_dot_path() -> QPainterPath:
+    path = QPainterPath()
+    for command, *values in _DEGENERATE_HANDLE_DOT:
+        if command == "M":
+            path.moveTo(*values)
+        else:
+            path.cubicTo(*values)
+    path.closeSubpath()
+    return path
+
+
+@pytest.mark.parametrize("protect_body", [False, True])
+@pytest.mark.parametrize("scale", [1.0, 2.0])
+def test_paint_stroke_path_covers_sharp_turn_at_degenerate_cubic_handle(
+    qapp, protect_body, scale
+):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from krok_helper.subtitle_render.engine.render.effects.raster import (
+        paint_stroke_path,
+    )
+
+    path = _degenerate_handle_dot_path()
+    image = QImage(
+        int(64 * scale), int(128 * scale), QImage.Format.Format_ARGB32_Premultiplied
+    )
+    image.fill(0)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(scale, scale)
+    paint_stroke_path(
+        painter,
+        path,
+        PaintFill(),
+        QRectF(0, 0, 64, 128),
+        20,
+        protect_body=protect_body,
+    )
+    painter.end()
+
+    # Every probe lies within 5px of the contour, well inside the 10px half
+    # width, so each must be fully stroked.
+    for x, y in [(21.0, 110.0), (22.0, 111.0), (20.0, 109.0), (24.0, 112.0)]:
+        alpha = image.pixelColor(int(x * scale), int(y * scale)).alpha()
+        assert alpha >= 250, f"stroke hole at {(x, y)} (alpha={alpha})"
+
+
+def test_stroke_outline_path_flattens_closed_contours(qapp):
+    from krok_helper.subtitle_render.engine.render.effects.raster import (
+        stroke_outline_path,
+    )
+
+    path = _degenerate_handle_dot_path()
+    flat = stroke_outline_path(path)
+
+    kinds = {flat.elementAt(i).type for i in range(flat.elementCount())}
+    assert QPainterPath.ElementType.CurveToElement not in kinds
+    polygons = flat.toSubpathPolygons()
+    assert len(polygons) == 1 and polygons[0].isClosed()
+    assert flat.boundingRect().adjusted(-0.2, -0.2, 0.2, 0.2).contains(
+        path.boundingRect()
+    )

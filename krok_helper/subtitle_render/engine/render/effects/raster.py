@@ -45,6 +45,53 @@ def paint_fill_path(
 ) -> None:
     painter.fillPath(path, brush_for_fill(fill, rect))
 
+# Device-space flattening tolerance is Qt's fixed 0.5 divided by this factor:
+# 0.25 device px, the same as D2D's default widening tolerance.  Finer values
+# only add vertices -- each costs Qt a round join -- without closing more holes.
+_STROKE_FLATTEN_OVERSAMPLE = 2.0
+
+
+def stroke_outline_path(
+    path: QPainterPath, transform: QTransform | None = None
+) -> QPainterPath:
+    """Polyline copy of ``path`` for wide pen strokes (mirrors D2D widening).
+
+    Qt's ``QStroker`` offsets cubic segments analytically
+    (``QBezier::shifted``).  A cubic whose tangent swings sharply within a
+    sub-pixel handle -- e.g. a 0.1px control handle perpendicular to the
+    curve's real direction, as in the left dot of 心 in A-SK Nakafree Min2 B
+    -- has a curvature radius far below the pen's half width, and Qt then
+    emits an offset contour that cuts the corner, leaving a hole in the
+    outline.  Direct2D flattens curves before widening and puts round joins
+    at every vertex, so the swept region is covered.  Stroking the flattened
+    polyline gives the CPU path the same geometry.  Only the stroke source
+    is flattened; body fills keep the exact curves.
+    """
+    if path.isEmpty():
+        return path
+    scale = 1.0
+    if transform is not None:
+        scale = max(
+            math.hypot(transform.m11(), transform.m12()),
+            math.hypot(transform.m21(), transform.m22()),
+            1.0,
+        )
+    factor = scale * _STROKE_FLATTEN_OVERSAMPLE
+    up = QTransform.fromScale(factor, factor)
+    down = QTransform.fromScale(1.0 / factor, 1.0 / factor)
+    flat = QPainterPath()
+    flat.setFillRule(path.fillRule())
+    for polygon in path.toSubpathPolygons(up):
+        if polygon.isEmpty():
+            continue
+        flat.addPolygon(down.map(polygon))
+        # Closed contours come back with the start point repeated; mark them
+        # closed so the stroker joins the seam instead of capping it.
+        if polygon.isClosed():
+            flat.closeSubpath()
+    return flat
+
+
 def paint_stroke_path(
     painter: QPainter,
     path: QPainterPath,
@@ -56,18 +103,19 @@ def paint_stroke_path(
 ) -> None:
     brush = brush_for_fill(fill, rect)
     pen_width = max(width, 1)
+    stroke_source = stroke_outline_path(path, painter.worldTransform())
     if protect_body:
         stroker = QPainterPathStroker()
         stroker.setWidth(float(pen_width))
         stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-        outline = stroker.createStroke(path).subtracted(path)
+        outline = stroker.createStroke(stroke_source).subtracted(path)
         painter.fillPath(outline, brush)
         return
     pen = QPen(brush, pen_width)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.strokePath(path, pen)
+    painter.strokePath(stroke_source, pen)
 
 def paint_shadow_silhouette(
     painter: QPainter,
@@ -389,6 +437,7 @@ def paint_transition_glow_halo(
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setColor(QColor(255, 255, 255))
             painter.setBrush(Qt.BrushStyle.NoBrush)
+            halo_path = stroke_outline_path(path, painter.worldTransform())
             for width_em, strength in GLOW_HALO_STROKES:
                 width = radius_em * width_em * font_px
                 if width < 0.5:
@@ -396,6 +445,6 @@ def paint_transition_glow_halo(
                 pen.setWidthF(width)
                 painter.setOpacity(min(base_opacity * glow_alpha * strength, 1.0))
                 painter.setPen(pen)
-                painter.drawPath(path)
+                painter.drawPath(halo_path)
     finally:
         painter.restore()

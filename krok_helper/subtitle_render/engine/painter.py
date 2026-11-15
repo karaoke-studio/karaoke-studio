@@ -92,6 +92,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     paint_split_glow_path as _paint_split_glow_path,
     paint_stroke_path as _paint_stroke_path,
     paint_text_layer_stack as _paint_text_layer_stack,
+    stroke_outline_path as _stroke_outline_path,
     ruby_baseline_y as _ruby_baseline_y,
     ruby_decoration_kind as _ruby_decoration_kind,
     ruby_glow_concentration_level as _ruby_glow_concentration_level,
@@ -3887,7 +3888,11 @@ def _paint_stroke_flash_overlay(
         try:
             painter.setPen(pen)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.drawPath(_glyph_path(glyph, baseline_y))
+            painter.drawPath(
+                _stroke_outline_path(
+                    _glyph_path(glyph, baseline_y), painter.worldTransform()
+                )
+            )
         finally:
             painter.restore()
 

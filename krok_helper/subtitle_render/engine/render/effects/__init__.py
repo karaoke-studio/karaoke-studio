@@ -57,6 +57,7 @@ from krok_helper.subtitle_render.engine.render.effects.raster import (
     paint_split_glow_path,
     paint_stroke_path,
     paint_text_layer_stack,
+    stroke_outline_path,
 )
 
 
@@ -90,6 +91,7 @@ __all__ = [
     "paint_split_glow_path",
     "paint_stroke_path",
     "paint_text_layer_stack",
+    "stroke_outline_path",
     "ruby_baseline_y",
     "ruby_decoration_kind",
     "ruby_glow_concentration_level",
