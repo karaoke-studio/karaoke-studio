@@ -398,6 +398,14 @@ git submodule status
    GPU duration half-up 和可视字素规则，不能把小假名 fallback 重新按拍分配；
    不得为对齐 Skia 擅自改变旧生产时钟。保留 4.4.6.1 的源码 opt-in/发布包排除及生产分页隔离。
 
+   P05.6 下方几何准备见 §14.27：`ruby/skia_reference.py` 批量读取固定主字/上下参考串、
+   字体 cap height 和参考墨迹，不依赖实际歌词或 Qt 参考度量；显式字体须覆盖参考字形。
+   源行框缓存须含参考内容身份。上下间距继续调用共享 `resolve_ruby_spacing`，遵循
+   `b6770aad` 的双侧居中槽位与下方墨迹碰撞规则；下方组不能覆盖主字时间。
+   可选 `p05_overlap_wipe` / `overlap_schema=1` 的 `wipe_end_position` 只调整终点，
+   补偿宽度是一个物理像素；无该能力的旧场景行为不变。终端探针不是产品支持，
+   下方源信息/独立外观/正式 IR 握手与完整验收前，产品下方注音门禁继续保留。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的

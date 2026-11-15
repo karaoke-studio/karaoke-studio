@@ -99,7 +99,7 @@ def prepare_ruby_wipe_timing(line, prepared_line, mode):
         if not indices or any(type(i) is not int or not 0 <= i < len(line.chars) for i in indices):
             raise ValueError('注音走字目标超出正文单元范围')
         readings.append(ruby_unit_clock(ruby, target.annotation_index))
-        if is_utopia_group_marker(ruby) or assigned.intersection(indices):
+        if getattr(target, 'lower', False) or is_utopia_group_marker(ruby) or assigned.intersection(indices):
             continue
         if not ruby_main_uses_base_timing(line, list(indices)):
             first, last = min(indices), max(indices)

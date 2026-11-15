@@ -19,11 +19,15 @@ from .style_semantics import ruby_script_stroke_style
 
 
 @dataclass(frozen=True)
-class PreparedLowerReading:
+class LowerReadingTarget:
     indices: tuple[int, ...]
     effective: LowerRuby
     style: Style
     clock: RubyUnitClock
+
+
+@dataclass(frozen=True)
+class PreparedLowerReading(LowerReadingTarget):
     metrics: MeasuredRubyReading
 
 
@@ -35,14 +39,9 @@ class PreparedLowerReadings:
     main_identity: str
 
 
-def prepare_lower_readings(track, style, line_styles, measured, *, resolve_font, measure):
-    """Select from canonical main intervals and batch all explicit ruby fonts.
-
-    This preparation port deliberately does not enable lower ruby in product
-    IR. Baseline references, source row frames and D2D GPU parity remain gates
-    for that later integration. Spatial spacing cannot change these clocks.
-    """
-    pending, readings = [], []
+def select_lower_targets(track, style, line_styles, measured):
+    """Select/derive once from canonical intervals, without a font capability."""
+    pending, count = [], 0
     for index, (line, appearance, _main) in enumerate(zip(
             track.lines, line_styles, measured.lines, strict=True)):
         if not appearance.lower_ruby_enabled:
@@ -63,18 +62,26 @@ def prepare_lower_readings(track, style, line_styles, measured, *, resolve_font,
             if not indices:
                 raise ValueError('Skia 下方注音缺少有效正文目标')
             effective_style = ruby_script_stroke_style(ruby.render_style, ruby.reading)
-            clock = ruby_unit_clock(ruby, len(readings))
+            clock = ruby_unit_clock(ruby, count)
             if clock.units != tuple(split_graphemes(ruby.reading)):
                 raise ValueError('Skia 下方注音的分段边界拆开了塑形单元')
-            groups.append((indices, ruby, effective_style, clock))
-            readings.append((ruby.reading, effective_style))
+            groups.append(LowerReadingTarget(indices, ruby, effective_style, clock))
+            count += 1
         pending.append(groups)
+    return tuple(tuple(groups) for groups in pending)
+
+
+def prepare_lower_readings(track, style, line_styles, measured, *, resolve_font, measure):
+    """Batch explicit fonts for selected targets; never enable product drawing."""
+    pending = select_lower_targets(track, style, line_styles, measured)
+    readings = [(g.effective.reading, g.style) for groups in pending for g in groups]
     metrics = measure_readings(readings, resolve_font=resolve_font, measure=measure)
     offset, lines = 0, []
     for groups in pending:
         result = []
-        for indices, ruby, appearance, clock in groups:
-            result.append(PreparedLowerReading(indices, ruby, appearance, clock, metrics.readings[offset]))
+        for target in groups:
+            result.append(PreparedLowerReading(target.indices, target.effective, target.style,
+                                               target.clock, metrics.readings[offset]))
             offset += 1
         lines.append(tuple(result))
     signature = (measured.identity, metrics.identity, value_signature(line_styles),

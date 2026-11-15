@@ -32,6 +32,7 @@ public:
     float ascent() const;
     float descent() const;
     float leading() const;
+    float capHeight() const;
 private:
     SkFont font_;
     float scaleX_ = 1;

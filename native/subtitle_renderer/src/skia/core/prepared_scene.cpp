@@ -34,23 +34,28 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
+            if (cell.adjustedWipeEnd && cell.wipePoints.empty())
+                throw std::runtime_error("Skia 重叠走字缺少基本时钟");
             if (!cell.wipePoints.empty()) {
                 if (cell.wipePoints.size() < 2 || cell.wipePoints.size() > 4096
                     || (totalPoints += cell.wipePoints.size()) > 1048576
-                    || cell.wipePoints.front().position != 0 || cell.wipePoints.back().position != 1)
+                    || cell.wipePoints.front().position != 0
+                    || (!cell.adjustedWipeEnd && cell.wipePoints.back().position != 1))
                     throw std::runtime_error("Skia 分段走字端点或数量无效");
                 int previousTime = -172800000;
                 float previousPosition = 0;
                 for (const auto& point : cell.wipePoints) {
+                    const bool terminal = cell.adjustedWipeEnd && &point == &cell.wipePoints.back();
                     if (point.timeMs < previousTime || point.timeMs > 172800000
-                        || !std::isfinite(point.position) || point.position < previousPosition || point.position > 1)
+                        || !std::isfinite(point.position) || point.position < 0
+                        || (!terminal && point.position < previousPosition) || point.position > 1)
                         throw std::runtime_error("Skia 分段走字包含无效、反向或非有限数据");
                     previousTime = point.timeMs;
                     previousPosition = point.position;
                 }
             }
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
-                                  cell.before, cell.after, cell.wipePoints});
+                                  cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd});
         }
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
@@ -117,23 +122,45 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 break;
             }
         }
-        for (const auto& cell : line.cells) {
-            const float progress = !cell.wipePoints.empty()
+        const auto rawProgress = [&](const Cell& cell) {
+            return !cell.wipePoints.empty()
                 ? krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, tMs)
                 : (cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)
                    : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f));
-            const float edge = cell.left + (cell.right - cell.left) * progress;
+        };
+        for (std::size_t index = 0; index < line.cells.size(); ++index) {
+            const auto& cell = line.cells[index];
+            float progress = rawProgress(cell);
+            float edge = cell.left + (cell.right-cell.left)*progress;
+            if (cell.adjustedWipeEnd) {
+                const int start = cell.wipePoints.front().timeMs, end = cell.wipePoints.back().timeMs;
+                const Cell* next = index+1 < line.cells.size() ? &line.cells[index+1] : nullptr;
+                const int followingEnd = next ? (next->wipePoints.empty() ? next->endMs : next->wipePoints.back().timeMs) : end;
+                const bool wiping = (start < tMs && tMs < end && start != end)
+                    || (next && start < tMs && tMs < followingEnd && start != followingEnd);
+                if (!wiping) {
+                    progress = tMs <= start ? 0.f : 1.f;
+                    edge = cell.left+(cell.right-cell.left)*progress;
+                } else if (tMs > end && next) {
+                    // N3 delegates the finishing cell's clip to its following
+                    // cell until that cell completes. Times remain authored.
+                    edge = next->left+(next->right-next->left)*rawProgress(*next);
+                    progress = std::clamp((edge-cell.left)/std::max(cell.right-cell.left, 1.f), 0.f, 1.f);
+                }
+            }
             // Two disjoint clips avoid painting translucent after color over before color.
             if (progress < 1) {
                 canvas.save();
-                canvas.clipRect(SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f));
+                canvas.clipRect(SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f),
+                                SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.before);
                 canvas.drawPath(cell.path, paint);
                 canvas.restore();
             }
             if (progress > 0) {
                 canvas.save();
-                canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f));
+                canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f),
+                                SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.after);
                 canvas.drawPath(cell.path, paint);
                 canvas.restore();

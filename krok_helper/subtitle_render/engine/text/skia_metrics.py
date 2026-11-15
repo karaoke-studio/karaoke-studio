@@ -62,7 +62,11 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
         snapshots.append(LineMetric.capture(line, style,
             [CellMetric.from_payload(c.text, m) for c, m in zip(line.chars, cells, strict=True)], layout_widths=widths))
     snapshot = TextMetricSnapshot(tuple(snapshots))
-    rows = source_row_frames(track, style, line_styles, lines)
+    def row_frames(requests):
+        from ..ruby.skia_reference import measure_annotated_rows
+        return measure_annotated_rows(requests, resolve_font=resolve_font, measure=measure)
+    rows = source_row_frames(track, style, line_styles, lines,
+        resolve_frames=row_frames if any(s.lower_ruby_enabled for s in line_styles) else None)
     lines = [replace(line, row_frame=row) for line, row in zip(lines, rows, strict=True)]
     # A main-font replacement must invalidate even a line with only Latin glyphs.
     signature = {'cells': snapshot.identity, 'fonts': [r['font_metrics'] for r in measured],

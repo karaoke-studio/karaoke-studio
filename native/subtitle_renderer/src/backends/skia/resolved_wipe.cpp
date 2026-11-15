@@ -4,6 +4,16 @@
 #include <cmath>
 
 namespace krok::subtitle::native {
+std::optional<float> resolvedSkiaWipeEnd(const QJsonObject& cell, const QJsonObject& ir) {
+    if (!cell.contains("wipe_end_position")) return {};
+    const auto value = cell.value("wipe_end_position");
+    const double end = value.toDouble(-1);
+    if (!ir.value("required_features").toArray().contains("p05_overlap_wipe")
+        || ir.value("skia_layout").toObject().value("overlap_schema").toDouble(-1) != 1
+        || !value.isDouble() || !std::isfinite(end) || end < 0 || end > 1)
+        throw BackendError("Skia 重叠走字终点缺少能力声明或包含无效值");
+    return float(end);
+}
 std::vector<WipePoint> resolvedSkiaWipePoints(const QJsonObject& cell, const QJsonObject& ir,
                                             int timingOffset, std::size_t& totalPoints) {
     if (!cell.contains("wipe_points")) return {};

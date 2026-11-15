@@ -37,7 +37,8 @@ QJsonObject measureSkiaText(const QJsonObject& request) {
         const auto& primary = *fonts.front();
         output.append(QJsonObject{{"cells", cells}, {"font_metrics", QJsonObject{
             {"font_identity", QString::fromStdString(primary.identity())},
-            {"ascent", primary.ascent()}, {"descent", primary.descent()}, {"leading", primary.leading()}}}});
+            {"ascent", primary.ascent()}, {"descent", primary.descent()}, {"leading", primary.leading()},
+            {"cap_height", primary.capHeight()}}}});
     }
     auto out = protocol::response(true, "text_measured");
     out.insert("metrics_schema", 1); out.insert("backend", "skia"); out.insert("execution_target", "cpu_metrics");

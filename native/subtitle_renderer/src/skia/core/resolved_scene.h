@@ -13,6 +13,7 @@ struct ResolvedCell {
     int startMs = 0, endMs = 0;
     std::uint32_t before = 0, after = 0;
     std::vector<krok::subtitle::native::WipePoint> wipePoints;
+    bool adjustedWipeEnd = false; // Configuration-only validation marker; never changes time.
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

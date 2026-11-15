@@ -20,6 +20,7 @@ from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
 
 def appearance(**changes):
     return replace(Style(font_family='Main', font_family_latin='Latin', font_size_px=50,
+        stroke_width_px=0, stroke2_width_px=0, decoration_kind='none',
         lower_ruby_enabled=True, _lower_romaji_options=(False, False, False, False),
         ruby_font_size_px=24, ruby_latin_font_size_px=32, ruby_latin_font_stretch_pct=125,
         ruby_stroke_width_px=0, ruby_stroke2_enabled=False), **changes)
@@ -88,7 +89,7 @@ def prepared_source(tmp_path):
         font = TTFont(path, recalcTimestamp=False)
         for cmap in font['cmap'].tables:
             if cmap.isUnicode():
-                cmap.cmap.update({ord(c): 'cjk' for c in 'かないきゃユーぐ'})
+                cmap.cmap.update({ord(c): 'cjk' for c in '国あいうえおアイウエオかないきゃユーぐ'})
                 cmap.cmap.update({ord(c): 'A' for c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-'})
         font.save(path); font.close()
         paths[family] = path

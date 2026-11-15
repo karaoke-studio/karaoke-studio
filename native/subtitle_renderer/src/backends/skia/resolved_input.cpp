@@ -69,6 +69,11 @@ std::uint32_t argb(const RgbaColor& c) {
             auto glyph = glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[j].startMs, line.chars[j].endMs,
                 argb(paint.beforeFillPaint.color), argb(paint.afterFillPaint.color));
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[j].startMs - int(interval[0].toDouble()), totalPoints);
+            if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
+                if (glyph.wipePoints.empty()) glyph.wipePoints = {{glyph.startMs, 0.f}, {glyph.endMs, 1.f}};
+                glyph.wipePoints.back().position = *end;
+                glyph.adjustedWipeEnd = true;
+            }
             prepared.cells.push_back(std::move(glyph));
         }
         const int timingOffset = cells.isEmpty() ? 0

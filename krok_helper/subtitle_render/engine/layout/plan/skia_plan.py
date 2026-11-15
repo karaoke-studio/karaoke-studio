@@ -30,7 +30,7 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
         styles = [style_for_line(style, line) for line in track.lines]
         measured = measure_track(track, style, styles, measure=measure, resolve_font=resolve_font)
         ruby = (prepare_ruby_geometry(track, style, styles, measured, measure=measure, resolve_font=resolve_font)
-                if track.rubies else None)
+                if track.rubies or any(s.lower_ruby_enabled for s in styles) else None)
         geometry = SkiaCollisionGeometry(track, style, styles, measured, ruby_geometry=ruby)
 
         def display(source, appearance, **size):

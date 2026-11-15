@@ -282,7 +282,7 @@ def test_nonfinite_ruby_glyph_snapshot_is_rejected(binary,annotated,value):
             measure_readings([('字',style)],resolve_font=resolve_skia_font,measure=measure)
 
 
-@pytest.mark.parametrize('change',[{'vertical':True},{'right_to_left':True},{'lower_ruby_enabled':True}])
+@pytest.mark.parametrize('change',[{'vertical':True},{'right_to_left':True}])
 def test_unimplemented_geometry_direction_is_explicitly_rejected(binary,annotated,change):
     track,style=annotated
     with pytest.raises(ValueError,match='正向横排上注音'):

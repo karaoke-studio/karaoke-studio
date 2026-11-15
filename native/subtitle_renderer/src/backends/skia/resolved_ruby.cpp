@@ -1,4 +1,5 @@
 #include "resolved_ruby.h"
+#include "resolved_wipe.h"
 #include "../render_backend.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
@@ -56,8 +57,13 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
             const auto shiftedStart = std::int64_t(start) + offset, shiftedEnd = std::int64_t(end) + offset;
             if (shiftedStart < -172800000 || shiftedEnd > 172800000)
                 throw BackendError("Skia 注音最终时间偏移超限");
-            cells.push_back(glyphs.cell(cell, text.toString(), int(shiftedStart), int(shiftedEnd),
-                argb(paint.rubyBeforeFillPaint.color), argb(paint.rubyAfterFillPaint.color)));
+            auto glyph = glyphs.cell(cell, text.toString(), int(shiftedStart), int(shiftedEnd),
+                argb(paint.rubyBeforeFillPaint.color), argb(paint.rubyAfterFillPaint.color));
+            if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
+                glyph.wipePoints = {{int(shiftedStart), 0.f}, {int(shiftedEnd), *end}};
+                glyph.adjustedWipeEnd = true;
+            }
+            cells.push_back(std::move(glyph));
         }
         groups.push_back(std::move(cells));
     }

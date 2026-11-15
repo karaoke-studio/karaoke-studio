@@ -1,4 +1,4 @@
-"""Prepare upper-ruby targets and local geometry from canonical measurements.
+"""Prepare upper/lower ruby targets and local canonical geometry.
 
 This is a configuration-time value projection. It neither enables a rendering
 profile nor allocates frame-time wipe progress. Main intervals remain owned by
@@ -15,11 +15,12 @@ from krok_helper.subtitle_render.engine.text.cell_positions import char_left_pos
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.font_slots import font_style_for_cell
 from krok_helper.subtitle_render.engine.value_signature import value_signature
-from .interference import RubySpacingSpan, resolve_ruby_spacing
 from .selection import active_rubies_for_line, ruby_target_indices, effective_ruby_for_target, ruby_target_x_range
 from .skia_metrics import MeasuredRubyReadings, measure_readings
 from .style_semantics import ruby_style_for_target_indices, ruby_script_stroke_style, ruby_stroke_width
-from .unit_layout import measured_ruby_origins
+from .skia_lower import select_lower_targets
+from .skia_reference import measure_references
+from .skia_spacing import reading_origins, resolve_line_spacing
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class RubyTarget:
     indices: tuple[int, ...]
     effective: RubyAnnotation
     style: Style
+    lower: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ class RubyLineGeometry:
     main: LocalLineGeometry
     rubies: tuple[RubyGeometry, ...]
     anchor: tuple[float, float]
+    placement_ink: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -81,9 +84,10 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
     that table and supply validated segmented clocks before enabling drawing.
     """
     annotation_indices = {id(r): i for i, r in enumerate(track.rubies)}
-    targets, intervals, readings = [], [], []
+    lower = select_lower_targets(track, style, line_styles, measured)
+    targets, intervals, readings, reference_pairs = [], [], [], []
     for index, (line, appearance) in enumerate(zip(track.lines, line_styles, strict=True)):
-        if appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled or line.wipe_reverse:
+        if appearance.vertical or appearance.right_to_left or line.wipe_reverse:
             raise ValueError('Skia 当前注音几何准备仅支持正向横排上注音')
         if any(style_for_role_in_layout(appearance, c.role_label).stroke_width_px > 0 for c in line.chars):
             raise ValueError('Skia 当前注音几何准备尚不支持带描边的主字')
@@ -103,40 +107,57 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             target = RubyTarget(annotation_indices[id(ruby)], tuple(indices), effective, ruby_style)
             line_targets.append(target)
             readings.append((effective.reading, ruby_style))
+        for generated in lower[index]:
+            target = RubyTarget(-1-generated.clock.annotation_index, generated.indices,
+                                generated.effective, generated.style, True)
+            line_targets.append(target)
+            readings.append((target.effective.reading, target.style))
+            reference_pairs.append((ruby_style_for_target_indices(appearance, line, list(target.indices)), target.style))
         targets.append(line_targets)
     ruby_metrics = measure_readings(readings, resolve_font=resolve_font, measure=measure)
+    references = measure_references(reference_pairs, resolve_font=resolve_font, measure=measure)
+    lower_targets = [t for group in targets for t in group if t.lower]
+    lower_baselines = {target.annotation_index: round(reference.lower_baseline(target.style.ruby_gap_px))
+                       for target, reference in zip(lower_targets, references, strict=True)}
     offset, lines = 0, []
     for line, appearance, main, clock, line_targets in zip(
             track.lines, line_styles, measured.lines, intervals, targets, strict=True):
         reading_metrics = ruby_metrics.readings[offset:offset + len(line_targets)]
         offset += len(line_targets)
-        spans = [RubySpacingSpan(min(t.indices), max(t.indices), False, i) for i, t in enumerate(line_targets)]
-
-        def draw_bounds(span, left, width):
-            target, metrics = line_targets[span.key], reading_metrics[span.key]
-            origins = measured_ruby_origins(metrics.unit_layouts, left, width,
-                                           style=target.style, base_text=target.effective.kanji)
-            if not origins:
-                return left, left
-            return min(c[1] for c in origins), max(c[1] + c[2] for c in origins)
-
-        gaps, left_overflow, right_overflow = resolve_ruby_spacing(main.widths, appearance, spans, draw_bounds=draw_bounds)
-        local = local_line_geometry(main, appearance, char_gaps=gaps) if spans else local_line_geometry(main, appearance)
+        gaps, left_overflow, right_overflow = resolve_line_spacing(main, appearance, line_targets, reading_metrics)
+        local = (local_line_geometry(main, appearance, char_gaps=gaps) if line_targets
+                 else local_line_geometry(main, appearance))
         lefts = char_left_positions(main.widths, 0, False, appearance.letter_spacing_px, char_gaps=gaps,
                                     n3_no_backtracking=appearance.layout_semantics == 'n3_1074')
         ranges = [(x, x + w) for x, w in zip(lefts, main.widths, strict=True)]
+        initial_lefts = char_left_positions(main.widths, 0, False, appearance.letter_spacing_px,
+                                           n3_no_backtracking=appearance.layout_semantics == 'n3_1074')
+        initial_ranges = [(x, x+w) for x, w in zip(initial_lefts, main.widths, strict=True)]
         ascent = _main_box_ascent(line, appearance, main, line_targets)
+        has_lower = any(t.lower for t in line_targets)
         rubies = []
         for target, metrics in zip(line_targets, reading_metrics, strict=True):
-            original = track.rubies[target.annotation_index]
+            original = target.effective if target.lower else track.rubies[target.annotation_index]
             span = ruby_target_x_range(original, line, clock, ranges)
             if span is None:
                 continue
-            origins = measured_ruby_origins(metrics.unit_layouts, span[0], max(span[1] - span[0], 1),
-                                           style=target.style, base_text=target.effective.kanji)
+            if has_lower:
+                # The GPU prepares annotation unit rounding before inserting
+                # slots, then translates each whole group with its first main
+                # cell. Re-rounding after a negative origin crosses zero can
+                # move an internal wipe boundary by an extra pixel.
+                initial = ruby_target_x_range(original, line, clock, initial_ranges)
+                if initial is None:
+                    raise ValueError('Skia 注音缺少初始正文几何')
+                shift = lefts[min(target.indices)]-initial_lefts[min(target.indices)]
+                origins = [(text, x+shift, width, pen) for text, x, width, pen in
+                           reading_origins(target, metrics, initial[0], max(initial[1]-initial[0], 1))]
+            else:
+                origins = reading_origins(target, metrics, span[0], max(span[1]-span[0], 1))
             descents = [_box_height(cell, ruby_metrics.runs[run]['size'], ruby_stroke_width(target.style), 'descent')
                         for cell, run in zip(metrics.cells, metrics.run_indices, strict=True)]
-            baseline = -ascent - appearance.ruby_gap_px - max(descents, default=0)
+            baseline = (lower_baselines[target.annotation_index] if target.lower
+                        else -ascent - appearance.ruby_gap_px - max(descents, default=0))
             cells = []
             for (_, origin, width, pen), cell, run in zip(origins, metrics.cells, metrics.run_indices, strict=True):
                 ink = cell['ink']
@@ -147,7 +168,19 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                               'wipe_left': x + ink[0] if visible else origin,
                               'wipe_right': x + ink[2] if visible else origin + width})
             rubies.append(RubyGeometry(target, tuple(span), baseline, tuple(cells)))
-        anchor = ((local.ink[0], local.ink[2]) if local.ink else (0, max(local.layout_width, 1)))
+        # Generated lower ink now participates in the source's placement and
+        # collision envelope; authored upper readings remain outside it.
+        boxes = [local.ink] if local.ink else []
+        for group in rubies:
+            if group.target.lower:
+                for cell in group.cells:
+                    a, b, c, d = cell['metrics']['ink']
+                    if c > a and d > b:
+                        boxes.append((a+cell['origin_x'], b+cell['baseline_y'],
+                                      c+cell['origin_x'], d+cell['baseline_y']))
+        placement_ink = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                         max(b[2] for b in boxes), max(b[3] for b in boxes)) if boxes else None
+        anchor = ((placement_ink[0], placement_ink[2]) if placement_ink else (0, max(local.layout_width, 1)))
         if appearance.layout_semantics == 'n3_1074':
             # N3 aligns the union of the main grid and ruby UNIT BOXES. Ink
             # bearings are irrelevant here; overflow on either side shifts
@@ -156,8 +189,9 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             anchor = (min([0, *(b[0] for b in boxes)]),
                       max([max(local.layout_width, 1), *(b[1] for b in boxes)]))
         lines.append(RubyLineGeometry(tuple(clock), tuple(gaps), (left_overflow, right_overflow),
-                                      local, tuple(rubies), anchor))
-    signature = (measured.identity, ruby_metrics.identity, value_signature(track.rubies), value_signature(line_styles))
+                                      local, tuple(rubies), anchor, placement_ink))
+    signature = (measured.identity, ruby_metrics.identity, value_signature(track.rubies), value_signature(line_styles),
+                 tuple(reference.identity for reference in references))
     identity = hashlib.sha256(repr(signature).encode('utf-8')).hexdigest()
     return RubyTrackGeometry(ruby_metrics, tuple(lines), identity, measured.identity)
 

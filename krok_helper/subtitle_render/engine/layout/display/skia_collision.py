@@ -48,7 +48,10 @@ class SkiaCollisionGeometry:
             placement = SimpleNamespace(line=item.line, layout_style=style, lane=item.lane, page_line_count=item.page_line_count,
                 center_override=line_center_override(self.track, item.line, style, respect_page_plan=True))
             position = self.position(placement, width, height)
-            bounds = collision_bounds(self.locals[i], position)
+            local = self.locals[i]
+            if self.ruby is not None:
+                local = replace(local, ink=self.ruby.lines[i].placement_ink)
+            bounds = collision_bounds(local, position)
             self.cache[key] = None if bounds is None else CollisionLineGeometry(
                 bounds[1], bounds[3], bounds[0], bounds[2], position.baseline_y, float(style.line_gap_px))
         return self.cache[key]

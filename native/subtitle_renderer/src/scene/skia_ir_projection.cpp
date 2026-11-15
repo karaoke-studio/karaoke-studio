@@ -24,11 +24,15 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_single_line_placement" && feature.toString() != "p05_inline_roles"
             && feature.toString() != "p05_fixed_row_grid" && feature.toString() != "p05_page_collisions"
             && feature.toString() != "p05_smart_horizontal" && feature.toString() != "p05_segmented_wipe"
-            && feature.toString() != "p05_resolved_ruby" && feature.toString() != "p05_upper_ruby")
+            && feature.toString() != "p05_resolved_ruby" && feature.toString() != "p05_upper_ruby"
+            && feature.toString() != "p05_overlap_wipe")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
+    if (ir.value("required_features").toArray().contains("p05_overlap_wipe")
+        && ir.value("skia_layout").toObject().value("overlap_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 重叠走字布局版本无效");
     if (!ir.value("screen").isObject() || !ir.value("style").isObject() || !ir.value("track").isObject())
         throw BackendError("Skia IR: screen/style/track objects are required");
     const auto screen = ir.value("screen").toObject();

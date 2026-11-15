@@ -520,7 +520,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
-- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。字体槽、规范批量度量和共用单元排布底座见 §14.18，尚未解除注音绘制门禁。
+- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音已完成纯语义、规范度量和几何/终端探针（§14.25–§14.27），产品下方绘制门禁仍保留，完整组合尚未验收。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
@@ -1595,6 +1595,22 @@ Mac CI [43687800504](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 Mac CI [43705296882](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43705296882)（`23e4aa71`）**5 项全部成功**：arm64/x64 产品组合各 **387 通过、65 项平台专用跳过**，新增下方准备专项各 **15 通过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。十五份 arm64/x64 规范样例最大误差均为 **0**；下载的 arm64 样例与重建后的 Windows/X11/Wayland 再比较也全部为 **0**。八份 Windows/Linux/macOS arm64/x64 的 GPU/Raster native 指纹均核对为 `c2320b0fcbe84cd9a82863e2bca0495988f5e573c469a9a57d7e4ff05f84cbc0`。两份干净 Mac 验收包均退出 **0**，`lower_ruby_preparation` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能作为真机门槛通过。§14.6 朋友测试入口已更新到本次提交与验收包。
 
 日志/样例前缀 `build/p05-lower-*`。本节未开放下方注音产品能力；下一步仍是 §14.25 列出的稳定参考基线、两层干扰/净空和最终绘制接入，再做 GPU 对照验收。Linux 真硬件与本轮 Mac 真机结果仍待补齐，未做 4K。
+
+### 14.27 P05.6 下方注音参考基线、两层间距与重叠走字准备（2026-11-16）
+
+**本批接通规范几何与终端 GPU/Raster 探针，尚未开放产品下方注音。** 已先拉取 `main` 至 `d4a316a2`，保留 Xuan-cc 的 `b6770aad`：下方读音扩宽槽位后，主字在槽内居中；下方墨迹参与 legacy 对齐与碰撞。没有覆盖生产修复，也没有修改 D2D C++ 后端、默认后端或发布隔离规则。
+
+- 新增小模块 `ruby/skia_reference.py`，以显式字体资源批量测量固定参考串：主字「国」、上注音「あいうえおアイウエオ」、下方 Latin 小写字母。参考墨迹、整数字体框和 Latin cap height 共同确定稳定下方基线，不按每句实际歌词重新漂移。`font_metrics.cap_height` 来自锁定 Skia/FreeType 的字体度量；测试用不同于 H 轮廓高度的 OS/2 cap 元数据验证它。旧 sidecar 缺少 cap、非有限度量、无轮廓或无效参考资源时明确失败。当前显式资源须覆盖参考字形，完整缺字回退资源链仍属 P05.1/P05.2，不能偷偷借系统 fallback。
+- `skia_rows.py` 将上下参考包络纳入同一源布局的 `RowFrame`，未上屏但实际使用的角色/歌手/Latin 字体也参与；参考内容身份进入度量缓存键。字体自身基线与外部源行框仍分开，不查询旧 Qt 参考墨迹或行框。
+- `skia_lower.py` 拆出纯目标选择，`skia_geometry.py` 合并上下目标并一次批量测量读音。`skia_spacing.py` 适配共享 `resolve_ruby_spacing` 的双侧槽位规则，上下层约束取最大值；不另写碰撞/分页算法。生成下方组不拥有主字时钟，保留原目标与空暂停。带下方层时，先按原始正文位置取整读音，再随插入槽位整体平移，避免负坐标跨零后二次取整造成额外 1px 偏差。legacy 以正文和生成下方墨迹并集定位，N3 仍取正文网格与全部读音单元盒并集；碰撞消费同一最终几何。
+- 新增 `ruby/skia_overlap.py` 计算重叠单元的最后走字位置，宽度补偿为 **1 个物理像素**，包含 DPR 和 GPU float32 中间值；不改变任何时间。native 可选能力 `p05_overlap_wipe` / `overlap_schema=1` 消费 `wipe_end_position`，主字/注音均校验类型、范围、有限值和能力声明，失败保留旧有效场景。旧的无该字段场景维持原语义。公共 Skia 核心在该能力下匹配 GPU 的终点缩短、后继单元完成前的延续/委托裁剪、全唱完释放裁剪和抗锯齿裁剪；不是帧循环重新排版。
+- 终端测试适配器暂时删除源注音，只验证最终几何，且上下层使用相同实色配色。它**不能代表产品源信息、独立下方配色和完整组合验收**。`build_skia_render_ir` 与正式注音 IR 编译器仍明确拒绝下方层；下一步须完成产品 IR/能力握手、独立下方外观、预览/导出与失败保留验证后再逐项开放。
+
+新增 `tests/test_subtitle_skia_lower_geometry.py` **39 项通过**，覆盖参考串去重、cap 元数据、角色/隐藏同行稳定行框、两层槽位、碰撞、seek/暂停、非法终点和旧场景保留。D2D GPU 对照为 legacy/N3 × 跟随/独立下方字号 × DPR 1/1.5，共 **8 组、各 9 个时刻**，包括暂停、临近结束和唱完后。受控矩形字体的各层 alpha 墨迹包络误差与规范化已唱预乘颜色覆盖对应的单前沿位移误差均要求 **≤1 物理像素**；临近终点的微小抗锯齿残留不能用硬颜色阈值包围盒误判为跨字形的前沿跳跃。这不是完整真实字体画质预算验收。
+
+本地完整 Skia 组合：Windows **490 通过**；Linux X11/Wayland 各 **423 通过、67 项平台专用跳过**（软件 Vulkan，不代表 Linux 真硬件验收）。Windows/Linux Vulkan 与 CPU-only 四份产物均按当前 native 源码完整重建，CTest 各 **3/3**，源码摘要统一为 `4aac675e67e9ec06452fc0355d6b90abd8cbf4178760886090376c3ace873731`。关联生产/架构/协议/字体/构建工具组合 **438 通过、3 失败**；收起本批全部改动后，在原始 `d4a316a2` 串行重跑同样三项全部失败：`test_lower_readings_force_page_displacement_clear_of_their_ink` 与两种语义的 `test_lower_long_reading_centers_its_slot`，确认为本轮前已存在的基线问题，未放宽断言或改写生产路径来掩盖。
+
+Mac 工作流与验收包加入 `lower_ruby_geometry=1`，新增 `lower-ruby-reference.json`、`lower-ruby-geometry.json`，跨架构规范样例共 **17 份**。Mac CI 结果待本批提交后补录；Linux 真硬件、Mac 本轮真机与 P05 完整门槛仍保留，未做 4K。日志/样例前缀 `build/p05-lower-geometry-*`。
 
 ## 15. 前期探针清理范围
 

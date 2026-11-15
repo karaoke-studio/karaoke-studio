@@ -13,10 +13,16 @@ PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells) : c
     for (const auto& cell : cells_) {
         if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
             || cell.right < cell.left || cell.startMs < previousEnd || cell.endMs < cell.startMs
-            || cell.endMs > 172800000 || !cell.wipePoints.empty()
+            || cell.endMs > 172800000
             || cell.before != cells.front().before || cell.after != cells.front().after)
             throw std::runtime_error("Skia 注音组几何、时钟或配色无效");
+        if (!cell.wipePoints.empty() && (cell.wipePoints.size() != 2
+            || cell.wipePoints.front().timeMs != cell.startMs || cell.wipePoints.front().position != 0
+            || cell.wipePoints.back().timeMs != cell.endMs || !std::isfinite(cell.wipePoints.back().position)
+            || cell.wipePoints.back().position < 0 || cell.wipePoints.back().position > 1))
+            throw std::runtime_error("Skia 注音组重叠终点无效");
         previousEnd = cell.endMs;
+        antialiasClip_ = antialiasClip_ || cell.adjustedWipeEnd;
         bounds_.join(cell.path.getBounds());
     }
 }
@@ -38,18 +44,19 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
         if (timeMs < cell.startMs) break;
         const float progress = timeMs <= cell.startMs ? 0.f : (timeMs >= cell.endMs ? 1.f
             : float(timeMs - cell.startMs) / float(cell.endMs - cell.startMs));
-        edge = cell.left + (cell.right - cell.left) * progress;
+        const float endpoint = cell.wipePoints.empty() ? 1.f : cell.wipePoints.back().position;
+        edge = cell.left + (cell.right - cell.left) * (progress * endpoint);
         if (timeMs <= cell.endMs) break;
     }
     // Disjoint clips preserve translucent alpha; completed groups release
     // their clip so overhangs keep the established full-after appearance.
     canvas.save();
-    canvas.clipRect(SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f));
+    canvas.clipRect(SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f), SkClipOp::kIntersect, antialiasClip_);
     draw(false);
     canvas.restore();
     if (edge > bounds_.left()) {
         canvas.save();
-        canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f));
+        canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f), SkClipOp::kIntersect, antialiasClip_);
         draw(true);
         canvas.restore();
     }

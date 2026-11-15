@@ -62,7 +62,8 @@ FontInstance::FontInstance(const FontSpec& spec) {
     font_.setLinearMetrics(true);
     SkFontMetrics metrics;
     font_.getMetrics(&metrics);
-    if (!std::isfinite(metrics.fAscent) || !std::isfinite(metrics.fDescent) || !std::isfinite(metrics.fLeading))
+    if (!std::isfinite(metrics.fAscent) || !std::isfinite(metrics.fDescent) || !std::isfinite(metrics.fLeading)
+        || !std::isfinite(metrics.fCapHeight) || metrics.fCapHeight < 0)
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
@@ -89,4 +90,5 @@ GlyphGeometry FontInstance::glyphGeometry(SkGlyphID glyph) const {
 float FontInstance::ascent() const { SkFontMetrics m; font_.getMetrics(&m); return -m.fAscent; }
 float FontInstance::descent() const { SkFontMetrics m; font_.getMetrics(&m); return m.fDescent; }
 float FontInstance::leading() const { SkFontMetrics m; font_.getMetrics(&m); return m.fLeading; }
+float FontInstance::capHeight() const { SkFontMetrics m; font_.getMetrics(&m); return m.fCapHeight; }
 }

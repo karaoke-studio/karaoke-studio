@@ -11,5 +11,6 @@ public:
 private:
     std::vector<ResolvedCell> cells_;
     SkRect bounds_;
+    bool antialiasClip_ = false;
 };
 }

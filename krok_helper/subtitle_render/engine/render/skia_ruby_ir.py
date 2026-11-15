@@ -13,6 +13,8 @@ def prepared_ruby_layout(prepared, *, width, height):
     ruby = geometry.ruby
     if ruby is None:
         raise ValueError('Skia 最终注音布局缺少准备几何')
+    if any(group.target.lower for line in ruby.lines for group in line.rubies):
+        raise ValueError('Skia 下方注音最终绘制尚未验收')
     if any(is_utopia_group_marker(annotation) for annotation in geometry.track.rubies):
         raise ValueError('Skia 最终注音组尚未验收空读音或短语标记')
     fonts = dict(measured.fonts)

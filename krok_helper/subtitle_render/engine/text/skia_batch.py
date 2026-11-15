@@ -41,6 +41,9 @@ class TextMeasurementBatch:
             if (len(result['cells']) != len(run['cells']) or not baseline.get('font_identity')
                     or not all(math.isfinite(float(baseline[k])) for k in ('ascent', 'descent', 'leading'))):
                 raise ValueError('Skia 批量度量单元或主字基线无效')
+            if 'cap_height' in baseline and (not math.isfinite(float(baseline['cap_height']))
+                                            or float(baseline['cap_height']) < 0):
+                raise ValueError('Skia 字体大写高度包含无效或非有限值')
         return results
 
     def resolved_runs(self):
