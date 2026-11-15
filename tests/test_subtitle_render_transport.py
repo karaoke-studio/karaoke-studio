@@ -4644,6 +4644,70 @@ def test_packaged_preview_does_not_import_experimental_skia(qapp, monkeypatch):
         canvas.deleteLater()
 
 
+@pytest.mark.parametrize("target_name", ["window", "viewport"])
+def test_preview_stationary_mouse_events_allow_controls_to_hide(qapp, monkeypatch, target_name):
+    from PyQt6.QtCore import QEvent, QPoint, QPointF, QTimer
+    from PyQt6.QtGui import QCursor, QEnterEvent, QMouseEvent
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QApplication, QWidget
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.player_window import PreviewPlayerWindow
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    owner = QWidget()
+    owner.resize(1600, 900)
+    window = PreviewPlayerWindow(owner)
+    window.preview_panel.set_populated(True)
+    window.show()
+    qapp.processEvents()
+    target = window if target_name == "window" else window.preview_panel.canvas.viewport()
+    local = QPoint(target.width() // 2, target.height() // 2)
+    global_pos = target.mapToGlobal(local)
+    monkeypatch.setattr(QCursor, "pos", lambda: global_pos)
+
+    def send_move():
+        event = QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(local), QPointF(global_pos),
+            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(target, event)
+
+    timer = QTimer()
+    timer.setInterval(16)
+    timer.timeout.connect(send_move)
+    try:
+        send_move()
+        assert window._bottom_controls.isVisible()
+        timer.start()
+        # G6 repeatedly forwards WM_MOUSEMOVE even with a stationary cursor.
+        # Exercise several real idle periods, not a direct timeout callback.
+        QTest.qWait(12_000)
+        assert window._bottom_controls.isHidden()
+        assert not window._hide_controls_timer.isActive()
+
+        # Showing/hiding overlays may also cause stationary enter events.
+        window_pos = QPointF(window.mapFromGlobal(global_pos))
+        QApplication.sendEvent(window, QEnterEvent(window_pos, window_pos, QPointF(global_pos)))
+        assert window._bottom_controls.isHidden()
+        timer.stop()
+        local += QPoint(8, 0)
+        global_pos = target.mapToGlobal(local)
+        send_move()
+        assert window._bottom_controls.isVisible()
+        point = window._bottom_controls.mapTo(window, window._bottom_controls.rect().center())
+        hit = window.childAt(point)
+        assert hit is window._bottom_controls or window._bottom_controls.isAncestorOf(hit)
+    finally:
+        timer.stop()
+        window.preview_panel.canvas.close()
+        window.close()
+        window.deleteLater()
+        owner.deleteLater()
+        qapp.processEvents()
+
+
 def test_preview_controls_stay_at_bottom_through_frames_and_window_changes(qapp, monkeypatch):
     from PyQt6.QtCore import QPoint, QRect, QSize
     from PyQt6.QtGui import QCursor

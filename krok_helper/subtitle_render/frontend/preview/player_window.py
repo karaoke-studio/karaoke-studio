@@ -177,7 +177,7 @@ class PreviewPlayerWindow(QWidget):
         self._owner = owner
         self._drag_origin: Optional[QPoint] = None
         self._suppress_control_show = False
-        # 视频区唤出去重：记录最近一次触发 show_controls 的 move 全局坐标。
+        # 所有输入路径共用坐标去重，包括 G6 转发到顶层的 move/enter。
         self._last_control_move_pos: Optional[QPoint] = None
         self._collapsed = False
         self._gpu_preview_confirmation_open = False
@@ -395,10 +395,7 @@ class PreviewPlayerWindow(QWidget):
                 # 停住的光标持续重发 mouse move（空闲超时改 force=True 的
                 # 根因），坐标未变视为无操作，只有真实移动才唤出控制栏。
                 if self._video_area_contains(watched, event.position().toPoint()):
-                    global_pos = event.globalPosition().toPoint()
-                    if global_pos != self._last_control_move_pos:
-                        self._last_control_move_pos = global_pos
-                        self.show_controls()
+                    self._show_controls_for_cursor_change(event.globalPosition().toPoint())
             elif event.type() == QEvent.Type.MouseButtonRelease:
                 if (
                     event.button() == Qt.MouseButton.LeftButton
@@ -602,6 +599,15 @@ class PreviewPlayerWindow(QWidget):
         self._transport_bar.seek_relative(delta_ms)
         self.show_controls()
 
+    def _show_controls_for_cursor_change(self, global_pos: QPoint) -> None:
+        # DComp 可将静止光标的 WM_MOUSEMOVE 直接转发给顶层窗口；只在
+        # viewport 过滤器去重会漏掉这条路径，不断续期空闲计时器。控件
+        # 隐藏引起的 enter 也须共用此状态，避免刚隐藏就被原坐标唤回。
+        if global_pos == self._last_control_move_pos:
+            return
+        self._last_control_move_pos = QPoint(global_pos)
+        self.show_controls()
+
     def show_controls(self) -> None:
         if self._collapsed:
             self._hide_controls_timer.stop()
@@ -725,7 +731,7 @@ class PreviewPlayerWindow(QWidget):
 
     def enterEvent(self, event):  # noqa: N802
         super().enterEvent(event)
-        self.show_controls()
+        self._show_controls_for_cursor_change(QCursor.pos())
 
     def mouseMoveEvent(self, event):  # noqa: N802
         super().mouseMoveEvent(event)
@@ -733,7 +739,7 @@ class PreviewPlayerWindow(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_origin)
             event.accept()
         elif not event.buttons() & Qt.MouseButton.LeftButton:
-            self.show_controls()
+            self._show_controls_for_cursor_change(event.globalPosition().toPoint())
 
     def mousePressEvent(self, event):  # noqa: N802
         if (
