@@ -111,30 +111,34 @@ def test_source_roles_update_except_for_sparse_user_overrides() -> None:
     ]
 
 
-def test_source_owned_inline_emoji_symbols_update_on_reload() -> None:
+@pytest.mark.parametrize(
+    ("option", "old", "new"),
+    [("bitmap_zoom_percent", 100, 50), ("bitmap_margin_bottom_px", 0, -80)],
+)
+def test_source_owned_inline_emoji_symbols_update_on_reload(option, old, new) -> None:
     """@Emoji 参数变化（如 Zoom）热重载后必须生效：与基线一致的行内符号是
     源拥有的状态，不能被 current 里的旧值盖回去。"""
 
-    def _emoji_track(zoom: int) -> TimingTrack:
+    def _emoji_track(value: int) -> TimingTrack:
         symbol = GuideSymbol(
             kind="bitmap",
             bitmap_before_path="avatar.png",
-            bitmap_zoom_percent=zoom,
+            **{option: value},
         )
         track = _track()
         track.lines[0].chars.insert(0, TimingChar("【A】", 1000, role_label="A"))
         track.lines[0].inline_guide_symbols = {0: symbol}
         return track
 
-    baseline = _emoji_track(100)
+    baseline = _emoji_track(old)
     current = deepcopy(baseline)  # 渲染器未改动该符号
-    candidate = _emoji_track(50)  # 源里 @Emoji Zoom=50
+    candidate = _emoji_track(new)
 
     result = merge_reloaded_track(current, baseline, candidate)
 
     assert result.conflicts == ()
     merged = result.track.lines[0].inline_guide_symbols[0]
-    assert merged.bitmap_zoom_percent == 50
+    assert getattr(merged, option) == new
 
 
 def test_source_owned_inline_emoji_symbols_removed_on_reload() -> None:

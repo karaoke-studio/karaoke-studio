@@ -478,11 +478,29 @@ def _g1_track() -> TimingTrack:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="DirectComposition preview is Windows-only")
-def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypatch) -> None:
+@pytest.mark.parametrize("avatar_count", [0, 3])
+def test_gpu_g6_direct_composition_child_window_has_zero_readback(
+    qapp, monkeypatch, tmp_path, avatar_count
+) -> None:
     if QApplication.platformName().lower() != "windows":
         pytest.skip("G6 native HWND smoke requires the Windows Qt platform plugin")
     renderer_path = _renderer_path()
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDERER", str(renderer_path))
+    track = _g1_track()
+    style = Style(**_PARITY_BASELINE, font_size_px=48, line_lead_in_ms=0)
+    if avatar_count:
+        style = replace(style, line_y_position="center")
+        avatar = QImage(24 * avatar_count, 24, QImage.Format.Format_RGBA8888)
+        avatar.fill(QColor("#FF0000"))
+        assert avatar.save(str(tmp_path / "avatar.png"))
+        lrc = tmp_path / "avatars.lrc"
+        lrc.write_text(
+            "【A】[00:00:00]A[00:01:00]B[00:01:50]\n\n"
+            "@Emoji=【A】,avatar.png,,Zoom=80%,NoDecor,MarginRight=-999,MarginBottom=-80.0\n",
+            encoding="utf-8",
+        )
+        track = load_nicokara_lrc(lrc)
+        assert track.lines[0].inline_guide_symbols[0].bitmap_margin_bottom_px == -80
 
     class RecordingWidget(QWidget):
         """记录鼠标事件的占位控件：验证 DComp 子窗口的输入转发。"""
@@ -515,8 +533,8 @@ def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypa
         try:
             with NativeRendererProcess(response_timeout_s=15.0) as process:
                 configured = process.configure_gpu(
-                    _g1_track(),
-                    Style(**_PARITY_BASELINE, font_size_px=48, line_lead_in_ms=0),
+                    track,
+                    style,
                     width=320,
                     height=180,
                     fps=60,
@@ -14437,6 +14455,86 @@ def test_native_qt_export_path_shows_both_wipe_fronts(monkeypatch, tmp_path) -> 
     assert len(_fill_column_runs(frames[1_100], width, height)) == 2, (
         "原生 Qt 导出路径只画了一个走字前沿：" + str(_fill_column_runs(frames[1_100], width, height))
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native sidecar build is Windows-only")
+@pytest.mark.parametrize("layout_semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("avatar_count", [1, 3])
+def test_emoji_decimal_bottom_margin_preserves_offset_pixels_in_render_cores(
+    tmp_path, layout_semantics, avatar_count
+) -> None:
+    """导入 -80.0 后头像下移；CPU、G5 回读/导出不得裁掉零宽单元的溢出图片。"""
+    from krok_helper.subtitle_render.engine.export.native_export import iter_gpu_rgba_frames
+
+    image_path = tmp_path / "avatar.png"
+    avatar = QImage(24 * avatar_count, 24, QImage.Format.Format_RGBA8888)
+    avatar.fill(QColor("#FF0000"))
+    assert avatar.save(str(image_path))
+    lrc = tmp_path / "avatars.lrc"
+    style = _g1_style(
+        layout_semantics=layout_semantics,
+        font_family_latin="Arial",
+        font_size_px=48,
+        base_color="#FFFFFF",
+        fill_color="#FFFFFF",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        entry_anim="none",
+        exit_anim="none",
+    )
+    width, height = 640, 360
+    timestamps = (1100, 1700, 2900)
+    frames = {}
+
+    def red_bounds(payload):
+        pixels = np.frombuffer(payload, np.uint8).reshape(height, width, 4)
+        mask = ((pixels[:, :, 0] > 200) & (pixels[:, :, 1] < 40)
+                & (pixels[:, :, 2] < 40) & (pixels[:, :, 3] > 200))
+        ys, xs = np.where(mask)
+        assert len(xs) > 100, "下移的头像不得消失或被局部回读裁掉"
+        return np.array([xs.min(), ys.min(), xs.max(), ys.max()])
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        for margin in ("0", "-80", "-80.0"):
+            lrc.write_text(
+                "【A】[00:01:00]A[00:02:00]B[00:03:00]\n\n"
+                "@Emoji=【A】,avatar.png,,Zoom=80%,NoDecor,"
+                f"MarginRight=-999,MarginBottom={margin}\n",
+                encoding="utf-8",
+            )
+            track = load_nicokara_lrc(lrc)
+            painter = [_render_painter_oracle(style, t_ms=t, track=track)
+                       for t in timestamps]
+            _, gpu = _render_g1_frames(
+                renderer, style, timestamps, force_warp=False, track=track,
+                shared_resources=True, wait_realizations=True,
+            )
+            # Exercise the compact G5 transport as well as full-frame GPU export.
+            event = renderer.render_gpu_frame(
+                timestamps[1], force_warp=False, readback_bands=True,
+            )
+            with SharedFrameRingReader.from_event(event) as reader:
+                image = reader.read_qimage(event).convertToFormat(QImage.Format.Format_RGBA8888)
+                bands = image.constBits().asstring(image.sizeInBytes())
+            assert bands == gpu[1]
+            exported = []
+            for packed in (False, True):
+                exported.extend(bytes(frame) for frame in iter_gpu_rgba_frames(
+                    track, style, width=width, height=height, fps=60,
+                    total_frames=1, start_t_ms=timestamps[1],
+                    renderer_path=_renderer_path(), packed_rgba=packed,
+                    shared_resources=True,
+                ))
+            frames[margin] = (painter, gpu, exported)
+
+    for core in range(3):
+        name = ("CPU", "GPU", "GPU export")[core]
+        assert frames["-80.0"][core] == frames["-80"][core], name
+        for normal, shifted in zip(frames["0"][core], frames["-80.0"][core]):
+            np.testing.assert_array_equal(
+                red_bounds(shifted) - red_bounds(normal), [0, 80, 0, 80], err_msg=name
+            )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native sidecar build is Windows-only")

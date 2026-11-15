@@ -81,6 +81,7 @@ from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_PNG_TRANSPARENT,
 )
 from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
+from krok_helper.subtitle_render.sources.emoji_options import parse_emoji_margin
 from krok_helper.subtitle_render.sources.sug import load_sug_timing_track
 from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_to_dict,
@@ -766,11 +767,11 @@ def _parse_emoji_tags(
             elif key_lower == "forcewipedecor":
                 force_wipe_decor = True
             elif sep and key_lower == "marginleft":
-                margin_left = _int(value, margin_left)
+                margin_left = parse_emoji_margin(value, margin_left)
             elif sep and key_lower == "marginright":
-                margin_right = _int(value, margin_right)
+                margin_right = parse_emoji_margin(value, margin_right)
             elif sep and key_lower == "marginbottom":
-                margin_bottom = _int(value, margin_bottom)
+                margin_bottom = parse_emoji_margin(value, margin_bottom)
         specs.append(
             _N3EmojiSpec(
                 trigger=trigger,

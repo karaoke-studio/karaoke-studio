@@ -43,6 +43,7 @@ from krok_helper.subtitle_render.domain.timing import (
     normalize_ruby_annotation_text,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
+from krok_helper.subtitle_render.sources.emoji_options import parse_emoji_margin
 
 # 时间戳：``[MM:SS:CC]``（冒号厘秒，nicokara）/ ``[MM:SS.CC]``（点号厘秒，标准 LRC）/
 # ``[MM:SS.mmm]``（点号毫秒，3 位）。秒与子秒间允许 ``:`` 或 ``.``；子秒 2 位=厘秒、3 位=毫秒。
@@ -417,11 +418,11 @@ def _parse_emoji_specs(lines: Iterable[str], base_dir: Path) -> list[dict[str, o
             elif key_lower == "forcewipedecor":
                 spec["force_wipe_decor"] = True
             elif sep and key_lower == "marginleft":
-                spec["margin_left"] = _parse_int(value, int(spec["margin_left"]))
+                spec["margin_left"] = parse_emoji_margin(value, int(spec["margin_left"]))
             elif sep and key_lower == "marginright":
-                spec["margin_right"] = _parse_int(value, int(spec["margin_right"]))
+                spec["margin_right"] = parse_emoji_margin(value, int(spec["margin_right"]))
             elif sep and key_lower == "marginbottom":
-                spec["margin_bottom"] = _parse_int(value, int(spec["margin_bottom"]))
+                spec["margin_bottom"] = parse_emoji_margin(value, int(spec["margin_bottom"]))
         specs.append(spec)
     return specs
 

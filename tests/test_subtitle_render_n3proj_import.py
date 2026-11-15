@@ -268,19 +268,20 @@ def test_load_n3proj_rejects_bad_json(tmp_path):
         load_n3proj(path)
 
 
-def test_imports_n3_emoji_role_tag_as_anchored_bitmap_guide(tmp_path):
+@pytest.mark.parametrize("margin", ["-80", "-80.0"])
+def test_imports_n3_emoji_role_tag_as_anchored_bitmap_guide(tmp_path, margin):
     """兜底：LRC 正文缺标签、但 N3 字符数据里有 → 行首 anchored 头像近似。"""
     payload = _project_payload(tmp_path)
     lrc = Path(payload["SourceLyricsInfos"][0]["SourceLyricsPath"])
     lrc.write_text(
         "[00:01:00]●[00:02:00]a[00:03:00]\n"
         "\n"
-        "@Emoji=【A】,avatar.png,,Zoom=80,NoDecor,MarginRight=20\n",
+        f"@Emoji=【A】,avatar.png,,Zoom=80%,NoDecor,MarginRight=-999.0,MarginBottom={margin}\n",
         encoding="utf-8",
     )
     (tmp_path / "avatar.png").write_bytes(b"fake")
     payload["SourceLyricsInfos"][0]["AtTagsForSave"] = [
-        "@Emoji=【A】,avatar.png,,Zoom=80,NoDecor,MarginRight=20"
+        f"@Emoji=【A】,avatar.png,,Zoom=80%,NoDecor,MarginRight=-999.0,MarginBottom={margin}"
     ]
     payload["SourceLyricsInfos"][0]["LineInfos"] = [
         _line_info(
@@ -303,7 +304,8 @@ def test_imports_n3_emoji_role_tag_as_anchored_bitmap_guide(tmp_path):
     assert symbol.bitmap_before_path == str(tmp_path / "avatar.png")
     assert symbol.bitmap_zoom_percent == 80
     assert symbol.bitmap_no_decor is True
-    assert symbol.bitmap_margin_right_px == 20
+    assert symbol.bitmap_margin_right_px == -999
+    assert symbol.bitmap_margin_bottom_px == -80
 
 
 def test_import_keeps_inline_emoji_replacement_for_every_role_tag(tmp_path):

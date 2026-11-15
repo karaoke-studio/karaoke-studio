@@ -131,7 +131,7 @@ def test_sug_emoji_guides_insert_at_singer_switches(tmp_path: Path) -> None:
         _sample_sug_project(),
         nicokara_tags={
             "custom": [
-                "@Emoji=【主唱】,lead.png,,NoDecor",
+                "@Emoji=【主唱】,lead.png,,Zoom=80%,NoDecor,MarginRight=-999,MarginBottom=-80.0",
                 "@Emoji=【和声】,chorus.png,,NoDecor",
             ]
         },
@@ -143,6 +143,9 @@ def test_sug_emoji_guides_insert_at_singer_switches(tmp_path: Path) -> None:
     assert [(c.text, c.start_ms) for c in first.chars] == [("【主唱】", 1050), ("愛", 1050)]
     assert set(first.inline_guide_symbols) == {0}
     assert first.inline_guide_symbols[0].bitmap_before_path == str(tmp_path / "lead.png")
+    assert first.inline_guide_symbols[0].bitmap_margin_bottom_px == -80
+    assert first.inline_guide_symbols[0].bitmap_margin_right_px == -999
+    assert first.inline_guide_symbols[0].bitmap_zoom_percent == 80
 
     second = track.lines[1]
     assert [(c.text, c.start_ms) for c in second.chars] == [("【和声】", 2250), ("空", 2250)]

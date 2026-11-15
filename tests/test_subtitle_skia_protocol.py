@@ -232,7 +232,7 @@ def test_unicode_font_resource_path(binary, tmp_path):
         assert frames[0][..., 3].max() > 0
 
 
-@pytest.mark.parametrize("mutation", ["schema", "required", "dimensions", "effect", "text", "font", "missing_guide"])
+@pytest.mark.parametrize("mutation", ["schema", "required", "dimensions", "effect", "text", "font", "missing_guide", "bitmap_guide"])
 def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
     from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
     from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
@@ -250,6 +250,11 @@ def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
         elif mutation == "text": ir["track"]["lines"][0]["chars"][0]["text"] = "字"
         elif mutation == "font": ir["style"]["font_resolved"]["resource_path"] = "missing.ttf"
         elif mutation == "missing_guide": ir["track"]["lines"][0]["chars"][0]["vector_glyph_id"] = "unretained-glyph"
+        elif mutation == "bitmap_guide":
+            ir["track"]["lines"][0]["chars"][0]["bitmap_guide"] = {
+                "before_path": "avatar.png", "no_decor": True,
+                "margin_right_px": -999, "margin_bottom_px": -80,
+            }
         process._send({"cmd": "configure", "ir": ir})
         with pytest.raises(NativeRendererError):
             process._expect_ok(process._read_until_event("configured"))

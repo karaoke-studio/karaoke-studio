@@ -843,6 +843,36 @@ def test_load_lrc_applies_emoji_role_tag_to_explicit_singer_line(tmp_path):
     assert track.lines[1].inline_guide_symbols == {}
 
 
+@pytest.mark.parametrize(
+    ("margin", "expected"),
+    [("-80", -80), ("-80.0", -80), ("+80.00", 80), ("0.0", 0),
+     ("-80.5", 0), ("NaN", 0), ("Infinity", 0), ("1e2", 0), ("bad", 0)],
+)
+def test_load_lrc_emoji_integral_decimal_margins(tmp_path, margin, expected):
+    lrc = tmp_path / "avatars.lrc"
+    lrc.write_text(
+        "【美鈴】[00:01:00]歌[00:02:00]\n"
+        "【手毬;星南;美鈴】[00:03:00]詞[00:04:00]\n\n"
+        + "\n".join(
+            f"@Emoji={trigger},avatar.png,,Zoom=80%,NoDecor,"
+            f"MarginLeft={margin},MarginRight=-999,MarginBottom={margin}"
+            for trigger in ("【美鈴】", "【手毬;星南;美鈴】")
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "avatar.png").write_bytes(b"fake")
+
+    track = load_nicokara_lrc(lrc)
+
+    for line in track.lines:
+        symbol = line.inline_guide_symbols[0]
+        assert symbol.bitmap_margin_left_px == expected
+        assert symbol.bitmap_margin_bottom_px == expected
+        assert symbol.bitmap_margin_right_px == -999
+        assert symbol.bitmap_zoom_percent == 80
+        assert symbol.bitmap_no_decor is True
+
+
 def test_load_lrc_color_separation_placeholder_emoji_tag(tmp_path):
     """SUG 分色标签设置助手的无图标分色：透明 1x1 + Zoom=1 + 负 MarginRight。
 
