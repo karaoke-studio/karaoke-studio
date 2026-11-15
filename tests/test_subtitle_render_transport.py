@@ -4619,8 +4619,10 @@ def test_preview_window_drag_uses_system_move_with_manual_fallback(
         qapp.processEvents()
 
 
-def test_preview_floating_controls_avoid_cached_subtitles_without_resizing(qapp, monkeypatch):
-    from PyQt6.QtCore import QRect, QSize
+def test_preview_controls_stay_at_bottom_through_frames_and_window_changes(qapp, monkeypatch):
+    from PyQt6.QtCore import QPoint, QRect, QSize
+    from PyQt6.QtGui import QCursor
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QWidget
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.player_window import PreviewPlayerWindow
@@ -4631,7 +4633,7 @@ def test_preview_floating_controls_avoid_cached_subtitles_without_resizing(qapp,
     window = PreviewPlayerWindow(owner)
     window.show()
     qapp.processEvents()
-    monkeypatch.setattr(window, "_cursor_over_bottom_controls", lambda: False)
+    monkeypatch.setattr(QCursor, "pos", lambda: QPoint(-10_000, -10_000))
     try:
         assert window.size() == QSize(800, 492)  # no extra footer/black border
         frame = window._preview_frame.geometry()
@@ -4642,29 +4644,66 @@ def test_preview_floating_controls_avoid_cached_subtitles_without_resizing(qapp,
         painter.fillRect(QRect(30, 320, 740, 130), QColor("white"))
         painter.fillRect(QRect(30, 20, 500, 20), QColor("white"))
         painter.end()
-        # Both CPU and GPU workers deliver this same transparent-layer surface.
-        window.preview_panel.canvas._subtitle_item.set_async_image(image)
-        window._position_transport_controls()
-        bar = window._bottom_controls.geometry()
-        assert frame.contains(bar)
-        assert bar.bottom() < frame.y() + 320
-        assert bar.top() > frame.y() + 40
-        assert window._preview_frame.geometry() == frame
+        empty = QImage(image.size(), image.format())
+        empty.fill(Qt.GlobalColor.transparent)
+        item = window.preview_panel.canvas._subtitle_item
 
-        # User interaction pins the bar even if a new frame changes text bands.
-        monkeypatch.setattr(window, "_cursor_over_bottom_controls", lambda: True)
-        image = image.copy()
-        image.fill(Qt.GlobalColor.transparent)
-        window.preview_panel.canvas._subtitle_item.set_async_image(image)
-        window._position_transport_controls()
-        assert window._bottom_controls.geometry() == bar
-        monkeypatch.setattr(window, "_cursor_over_bottom_controls", lambda: False)
-        window._position_transport_controls()
-        assert window._bottom_controls.geometry().bottom() == window.height() - 1
+        def assert_bottom():
+            bar = window._bottom_controls.geometry()
+            assert bar == QRect(0, window.height() - 58, window.width(), 58)
 
-        window.hide_controls(force=True)
+        # Cover subtitle appearance/disappearance and native preview with no
+        # cached image. Wait beyond the former 150 ms avoidance timer each time.
+        for current in (image, empty, None, image):
+            if current is None:
+                item.clear_async_image()
+                window.preview_panel.canvas.framePainted.emit()
+            else:
+                item.set_async_image(current)
+            window.show_controls()
+            QTest.qWait(180)
+            assert_bottom()
+            assert window._preview_frame.geometry() == frame
+
+        for width, height in ((1000, 605), (640, 700), (800, 492)):
+            window.move(window.pos() + QPoint(30, 20))
+            window.resize(width, height)
+            qapp.processEvents()
+            assert_bottom()
+            QTest.qWait(180)
+            assert_bottom()
+
+        for _ in range(2):
+            window._toggle_maximized()
+            qapp.processEvents()
+            QTest.qWait(180)
+            assert_bottom()
+
+        for _ in range(2):
+            window.showFullScreen()
+            qapp.processEvents()
+            assert window.isFullScreen()
+            QTest.qWait(180)
+            assert_bottom()
+            window.hide_controls(force=True)
+            window.show_controls()
+            assert_bottom()
+            # The same title-bar button restores both fullscreen/maximized.
+            window._toggle_maximized()
+            qapp.processEvents()
+            assert not window.isFullScreen()
+            assert not window.isMaximized()
+            window.move(window.pos() + QPoint(40, -20))
+            QTest.qWait(180)
+            assert_bottom()
+
+        # Idle hiding and mouse-driven reveal retain the same bottom anchor.
+        window._on_controls_idle_timeout()
+        assert window._bottom_controls.isHidden()
         window.show_controls()
-        assert window._preview_frame.geometry() == frame
+        assert not window._bottom_controls.isHidden()
+        QTest.qWait(180)
+        assert_bottom()
     finally:
         window.preview_panel.canvas.close()
         window.close()
