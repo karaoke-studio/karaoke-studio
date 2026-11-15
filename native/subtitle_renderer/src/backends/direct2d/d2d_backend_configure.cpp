@@ -3405,6 +3405,24 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
             };
 
+            // Freeze the natural main-glyph gaps before either ruby layer
+            // pushes targets. Raw letterSpacing omits bearings and the main
+            // outline allowance (a -2px setting can still have a visible gap).
+            std::vector<std::pair<float, float>> mainInkBounds;
+            if (std::any_of(cached.rubies.begin(), cached.rubies.end(),
+                            [](const Impl::CachedRuby &ruby) { return ruby.lower; })) {
+                mainInkBounds.reserve(cached.chars.size());
+                for (const Impl::CachedChar &ch : cached.chars) {
+                    D2D1_RECT_F bounds = D2D1::RectF(ch.layoutLeft, ch.top, ch.layoutRight, ch.bottom);
+                    if (ch.geometry) {
+                        // CachedChar.left/right include wipe padding, whereas
+                        // ruby.bounds and the Python measurements are pure ink.
+                        checkHr(ch.geometry->GetBounds(nullptr, &bounds),
+                                "ID2D1Geometry::GetBounds(lower ruby clearance)", device_);
+                    }
+                    mainInkBounds.emplace_back(bounds.left, bounds.right);
+                }
+            }
             for (std::size_t rubyIndex = 1; rubyIndex < cached.rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &previous = cached.rubies[rubyIndex - 1];
                 Impl::CachedRuby &current = cached.rubies[rubyIndex];
@@ -3414,8 +3432,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 if (previous.chars.empty() || current.chars.empty()) {
                     continue;
                 }
-                const float deficit = previous.chars.back().layoutRight
-                    + style.rubyInterval - current.chars.front().layoutLeft;
+                const float minimumGap = current.lower
+                    ? std::max(style.letterSpacing,
+                        mainInkBounds[static_cast<std::size_t>(current.firstCharIndex)].first
+                        - mainInkBounds[static_cast<std::size_t>(previous.lastCharIndex)].second)
+                    : style.rubyInterval;
+                const float previousRight = current.lower ? previous.bounds.right : previous.chars.back().layoutRight;
+                const float currentLeft = current.lower ? current.bounds.left : current.chars.front().layoutLeft;
+                const float deficit = previousRight + minimumGap - currentLeft;
                 if (deficit <= 0.0f) {
                     continue;
                 }

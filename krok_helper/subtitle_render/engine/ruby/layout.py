@@ -24,10 +24,12 @@ from krok_helper.subtitle_render.engine.ruby.style import (
 )
 from krok_helper.subtitle_render.engine.ruby.timing import _ruby_utopia_visual_units
 from krok_helper.subtitle_render.engine.text import (
+    build_text_layout,
     char_glyph_ink_box,
     char_layout_width,
     char_path_left_offset,
 )
+from krok_helper.subtitle_render.engine.text.cell_positions import char_left_positions
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
@@ -338,7 +340,34 @@ def _ruby_char_gaps_uncached(
         return ruby_layout_draw_bounds(_ruby_utopia_visual_units(paint_ruby.reading), metrics,
                                        left, target_width, style=ruby_style, base_text=ruby.kanji)
 
-    return resolve_ruby_spacing(char_widths, style, spans, draw_bounds=draw_bounds)
+    main_ink_bounds = None
+    if lower_rubies:
+        # Freeze the authored main glyph gap before any ruby pushes. The raw
+        # letter-spacing value omits font bearings and the outline allowance.
+        lefts = char_left_positions(char_widths, 0, False, int(style.letter_spacing_px),
+                                   n3_no_backtracking=style.layout_semantics == 'n3_1074')
+        main_ink_bounds = [(left, left + width) for left, width in zip(lefts, char_widths)]
+        main_layout = build_text_layout(line, style, x0=0, baseline_y=0,
+                                       inline_styles=any(char.role_label for char in line.chars))
+        for glyph in main_layout.glyphs:
+            if glyph.ink_box is not None:
+                x = lefts[glyph.index] + glyph.path_offset_x
+                main_ink_bounds[glyph.index] = (x + glyph.ink_box[0], x + glyph.ink_box[2])
+
+    def lower_ink_bounds(span, left, target_width):
+        _first, _last, paint_ruby, ruby, ruby_style = entries[span.key]
+        metrics = QFontMetrics(build_ruby_font_for_text(ruby_style, paint_ruby.reading))
+        units = ruby_unit_layouts(_ruby_utopia_visual_units(paint_ruby.reading), metrics, ruby_style)
+        origins = measured_ruby_origins(units, left, target_width, style=ruby_style, base_text=ruby.kanji)
+        bounds = [(origin + ink_left, origin + ink_right)
+                  for (_text, origin, _width, _offset), (_unit, _w, _o, ink_left, ink_right)
+                  in zip(origins, units) if ink_right > ink_left]
+        if not bounds:
+            return draw_bounds(span, left, target_width)
+        return min(bound[0] for bound in bounds), max(bound[1] for bound in bounds)
+
+    return resolve_ruby_spacing(char_widths, style, spans, draw_bounds=draw_bounds,
+                                main_ink_bounds=main_ink_bounds, lower_ink_bounds=lower_ink_bounds)
 
 
 

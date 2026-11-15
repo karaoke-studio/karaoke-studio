@@ -990,6 +990,8 @@ class Style:
     lower_ruby_enabled: bool = False
     lower_ruby_follow_upper: bool = True
     lower_ruby_gap_px: int = 0
+    lower_ruby_interval_px: int | None = None
+    """Lower reading letter spacing; None preserves the inherited project value."""
     lower_ruby_style: dict = field(default_factory=dict)
     """Render-only lower reading overrides; source ruby and clocks stay untouched."""
     _lower_romaji_options: tuple[bool, bool, bool, bool] | None = field(default=None, repr=False)
@@ -2601,6 +2603,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             changes[key] = _bool_value(value)
         elif key == "lower_ruby_gap_px":
             changes[key] = _int_value(value, 0)
+        elif key == "lower_ruby_interval_px":
+            changes[key] = None if value is None else _int_value(value, 0)
         elif key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
         elif key == "layouts":
@@ -3532,6 +3536,9 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
         ruby_interval_px=scaled(style.ruby_interval_px),
         ruby_gap_px=scaled(style.ruby_gap_px),
         lower_ruby_gap_px=scaled(style.lower_ruby_gap_px),
+        lower_ruby_interval_px=(
+            None if style.lower_ruby_interval_px is None else scaled(style.lower_ruby_interval_px)
+        ),
         upper_line_left_margin_px=margin,
         lower_line_right_margin_px=margin,
         layouts=layouts,

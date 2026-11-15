@@ -179,6 +179,81 @@ def test_lower_style_and_configuration_round_trip(qapp):
     assert all(ruby.font.pixelSize() == 48 for ruby in layout.ruby_layouts)
 
 
+@pytest.mark.parametrize("follows", [False, True])
+def test_lower_letter_spacing_is_independent_and_preserved(qapp, follows):
+    from krok_helper.subtitle_render.domain.models import rescale_layout_sizes
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style
+    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+
+    style = _style(ruby_interval_px=2, lower_ruby_follow_upper=follows,
+                   lower_ruby_interval_px=11)
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.lower_ruby_interval_px == 11
+    assert lower_style(restored).ruby_interval_px == 11
+    assert restored.ruby_interval_px == 2
+    assert rescale_layout_sizes(restored, 2160).lower_ruby_interval_px == 22
+    inherited = replace(restored, lower_ruby_interval_px=None)
+    assert lower_style(inherited).ruby_interval_px == 2
+    assert rescale_layout_sizes(inherited, 2160).lower_ruby_interval_px is None
+    assert style_from_dict({}).lower_ruby_interval_px is None
+
+    line = _line("かな")
+    ir = build_render_ir(TimingTrack(lines=[line]), restored, width=960, height=540, fps=60)
+    assert {entry["ruby_interval_px"] for entry in ir["track"]["lower_styles"]} == {11}
+
+
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+def test_lower_letters_and_group_clearance_use_separate_settings(qapp, semantics):
+    from krok_helper.subtitle_render.engine.ruby.layout import ruby_layout_draw_bounds
+    from krok_helper.subtitle_render.engine.ruby.timing import _ruby_utopia_visual_units
+
+    line = _line("しし")
+    track = TimingTrack(lines=[line])
+    style = replace(_style(), layout_semantics=semantics, font_size_px=24, ruby_font_size_px=36,
+                    ruby_interval_px=2, letter_spacing_px=18, ruby_stroke_width_px=0,
+                    ruby_stroke2_enabled=False)
+    from krok_helper.subtitle_render.engine.text import build_text_layout
+    glyphs = build_text_layout(line, style, x0=0, baseline_y=0, inline_styles=False).glyphs
+    expected_gap = (glyphs[1].left + glyphs[1].path_offset_x + glyphs[1].ink_box[0]
+                    - glyphs[0].left - glyphs[0].path_offset_x - glyphs[0].ink_box[2])
+    widths = []
+    for interval in (3, 9):
+        current = replace(style, lower_ruby_interval_px=interval)
+        layout = _layout_line(track, line, current, 960, 540, baseline_y=200)
+        readings = list(layout.ruby_layouts)
+        assert [ruby.ruby.reading for ruby in readings] == ["shi", "shi"]
+        bounds = [ruby_layout_draw_bounds(
+            _ruby_utopia_visual_units(ruby.ruby.reading), ruby.metrics, ruby.x,
+            ruby.target_width, style=ruby.style, base_text=ruby.ruby.kanji,
+        ) for ruby in readings]
+        ink_gap = readings[1].gradient_rect.left() - readings[0].gradient_rect.right()
+        assert expected_gap <= ink_gap < expected_gap + 2
+        widths.append(bounds[0][1] - bounds[0][0])
+        assert [(ruby.ruby.pos_start_ms, ruby.ruby.pos_end_ms) for ruby in readings] == [(0, 500), (500, 1000)]
+    assert widths[1] - widths[0] == pytest.approx(12)
+
+
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+def test_lower_long_reading_retains_main_ink_clearance_with_negative_spacing(qapp, semantics):
+    from krok_helper.subtitle_render.engine.text import build_text_layout
+    line = _line("す命と")
+    upper = RubyAnnotation("命", "いのち", pos_start_ms=500, pos_end_ms=1000,
+                           target_line_index=0, target_char_start=1, target_char_end=2)
+    style = replace(_style(), layout_semantics=semantics, font_size_px=100, ruby_font_size_px=45,
+                    letter_spacing_px=-2, ruby_interval_px=-2, stroke_width_px=15,
+                    ruby_stroke_width_px=10, ruby_stroke2_enabled=False)
+    original = build_text_layout(line, style, x0=0, baseline_y=0, inline_styles=False)
+    ink = [(g.left + g.path_offset_x + g.ink_box[0], g.left + g.path_offset_x + g.ink_box[2])
+           for g in original.glyphs]
+    expected = [ink[i + 1][0] - ink[i][1] for i in range(2)]
+    assert min(expected) > 0
+    layout = _layout_line(TimingTrack(lines=[line], rubies=[upper]), line, style, 960, 540, baseline_y=250)
+    lower = [r for r in layout.ruby_layouts if isinstance(r.ruby, LowerRuby)]
+    assert [r.ruby.reading for r in lower] == ["su", "inochi", "to"]
+    actual = [lower[i + 1].gradient_rect.left() - lower[i].gradient_rect.right() for i in range(2)]
+    assert all(gap >= minimum for gap, minimum in zip(actual, expected)), (actual, expected)
+
+
 @pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
 def test_lower_readings_do_not_compress_adjacent_row_display_times(qapp, semantics):
     from krok_helper.subtitle_render.domain.timing import TrackPage, TrackPagePlan, TrackSection
@@ -238,7 +313,12 @@ def test_lower_controls_and_independent_editor_keep_upper_intact(qapp, monkeypat
     panel = PropertyPanel()
     panel.set_style(replace(_style(), lower_ruby_enabled=False), emit=False)
     assert not panel._lower_ruby_style_button.isEnabled()
+    assert not panel._lower_ruby_interval_spin.isEnabled()
     panel._lower_ruby_enabled_check.setChecked(True)
+    assert panel._lower_ruby_interval_spin.isEnabled()
+    panel._lower_ruby_interval_spin.setValue(12)
+    assert panel.subtitle_style.lower_ruby_interval_px == 12
+    assert panel.subtitle_style.ruby_interval_px == 0
     panel._lower_ruby_follow_check.setChecked(False)
     assert panel.subtitle_style.lower_ruby_style
     upper = panel.subtitle_style.ruby_latin_font_size_px
@@ -271,6 +351,27 @@ def test_lower_controls_and_independent_editor_keep_upper_intact(qapp, monkeypat
     panel._edit_lower_ruby_style()
     assert panel.subtitle_style.lower_ruby_style["ruby_latin_font_size_px"] == 56
     assert panel.subtitle_style.ruby_latin_font_size_px == upper
+    panel.close()
+    panel.deleteLater()
+
+
+def test_lower_spacing_control_reads_inherited_layout_without_writing_it(qapp):
+    from krok_helper.subtitle_render.domain.models import LyricsLayout
+    from krok_helper.subtitle_render.frontend.properties.property_panel import PropertyPanel
+
+    panel = PropertyPanel()
+    panel.set_style(_style(ruby_interval_px=2, layouts=[
+        LyricsLayout(name="测试布局", layout_id="lower-spacing", ruby_interval_px=7),
+    ]), emit=False)
+    assert panel._lower_ruby_interval_spin.value() == 2
+    panel._layout_combo.setCurrentIndex(panel._layout_combo.findData(1))
+    assert panel._lower_ruby_interval_spin.value() == 7
+    assert panel.subtitle_style.lower_ruby_interval_px is None
+    panel._lower_ruby_interval_spin.setValue(12)
+    panel._layout_combo.setCurrentIndex(panel._layout_combo.findData(0))
+    assert panel._lower_ruby_interval_spin.value() == 12
+    assert panel.subtitle_style.ruby_interval_px == 2
+    assert panel.subtitle_style.layouts[0].ruby_interval_px == 7
     panel.close()
     panel.deleteLater()
 
@@ -324,6 +425,7 @@ def test_lower_layout_patch_key_invalidates_generated_baselines(qapp):
                                     dpr=1, include_layout_signature=False)
     style = _style()
     assert key(style) != key(replace(style, lower_ruby_gap_px=20))
+    assert key(style) != key(replace(style, lower_ruby_interval_px=20))
     assert key(style) != key(replace(style, lower_ruby_enabled=False))
     disabled = replace(style, lower_ruby_enabled=False)
     assert key(disabled) == key(replace(disabled, lower_ruby_gap_px=20))

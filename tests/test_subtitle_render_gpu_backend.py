@@ -317,6 +317,104 @@ def test_gpu_lower_ruby_two_row_zero_gap_matches_painter(monkeypatch, semantics,
         assert np.max(np.abs(row_bounds[0] - row_bounds[1])) <= 2
 
 
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("lower_spacing", [1, 7])
+def test_gpu_lower_ruby_group_spacing_matches_main_text(monkeypatch, semantics, lower_spacing):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.ruby.lower import lower_style_snapshot
+
+    line = TimingLine(chars=[TimingChar("し", index * 500) for index in range(3)],
+                      end_ms=1500, track_line_index=0,
+                      display_start_override_ms=0, display_end_override_ms=2000)
+    track = TimingTrack(lines=[line])
+    def colors(color):
+        state = KaraokeColorState(text=PaintFill(color=color))
+        return KaraokeColors(before=state, after=state)
+    style = _g1_style(layout_semantics=semantics, font_family="Meiryo", font_family_latin="Meiryo",
+        font_size_px=24, ruby_font_size_px=36, ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo", ruby_font_follow_main=False,
+        stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
+        ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_decoration_kind="none",
+        ruby_colors_follow_main=False, karaoke_colors=colors("#FF0000"),
+        ruby_karaoke_colors=colors("#0000FF"), lower_ruby_enabled=True,
+        lower_ruby_follow_upper=False, dual_line_layout=False, title_overlays=[],
+        letter_spacing_px=0, ruby_interval_px=2, lower_ruby_interval_px=lower_spacing,
+        layout_reference_height=360, ruby_alignment="center")
+    style = replace(style, lower_ruby_style=lower_style_snapshot(style))
+    starts = []
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        for current in (style, replace(style, letter_spacing_px=18),
+                        replace(style, letter_spacing_px=18, lower_ruby_interval_px=lower_spacing + 4)):
+            _, frames = _render_g1_frames(renderer, current, (750,), force_warp=True, track=track)
+            rgba = np.frombuffer(frames[0], dtype=np.uint8).reshape(360, 640, 4)
+            mask = ((rgba[:, :, 0] > 150) & (rgba[:, :, 2] < 40) & (rgba[:, :, 3] > 100))
+            xs = np.flatnonzero(mask.any(axis=0))
+            groups = np.r_[xs[0], xs[np.flatnonzero(np.diff(xs) > 1) + 1]]
+            assert len(groups) == 3
+            starts.append(groups)
+    # Changing the main spacing must increase each inter-group step by 18px;
+    # changing the internal spacing of three-letter "shi" by 4 adds 8px.
+    assert np.array_equal(np.diff(starts[1]) - np.diff(starts[0]), [18, 18])
+    assert np.array_equal(np.diff(starts[2]) - np.diff(starts[1]), [8, 8])
+
+
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+def test_gpu_lower_long_reading_keeps_visible_main_gap_at_negative_spacing(monkeypatch, semantics):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+
+    palette = ("#00FF00", "#0000FF", "#FF00FF")
+    def colors(color):
+        state = KaraokeColorState(text=PaintFill(color=color))
+        return KaraokeColors(before=state, after=state)
+    line = TimingLine(chars=[TimingChar(char, i * 500, role_label=str(i))
+                             for i, char in enumerate("す命と")],
+                      end_ms=1500, track_line_index=0,
+                      display_start_override_ms=0, display_end_override_ms=2000)
+    upper = RubyAnnotation("命", "いのち", pos_start_ms=500, pos_end_ms=1000,
+                           target_line_index=0, target_char_start=1, target_char_end=2)
+    track = TimingTrack(lines=[line], rubies=[upper])
+    style = _g1_style(layout_semantics=semantics, font_family="Meiryo", font_family_latin="Comic Sans MS",
+        font_size_px=100, ruby_font_size_px=45, ruby_font_family="Meiryo",
+        ruby_font_family_latin="Comic Sans MS", ruby_font_follow_main=False,
+        font_reference_height=540, layout_reference_height=540,
+        stroke_width_px=15, stroke2_enabled=False, decoration_kind="none",
+        ruby_stroke_width_px=10, ruby_stroke2_enabled=False, ruby_decoration_kind="none",
+        lower_ruby_enabled=True, dual_line_layout=False, title_overlays=[],
+        letter_spacing_px=-2, ruby_interval_px=-2,
+        custom_style_schemes={str(i): SubtitleStyleScheme(
+            karaoke_colors=colors(color), ruby_colors_follow_main=False, ruby_karaoke_colors=colors(color),
+        ) for i, color in enumerate(palette)})
+    baseline = build_render_ir(track, style, width=960, height=540, fps=60)["track"]["lines"][0]["annotation_baseline_y"]
+    with NativeRendererProcess(_renderer_path()) as renderer:
+        _, natural = _render_g1_frames(renderer, replace(style, lower_ruby_enabled=False),
+            (750,), force_warp=True, track=TimingTrack(lines=[line]), width=960, height=540)
+        _, annotated = _render_g1_frames(renderer, style, (250, 750, 1250),
+            force_warp=True, track=track, width=960, height=540)
+
+    def bounds(payload, lower=False):
+        rgba = np.frombuffer(payload, dtype=np.uint8).reshape(540, 960, 4)
+        if lower:
+            rgba = rgba[int(baseline) + 10:]
+        result = []
+        for color in ((0, 255, 0), (0, 0, 255), (255, 0, 255)):
+            mask = rgba[:, :, 3] > 180
+            for channel, value in enumerate(color):
+                mask &= rgba[:, :, channel] > 180 if value else rgba[:, :, channel] < 40
+            xs = np.flatnonzero(mask.any(axis=0))
+            assert len(xs)
+            result.append((xs.min(), xs.max()))
+        return result
+
+    original = bounds(natural[0])
+    required = [original[i + 1][0] - original[i][1] - 1 for i in range(2)]
+    assert min(required) > 0
+    for frame in annotated:
+        lower = bounds(frame, lower=True)
+        actual = [lower[i + 1][0] - lower[i][1] - 1 for i in range(2)]
+        assert all(gap >= minimum - 2 for gap, minimum in zip(actual, required)), (actual, required)
+
+
 def test_gpu_lower_ruby_follow_colors_survive_style_patch(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from krok_helper.subtitle_render.engine.render.render_ir import build_style_patch_ir

@@ -229,11 +229,25 @@ class LayoutPropertyPageBuilder:
         host._lower_ruby_gap_spin.valueChanged.connect(
             lambda value: host._update_style(_force_global=True, lower_ruby_gap_px=value)
         )
+        host._lower_ruby_interval_spin = self._spin_factory(
+            -LAYOUT_SIZE_MAX_PX, LAYOUT_SIZE_MAX_PX, suffix=" px",
+        )
+        host._lower_ruby_interval_spin.setToolTip(
+            "下层罗马音字母之间的最小间距，独立于上层注音，可为负值。\n"
+            "相邻罗马音组保留正文排版的实际字形间隔，包含字体留白与描边预留。\n"
+            "非负时仍会补足描边净空；负值允许字母叠压。"
+        )
+        host._lower_ruby_interval_spin.valueChanged.connect(
+            lambda value: host._update_style(_force_global=True, lower_ruby_interval_px=value)
+        )
         host._lower_ruby_style_button = PushButton("编辑下层注音样式", section)
         host._lower_ruby_style_button.clicked.connect(lambda: host._edit_lower_ruby_style())
         layout.addWidget(host._lower_ruby_enabled_check)
         layout.addWidget(host._lower_ruby_follow_check)
-        layout.addWidget(property_field("下层与正文间距", host._lower_ruby_gap_spin))
+        lower_grid = ResponsiveFieldGrid(section, min_column_width=120, max_columns=2)
+        lower_grid.add_field("下层与正文间距", host._lower_ruby_gap_spin)
+        lower_grid.add_field("罗马音字间距", host._lower_ruby_interval_spin)
+        layout.addWidget(lower_grid)
         layout.addWidget(host._lower_ruby_style_button)
         return section
 

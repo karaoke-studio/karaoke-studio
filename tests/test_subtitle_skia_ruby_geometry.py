@@ -83,6 +83,33 @@ def test_spacing_lower_group_resets_interference_and_negative_interval_is_honore
     assert resolve_ruby_spacing([20,20],style,spans,draw_bounds=bounds)==([0,37],20,20)
 
 
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+@pytest.mark.parametrize('spacing', [-3, 0, 14])
+def test_lower_group_clearance_uses_main_letter_spacing(semantics, spacing):
+    style = Style(layout_semantics=semantics, letter_spacing_px=spacing, ruby_interval_px=2)
+    spans = [RubySpacingSpan(0, 0, True, 0), RubySpacingSpan(1, 1, True, 1)]
+    bounds = lambda span, x, width: (x - 20, x + 40)
+    gaps, _, _ = resolve_ruby_spacing([20, 20], style, spans, draw_bounds=bounds)
+    lefts = char_left_positions([20, 20], 0, False, spacing, char_gaps=gaps)
+    assert (lefts[1] - 20) - (lefts[0] + 40) == spacing
+
+
+def test_lower_clearance_uses_frozen_main_ink_instead_of_raw_negative_spacing():
+    style = Style(letter_spacing_px=-2, ruby_interval_px=-2)
+    spans = [RubySpacingSpan(i, i, True, i) for i in range(3)]
+    # The -2px cell spacing still leaves 18px between the main glyphs.
+    original_ink = [(10, 90), (108, 188), (206, 286)]
+    gaps, _, _ = resolve_ruby_spacing(
+        [100, 100, 100], style, spans,
+        draw_bounds=lambda span, x, width: (x - 20, x + 120),
+        lower_ink_bounds=lambda span, x, width: (x - 15, x + 115),
+        main_ink_bounds=original_ink,
+    )
+    assert gaps == [0, 50, 50]
+    positions = char_left_positions([100] * 3, 0, False, -2, char_gaps=gaps)
+    assert [(positions[i + 1] - 15) - (positions[i] + 115) for i in range(2)] == [18, 18]
+
+
 @pytest.mark.parametrize('value',[float('nan'),float('inf'),float('-inf')])
 def test_interference_rejects_nonfinite_reading_bounds(value):
     with pytest.raises(ValueError,match='非有限'):

@@ -6904,8 +6904,13 @@ class PropertyPanel(QWidget):
             self._lower_ruby_enabled_check.setEnabled(not self._style.vertical)
             self._lower_ruby_follow_check.setChecked(follows)
             self._lower_ruby_gap_spin.setValue(self._style.lower_ruby_gap_px)
+            interval = self._style.lower_ruby_interval_px
+            self._lower_ruby_interval_spin.setValue(
+                int(self._current_layout_values()["ruby_interval_px"]) if interval is None else interval
+            )
             self._lower_ruby_follow_check.setEnabled(enabled)
             self._lower_ruby_gap_spin.setEnabled(enabled)
+            self._lower_ruby_interval_spin.setEnabled(enabled)
             self._lower_ruby_style_button.setEnabled(enabled and not follows)
         finally:
             self._syncing = syncing

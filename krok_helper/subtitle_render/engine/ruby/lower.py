@@ -84,12 +84,17 @@ def lower_style_snapshot(style: Style) -> dict:
 
 
 def lower_style(style: Style) -> Style:
+    spacing = (style.ruby_interval_px if style.lower_ruby_interval_px is None
+               else style.lower_ruby_interval_px)
+    changes = {"ruby_gap_px": style.lower_ruby_gap_px, "ruby_interval_px": spacing}
     if style.lower_ruby_follow_upper or not style.lower_ruby_style:
-        return replace(style, ruby_gap_px=style.lower_ruby_gap_px)
-    payload = {key: value for key, value in style.lower_ruby_style.items() if key in LOWER_APPEARANCE_FIELDS}
+        return replace(style, **changes)
+    payload = {
+        key: value for key, value in style.lower_ruby_style.items()
+        if key in LOWER_APPEARANCE_FIELDS
+    }
     parsed = subtitle_style_scheme_from_dict(payload)
-    return replace(style, **{key: getattr(parsed, key) for key in payload},
-                   ruby_gap_px=style.lower_ruby_gap_px)
+    return replace(style, **{key: getattr(parsed, key) for key in payload}, **changes)
 
 
 def _romanized(
