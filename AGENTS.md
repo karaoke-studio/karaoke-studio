@@ -226,17 +226,20 @@ git submodule status
     放在 d2d_backend_configure.cpp（它本来就含 `<QImage>`）。
 
 14. **sidecar 构建环境用错一次后，增量构建会复用坏 .obj 造成运行期崩溃**——
-    本机构建树（`build/native-renderer`）配置的是 **Community 版 MSVC 14.51**
+    事故时本机构建树（`build/native-renderer`）配置的是 **Community 版 MSVC 14.51**
     （cl 绝对路径烙在 ninja 规则里），用 BuildTools 版 vcvars 起环境会导致
     STL 头找不到而部分 TU 编译失败；换回正确环境后**增量构建只重编失败的
     TU，之前用错误 STL 头编出的 .obj 被留用**，混链出的 exe 在
     `gpu_configure` 100% 崩 0xC0000005（曾被误判为源码缺陷）。
-    预防：构建 sidecar 统一用 `build/full_clean_rebuild.bat`（Community
-    vcvars + `--target clean` + 全量重建）；凡怀疑构建环境出过错，先
+    预防：先读目标树的 `CMakeCache.txt`，按写定的 compiler 匹配 vcvars，
+    然后 `--clean-first` 全量重建。历史 `build/full_clean_rebuild.bat` 是
+    Community 缓存的配套脚本，不能套到其他工具链；凡怀疑构建环境出过错，先
     `cmake --build build/native-renderer --target clean` 全清再编，不要相信
     增量产物。定位此类崩溃可用「录制 stdin 协议直接重放到 exe」的办法
     （绕开 pytest/Python 变量；`build/replay_check.py` 参考实现）。`build/`
-    未入库，这两个脚本只在本机存在。
+    未入库，本地脚本不保证存在。2026-11-15 核对：现有 `build/native-renderer`
+    和 `build/p04-d2d-native` 都已配置为 BuildTools **14.50.35717**，本轮按
+    `vcvars64.bat -vcvars_ver=14.50` 配套干净重建通过；不要把历史 14.51 路径当成当前值。
 
 ---
 

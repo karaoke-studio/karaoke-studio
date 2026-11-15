@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout bac54165
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43640232001 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout c2d05d62
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43668312216 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1477,7 +1477,7 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 ### 14.20 P05.6 字体门槛闭环：资源继承、角色提示与 D2D box 度量（2026-11-15）
 
-**关闭 §14.19 的两项字体边界未通过项，尚未关闭 P05.6。** 本批确实修复了共享字体提示和 D2D 字体资源边界；没有改 Skia 字体继承去匹配错误的 D2D 画面，也未放宽原 **1px** 几何条件。Skia 的产品 ruby 门禁、P00 严格栅格化预算与后续分段走字仍保留。
+**关闭 §14.19 的两项字体边界未通过项，尚未关闭 P05.6。** 实现提交 `c2d05d62`。本批修复了共享字体提示和 D2D 字体资源边界，保留 Skia 字体继承和原 **1px** 几何条件。Skia 的产品 ruby 门禁、P00 严格栅格化预算与后续分段走字仍保留。
 
 根因与改动：
 
@@ -1490,8 +1490,9 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 - Windows 完整 Skia 产品组合 **276 通过、无 xfail**；注音几何专项含 **35 项**，原两项字体门槛及新增角色输入均满足原 1px 条件。字体解析/提示/协议与几何组合 **195 通过**；新增三个平台无关字体契约单独运行 **3 通过**。
 - D2D 注音 stretch、共享 realization、完成后 wipe 释放、干涉网格缓存与 G6 零回读回归 **13 通过**。另保留修复前二进制，以明确的 Meiryo/Arial 比较 legacy/N3 × 有无角色 × 普通/发光 **8 组、24 帧**，GPU 原始 RGBA **逐字节一致**；应用内字体的错误资源/box 是本批有意修正的表现。
-- 独立 D2D 树和实际 `build/native-renderer` 均干净重建。按两个现有 CMake cache 写定的 BuildTools **14.50** 配套环境构建，未套用历史 Community 14.51 缓存的环境；两次构建均成功。Windows/Linux Vulkan 与 CPU-only 的 Skia 构建也分别验证，CTest 各 **3/3**。本批改动在 D2D 目录，Skia 的来源摘要按构建边界保持 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`，不是为了通过检查重写摘要。
-- Linux X11/Wayland、相关回归与新 Mac 双架构 CI 的结果回收后补记。Mac 验收包新增 `font_resource_contracts=1`，一键脚本按标志复验上述三个契约；没有把 D2D 专用检查伪装成 Metal 检查。
+- 独立 D2D 树和实际 `build/native-renderer` 均干净重建。按两个现有 CMake cache 写定的 BuildTools **14.50** 配套环境构建，两次均成功；AGENTS §8.14 已把历史事故与当前缓存区分。Windows/Linux Vulkan 与 CPU-only 的 Skia 构建也分别验证，CTest 各 **3/3**。Skia 摘要不包含 D2D 目录，按既有构建边界保持 `da42eeea29e24f2022f7ebf7da9bb9c9aaee54491f0d2cd031fa0e7814f6af3f`。
+- Linux X11/Wayland 各 **243 通过、33 跳过**，字体契约单独 **3 通过**；相关架构/布局/渲染/lower ruby/字重/字体资源/构建/验收工具等回归 **655 通过、12 跳过**。十份规范样例在 Windows/X11/Wayland 比较最大误差 **0**，与 §14.19 的规范结果也逐值一致。
+- Mac CI [43668312216](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43668312216)（`c2d05d62`）**5 项全部成功**：arm64/x64 产品组合各 **239 通过、37 跳过**，新增字体契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**；十份跨架构样例最大误差 **0**。下载的 arm64 十份样例与 Windows/X11/Wayland 再比较亦为 **0**，两架构 Metal/Raster 四份 native 指纹均核对一致。验收包新增 `font_resource_contracts=1`，两份干净 Mac 的该步骤均退出 **0**、全部功能项通过，托管虚拟 Metal 的真硬件门槛继续保留；D2D 专用检查仍只在 Windows 验证。§14.6 朋友入口已更新到本轮提交与验收包。
 
 边界：资源提示属于既有序列化/平台适配层，未并入 `skia/core`。当前 Skia 注音仍只有规范目标/空间几何准备；下一步把锚点接入页面/SmartHorizon，并物化 reading parts、空 pause、checkpoint 及显式主字边界的两层分段走字，再接最终 IR 校验和公共 C++ 绘制。关闭这两项字体门槛不代表注音已可用。
 
