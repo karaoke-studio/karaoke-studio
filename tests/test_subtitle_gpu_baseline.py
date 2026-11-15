@@ -21,7 +21,7 @@ def cases(qapp, tmp_path_factory):
 def test_model_and_enum_inventory_requires_explicit_review_for_new_fields():
     frozen = json.loads((ROOT / "tests/data/subtitle_gpu_baseline_contract.json").read_text(encoding="utf8"))
     assert contract() == frozen
-    assert len(frozen["models"]["Style"]) == 279
+    assert len(frozen["models"]["Style"]) == 280
 
 
 def test_cases_cover_every_declared_animation_and_paint_variant(cases):

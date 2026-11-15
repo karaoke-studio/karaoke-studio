@@ -206,6 +206,10 @@
         "feature": "F04",
         "render_metadata": true
       },
+      "lower_ruby_interval_px": {
+        "feature": "F04",
+        "render_metadata": true
+      },
       "lower_ruby_style": {
         "feature": "F04",
         "render_metadata": true
