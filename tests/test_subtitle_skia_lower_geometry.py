@@ -1,7 +1,7 @@
 """Lower geometry/reference preparation, using only GPU/Raster image oracles.
 
-The terminal-group adapter below is deliberately a probe: product lower ruby
-remains gated, including independent lower paints and source annotation IR.
+The terminal-group adapter below remains deliberately a probe. Product source
+annotations and independent paints are covered in test_subtitle_skia_lower_product.
 """
 from dataclasses import asdict, replace
 import copy

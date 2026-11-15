@@ -1,4 +1,4 @@
-"""Serialize final upper-ruby geometry and clocks from the canonical plan.
+"""Serialize final upper/lower ruby geometry and clocks from the canonical plan.
 
 Source ownership, page placement and timing are resolved before this boundary.
 """

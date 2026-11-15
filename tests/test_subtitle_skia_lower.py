@@ -1,4 +1,4 @@
-"""Lower-reading preparation: canonical clocks/fonts, with product gate closed."""
+"""Lower-reading preparation: canonical clocks/fonts, independent of product IR."""
 import ast
 from copy import deepcopy
 from dataclasses import replace

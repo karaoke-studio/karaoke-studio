@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 23e4aa71
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43705296882 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 9fc52c09
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43739980718 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1610,7 +1610,7 @@ Mac CI [43705296882](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 
 本地完整 Skia 组合：Windows **490 通过**；Linux X11/Wayland 各 **423 通过、67 项平台专用跳过**（软件 Vulkan，不代表 Linux 真硬件验收）。Windows/Linux Vulkan 与 CPU-only 四份产物均按当前 native 源码完整重建，CTest 各 **3/3**，源码摘要统一为 `4aac675e67e9ec06452fc0355d6b90abd8cbf4178760886090376c3ace873731`。关联生产/架构/协议/字体/构建工具组合 **438 通过、3 失败**；收起本批全部改动后，在原始 `d4a316a2` 串行重跑同样三项全部失败：`test_lower_readings_force_page_displacement_clear_of_their_ink` 与两种语义的 `test_lower_long_reading_centers_its_slot`，确认为本轮前已存在的基线问题，未放宽断言或改写生产路径来掩盖。
 
-Mac 工作流与验收包加入 `lower_ruby_geometry=1`，新增 `lower-ruby-reference.json`、`lower-ruby-geometry.json`，跨架构规范样例共 **17 份**。Mac CI 结果待本批提交后补录；Linux 真硬件、Mac 本轮真机与 P05 完整门槛仍保留，未做 4K。日志/样例前缀 `build/p05-lower-geometry-*`。
+Mac 工作流与验收包加入 `lower_ruby_geometry=1`，新增 `lower-ruby-reference.json`、`lower-ruby-geometry.json`，跨架构规范样例共 **17 份**。Mac CI [43738392671](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43738392671)（`31ef6b7a`）**5 项全部成功**：arm64/x64 完整组合各 **417 通过、73 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**；17 份跨架构样例最大误差均为 **0**。两架构 Metal/Raster 四份指纹均核对为本节同一源码摘要，与重建前记录的本地四份身份一致。两份干净验收包的 `lower_ruby_geometry=0`（步骤退出码）、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。Windows/X11/Wayland 的 17 份样例比较也均为 **0**。Linux 真硬件、Mac 本轮真机与 P05 完整门槛仍保留，未做 4K。日志/样例前缀 `build/p05-lower-geometry-*`。
 
 ### 14.28 P05.6 基础实色下方注音产品接入（2026-11-16）
 
@@ -1624,7 +1624,7 @@ Mac 工作流与验收包加入 `lower_ruby_geometry=1`，新增 `lower-ruby-ref
 
 新增产品专项 **45 项通过**：来源完整性与旧场景保留、独立半透明配色、角色/两行来源隔离、无上注音的假名自读、无可转换文本、GPU/Raster seek/暂停、源/style/roll 偏移与 DPR、真实异步 G5 预览、短 MP4、GPU 关闭和 Vulkan loader 失败后使用 Skia Raster。实际 D2D GPU 对照包括 §14.27 同样的 **8 组**基础布局，以及独立半透明实色的 **4 组**（两种语义 × DPR 1/1.5）；只比较 GPU，不使用 QPainter 图像 oracle。
 
-Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；native 源码摘要为 `653c415b8f7ef05f6c07fc516ef5dbf31b04751aaa29de0a938c9abf7806a43c`。本地 Windows 完整 Skia 组合 **534 通过**，关联生产/架构/协议/字体/构建工具组合 **438 通过**（显式排除 §14.27 已在原始 main 复现的 3 项基线失败）。Linux X11 完整组合 **455 通过、79 项平台专用跳过**；Wayland 与本批 Mac CI 待回归结束后补录。Mac 验收包加入 `lower_ruby_product=1`，新增第 **18** 份规范样例 `lower-ruby-product.json`。Linux 真硬件、Mac 本轮真机和完整画质预算仍保留；未做 4K。日志/样例前缀 `build/p05-lower-product-*`。
+Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；native 源码摘要为 `653c415b8f7ef05f6c07fc516ef5dbf31b04751aaa29de0a938c9abf7806a43c`。本地 Windows 完整 Skia 组合 **534 通过**，关联生产/架构/协议/字体/构建工具组合 **438 通过**（显式排除 §14.27 已在原始 main 复现的 3 项基线失败）。Linux X11/Wayland 完整组合各 **455 通过、79 项平台专用跳过**，18 份 Windows/X11/Wayland 规范样例最大误差均为 **0**。实现提交 `9fc52c09` 的 Mac CI [43739980718](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43739980718) **5 项全部成功**：arm64/x64 完整产品组合各 **447 通过、87 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**；18 份跨架构规范样例误差均为 **0**。以字节范围读取 arm64 证据包中的 18 份 JSON 后，与 Windows/X11/Wayland 再比较也全部为 **0**，不依赖仅看平台各自断言。两架构 Metal/Raster 四份指纹与本地四份统一核对为本节同一 native 源码身份。两份干净 Mac 验收包均退出 **0**，`lower_ruby_product` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能代表本轮真机门槛已过。§14.6 已指向本批代码和 CI 包。Mac 验收包加入 `lower_ruby_product=1`，新增第 **18** 份规范样例 `lower-ruby-product.json`。Linux 真硬件、Mac 本轮真机和完整画质预算仍保留；未做 4K。日志/样例前缀 `build/p05-lower-product-*`。
 
 ## 15. 前期探针清理范围
 
