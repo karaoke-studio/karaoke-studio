@@ -69,7 +69,9 @@ from qfluentwidgets import (
 )
 from krok_helper.qfluent_compat import install_fluent_tooltip
 from krok_helper.subtitle_render.frontend.properties.controls.role_target import RoleTargetComboBox
-from krok_helper.subtitle_render.frontend.widgets.role_colors import role_swatch_icon, scheme_swatch_color
+from krok_helper.subtitle_render.frontend.widgets.role_colors import (
+    role_swatch_icon, scheme_swatch_color, scheme_swatch_fill,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.page_navigation import (
     PropertyPageNavigation,
     PropertyNavigationScrollArea,
@@ -5722,6 +5724,7 @@ class PropertyPanel(QWidget):
         self._singer_combo.set_identity(
             scheme_swatch_color(self._style, name) if name else None,
             global_target=name is None,
+            fill=scheme_swatch_fill(self._style, name) if name else None,
         )
         target = f"正在编辑：{self._current_target_label()}"
         self._singer_combo.setAccessibleName(target)
@@ -5734,10 +5737,8 @@ class PropertyPanel(QWidget):
         for index in range(self._singer_combo.count()):
             key = self._singer_combo.itemData(index)
             name = key.removeprefix(_CUSTOM_SCHEME_PREFIX) if isinstance(key, str) else ""
-            color = scheme_swatch_color(self._style, name) if key != _GLOBAL_SCHEME_KEY else neutral
-            self._singer_combo.setItemIcon(index, role_swatch_icon(
-                color if color is not None and color.isValid() else neutral,
-            ))
+            fill = scheme_swatch_fill(self._style, name) if key != _GLOBAL_SCHEME_KEY else neutral
+            self._singer_combo.setItemIcon(index, role_swatch_icon(fill if fill is not None else neutral))
 
     def _add_custom_scheme(self, name: Optional[str] = None) -> None:
         if name is None or isinstance(name, bool):

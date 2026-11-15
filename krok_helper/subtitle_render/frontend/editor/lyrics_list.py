@@ -34,7 +34,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal as Signal,
 )
-from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -74,7 +74,13 @@ from krok_helper.qfluent_compat import ModelessDialog, hide_fluent_tooltip, show
 from krok_helper.subtitle_render.frontend.widgets.role_colors import (
     role_swatch_icon as _swatch_icon_uncached,
     scheme_swatch_color as _scheme_swatch_color,
+    scheme_swatch_fill as _scheme_swatch_fill,
+    paint_fill_swatch,
+    scheme_color_tooltip,
+    swatch_key,
+    swatch_icon_from_pixmap,
 )
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.engine.layout.display.section_edges import (
     apply_section_edge_animation,
     section_edge_line_flags,
@@ -592,8 +598,8 @@ _SWATCH_ICON_CACHE_MAX = 256
 _SWATCH_REFRESH_DEBOUNCE_MS = 250
 
 
-def _swatch_cache_key(color: Optional[QColor]) -> tuple:
-    return (None,) if color is None else (color.rgba(),)
+def _swatch_cache_key(color: PaintFill | QColor | None) -> tuple:
+    return swatch_key(color)
 
 
 def _cached_icon(key: tuple, build) -> QIcon:
@@ -608,35 +614,38 @@ def _cached_icon(key: tuple, build) -> QIcon:
     return icon
 
 
-def _swatch_icon(color: Optional[QColor]) -> QIcon:
+def _swatch_icon(color: PaintFill | QColor | None) -> QIcon:
     """圆形配色色点；``None``（未定义方案）画空心灰圈。"""
     return _cached_icon(("solid", *_swatch_cache_key(color)), lambda: _swatch_icon_uncached(color))
 
 
-def _mixed_swatch_icon(colors: list[Optional[QColor]]) -> QIcon:
+def _mixed_swatch_icon(colors: list[PaintFill | QColor | None]) -> QIcon:
     """混合角色行的双色点（左右各半圆，取行内前两种代表色）。"""
     key = ("mixed",) + tuple(
-        _swatch_cache_key(color)[0] for color in (colors + [None, None])[:2]
+        _swatch_cache_key(color) for color in (colors + [None, None])[:2]
     )
     return _cached_icon(key, lambda: _mixed_swatch_icon_uncached(colors))
 
 
-def _mixed_swatch_icon_uncached(colors: list[Optional[QColor]]) -> QIcon:
+def _mixed_swatch_icon_uncached(colors: list[PaintFill | QColor | None]) -> QIcon:
     pixmap = QPixmap(24, 24)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     halves = (colors + [None, None])[:2]
     for index, color in enumerate(halves):
-        painter.setBrush(color if color is not None else QColor(148, 163, 184, 120))
-        painter.setPen(Qt.PenStyle.NoPen)
-        start = (90 if index == 0 else 270) * 16
-        painter.drawPie(5, 5, 14, 14, start, 180 * 16)
+        painter.save()
+        circle = QPainterPath()
+        circle.addEllipse(QRectF(5, 5, 14, 14))
+        painter.setClipPath(circle)
+        painter.setClipRect(QRectF(5 + index * 7, 5, 7, 14), Qt.ClipOperation.IntersectClip)
+        paint_fill_swatch(painter, QRectF(5, 5, 14, 14), color if color is not None else QColor(148, 163, 184, 120))
+        painter.restore()
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.setPen(QPen(QColor(0, 0, 0, 64), 1.5))
     painter.drawEllipse(5, 5, 14, 14)
     painter.end()
-    return QIcon(pixmap)
+    return swatch_icon_from_pixmap(pixmap)
 
 
 def _guide_symbol_icon(symbol: GuideSymbol) -> QIcon:
@@ -1280,7 +1289,7 @@ class _CharRoleDialog(ModelessDialog):
         button = FluentToggleButton(text, self)
         button.setProperty("roleLabel", label)
         swatch_role = label or self._default_swatch_role
-        button.setIcon(_swatch_icon(_scheme_swatch_color(self._style, swatch_role)))
+        button.setIcon(_swatch_icon(_scheme_swatch_fill(self._style, swatch_role)))
         button.clicked.connect(
             lambda _checked=False, l=label: self._chips.apply_role(l or None)
         )
@@ -1725,7 +1734,7 @@ class LyricsPanel(DropPanel):
                     seen.append(label)
             return _mixed_swatch_icon(
                 [
-                    _scheme_swatch_color(
+                    _scheme_swatch_fill(
                         self._style,
                         label or (TITLE_SCHEME_NAME if self._title_mode else ""),
                     )
@@ -1733,11 +1742,22 @@ class LyricsPanel(DropPanel):
                 ]
             )
         return _swatch_icon(
-            _scheme_swatch_color(
+            _scheme_swatch_fill(
                 self._style,
                 role or (TITLE_SCHEME_NAME if self._title_mode else ""),
             )
         )
+
+    def _role_swatch_tooltip_for(self, line: Optional[TimingLine], role: str) -> str:
+        labels = list(dict.fromkeys(_line_role_labels(line))) if line is not None and _line_role_mixed(line) else [role]
+        parts = []
+        for label in labels:
+            name = label or (TITLE_SCHEME_NAME if self._title_mode else "")
+            scheme = self._style.custom_style_schemes.get(name) if name else self._style
+            parts.append(f"{name or '默认'}\n{scheme_color_tooltip(scheme) if scheme is not None else '未定义样式'}")
+        if len(labels) > 1:
+            parts.insert(0, "混合角色 · 双击内容列编辑")
+        return "\n\n".join(parts)
 
     def _presentation_row_line(self, row: int) -> Optional[TimingLine]:
         """行号 → 对应轨道行；越界 / 未加载返回 ``None``。"""
@@ -1889,6 +1909,7 @@ class LyricsPanel(DropPanel):
                 line = self._presentation_row_line(row)
                 role = _dominant_role(line) if line is not None else ""
                 role_item.setIcon(self._role_swatch_icon_for(line, role))
+                role_item.setToolTip(self._role_swatch_tooltip_for(line, role))
         finally:
             self._table.blockSignals(False)
 
@@ -1929,6 +1950,7 @@ class LyricsPanel(DropPanel):
                     )
                     role_item.setToolTip("")
                 role_item.setIcon(self._role_swatch_icon_for(line, role))
+                role_item.setToolTip(self._role_swatch_tooltip_for(line, role))
         finally:
             self._table.blockSignals(False)
         self._table.viewport().update()
@@ -3068,6 +3090,7 @@ class LyricsPanel(DropPanel):
                         )
                         role_item.setToolTip("")
                     role_item.setIcon(self._role_swatch_icon_for(line, role))
+                role_item.setToolTip(self._role_swatch_tooltip_for(line, role))
                 if line is not None and not self._title_mode:
                     effect_item.setSizeHint(QSize(_EFFECT_HINT_W, -1))
                     effect_item.setText(
@@ -3534,7 +3557,7 @@ class LyricsPanel(DropPanel):
             menu.addSeparator()
         for display, name, swatch_name in choices:
             action = Action(
-                _swatch_icon(_scheme_swatch_color(self._style, swatch_name)),
+                _swatch_icon(_scheme_swatch_fill(self._style, swatch_name)),
                 display,
                 menu,
             )

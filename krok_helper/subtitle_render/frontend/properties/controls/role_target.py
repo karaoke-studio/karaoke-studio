@@ -6,6 +6,8 @@ from qfluentwidgets import FluentIcon as FIF
 
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import WheelFocusedComboBox
 from krok_helper.subtitle_render.frontend.widgets.theme import palette
+from krok_helper.subtitle_render.frontend.widgets.role_colors import role_swatch_icon, swatch_key
+from krok_helper.subtitle_render.domain.paint import PaintFill
 
 
 class RoleTargetComboBox(WheelFocusedComboBox):
@@ -14,16 +16,21 @@ class RoleTargetComboBox(WheelFocusedComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._identity_color = None
+        self._identity_icon = role_swatch_icon(None)
+        self._identity_key = None
         self._global_target = True
         font = self.font()
         font.setWeight(QFont.Weight.DemiBold)
         self.setFont(font)
 
-    def set_identity(self, color: QColor | None, *, global_target: bool) -> None:
+    def set_identity(self, color: QColor | None, *, global_target: bool, fill: PaintFill | None = None) -> None:
         color = QColor(color) if color is not None and color.isValid() else None
-        if color == self._identity_color and global_target == self._global_target:
+        key = (swatch_key(fill if fill is not None else color), global_target)
+        if color == self._identity_color and key == self._identity_key:
             return
+        self._identity_key = key
         self._identity_color = color
+        self._identity_icon = role_swatch_icon(fill if fill is not None else color)
         self._global_target = global_target
         self.update()
 
@@ -56,9 +63,7 @@ class RoleTargetComboBox(WheelFocusedComboBox):
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6, 6)
         if self.isHover or self.isPressed:
             painter.fillRect(self.rect().adjusted(6, 4, -6, -4), QColor(128, 128, 128, 10))
-        painter.setPen(QPen(QColor(p.input_border_hover), 1))
-        painter.setBrush(color)
-        painter.drawEllipse(QRectF(11, (self.height() - 10) / 2, 10, 10))
+        self._identity_icon.paint(painter, 7, (self.height() - 24) // 2, 24, 24)
         painter.setPen(QColor(p.text_primary))
         painter.setFont(self.font())
         text = painter.fontMetrics().elidedText(

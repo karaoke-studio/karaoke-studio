@@ -207,6 +207,34 @@ def test_swatch_flush_updates_role_column_only(qapp):
     qapp.processEvents()
 
 
+def test_gradient_swatch_refresh_invalidates_cached_icons_without_rebuilding_rows(qapp):
+    from krok_helper.subtitle_render.domain.models import KaraokeColors, KaraokeColorState, PaintFill
+    from krok_helper.subtitle_render.frontend.editor.lyrics_list import _mixed_swatch_icon
+
+    panel = LyricsPanel()
+    fill = PaintFill(mode="gradient_horizontal", color="#FF5A6F",
+                     gradient_stops=[(0, "#FF0000"), (100, "#0000FF")])
+    style = Style(karaoke_colors=KaraokeColors(after=KaraokeColorState(text=fill)))
+    panel.set_style(style)
+    panel.set_track(_track())
+    role_item = panel.table_widget.item(2, COL_ROLE)
+    content_item = panel.table_widget.item(2, COL_CONTENT)
+    content_item.setText("sentinel")
+    first = role_item.icon().pixmap(24, 24).toImage()
+    first_mixed = _mixed_swatch_icon([fill, None])
+
+    changed = replace(fill, gradient_stops=[(0, "#00FF00"), (100, "#0000FF")])
+    panel.set_style(replace(style, karaoke_colors=KaraokeColors(after=KaraokeColorState(text=changed))))
+    panel._flush_swatch_refresh()
+    current = role_item.icon().pixmap(24, 24).toImage()
+    assert current.pixelColor(7, 12).green() > first.pixelColor(7, 12).green() + 100
+    assert "#00FF00" in role_item.toolTip()
+    assert panel.table_widget.item(2, COL_CONTENT) is content_item
+    assert content_item.text() == "sentinel"
+    assert _mixed_swatch_icon([changed, None]).cacheKey() != first_mixed.cacheKey()
+    assert _mixed_swatch_icon([changed, None]).cacheKey() == _mixed_swatch_icon([changed, None]).cacheKey()
+
+
 def test_loading_settings_card_is_isolated_and_fully_described(qapp):
     parent = QWidget()
     defaults = SubtitleLoadingSettings()

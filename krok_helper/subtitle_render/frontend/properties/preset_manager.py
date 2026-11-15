@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -48,6 +48,12 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.role_colors import (
+    paint_fill_swatch,
+    scheme_color_tooltip,
+    scheme_text_fills,
+    swatch_icon_from_pixmap,
+)
 from krok_helper.subtitle_render.n3.template_import import (
     N3_TEMPLATE_FILTER,
     N3_TEMPLATE_SOURCE_TYPE,
@@ -345,7 +351,7 @@ class StylePresetManagerDialog(ModelessDialog):
         layout.addLayout(filter_row)
 
         self._preset_list = FluentListWidget(self)
-        self._preset_list.setIconSize(QSize(34, 20))
+        self._preset_list.setIconSize(QSize(50, 22))
         self._preset_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._preset_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
@@ -356,6 +362,7 @@ class StylePresetManagerDialog(ModelessDialog):
         # 点行空白切换勾选（与布局预设库一致）；点勾选框本身由 Qt 原生处理。
         self._preset_list.itemClicked.connect(self._on_preset_row_clicked)
         layout.addWidget(self._preset_list, 1)
+        layout.addWidget(CaptionLabel("色块：左侧走字前 · 右侧走字后", self))
 
         selection_row = QHBoxLayout()
         selection_row.setContentsMargins(0, 0, 0, 0)
@@ -462,7 +469,7 @@ class StylePresetManagerDialog(ModelessDialog):
         for preset_id, preset in self._presets.items():
             group_text = f" [{preset.group}]" if preset.group else ""
             existing_text = (
-                "  （项目中已存在）"
+                "  （同名角色）"
                 if preset.name in self._existing_role_names
                 else ""
             )
@@ -472,6 +479,10 @@ class StylePresetManagerDialog(ModelessDialog):
                 f"{self._scheme_summary(preset.scheme)}"
             )
             item.setIcon(_scheme_icon(preset.scheme))
+            tooltip = f"{preset.name}\n{scheme_color_tooltip(preset.scheme)}"
+            if existing_text:
+                tooltip += "\n项目中有同名角色，预设与项目样式独立保存。"
+            item.setToolTip(tooltip)
             item.setData(Qt.ItemDataRole.UserRole, preset_id)
             item.setData(Qt.ItemDataRole.UserRole + 1, preset.group)
             if preset.name not in self._existing_role_names:
@@ -634,12 +645,10 @@ class StylePresetManagerDialog(ModelessDialog):
         self._sync_buttons()
 
     def _scheme_summary(self, scheme: SubtitleStyleScheme) -> str:
-        fill = scheme.fill_color or "#FFFFFF"
-        base = scheme.base_color or "#FFFFFF"
         font_size = scheme.font_size_px
         font = scheme.font_family or "继承字体"
         size_text = f" {font_size}px" if font_size is not None else ""
-        return f"{font}{size_text} · 已唱 {fill} / 未唱 {base}"
+        return f"{font}{size_text}"
 
     def _on_save_current(self) -> None:
         suggested_name = self._target_label if self._target_label != "全局默认" else ""
@@ -1003,15 +1012,15 @@ class StylePresetManagerDialog(ModelessDialog):
 
 
 def _scheme_icon(scheme: SubtitleStyleScheme) -> QIcon:
-    before = QColor(scheme.base_color or "#FFFFFF")
-    after = QColor(scheme.fill_color or "#FF5A6F")
-    pixmap = QPixmap(34, 20)
+    before, after = scheme_text_fills(scheme)
+    pixmap = QPixmap(50, 22)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.fillRect(QRect(0, 0, 17, 20), before)
-    painter.fillRect(QRect(17, 0, 17, 20), after)
-    painter.setPen(QColor("#000000"))
-    painter.drawRect(0, 0, 33, 19)
+    paint_fill_swatch(painter, QRectF(1, 1, 22, 20), before)
+    paint_fill_swatch(painter, QRectF(27, 1, 22, 20), after)
+    painter.setPen(QColor(128, 128, 128, 160))
+    painter.drawRect(0, 0, 23, 21)
+    painter.drawRect(26, 0, 23, 21)
     painter.end()
-    return QIcon(pixmap)
+    return swatch_icon_from_pixmap(pixmap)
 

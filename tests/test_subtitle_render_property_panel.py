@@ -8972,6 +8972,75 @@ def test_style_preset_manager_dialog_saves_current_scheme(qapp):
     assert dialog._preset_list.count() == 1
 
 
+@pytest.mark.parametrize("mode", ["solid", "gradient_horizontal", "gradient_vertical", "split_vertical", "image"])
+def test_style_preset_swatches_use_saved_matrix_and_keep_list_concise(qapp, tmp_path, mode):
+    from krok_helper.subtitle_render.frontend.widgets.role_colors import (
+        role_swatch_icon, scheme_swatch_fill,
+    )
+
+    texture = QImage(8, 8, QImage.Format.Format_ARGB32)
+    texture.fill(QColor("#FF0000"))
+    texture_path = tmp_path / "texture.png"
+    assert texture.save(str(texture_path))
+    after = PaintFill(
+        mode=mode, color="#FF0000" if mode == "solid" else "#FF5A6F",
+        gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+        split_stops=[(0, "#FF0000"), (50, "#0000FF"), (100, "#0000FF")],
+        image_path=str(texture_path),
+    )
+    scheme = SubtitleStyleScheme(
+        fill_color="#FF5A6F", base_color="#FFFFFF", font_family="Arial",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(color="#00FF00")),
+            after=KaraokeColorState(text=after),
+        ),
+    )
+    dialog = StylePresetManagerDialog({}, scheme, "测试角色", existing_role_names={"测试角色"})
+    assert dialog.add_preset("测试角色")
+    item = dialog._preset_list.item(0)
+    assert "#" not in item.text()
+    assert "同名角色" in item.text()
+    assert "走字前：#00FF00" in item.toolTip()
+    assert "独立保存" in item.toolTip()
+    image = item.icon().pixmap(50, 22).toImage()
+    assert image.pixelColor(12, 10) == QColor("#00FF00")
+    if mode in {"solid", "image"}:
+        assert image.pixelColor(38, 10) == QColor("#FF0000")
+    elif mode == "gradient_horizontal":
+        assert image.pixelColor(29, 10).red() > 200
+        assert image.pixelColor(46, 10).blue() > 200
+    else:
+        assert image.pixelColor(38, 3).red() > 200
+        assert image.pixelColor(38, 18).blue() > 200
+
+    role_fill = scheme_swatch_fill(Style(custom_style_schemes={"测试角色": scheme}), "测试角色")
+    role_image = role_swatch_icon(role_fill).pixmap(24, 24).toImage()
+    if mode in {"solid", "image"}:
+        assert role_image.pixelColor(12, 12) == QColor("#FF0000")
+    elif mode == "gradient_horizontal":
+        assert role_image.pixelColor(7, 12).red() > role_image.pixelColor(16, 12).red()
+    else:
+        assert role_image.pixelColor(12, 7).red() > role_image.pixelColor(12, 16).red()
+
+
+def test_style_preset_swatches_keep_legacy_colors_and_show_transparency(qapp):
+    from PyQt6.QtGui import QIcon
+
+    legacy = preset_manager_module._scheme_icon(SubtitleStyleScheme(base_color="#123456", fill_color="#654321"))
+    image = legacy.pixmap(50, 22).toImage()
+    assert image.pixelColor(12, 10) == QColor("#123456")
+    assert image.pixelColor(38, 10) == QColor("#654321")
+    for mode in QIcon.Mode:
+        for state in QIcon.State:
+            assert legacy.pixmap(QSize(50, 22), mode, state).toImage() == image
+    transparent = SubtitleStyleScheme(karaoke_colors=KaraokeColors(
+        after=KaraokeColorState(text=PaintFill(color="#00000000")),
+    ))
+    image = preset_manager_module._scheme_icon(transparent).pixmap(50, 22).toImage()
+    assert image.pixelColor(29, 3) != image.pixelColor(33, 3)
+    assert image.pixelColor(29, 3).alpha() == 255
+
+
 def test_style_preset_manager_checked_item_is_applied_after_reopening(qapp):
     presets = {
         "preset-a": StylePreset(
