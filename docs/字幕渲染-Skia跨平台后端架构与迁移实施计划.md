@@ -1502,7 +1502,7 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 职责与契约：
 
-- `ruby/timing.py` 的 checkpoint clamp 提为共用纯函数，原调用者保留行为。新增 `ruby/skia_timing.py` 仅消费已选定的注音目标和规范区间：`reading_units` 的空 part 成为暂停，`checkpoint_segments` 的空段仍占主字进度份额；读音单元时钟独立保留。主字按既有 GPU 的等 authored-cell 份额切分，不采用 Painter 的宽度权重；反求时间沿用 GPU 的 half-up duration 取整。
+- `ruby/timing.py` 的 checkpoint clamp 提为共用纯函数，原调用者保留行为。新增 `ruby/skia_timing.py` 仅消费已选定的注音目标和规范区间：`reading_units` 的空 part 成为暂停，`checkpoint_segments` 的空段仍占主字进度份额；读音单元时钟独立保留。主字按既有 GPU 的等 authored-cell 份额切分，不采用 Painter 的宽度权重；反求时间沿用 GPU 的 float32 中间值及 half-up duration 取整。不能直接以 Python 双精度替代：`[(0,5),(5,10)]` 分成 20 格时第 13 格的结束时间会从 GPU 的 6ms 变成 7ms，已新增回归固定该边界。
 - 显式主字内部 start/end 保留原主字区间，外侧边界不阻断注音时钟；按原目标顺序首个相交组整体拥有主字时钟，后续相交组不局部覆盖。空读音/`^` 标记不改主字时钟。该准备结果尚未由产品 IR 入口为 ruby 工程自动生成。
 - 最终 IR 在 `skia_layout.lines[].cells[]` 增加可选 `wipe_points=[{time_ms,position},...]`，另设 `wipe_schema=1` 与 `p05_segmented_wipe` 能力；几何 schema 仍为 2。Python 启动时检查能力和版本，拒绝旧 sidecar；普通无曲线单元保持 start/end 线性行为。源 `track.chars.wipe_points` 仍不受支持，不得借此绕过最终布局契约。
 - Qt 边界 `backends/skia/resolved_wipe.*` 校验 JSON 类型、有限值、整数时间及数量，统一叠加一次 style/media/roll 时差；公共 `skia/core` 再检查单调时刻/进度与精确 0/1 端点。每单元 2–4096 点、总计不超过 1,048,576 点，源时间 ±86,400,000ms，平移后 ±172,800,000ms。坏配置保留先前有效场景。

@@ -6,12 +6,18 @@ Ruby visual-unit intervals remain separate from the main-text clock.
 """
 from dataclasses import dataclass
 import math
+import struct
 
 from .timing import (ruby_main_wipe_intervals, ruby_visual_units_and_intervals,
                      ruby_main_uses_base_timing, is_utopia_group_marker)
 
 
 WipeCurve = tuple[tuple[int, float], ...]
+
+
+def _f32(value):
+    """Match the existing GPU projection's intermediate float arithmetic."""
+    return struct.unpack('f', struct.pack('f', value))[0]
 
 
 @dataclass(frozen=True)
@@ -42,24 +48,25 @@ def main_wipe_points(intervals, base_count):
         if (type(start) is not int or type(end) is not int or start < previous
                 or end < start or abs(start) > 86400000 or abs(end) > 86400000):
             raise ValueError('分段走字包含无效、反向或非整数区间')
-        raw.extend(((start, index / count), (end, (index + 1) / count)))
+        raw.extend(((start, _f32(index / count)), (end, _f32((index + 1) / count))))
         previous = end
 
     def time_at(target, right):
-        exact = [t for t, p in raw if abs(p-target) < .0001]
+        exact = [t for t, p in raw if abs(_f32(p-target)) < _f32(.0001)]
         if exact:
             return max(exact) if right else min(exact)
         for (t0, p0), (t1, p1) in zip(raw, raw[1:]):
             if p0 < target < p1:
-                return t0 + math.floor((t1-t0) * (target-p0) / (p1-p0) + .5)
+                local = _f32(_f32(target-p0) / _f32(p1-p0))
+                return t0 + math.floor(_f32(_f32(t1-t0) * local) + .5)
         return raw[0][0] if target <= 0 else raw[-1][0]
 
     result = []
     for index in range(base_count):
-        left, right = index/base_count, (index+1)/base_count
+        left, right = _f32(index/base_count), _f32((index+1)/base_count)
         points = [(time_at(left, True), 0.)]
-        points.extend((t, (p-left)/(right-left)) for t, p in raw
-                      if p > left+.0001 and p < right-.0001)
+        points.extend((t, _f32(_f32(p-left)/_f32(right-left))) for t, p in raw
+                      if p > _f32(left+_f32(.0001)) and p < _f32(right-_f32(.0001)))
         points.append((time_at(right, False), 1.))
         result.append(tuple(sorted(points, key=lambda p:p[0])))
     return tuple(result)

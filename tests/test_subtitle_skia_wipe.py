@@ -55,6 +55,11 @@ def test_time_inversion_uses_gpu_half_up_rounding_and_keeps_zero_duration():
     assert main_wipe_points([(0,100),(300,400)],1)==(((0,0.),(100,.5),(300,.5),(400,1.)),)
 
 
+def test_time_inversion_preserves_gpu_float32_intermediate_rounding():
+    # Double precision yields 7ms at this boundary; the GPU yields 6ms.
+    assert main_wipe_points([(0,5),(5,10)],20)[12] == ((6,0.),(6,1.))
+
+
 @pytest.mark.parametrize('internal',['start','end'])
 def test_explicit_internal_main_boundaries_preserve_authoritative_base_intervals(internal):
     line=line_three()
