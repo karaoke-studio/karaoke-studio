@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout c2d05d62
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43668312216 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 1a87fc4e
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43674177045 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1498,7 +1498,7 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 ### 14.21 P05.6 分段走字时钟与公共执行核心（2026-11-15）
 
-**已接通最终分段主字时钟的 GPU/Raster 执行，尚未解除产品注音门禁。** 本批继续 §14.20：物化两层时间准备结果并建立最终曲线协议；注音字形、组裁剪和页面锚点尚未整体接入。不能据此宣布 P05.6、P07 或完整 D2D 替代验收完成。
+**已接通最终分段主字时钟的 GPU/Raster 执行，尚未解除产品注音门禁。** 实现提交 `20c29260`，float32 语义补强 `1a87fc4e`。本批继续 §14.20：物化两层时间准备结果并建立最终曲线协议；注音字形、组裁剪和页面锚点尚未整体接入。不能据此宣布 P05.6、P07 或完整 D2D 替代验收完成。
 
 职责与契约：
 
@@ -1510,13 +1510,14 @@ P00 严格画质预算、完整字体 fallback、竖排/RTL、复杂外观、出
 
 本机验证：
 
-- Windows 产品组合 **320 通过**；随后补充独立 CPU-only 构建对照，最终分段专项 **45 通过**。覆盖暂停/恢复、重复与零时长、随机 seek、DPR 1.5、三种时间偏移、GPU–Raster 画质预算、GPU 构建 Raster–CPU-only Raster 逐字节一致，以及 16 类坏曲线保留旧场景。两种模式 × 有无显式主字内部边界的四组实际 D2D GPU 对照，每组 10 时刻，保留原 **1px** 条件。
-- Linux WSLg X11/Wayland 的最终完整组合各 **284 通过、37 跳过**，包含独立 CPU-only 对照；跳过含四项 Windows D2D 专用样例。相关共享语义/渲染/布局回归 **638 通过、12 跳过**，构建/验收工具 **26 通过**，D2D 专项 **13 通过**。
+- Windows 最终产品组合 **322 通过**，含分段专项 **46 项**。覆盖 float32 边界、暂停/恢复、重复与零时长、随机 seek、DPR 1.5、三种时间偏移、GPU–Raster 画质预算、GPU 构建 Raster–CPU-only Raster 逐字节一致，以及 16 类坏曲线保留旧场景。两种模式 × 有无显式主字内部边界的四组实际 D2D GPU 对照，每组 10 时刻，保留原 **1px** 条件。
+- Linux WSLg X11/Wayland 的最终完整组合各 **285 通过、37 跳过**，包含独立 CPU-only 对照；跳过含四项 Windows D2D 专用样例。相关共享语义/渲染/布局回归 **638 通过、12 跳过**，构建/验收工具 **26 通过**，D2D 专项 **13 通过**。
 - 原 Python checkpoint 函数与重构后版本做 **78,000 次逐值比较**，全部一致；修改前后 D2D 二进制在 legacy/N3 × 两种时钟模式 × 普通/零时长共 **8 组、64 帧**原始 RGBA **逐字节一致**。未使用 QPainter 作为 Skia 画面对照。
 - Windows/Linux Vulkan 与独立 CPU-only 全部重建，四种构建 CTest 各 **3/3**。D2D 按 cache 的 BuildTools 14.50 干净编译；首次链接被 exe 占用阻止，检查时占用已结束，同工具链重试链接成功。native 源码身份统一为 `9903249b4cbda1320f03fd9ef64e005207286b1162922f86d5a6851e95d8e189`，日志/样例在 `build/p05-segmented-*`。
-- Mac 工作流、无 SDK 验收包接入相同专项，manifest 新增 `segmented_wipe=1`；规范样例增加 `wipe-layout.json`，跨架构比较共十一份。此批 Mac CI 结果待下面补录，不能引用上一轮结果代替新 native 验证。
+- Mac CI [43674177045](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43674177045)（`1a87fc4e`）**5 项全部成功**：arm64/x64 产品组合各 **281 通过、41 跳过**，分段专项各 **42 通过、4 跳过**（D2D 专用），字体契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。十一份跨架构规范样例最大误差 **0**；下载的 arm64 十一份样例与 Windows/X11/Wayland 再比较也均为 **0**。两架构 Metal/Raster 的四份 native 指纹均核对为本节同一源码身份。
+- Mac 工作流、无 SDK 验收包接入相同专项，manifest 新增 `segmented_wipe=1`；规范样例增加 `wipe-layout.json`。两份干净 Mac 验收包的该步骤均退出 **0**、全部功能项通过，托管虚拟 Metal 的真硬件门槛正确保留。§14.6 的朋友测试入口已更新到上述实现提交与验收包。
 
-剩余：将已准备的注音锚点接入分页/SmartHorizon/碰撞几何，把注音单元的最终字形、组裁剪和独立读音时钟写入 IR，再在同一公共核心接通上下 ruby 并进行 GPU 对照。当前规范曲线仅单调 0→1；反向、完成后裁剪释放、装饰/描边和出入场/粒子仍按对应阶段门禁处理，不能静默近似。Linux 真硬件与本轮 Mac 真机验收仍保留；未补做 4K。
+剩余：将已准备的注音锚点接入分页/SmartHorizon/碰撞几何，把注音单元的最终字形、组裁剪和独立读音时钟写入 IR，再在同一公共核心接通上下 ruby 并进行 GPU 对照。解除 ruby 门禁时须保持最终时钟权威，不能让旧 Qt 注音投影再次分配时长或把分配差值误当全局 offset。当前规范曲线仅单调 0→1；反向、完成后裁剪释放、装饰/描边和出入场/粒子仍按对应阶段门禁处理，不能静默近似。Linux 真硬件与本轮 Mac 真机验收仍保留；未补做 4K。
 
 ## 15. 前期探针清理范围
 

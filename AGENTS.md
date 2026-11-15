@@ -365,7 +365,8 @@ git submodule status
    仍遵守既有清除语义。此修复不代表已经接通 Skia 注音最终 IR/分段走字。
 
    P05.6 分段时钟见 §14.21：`ruby/skia_timing.py` 消费已选目标和规范区间，按 GPU 等主字
-   单元份额准备两层时钟，不能使用 Painter 宽度权重；显式内部边界与首个相交组的所有权须保留。
+   单元份额准备两层时钟，保留 GPU float32 中间值与 duration 取整，不能使用 Painter 宽度权重；
+   显式内部边界与首个相交组的所有权须保留。
    最终 `cells[].wipe_points` 受 `p05_segmented_wipe` / `wipe_schema=1` 门控，公共
    `effects/wipe_clock.h` 同供 D2D 和 Skia GPU/Raster；时差只在 Qt 边界叠加一次。
    无曲线单元保持基本时钟，非法曲线拒绝且保留旧场景。初始时刻/内部重复点/零时长边界
