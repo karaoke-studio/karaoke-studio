@@ -19,6 +19,9 @@ struct ResolvedLine {
     int startMs = 0, endMs = 0;
     struct Translation { int startMs, endMs; float x, y; };
     std::vector<Translation> translations;
+    // One continuous wipe front clips every path in the group. Unit clocks
+    // are final values; neither grouping nor timing is resolved while drawing.
+    std::vector<std::vector<ResolvedCell>> rubyGroups;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

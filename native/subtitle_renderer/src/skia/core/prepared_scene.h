@@ -1,6 +1,7 @@
 #pragma once
 #include "include/core/SkPath.h"
 #include "resolved_scene.h"
+#include "wipe_group.h"
 #include <cstdint>
 #include <vector>
 
@@ -50,6 +51,7 @@ private:
         std::vector<Cell> cells;
         int startMs, endMs;
         std::vector<ResolvedLine::Translation> translations;
+        std::vector<PreparedWipeGroup> rubyGroups;
     };
     int width_, height_;
     std::vector<Line> lines_;

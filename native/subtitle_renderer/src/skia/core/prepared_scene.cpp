@@ -17,7 +17,7 @@ namespace subtitle::skia {
 PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.width), height_(input.height) {
     if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
         throw std::runtime_error("Skia: invalid resolved canvas size");
-    std::size_t totalPoints = 0;
+    std::size_t totalPoints = 0, totalCells = 0, totalGroups = 0;
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
@@ -30,6 +30,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             line.translations.push_back(translation);
         }
         for (const auto& cell : source.cells) {
+            if (++totalCells > 65536) throw std::runtime_error("Skia 字形单元总数超限");
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
@@ -50,6 +51,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             }
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints});
+        }
+        for (const auto& group : source.rubyGroups) {
+            totalCells += group.size();
+            if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
+            line.rubyGroups.emplace_back(group);
         }
         lines_.push_back(std::move(line));
     }
@@ -133,6 +139,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 canvas.restore();
             }
         }
+        for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
         canvas.restore();
     }
 }

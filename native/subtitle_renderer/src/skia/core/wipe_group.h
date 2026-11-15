@@ -1,0 +1,15 @@
+#pragma once
+#include "resolved_scene.h"
+#include "include/core/SkRect.h"
+
+class SkCanvas;
+namespace subtitle::skia {
+class PreparedWipeGroup {
+public:
+    explicit PreparedWipeGroup(const std::vector<ResolvedCell>&);
+    void draw(SkCanvas&, int timeMs) const;
+private:
+    std::vector<ResolvedCell> cells_;
+    SkRect bounds_;
+};
+}

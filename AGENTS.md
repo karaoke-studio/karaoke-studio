@@ -379,6 +379,13 @@ git submodule status
    页面/显示/计划缓存身份须包含注音字体内容，行位改变须清整页统计；注入时检查正文度量
    和时间区间，拒绝过期准备。该入口只接通准备几何，产品 ruby 绘制门禁仍保留。
 
+   P05.6 最终注音组见 §14.23：`render/skia_ruby_ir.py` 序列化已准备的字体/坐标/两层时钟，
+   `p05_resolved_ruby` / `ruby_schema=1` 门控最终 `ruby_groups`；原始源注音仍拒绝。
+   `resolved_glyph` 共用正文/注音快照校验，`resolved_ruby` 在 Qt 边界叠加一次时差并取角色实色。
+   公共 `skia/core/wipe_group` 按整组锋面裁剪全部路径，暂停、互斥半透明、完成后释放裁剪与
+   零时长起点须保持 GPU 语义，不能换成独立字形裁剪。门禁仍限制描边/装饰、下方注音、
+   空读音/短语标记、no_wipe/反向和特效；测试探针不是产品源注音近似路径。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的
