@@ -1568,6 +1568,18 @@ Mac CI [43687800504](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 
 日志/样例前缀 `build/p05-upper-product-*`，新增第十四份规范样例 `upper-ruby-product.json`，含源注音、最终曲线/组及能力声明。新测试同时对比真实产品入口与既有最终组探针的内容和像素，八组 D2D GPU 对照（两种语义 × 两种主字模式 × 有无 fallback parts）各十时刻，保留 **1px** 条件；布局缓存身份因 `style_for_track` 预物化继承字段可不同，不把这个身份当画面几何比较。公共绘制核心与字体算法未改，只有 Skia 源 IR 投影与 sidecar 能力改变；Linux 真硬件、此轮 Mac 真机及严格画质门槛继续保留，未做 4K。
 
+### 14.25 P05.6 下方罗马音纯语义与规范度量准备（2026-11-15）
+
+**本批交付下方读音的配置期准备端口，尚未开放 Skia 下方注音绘制。** 不扩展 §14.24 的产品支持范围，也不改变 D2D 默认、发布包隔离或 Skia Raster 回退策略。
+
+- `ruby/lower_semantics.py` 持有 `LowerRuby`、上下层样式继承、SUG 罗马音转换和目标/停顿保真规则，不导入 Qt 字体、前端设置或旧渲染器。既有 `ruby/lower.py` 保留 Qt 外观编辑快照和设置读取，并重新导出旧入口；设置仍只在需要转换时延迟读取。
+- `ruby/skia_lower.py::prepare_lower_readings` 显式接收规范主字度量快照、字体解析和 CPU 度量端口。按源行身份选择上注音，优先从作者读音派生，再补未覆盖假名；使用规范主字区间进行目标筛选与裁切。缺少冻结的四项布尔罗马音选项时明确失败，工作线程不查询前端设置。
+- 所有下方读音一次批量度量，复用 Japanese/Latin 独立字体实例、内容身份、整读音字素几何和角色继承；输出逐组目标索引、最终读音单元时钟、度量及缓存身份。下方组不进入主字进度覆盖，独立间距/净空改变身份但不重新分配时间。空暂停、小假名、长音、粒子与源行隔离均有规范字体测试。
+- 源读音转罗马音仍采用既有分段语义，最终可视单元与上注音共用 `ruby_unit_clock`。**已生成的 parts 内按整数除法划分**：5ms 的 `na` 为 `[0,2],[2,5]`，不能误用无 parts fallback 的 half-up `[0,3],[3,5]`。这直接对应现有 GPU `qt_ruby_timing.cpp` 的整数算法。
+- 尚需后续接入：稳定字体参考墨迹/Latin cap height 的下方基线、上下两层干扰与可见净空、包含下层的源布局行框、最终 IR/能力握手，以及 D2D GPU—Skia GPU / Skia GPU—Raster 实际绘制验收。这些门槛完成前，产品入口仍明确拒绝 `lower_ruby_enabled`。
+
+新增专项 `tests/test_subtitle_skia_lower.py` 和规范样例 `lower-ruby-preparation.json`。Mac 工作流及验收包添加 `lower_ruby_preparation=1`，只表示上述准备端口，不表示产品已支持下方绘制。初步验证：Windows 下方/分段时钟/验收工具组合 **109 通过**；Linux X11/Wayland 下方/分段时钟/注音度量各 **84 通过、4 项 D2D 专用跳过**。完整回归发现发布提交 `4a94caf0` 引入的源布局行框规则尚未同步到 Skia，继续在下一批补齐后重新执行全组合验证。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -39,6 +39,14 @@ class RubyWipeTiming:
     readings: tuple[RubyUnitClock, ...]
 
 
+def ruby_unit_clock(ruby, annotation_index):
+    """Final GPU visual-unit clock, shared by upper and lower readings."""
+    units = ruby_visual_units_and_intervals(
+        ruby, round_boundary=_gpu_boundary, split_reading_units=split_graphemes)
+    return RubyUnitClock(annotation_index, tuple(u for u, _ in units),
+                         tuple(interval for _, interval in units))
+
+
 def main_wipe_points(intervals, base_count):
     """Project progress onto equal base-cell slots, preserving pause plateaus.
 
@@ -90,9 +98,7 @@ def prepare_ruby_wipe_timing(line, prepared_line, mode):
         ruby, indices = target.effective, target.indices
         if not indices or any(type(i) is not int or not 0 <= i < len(line.chars) for i in indices):
             raise ValueError('注音走字目标超出正文单元范围')
-        timed_units = ruby_visual_units_and_intervals(ruby, round_boundary=_gpu_boundary, split_reading_units=split_graphemes)
-        readings.append(RubyUnitClock(target.annotation_index,
-            tuple(u for u, _interval in timed_units), tuple(interval for _u, interval in timed_units)))
+        readings.append(ruby_unit_clock(ruby, target.annotation_index))
         if is_utopia_group_marker(ruby) or assigned.intersection(indices):
             continue
         if not ruby_main_uses_base_timing(line, list(indices)):
