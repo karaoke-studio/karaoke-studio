@@ -880,12 +880,12 @@ def _gpu_renderer_for_roll():
     return NativeRendererProcess(path, response_timeout_s=15.0)
 
 
-def test_gpu_and_painter_render_identical_frames_with_roll_shift(qapp):
+def test_gpu_and_painter_render_identical_frames_with_roll_shift(qapp, request):
     """GPU（Direct2D 回读）与 CPU Painter 在同一 display 时刻出同一布局帧。
 
     前黑开启（roll_shift=4000）：display t=5500 应见到主轨行（源 1500），
     t=1000（前黑区）无字幕；两后端帧 alpha 包络一致。"""
-    from PyQt6.QtGui import QImage
+    from PyQt6.QtGui import QFontDatabase, QImage
 
     from krok_helper.subtitle_render.domain.timing import (
         TimingChar,
@@ -897,6 +897,29 @@ def test_gpu_and_painter_render_identical_frames_with_roll_shift(qapp):
     renderer = _gpu_renderer_for_roll()
     if renderer is None:
         pytest.skip("native subtitle renderer executable is not built")
+
+    # Offscreen Qt cannot enumerate system fonts. Register the same faces used
+    # by the parity style, otherwise Painter silently substitutes a font while
+    # DirectWrite uses the requested one and this compares unrelated glyphs.
+    from krok_helper.subtitle_render.n3.font_catalog import invalidate_n3_font_caches
+    from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
+
+    def refresh_fonts():
+        invalidate_n3_font_caches()
+        clear_font_weight_cache()
+
+    handles = []
+    def restore_fonts():
+        for handle in handles:
+            QFontDatabase.removeApplicationFont(handle)
+        refresh_fonts()
+
+    request.addfinalizer(restore_fonts)
+    for name in ("arial.ttf", "times.ttf", "meiryo.ttc"):
+        handle = QFontDatabase.addApplicationFont(rf"C:\Windows\Fonts\{name}")
+        assert handle >= 0, name
+        handles.append(handle)
+    refresh_fonts()
 
     from krok_helper.subtitle_render.native.backend import SharedFrameRingReader
 
