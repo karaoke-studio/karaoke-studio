@@ -2014,6 +2014,87 @@ def test_gpu_drawn_gradient_uses_baked_stops_in_cpu_gpu_and_cached_frames(monkey
     assert diagnostics["brush_cache_size"] <= diagnostics["brush_cache_capacity"]
 
 
+@pytest.mark.parametrize("backend", ["gpu", "gpu_hardware", "painter"])
+@pytest.mark.parametrize("semantics", ["legacy", "n3_1074"])
+@pytest.mark.parametrize("mode", ["gradient_vertical", "split_vertical"])
+@pytest.mark.parametrize("variant", ["below", "above", "large_font"])
+def test_bitmap_avatar_preserves_text_vertical_gradient_and_height(
+    tmp_path, backend, semantics, mode, variant,
+) -> None:
+    image_path = tmp_path / "gradient_avatar.png"
+    image = QImage(24, 24, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(image_path))
+    gradient = PaintFill(
+        mode=mode, start_color="#FF0000", end_color="#0000FF",
+        gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+        split_top_color="#FF0000", split_bottom_color="#0000FF",
+        split_stops=[(0, "#FF0000"), (50, "#0000FF"), (100, "#0000FF")],
+    )
+    state = KaraokeColorState(text=gradient)
+    style = _g1_style(
+        font_family_latin="Arial", font_size_px=72, layout_semantics=semantics,
+        stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
+        dual_line_layout=False, line_y_position="center",
+        line_lead_in_ms=1000, line_tail_ms=1000,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+        custom_style_schemes={"avatar": SubtitleStyleScheme(font_size_px=72)},
+    )
+    changed_style = replace(style, custom_style_schemes={
+        "avatar": SubtitleStyleScheme(font_size_px=200, stroke_width_px=80),
+    }) if variant == "large_font" else style
+
+    def track(offset):
+        symbol = GuideSymbol(
+            kind="bitmap", bitmap_before_path=str(image_path),
+            bitmap_after_path=str(image_path), bitmap_no_decor=True,
+            bitmap_fix_size=True, bitmap_margin_bottom_px=offset,
+        )
+        return TimingTrack(lines=[TimingLine(chars=[
+            TimingChar("\ufffc", 1000, vector_glyph=symbol, role_label="avatar"),
+            TimingChar("H", 1000), TimingChar("H", 1500),
+        ], end_ms=2000)])
+
+    offset = {"below": -80, "above": 80, "large_font": 0}[variant]
+    timestamps = (500, 2000)
+    if backend.startswith("gpu"):
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            _, reference = _render_g1_frames(
+                renderer, style, timestamps, force_warp=backend == "gpu", track=track(0),
+            )
+            _, changed = _render_g1_frames(
+                renderer, changed_style, timestamps, force_warp=backend == "gpu", track=track(offset),
+            )
+    else:
+        reference = [_render_painter_oracle(style, t_ms=t, track=track(0)) for t in timestamps]
+        changed = [_render_painter_oracle(changed_style, t_ms=t, track=track(offset)) for t in timestamps]
+
+    def text_rows(payload):
+        pixels = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+        mask = ((pixels[:, :, 3] > 248) & (pixels[:, :, 1] < 8)
+                & (pixels[:, :, 0].astype(int) + pixels[:, :, 2] > 200))
+        rows = np.flatnonzero(mask.any(axis=1))
+        assert len(rows) > 30
+        red = [np.median(pixels[y, mask[y], 0].astype(float)) / 255 for y in rows]
+        return rows, np.asarray(red)
+
+    for expected, actual in zip(reference, changed):
+        reference_rows, reference_red = text_rows(expected)
+        actual_rows, actual_red = text_rows(actual)
+        assert np.array_equal(actual_rows, reference_rows), (backend, semantics, variant)
+        assert actual_red == pytest.approx(reference_red, abs=.01), (backend, semantics, variant)
+        # Excluding an avatar from text height must not crop its real pixels.
+        avatar_rows = []
+        for payload in (expected, actual):
+            pixels = np.frombuffer(payload, dtype=np.uint8).reshape(360, 640, 4)
+            green = ((pixels[:, :, 1] > 240) & (pixels[:, :, 0] < 8)
+                     & (pixels[:, :, 2] < 8) & (pixels[:, :, 3] > 248))
+            assert green.sum() > 400
+            avatar_rows.append(np.flatnonzero(green.any(axis=1)))
+        if variant != "large_font":
+            assert np.array_equal(avatar_rows[1], avatar_rows[0] - offset)
+
+
 def test_gpu_horizontal_ruby_gradient_uses_main_line_bounds_by_default(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

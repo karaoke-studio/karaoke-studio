@@ -5150,6 +5150,107 @@ def test_main_fill_rect_uses_glyph_ink_x_and_ink_vertical_box(qapp):
     )
 
 
+@pytest.mark.parametrize("margin_bottom", [-80, 80])
+@pytest.mark.parametrize("with_text", [True, False])
+def test_bitmap_avatars_do_not_expand_vertical_fill_bounds(
+    qapp, tmp_path, margin_bottom, with_text,
+):
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import (
+        layout as horizontal_layout,
+    )
+
+    image_path = tmp_path / "avatar.png"
+    image = QImage(24, 24, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(image_path))
+    symbol = GuideSymbol(
+        kind="bitmap", bitmap_before_path=str(image_path),
+        bitmap_margin_bottom_px=margin_bottom, bitmap_no_decor=True,
+    )
+    chars = [TimingChar("\ufffc", 1000, vector_glyph=symbol)]
+    if with_text:
+        chars.append(TimingChar("H", 1000))
+    line = TimingLine(chars=chars, end_ms=2000)
+    layout = _layout_line(
+        TimingTrack(lines=[line]), line,
+        Style(font_size_px=72, stroke_width_px=4),
+        500, 360, baseline_y=180,
+    )
+    assert layout is not None
+    glyphs = layout.text_layout.glyphs
+    all_ink = horizontal_layout.glyph_ink_bounds(glyphs, layout.baseline_y)
+    assert all_ink is not None
+    rect = horizontal_layout.n3_main_fill_rect(layout.text_layout, layout.baseline_y)
+    if with_text:
+        text_ink = horizontal_layout.glyph_ink_bounds(glyphs[1:], layout.baseline_y)
+        assert text_ink is not None
+        pad = horizontal_layout.role_visual_text_padding(layout.text_layout)
+        assert rect.top() == pytest.approx(text_ink[2] - pad)
+        assert rect.bottom() == pytest.approx(text_ink[3] + pad)
+    else:
+        assert rect.top() == layout.text_layout.line_rect.top()
+        assert rect.bottom() == layout.text_layout.line_rect.bottom()
+    assert rect.left() == pytest.approx(all_ink[0])
+    assert rect.right() == pytest.approx(all_ink[1])
+
+
+@pytest.mark.parametrize("with_text", [True, False])
+@pytest.mark.parametrize("margin_right", [0, -999])
+def test_bitmap_avatar_font_does_not_expand_text_line_metrics(
+    qapp, tmp_path, with_text, margin_right,
+):
+    from krok_helper.subtitle_render.engine.guide import vector_glyph_width
+    from krok_helper.subtitle_render.engine.text.layout import build_role_text_layout
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+        role_visual_text_padding,
+    )
+
+    image_path = tmp_path / "avatar.png"
+    image = QImage(24, 24, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(image_path))
+    symbol = GuideSymbol(
+        kind="bitmap", bitmap_before_path=str(image_path), bitmap_fix_size=True,
+        bitmap_margin_right_px=margin_right, bitmap_no_decor=True,
+    )
+    style = Style(font_size_px=72, stroke_width_px=4, letter_spacing_px=0)
+    text = [TimingChar("H", 1000)] if with_text else []
+    line = TimingLine(chars=[
+        TimingChar("\ufffc", 1000, vector_glyph=symbol, role_label="avatar"), *text,
+    ], end_ms=2000)
+    small = replace(style, custom_style_schemes={"avatar": SubtitleStyleScheme(
+        font_size_px=24, stroke_width_px=0,
+    )})
+    large = replace(style, custom_style_schemes={"avatar": SubtitleStyleScheme(
+        font_size_px=200, stroke_width_px=80,
+    )})
+    layouts = [build_role_text_layout(line, s, x0=0, baseline_y=180) for s in (small, large)]
+    assert layouts[0].ascent == layouts[1].ascent
+    assert layouts[0].descent == layouts[1].descent
+    assert layouts[0].height == layouts[1].height
+    assert role_visual_text_padding(layouts[0]) == role_visual_text_padding(layouts[1])
+    if with_text:
+        reference = build_role_text_layout(
+            TimingLine(chars=text, end_ms=2000), style, x0=0, baseline_y=180,
+        )
+        assert layouts[1].height == reference.height
+        assert layouts[1].total_width == (
+            reference.total_width + vector_glyph_width(symbol, large)
+        )
+        track = TimingTrack(lines=[line], rubies=[RubyAnnotation(
+            "H", "えいち", pos_start_ms=1000, pos_end_ms=2000,
+        )])
+        annotated = [
+            _layout_line(track, line, s, 500, 360, baseline_y=180)
+            for s in (small, large)
+        ]
+        assert all(item is not None and item.ruby_layouts for item in annotated)
+        assert annotated[0].ruby_layouts[0].baseline_y == annotated[1].ruby_layouts[0].baseline_y
+    else:
+        main_metrics = QFontMetrics(_build_font(style))
+        assert layouts[1].height == main_metrics.ascent() + main_metrics.descent()
+
+
 def test_main_horizontal_gradient_ink_bounds_include_svg_guide(qapp):
     from krok_helper.subtitle_render.domain.timing import (
         guide_symbol_with_role_labels,

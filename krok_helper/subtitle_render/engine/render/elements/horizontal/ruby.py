@@ -50,6 +50,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
     apply_signal_band_left,
+    glyph_is_bitmap_guide,
     lower_ruby_baseline_offset,
     n3_main_fill_rect,
     role_main_fill_rects,
@@ -621,7 +622,8 @@ def layout_rubies(
         height_glyphs = [
             glyph
             for glyph in text_layout.glyphs
-            if glyph.text.strip() and glyph.style.affects_ruby_anchor
+            if (glyph.text.strip() and glyph.style.affects_ruby_anchor
+                and not glyph_is_bitmap_guide(glyph))
         ]
         if not height_glyphs:
             target_indices = {
@@ -632,7 +634,8 @@ def layout_rubies(
             height_glyphs = [
                 glyph
                 for glyph in text_layout.glyphs
-                if glyph.text.strip() and glyph.index in target_indices
+                if (glyph.text.strip() and glyph.index in target_indices
+                    and not glyph_is_bitmap_guide(glyph))
             ]
         candidates = [
             n3_char_box_ascent(

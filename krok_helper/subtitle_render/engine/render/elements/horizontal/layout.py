@@ -634,9 +634,11 @@ def glyph_path(glyph: GlyphLayout, baseline_y: int) -> QPainterPath:
 
 
 def role_visual_text_padding(layout: TextLayout) -> int:
-    if not layout.glyphs:
-        return 0
-    return max(visual_text_padding(glyph.style) for glyph in layout.glyphs)
+    return max(
+        (visual_text_padding(glyph.style) for glyph in layout.glyphs
+         if not glyph_is_bitmap_guide(glyph)),
+        default=0,
+    )
 
 
 def resolve_role_baseline_y(
@@ -944,9 +946,9 @@ def n3_main_fill_rect(layout: TextLayout, baseline_y: int) -> QRectF:
     band texture then painted the glyph tops in the bottom band colour.  The
     union is padded by the maximal symmetric stroke extent so widened
     outlines do not wrap the band texture; advances, whitespace, and letter
-    spacing stay excluded, and bitmap guides participate through their
-    visible content box.  Lines without visible ink fall back to the N3
-    ``DrawLineInfo`` metric box.
+    spacing stay excluded. Bitmap avatars contribute only to the horizontal
+    span; their image size, offsets and font never stretch vertical bounds.
+    Lines without text ink use a stable font-metric box instead.
     """
     glyphs = layout.glyphs
     if not glyphs:
@@ -955,7 +957,17 @@ def n3_main_fill_rect(layout: TextLayout, baseline_y: int) -> QRectF:
     ink = glyph_ink_bounds(glyphs, baseline_y)
     if ink is None:
         return _n3_main_metrics_fill_rect(layout, baseline_y)
-    ink_left, ink_right, ink_top, ink_bottom = ink
+    ink_left, ink_right, _ink_top, _ink_bottom = ink
+    text_glyphs = [glyph for glyph in glyphs if not glyph_is_bitmap_guide(glyph)]
+    text_ink = ink if len(text_glyphs) == len(glyphs) else glyph_ink_bounds(
+        text_glyphs, baseline_y,
+    )
+    if text_ink is None:
+        rect = _n3_main_metrics_fill_rect(layout, baseline_y)
+        rect.setLeft(ink_left)
+        rect.setRight(max(ink_right, ink_left + 1.0))
+        return rect
+    ink_top, ink_bottom = text_ink[2], text_ink[3]
     pad = role_visual_text_padding(layout)
     return QRectF(
         ink_left,
@@ -968,7 +980,9 @@ def n3_main_fill_rect(layout: TextLayout, baseline_y: int) -> QRectF:
 def _n3_main_metrics_fill_rect(layout: TextLayout, baseline_y: int) -> QRectF:
     """Metric fallback of :func:`n3_main_fill_rect` for ink-free lines."""
 
-    glyphs = layout.glyphs
+    glyphs = [glyph for glyph in layout.glyphs if not glyph_is_bitmap_guide(glyph)]
+    if not glyphs:
+        return QRectF(layout.line_rect)
     first = glyphs[0]
     font_size = max(int(first.font.pixelSize()), 1)
     metric_total = max(first.metrics.ascent() + first.metrics.descent(), 1)

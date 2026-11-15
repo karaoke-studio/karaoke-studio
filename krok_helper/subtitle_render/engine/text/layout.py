@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFont, QFontMetrics
 
-from krok_helper.subtitle_render.engine.guide import vector_glyph_width
+from krok_helper.subtitle_render.engine.guide import guide_symbol_is_bitmap, vector_glyph_width
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role, style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.metrics import (
     build_font,
@@ -251,12 +251,19 @@ def build_text_layout(
             if style.layout_semantics == "n3_1074" and spacing_after
             else advance
         )
-        if char.text.strip():
+        # Bitmap avatars reserve horizontal cells, never a text line height.
+        if char.text.strip() and not guide_symbol_is_bitmap(char.vector_glyph):
             max_ascent = max(max_ascent, glyph_metrics.ascent())
             max_descent = max(max_descent, glyph_metrics.descent())
 
     if measured and max_ascent == 0 and max_descent == 0:
-        fallback_metrics = measured[0][6]
+        fallback_metrics = next(
+            (item[6] for item in measured if not guide_symbol_is_bitmap(item[10])),
+            None,
+        )
+        if fallback_metrics is None:
+            # An avatar-only line keeps the main font's stable baseline box.
+            fallback_metrics = QFontMetrics(plain_font or build_font(style))
         max_ascent = fallback_metrics.ascent()
         max_descent = fallback_metrics.descent()
 

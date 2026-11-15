@@ -1737,13 +1737,15 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             const int unit = referenceInt(fontSize, 1);
             const int edgeSize = referenceInt(charStyle.strokeWidth, 0);
             const int edge2Size = referenceInt(charStyle.stroke2Width, 0);
-            cached.maxVisualPad = std::max(
-                cached.maxVisualPad,
-                std::ceil((
-                    std::max(charStyle.strokeWidth / layoutScale, 0.0f)
-                    + std::max(charStyle.stroke2Width / layoutScale, 0.0f)
-                ) * 0.5f) * layoutScale
-            );
+            if (!bitmapGuide) {
+                cached.maxVisualPad = std::max(
+                    cached.maxVisualPad,
+                    std::ceil((
+                        std::max(charStyle.strokeWidth / layoutScale, 0.0f)
+                        + std::max(charStyle.stroke2Width / layoutScale, 0.0f)
+                    ) * 0.5f) * layoutScale
+                );
+            }
 
             DWRITE_FONT_METRICS fontMetrics{};
             // Vertical box metrics follow the metrics face (static/default
@@ -1760,7 +1762,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 latin ? charStyle.latinFontAxis : charStyle.fontAxis,
                 latin ? charStyle.latinFontHint : charStyle.fontHint
             )->GetMetrics(&fontMetrics);
-            if (!hasFirstSlot) {
+            if (!bitmapGuide && !hasFirstSlot) {
                 const int metricTotal = std::max(
                     static_cast<int>(fontMetrics.ascent)
                         + static_cast<int>(fontMetrics.descent),
@@ -1773,9 +1775,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 firstSlotEdge2 = static_cast<float>(edge2Size) * layoutScale;
                 hasFirstSlot = true;
             }
-            maxDrawHeight = std::max(
-                maxDrawHeight, static_cast<float>(unit + edgeSize) * layoutScale
-            );
+            if (!bitmapGuide) {
+                maxDrawHeight = std::max(
+                    maxDrawHeight, static_cast<float>(unit + edgeSize) * layoutScale
+                );
+            }
             // The product's lane boxes remain Painter-compatible. N3's exact
             // glyph bearings/outline are used inside those boxes, while the
             // face's em scale keeps mixed-font baselines close to QFontMetrics.
@@ -1787,8 +1791,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 * static_cast<float>(fontMetrics.ascent) / verticalUnits;
             const float charDescent = static_cast<float>(unit) * layoutScale
                 * static_cast<float>(fontMetrics.descent) / verticalUnits;
-            cached.ascent = std::max(cached.ascent, charAscent);
-            cached.descent = std::max(cached.descent, charDescent);
+            if (!bitmapGuide) {
+                cached.ascent = std::max(cached.ascent, charAscent);
+                cached.descent = std::max(cached.descent, charDescent);
+            }
             const float boxMetricTotal = static_cast<float>(std::max(
                 static_cast<int>(fontMetrics.ascent) + static_cast<int>(fontMetrics.descent),
                 1
@@ -1801,10 +1807,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 static_cast<float>(unit) * layoutScale
                     * static_cast<float>(fontMetrics.descent) / boxMetricTotal
                 + static_cast<float>(edgeSize) * layoutScale * 0.5f;
-            cached.n3CharAscent = std::max(cached.n3CharAscent, charBoxAscent);
-            cached.n3CharDescent = std::max(cached.n3CharDescent, charBoxDescent);
-            cached.hasN3CharBox = true;
-            if (!isWhitespaceText(sourceChar.text) && charStyle.affectsRubyAnchor) {
+            if (!bitmapGuide) {
+                cached.n3CharAscent = std::max(cached.n3CharAscent, charBoxAscent);
+                cached.n3CharDescent = std::max(cached.n3CharDescent, charBoxDescent);
+                cached.hasN3CharBox = true;
+            }
+            if (!bitmapGuide && !isWhitespaceText(sourceChar.text) && charStyle.affectsRubyAnchor) {
                 cached.boxAscent = std::max(cached.boxAscent, charBoxAscent);
                 cached.hasRubyAnchor = true;
             }
@@ -2517,25 +2525,21 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cellWidth * 0.5f,
                 cellHeight * static_cast<float>(cached.chars.size())
             );
-        } else if (hasFirstSlot) {
+        } else {
             // Glyph-ink vertical anchor, mirroring the Painter's ink-based
             // n3_main_fill_rect: the metric em box systematically displaced
             // MilleFeuille / vertical-gradient bands on faces whose ink is
             // taller than the em, and the wrapping band texture then painted
             // glyph tops in the bottom band colour.  Union the placed glyph
-            // bounds (bitmap guides through their content box) and pad
+            // bounds of text/vector glyphs and pad
             // symmetrically by the maximal stroke extent so widened outlines
             // do not wrap either; lines without visible ink keep the metric
-            // box.
+            // box. Bitmap avatars reserve horizontal space only; their
+            // content size, offsets and font cannot stretch the text box.
             bool inkHasBounds = false;
             D2D1_RECT_F inkBounds{};
             for (const Impl::CachedChar &ch : cached.chars) {
-                if (ch.bitmapGuide.has_value()) {
-                    if (ch.bitmapRect.right > ch.bitmapRect.left
-                        && ch.bitmapRect.bottom > ch.bitmapRect.top) {
-                        extendBounds(inkBounds, inkHasBounds, ch.bitmapRect);
-                    }
-                } else if (ch.geometry) {
+                if (!ch.bitmapGuide.has_value() && ch.geometry) {
                     extendBounds(
                         inkBounds,
                         inkHasBounds,
@@ -2550,7 +2554,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     std::max(cursor, 1.0f),
                     inkBounds.bottom + cached.maxVisualPad
                 );
-            } else {
+            } else if (hasFirstSlot) {
                 const float drawBottom = firstSlotDescent + std::floor(
                     firstSlotEdge / layoutScale / 2.0f
                 ) * layoutScale;
@@ -2563,6 +2567,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     std::max(cursor, 1.0f),
                     std::max(drawBottom - inset, drawBottom - maxDrawHeight + inset + layoutScale)
                 );
+            } else {
+                // Avatar-only lines retain a stable main-font metric box.
+                cached.ascent = laneAscent;
+                cached.descent = laneDescent;
+                cached.fillBounds = D2D1::RectF(
+                    0.0f, -laneAscent, std::max(cursor, 1.0f), laneDescent
+                );
             }
         }
 
@@ -2574,6 +2585,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     static_cast<int>(cached.chars.size()) - 1
                 );
                 for (int index = first; index <= last; ++index) {
+                    if (cached.chars[static_cast<std::size_t>(index)].bitmapGuide.has_value()) {
+                        continue;
+                    }
                     cached.boxAscent = std::max(
                         cached.boxAscent,
                         cached.chars[static_cast<std::size_t>(index)].boxAscent
