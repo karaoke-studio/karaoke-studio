@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QListWidgetItem,
+    QProxyStyle,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -66,6 +68,67 @@ from krok_helper.subtitle_render.n3.template_import import (
 
 
 _PRESET_NO_GROUP = "\x00ungrouped"
+
+
+class _PresetDropIndicatorStyle(QProxyStyle):
+    """Restyle Qt's own insertion marker without changing drop geometry."""
+
+    def drawPrimitive(self, element, option, painter, widget=None) -> None:  # noqa: N802
+        if element != QStyle.PrimitiveElement.PE_IndicatorItemViewItemDrop:
+            super().drawPrimitive(element, option, painter, widget)
+            return
+        rect = QRectF(option.rect)
+        left, right = rect.left() + 12, rect.right() - 12
+        if right <= left:
+            return
+        # Native edge markers can have zero height; keep the rounded cap visible
+        # when inserting at the very top/bottom of the viewport.
+        bounds = painter.viewport()
+        y = max(bounds.top() + 4.0, min(rect.center().y(), bounds.bottom() - 4.0))
+        accent = QColor(palette().accent_primary)
+        halo = QColor(accent)
+        halo.setAlpha(32)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(halo)
+        painter.drawRoundedRect(QRectF(left, y - 4, right - left, 8), 4, 4)
+        painter.setBrush(accent)
+        painter.drawRoundedRect(QRectF(left + 3, y - 1, right - left - 3, 2), 1, 1)
+        painter.drawEllipse(QRectF(left, y - 3, 6, 6))
+        painter.restore()
+
+
+class _ReorderablePresetList(FluentListWidget):
+    """Keep a completed/cancelled drag from acting as a checkbox click."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        # Give the proxy its own base style. Passing self.style() would transfer
+        # ownership of the application/shared style to this short-lived list.
+        self._drop_indicator_style = _PresetDropIndicatorStyle()
+        self._drop_indicator_style.setParent(self)
+        self.setStyle(self._drop_indicator_style)
+        self.drag_started = False
+        self._checkbox_pressed = False
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDragDropOverwriteMode(False)
+        self.setDropIndicatorShown(True)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self.drag_started = False
+        item = self.itemAt(event.pos())
+        rect = self.visualItemRect(item) if item is not None else None
+        self._checkbox_pressed = rect is not None and rect.left() + 11 <= event.pos().x() <= rect.left() + 38
+        super().mousePressEvent(event)
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        if self._checkbox_pressed:
+            return
+        self.drag_started = True
+        super().startDrag(supported_actions)
+        self.updateSelectedRows()
 
 
 def resolve_preset_for_target(
@@ -288,6 +351,7 @@ class StylePresetManagerDialog(ModelessDialog):
     """Manage independent, grouped subtitle style presets."""
 
     presetLibraryChanged = Signal(dict)
+    presetOrderChanged = Signal(list)
 
     def __init__(
         self,
@@ -350,7 +414,7 @@ class StylePresetManagerDialog(ModelessDialog):
         filter_row.addWidget(self._group_filter)
         layout.addLayout(filter_row)
 
-        self._preset_list = FluentListWidget(self)
+        self._preset_list = _ReorderablePresetList(self)
         self._preset_list.setIconSize(QSize(50, 22))
         self._preset_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._preset_list.setHorizontalScrollBarPolicy(
@@ -359,10 +423,11 @@ class StylePresetManagerDialog(ModelessDialog):
         self._preset_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._preset_list.currentItemChanged.connect(lambda _cur, _old: self._sync_buttons())
         self._preset_list.itemChanged.connect(self._on_preset_item_changed)
+        self._preset_list.model().rowsMoved.connect(self._on_preset_rows_moved)
         # 点行空白切换勾选（与布局预设库一致）；点勾选框本身由 Qt 原生处理。
         self._preset_list.itemClicked.connect(self._on_preset_row_clicked)
         layout.addWidget(self._preset_list, 1)
-        layout.addWidget(CaptionLabel("色块：左侧走字前 · 右侧走字后", self))
+        layout.addWidget(CaptionLabel("拖动排序 · 色块：左侧走字前 / 右侧走字后", self))
 
         selection_row = QHBoxLayout()
         selection_row.setContentsMargins(0, 0, 0, 0)
@@ -485,6 +550,8 @@ class StylePresetManagerDialog(ModelessDialog):
             item.setToolTip(tooltip)
             item.setData(Qt.ItemDataRole.UserRole, preset_id)
             item.setData(Qt.ItemDataRole.UserRole + 1, preset.group)
+            # Only insert between rows; dropping onto a row must not replace it.
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
             if preset.name not in self._existing_role_names:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(
@@ -576,6 +643,23 @@ class StylePresetManagerDialog(ModelessDialog):
             self._preset_list.setCurrentItem(item)
         self._sync_buttons()
 
+    def _on_preset_rows_moved(self, *_args: Any) -> None:
+        """Adopt the list's stable-ID order without rebuilding checked items.
+
+        Hidden rows remain in the model, so filtering preserves their relative
+        order while the dragged preset moves before/after a visible neighbour.
+        """
+        order = [
+            str(self._preset_list.item(row).data(Qt.ItemDataRole.UserRole))
+            for row in range(self._preset_list.count())
+        ]
+        if order == list(self._presets) or set(order) != set(self._presets):
+            return
+        self._presets = {preset_id: self._presets[preset_id] for preset_id in order}
+        # A reorder changes identities' positions only. Publishing full schemes
+        # would deepcopy the library repeatedly and save settings during drop.
+        self.presetOrderChanged.emit(order)
+
     def _on_preset_row_clicked(self, item: QListWidgetItem) -> None:
         """点行内空白/文字区域切换勾选（与布局预设库同理）。
 
@@ -584,7 +668,7 @@ class StylePresetManagerDialog(ModelessDialog):
         ``ListItemDelegate._drawCheckBox``）。
         """
 
-        if item is None:
+        if item is None or self._preset_list.drag_started:
             return
         # 「项目中已存在」的条目明确不可勾选（无 ItemIsUserCheckable）：
         # 行点击必须遵守该状态，否则会写出一个「全选/全部取消」都管不到的

@@ -1041,6 +1041,15 @@ def merge_style_preset_library(
             order.append(preset_id)
         rows_by_id[preset_id] = row
 
+    # Only an explicit local reorder may override the disk order. A stale
+    # instance saving a color edit or appending a preset must retain another
+    # instance's sorting. Leave concurrently added rows in their disk slots.
+    unchanged_order = [preset_id for preset_id in baseline if preset_id in current]
+    unchanged_order.extend(preset_id for preset_id in current if preset_id not in baseline)
+    if list(current) != unchanged_order:
+        desired = iter(preset_id for preset_id in current if preset_id in rows_by_id)
+        order = [next(desired) if preset_id in current else preset_id for preset_id in order]
+
     return [
         rows_by_id[preset_id]
         for preset_id in dict.fromkeys(order)

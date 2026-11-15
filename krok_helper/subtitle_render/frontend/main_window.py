@@ -421,6 +421,7 @@ from krok_helper.subtitle_render.settings.preferences import (
     SIGNAL_MODULE_STYLE_FIELDS as _SIGNAL_MODULE_STYLE_FIELDS,
     load_app_preferences,
     prepare_app_preferences,
+    merge_style_preset_library,
     style_presets_from_dict as _style_presets_from_dict,
     style_presets_to_dict as _style_presets_to_dict,
 )
@@ -4075,6 +4076,8 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.presetSchemesChanged.connect(
             self._apply_style_presets
         )
+        self._property_panel.presetOrderChanged.connect(self._apply_style_preset_order)
+        self._property_panel.presetLibraryClosed.connect(self._flush_persisted_state_save)
         self._property_panel.presetLibraryOpening.connect(
             self._reload_style_presets_from_disk
         )
@@ -9433,6 +9436,15 @@ class SubtitleRenderWindow(QWidget):
             self._lyrics_panel.set_role_options(self._merged_role_options())
         self._save_persisted_state()
 
+    def _apply_style_preset_order(self, order: list[str]) -> None:
+        """Reorder existing objects; defer serialization and disk IO until idle."""
+        if len(order) != len(self._style_presets) or set(order) != set(self._style_presets):
+            return
+        if order == list(self._style_presets):
+            return
+        self._style_presets = {preset_id: self._style_presets[preset_id] for preset_id in order}
+        self._schedule_persisted_state_save()
+
     def _on_export_screen_changed(self, *_args, video_info=None) -> None:
         if (
             self._syncing_screen_controls
@@ -11694,26 +11706,12 @@ class SubtitleRenderWindow(QWidget):
         moves with it so this instance still only submits its own deltas.
         """
 
-        loaded = _style_presets_from_dict(
-            self._load_subtitle_settings().get("style_presets")
-        )
-        unsaved = {
-            preset_id: preset
-            for preset_id, preset in self._style_presets.items()
-            if self._style_presets_baseline.get(preset_id) != preset
-        }
-        removed = {
-            preset_id
-            for preset_id in self._style_presets_baseline
-            if preset_id not in self._style_presets
-        }
+        rows = self._load_subtitle_settings().get("style_presets")
+        loaded = _style_presets_from_dict(rows)
+        merged = _style_presets_from_dict(merge_style_preset_library(
+            rows, self._style_presets, self._style_presets_baseline,
+        ))
         self._style_presets_baseline = deepcopy(loaded)
-        merged = {
-            preset_id: preset
-            for preset_id, preset in loaded.items()
-            if preset_id not in removed
-        }
-        merged.update(deepcopy(unsaved))
         self._style_presets = merged
         if hasattr(self, "_property_panel"):
             self._property_panel.set_preset_schemes(merged)
@@ -11722,7 +11720,7 @@ class SubtitleRenderWindow(QWidget):
         """Take the freshly merged library as both current state and baseline."""
 
         merged = dict(presets)
-        changed = merged != self._style_presets
+        changed = merged != self._style_presets or list(merged) != list(self._style_presets)
         self._style_presets = merged
         self._style_presets_baseline = deepcopy(merged)
         if changed and hasattr(self, "_property_panel"):

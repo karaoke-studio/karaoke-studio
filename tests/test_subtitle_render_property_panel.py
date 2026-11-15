@@ -9772,14 +9772,20 @@ def test_property_panel_dialog_library_changes_do_not_remove_project_roles(qapp,
     panel.set_roles(["A"])
 
     class FakeSignal:
-        def connect(self, _callback):
-            pass
+        def connect(self, callback):
+            self._callback = callback
+
+        def emit(self, payload):
+            self._callback(payload)
 
     class FakeDialog:
         def __init__(self, *args, **kwargs):
             self.presetLibraryChanged = FakeSignal()
+            self.presetOrderChanged = FakeSignal()
+            self.finished = FakeSignal()
 
         def exec(self):
+            self.presetLibraryChanged.emit({})
             return 0
 
         def preset_schemes(self):
@@ -9825,6 +9831,8 @@ def test_n3_preset_import_is_persisted_before_manager_dialog_closes(qapp, monkey
     class FakeDialog:
         def __init__(self, *args, **kwargs):
             self.presetLibraryChanged = FakeSignal()
+            self.presetOrderChanged = FakeSignal()
+            self.finished = FakeSignal()
 
         def exec(self):
             self.presetLibraryChanged.emit({"n3-template": imported})
@@ -12402,6 +12410,173 @@ def test_delete_layout_confirm_shows_project_usage(qapp, monkeypatch):
     panel._on_delete_layout()
     assert "当前工程正在使用" not in captured["text"]
     panel.close()
+
+
+def test_style_preset_manager_reorders_without_losing_checks_or_target(qapp):
+    from PyQt6.QtCore import QModelIndex
+    from PyQt6.QtWidgets import QAbstractItemView
+
+    presets = {key: StylePreset(name=key, preset_id=key) for key in ("a", "b", "c")}
+    dialog = StylePresetManagerDialog(presets, SubtitleStyleScheme(), "目标", existing_role_names={"b"})
+    rows = dialog._preset_list
+    assert rows.dragDropMode() == QAbstractItemView.DragDropMode.InternalMove
+    rows.item(0).setCheckState(Qt.CheckState.Checked)
+    selected = rows.item(0)
+    published = []
+    dialog.presetOrderChanged.connect(published.append)
+    assert rows.model().moveRows(QModelIndex(), 0, 1, QModelIndex(), 3)
+    assert list(dialog.preset_schemes()) == ["b", "c", "a"]
+    assert list(published[-1]) == ["b", "c", "a"]
+    assert rows.currentItem() is selected
+    assert dialog._checked_names() == ["a"]
+    assert not (rows.item(0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    assert rows.model().moveRows(QModelIndex(), 0, 1, QModelIndex(), 3)
+    assert list(dialog.preset_schemes()) == ["c", "a", "b"]
+    dialog._populate_list()
+    assert dialog._checked_names() == ["a"]
+    reopened = StylePresetManagerDialog(dialog.preset_schemes(), SubtitleStyleScheme(), "目标")
+    assert [reopened._preset_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(3)] == ["c", "a", "b"]
+
+
+@pytest.mark.parametrize("filter_kind", ["search", "group"])
+def test_style_preset_manager_reorders_filtered_rows_without_losing_hidden_presets(qapp, filter_kind):
+    from PyQt6.QtCore import QModelIndex
+
+    presets = {key: StylePreset(name=f"匹配 {key}" if key in {"a", "c"} else key,
+                               group="目标" if key in {"a", "c"} else "其他", preset_id=key)
+               for key in ("a", "b", "c", "d")}
+    dialog = StylePresetManagerDialog(presets, SubtitleStyleScheme(), "目标")
+    if filter_kind == "search":
+        dialog._filter_edit.setText("匹配")
+    else:
+        dialog._group_filter.setCurrentIndex(dialog._group_filter.findData("目标"))
+    rows = dialog._preset_list
+    rows.item(3).setCheckState(Qt.CheckState.Checked)
+    assert rows.item(1).isHidden() and rows.item(3).isHidden()
+    assert rows.model().moveRows(QModelIndex(), 2, 1, QModelIndex(), 0)
+    assert list(dialog.preset_schemes()) == ["c", "a", "b", "d"]
+    assert rows.item(2).isHidden() and rows.item(3).isHidden()
+    assert dialog._checked_names() == ["d"]
+    dialog._filter_edit.clear()
+    dialog._group_filter.setCurrentIndex(0)
+    assert all(not rows.item(i).isHidden() for i in range(4))
+    assert list(dialog.preset_schemes()) == ["c", "a", "b", "d"]
+
+
+def test_style_preset_drag_does_not_toggle_checkboxes(qapp, monkeypatch):
+    dialog = StylePresetManagerDialog({"a": SubtitleStyleScheme()}, SubtitleStyleScheme(), "目标")
+    dialog.show()
+    qapp.processEvents()
+    rows = dialog._preset_list
+    item = rows.item(0)
+    rect = rows.visualItemRect(item)
+    drag_calls = []
+
+    def fake_native_drag(self, actions):
+        drag_calls.append(actions)
+        self.itemClicked.emit(item)
+
+    monkeypatch.setattr(preset_manager_module.FluentListWidget, "startDrag", fake_native_drag)
+    QTest.mousePress(rows.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.left() + 80, rect.center().y()))
+    rows.startDrag(Qt.DropAction.MoveAction)
+    QTest.mouseRelease(rows.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.left() + 80, rect.center().y()))
+    assert len(drag_calls) == 1
+    assert item.checkState() == Qt.CheckState.Unchecked
+    # A fresh press resets the drag guard; an ordinary click still checks once.
+    QTest.mouseClick(rows.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.left() + 80, rect.center().y()))
+    assert item.checkState() == Qt.CheckState.Checked
+    # Dragging from the checkbox never enters a native drag operation.
+    QTest.mousePress(rows.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.left() + 22, rect.center().y()))
+    rows.startDrag(Qt.DropAction.MoveAction)
+    QTest.mouseRelease(rows.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.left() + 22, rect.center().y()))
+    assert len(drag_calls) == 1
+    dialog.close()
+
+
+def test_style_preset_drag_order_is_saved_after_idle_and_reloaded(qapp, monkeypatch):
+    from PyQt6.QtCore import QModelIndex
+
+    presets = {key: StylePreset(name=key, preset_id=key) for key in ("a", "b", "c")}
+    provider = _CountingSettingsProvider({"style_presets": mw._style_presets_to_dict(presets)})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    dialog = StylePresetManagerDialog(win._property_panel.preset_schemes, SubtitleStyleScheme(), "目标")
+    dialog.presetLibraryChanged.connect(win._property_panel._set_preset_schemes_from_dialog)
+    dialog.presetOrderChanged.connect(win._property_panel._set_preset_order_from_dialog)
+    saves = provider.saves
+    old_objects = dict(win._style_presets)
+
+    def unexpected_full_refresh(*_args, **_kwargs):
+        raise AssertionError("Sorting must not copy/serialize styles or refresh project roles")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(preset_manager_module, "_normalize_style_presets", unexpected_full_refresh)
+        patch.setattr(pp, "_normalize_style_presets", unexpected_full_refresh)
+        patch.setattr(mw, "_style_presets_from_dict", unexpected_full_refresh)
+        patch.setattr(win._lyrics_panel, "set_role_options", unexpected_full_refresh)
+        for _ in range(4):
+            assert dialog._preset_list.model().moveRows(QModelIndex(), 2, 1, QModelIndex(), 0)
+    assert list(win._style_presets) == ["c", "a", "b"]
+    assert all(win._style_presets[key] is value for key, value in old_objects.items())
+    assert provider.saves == saves
+    assert win._persisted_state_save_timer.isActive()
+    assert [row["id"] for row in provider.data["style_presets"]] == ["a", "b", "c"]
+    win._flush_persisted_state_save()
+    assert provider.saves == saves + 1
+    assert [row["id"] for row in provider.data["style_presets"]] == ["c", "a", "b"]
+    reopened = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    assert list(reopened._property_panel.preset_schemes) == ["c", "a", "b"]
+    # Saving an otherwise unchanged stale instance adopts the latest disk order.
+    reopened._style_presets = presets
+    reopened._style_presets_baseline = deepcopy(presets)
+    reopened._property_panel.set_preset_schemes(presets)
+    reopened._save_persisted_state()
+    assert list(reopened._property_panel.preset_schemes) == ["c", "a", "b"]
+
+
+@pytest.mark.parametrize("concurrent_add", [False, True])
+def test_style_preset_pending_sort_flushes_when_manager_closes(qapp, monkeypatch, concurrent_add):
+    from PyQt6.QtCore import QModelIndex, QTimer
+
+    presets = {key: StylePreset(name=key, preset_id=key) for key in ("a", "b", "c")}
+    provider = _CountingSettingsProvider({"style_presets": mw._style_presets_to_dict(presets)})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    saves = provider.saves
+
+    def make_dialog(*args, **kwargs):
+        dialog = StylePresetManagerDialog(*args, **kwargs)
+
+        def move_and_close():
+            assert dialog._preset_list.model().moveRows(QModelIndex(), 2, 1, QModelIndex(), 0)
+            assert provider.saves == saves
+            if concurrent_add:
+                provider.data["style_presets"] = mw._style_presets_to_dict({
+                    **presets, "new": StylePreset(name="new", preset_id="new"),
+                })
+            dialog.accept()
+            assert provider.saves == saves + 1
+
+        QTimer.singleShot(0, move_and_close)
+        return dialog
+
+    monkeypatch.setattr(pp, "StylePresetManagerDialog", make_dialog)
+    win._property_panel._open_preset_manager()
+    assert not win._persisted_state_save_timer.isActive()
+    expected = ["c", "a", "b"] + (["new"] if concurrent_add else [])
+    assert [row["id"] for row in provider.data["style_presets"]] == expected
+    assert list(win._property_panel.preset_schemes) == expected
+    assert provider.saves == saves + 1
+
+
+def test_style_preset_reload_keeps_unsaved_sort_and_other_instances_new_rows(qapp):
+    presets = {key: StylePreset(name=key, preset_id=key) for key in ("a", "b", "c")}
+    provider = _FontMigrationSettingsProvider({"style_presets": mw._style_presets_to_dict(presets)})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._style_presets = {key: presets[key] for key in ("c", "a", "b")}
+    provider.data["style_presets"] = mw._style_presets_to_dict({**presets, "d": StylePreset(name="d", preset_id="d")})
+    win._reload_style_presets_from_disk()
+    assert list(win._property_panel.preset_schemes) == ["c", "a", "b", "d"]
+    win._save_persisted_state()
+    assert [row["id"] for row in provider.data["style_presets"]] == ["c", "a", "b", "d"]
 
 
 def test_style_preset_manager_click_row_blank_toggles_check(qapp, monkeypatch):

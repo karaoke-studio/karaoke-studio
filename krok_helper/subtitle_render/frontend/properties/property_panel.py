@@ -896,6 +896,8 @@ class PropertyPanel(QWidget):
     """(旧角色名, 新角色名 或 None=删除)；在样式改动落地之前发出，让主窗口把内容里的引用一起改写并合成一步撤销。"""
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
+    presetOrderChanged = Signal(list)
+    presetLibraryClosed = Signal()
     presetLibraryOpening = Signal()
     """预设库即将打开：宿主借此从磁盘刷新，拿到其他实例新增的预设。"""
     defaultSchemeSaveRequested = Signal(str)
@@ -5781,12 +5783,14 @@ class PropertyPanel(QWidget):
             parent=self,
         )
         dialog.presetLibraryChanged.connect(self._set_preset_schemes_from_dialog)
+        dialog.presetOrderChanged.connect(self._set_preset_order_from_dialog)
+        dialog.finished.connect(self.presetLibraryClosed)
         dialog.exec()
-        schemes = dialog.preset_schemes()
         imported = dialog.imported_schemes()
         applied = dialog.applied_scheme()
-        if schemes != self._preset_schemes:
-            self._set_preset_schemes_from_dialog(schemes)
+        # Library edits are already published by the signals above. Replaying
+        # a full snapshot here is expensive and can undo a concurrent merge
+        # adopted by the host when pending order changes were flushed on close.
         if applied is not None:
             self._apply_preset_to_current_target(applied)
         if imported:
@@ -5864,6 +5868,14 @@ class PropertyPanel(QWidget):
     ) -> None:
         self._preset_schemes = _normalize_style_presets(schemes)
         self.presetSchemesChanged.emit(self.preset_schemes)
+
+    def _set_preset_order_from_dialog(self, order: list[str]) -> None:
+        if len(order) != len(self._preset_schemes) or set(order) != set(self._preset_schemes):
+            return
+        if order == list(self._preset_schemes):
+            return
+        self._preset_schemes = {preset_id: self._preset_schemes[preset_id] for preset_id in order}
+        self.presetOrderChanged.emit(order)
 
     def _import_preset_schemes(
         self, schemes: dict[str, StylePreset | SubtitleStyleScheme]

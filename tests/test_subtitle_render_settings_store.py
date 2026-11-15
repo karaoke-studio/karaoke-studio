@@ -252,3 +252,62 @@ def test_preset_library_merge_preserves_unknown_fields_from_newer_versions():
     # 本实例改动的字段写进去了，未知字段仍然在。
     assert rows[0]["scheme"]["font_size_px"] == 99
     assert rows[0]["future_preset"] == 9
+
+
+def test_preset_library_reorder_survives_roundtrip_and_concurrent_changes():
+    from krok_helper.subtitle_render.settings.preferences import (
+        merge_style_preset_library, style_presets_from_dict, style_presets_to_dict,
+    )
+
+    baseline = {key: _preset(key, key) for key in ("a", "b", "c")}
+    current = {key: baseline[key] for key in ("c", "a", "b")}
+    disk = style_presets_to_dict({
+        "a": _preset("renamed", "a", size=99),
+        "new": _preset("new", "new"),
+        "b": baseline["b"], "c": baseline["c"],
+    })
+    disk[0]["future"] = {"keep": True}
+    rows = merge_style_preset_library(disk, current, baseline)
+    assert [row["id"] for row in rows] == ["c", "new", "a", "b"]
+    assert rows[2]["name"] == "renamed"
+    assert rows[2]["scheme"]["font_size_px"] == 99
+    assert rows[2]["future"] == {"keep": True}
+    loaded = style_presets_from_dict(rows)
+    assert list(loaded) == ["c", "new", "a", "b"]
+    assert style_presets_to_dict(loaded)[2]["name"] == "renamed"
+
+
+def test_stale_preset_edits_and_appends_keep_another_instances_sort_order():
+    from krok_helper.subtitle_render.settings.preferences import (
+        merge_style_preset_library, style_presets_to_dict,
+    )
+
+    baseline = {key: _preset(key, key) for key in ("a", "b", "c")}
+    current = {**baseline, "a": _preset("a", "a", size=99), "new": _preset("new", "new")}
+    disk = style_presets_to_dict({key: baseline[key] for key in ("c", "a", "b")})
+    rows = merge_style_preset_library(disk, current, baseline)
+    assert [row["id"] for row in rows] == ["c", "a", "b", "new"]
+    assert rows[1]["scheme"]["font_size_px"] == 99
+
+
+def test_preset_reorder_does_not_resurrect_a_concurrently_deleted_row():
+    from krok_helper.subtitle_render.settings.preferences import (
+        merge_style_preset_library, style_presets_to_dict,
+    )
+
+    baseline = {key: _preset(key, key) for key in ("a", "b", "c")}
+    current = {key: baseline[key] for key in ("c", "a", "b")}
+    disk = style_presets_to_dict({key: baseline[key] for key in ("a", "c")})
+    rows = merge_style_preset_library(disk, current, baseline)
+    assert [row["id"] for row in rows] == ["c", "a"]
+
+
+def test_new_preset_can_be_inserted_between_existing_presets():
+    from krok_helper.subtitle_render.settings.preferences import (
+        merge_style_preset_library, style_presets_to_dict,
+    )
+
+    baseline = {key: _preset(key, key) for key in ("a", "b")}
+    current = {"a": baseline["a"], "new": _preset("new", "new"), "b": baseline["b"]}
+    rows = merge_style_preset_library(style_presets_to_dict(baseline), current, baseline)
+    assert [row["id"] for row in rows] == ["a", "new", "b"]
