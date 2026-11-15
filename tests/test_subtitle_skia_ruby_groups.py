@@ -40,8 +40,8 @@ def reading(pages):
 def ir_for(binary, source, *, roll_shift_ms=0, dpr=1):
     track, style = source
     prepared = prepare(binary, track, style)
-    # The real product gate still rejects source annotations. This explicit
-    # protocol probe consumes their already-resolved, independent draw groups.
+    # Isolate final-group execution from product source compilation. The
+    # product upper-ruby tests separately exercise the retained annotations.
     ir = build_render_ir(replace(track, rubies=[]), style, width=641, height=720, fps=60, dpr=dpr,
                          roll_shift_ms=roll_shift_ms, layout_plan_builder=lambda *a, **k: prepared.plan)
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_segmented_wipe', 'p05_resolved_ruby']

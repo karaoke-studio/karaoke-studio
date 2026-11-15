@@ -1,7 +1,6 @@
-"""Serialize prepared upper-ruby geometry and clocks for the native group probe.
+"""Serialize final upper-ruby geometry and clocks from the canonical plan.
 
-This does not open the product ruby gate. Source ownership, page placement and
-timing have already been resolved by the canonical preparation boundary.
+Source ownership, page placement and timing are resolved before this boundary.
 """
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells

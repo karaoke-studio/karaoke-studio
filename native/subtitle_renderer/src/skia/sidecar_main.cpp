@@ -23,6 +23,10 @@ int main(int argc, char** argv) {
     ready.insert("resolved_layout_schema", 2);
     ready.insert("resolved_wipe_schema", 1);
     ready.insert("resolved_ruby_schema", 1);
+    ready.insert("upper_ruby_schema", 1);
+    auto profiles = ready.value("profiles").toArray();
+    profiles.append("p05_upper_ruby");
+    ready.insert("profiles", profiles);
     ready.insert("fingerprint", KROK_SKIA_FINGERPRINT);
     protocol::writeJson(ready);
     commands::SkiaCommandRouter router;

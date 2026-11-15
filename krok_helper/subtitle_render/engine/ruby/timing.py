@@ -34,7 +34,7 @@ def _ruby_checkpoint_anchors(ruby: RubyAnnotation) -> list[int]:
     return anchors
 
 
-def ruby_main_wipe_intervals(ruby: RubyAnnotation, mode: str) -> list[tuple[int, int]]:
+def ruby_main_wipe_intervals(ruby: RubyAnnotation, mode: str, *, round_boundary=round, split_reading_units=None) -> list[tuple[int, int]]:
     """GPU main-text progress segments; empty checkpoints retain their share.
 
     reading_units uses only visible units, so empty exported parts become
@@ -43,7 +43,7 @@ def ruby_main_wipe_intervals(ruby: RubyAnnotation, mode: str) -> list[tuple[int,
     if mode not in {'reading_units', 'checkpoint_segments'}:
         raise ValueError('无效的注音主字走字模式')
     if mode == 'reading_units':
-        units = ruby_visual_units_and_intervals(ruby)
+        units = ruby_visual_units_and_intervals(ruby, round_boundary=round_boundary, split_reading_units=split_reading_units)
         if units:
             return [interval for _unit, interval in units]
     anchors = _ruby_checkpoint_anchors(ruby)
@@ -83,6 +83,7 @@ def _ruby_progress_ratio(
 
 def _ruby_progress_parts_and_intervals(
     ruby: RubyAnnotation,
+    *, round_boundary=round, split_reading_units=None,
 ) -> tuple[list[str], list[tuple[int, int]]]:
     """Return the exported ruby parts and their checkpoint intervals.
 
@@ -100,12 +101,13 @@ def _ruby_progress_parts_and_intervals(
         anchors = _ruby_checkpoint_anchors(ruby)
         return parts, list(zip(anchors, anchors[1:]))
 
-    units = _ruby_reading_units(ruby.reading)
-    return units, _ruby_reading_intervals(ruby)
+    units = (split_reading_units or _ruby_reading_units)(ruby.reading)
+    return units, _ruby_reading_intervals(ruby, round_boundary=round_boundary, split_reading_units=split_reading_units)
 
 
 def _ruby_visual_units_and_intervals(
     ruby: RubyAnnotation,
+    *, round_boundary=round, split_reading_units=None,
 ) -> list[tuple[str, tuple[int, int]]]:
     """Expand exported ruby parts into N3 visual characters and exact times.
 
@@ -113,7 +115,7 @@ def _ruby_visual_units_and_intervals(
     Multi-character parts divide their own interval with integer boundaries;
     combining dakuten/handakuten stay attached to the preceding character.
     """
-    parts, intervals = _ruby_progress_parts_and_intervals(ruby)
+    parts, intervals = _ruby_progress_parts_and_intervals(ruby, round_boundary=round_boundary, split_reading_units=split_reading_units)
     result: list[tuple[str, tuple[int, int]]] = []
     for part, (start, end) in zip(parts, intervals):
         units = _ruby_utopia_visual_units(part)
@@ -130,9 +132,10 @@ def _ruby_visual_units_and_intervals(
 
 def ruby_visual_units_and_intervals(
     ruby: RubyAnnotation,
+    *, round_boundary=round, split_reading_units=None,
 ) -> list[tuple[str, tuple[int, int]]]:
     """Public timing contract for renderers that need visual ruby units."""
-    return _ruby_visual_units_and_intervals(ruby)
+    return _ruby_visual_units_and_intervals(ruby, round_boundary=round_boundary, split_reading_units=split_reading_units)
 
 
 def _ruby_reading_unit_progress_points(
@@ -324,12 +327,12 @@ def _main_text_ruby_progress_time_at_ratio(
     return anchors[-1]
 
 
-def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:
-    units = _ruby_reading_units(ruby.reading)
+def _ruby_reading_intervals(ruby: RubyAnnotation, *, round_boundary=round, split_reading_units=None) -> list[tuple[int, int]]:
+    units = (split_reading_units or _ruby_reading_units)(ruby.reading)
     if len(ruby.reading_part_ms) >= 2 * max(len(units) - 1, 0):
         return _ruby_reading_intervals_with_pauses(ruby, len(units))
     result: list[tuple[int, int]] = []
-    boundaries = _ruby_reading_boundaries(ruby, len(units))
+    boundaries = _ruby_reading_boundaries(ruby, len(units), round_boundary=round_boundary)
     for index, _unit in enumerate(units):
         start = boundaries[index]
         end = boundaries[index + 1]
@@ -390,7 +393,7 @@ def _ruby_reading_units(reading: str) -> list[str]:
     return units
 
 
-def _ruby_reading_boundaries(ruby: RubyAnnotation, unit_count: int) -> list[int]:
+def _ruby_reading_boundaries(ruby: RubyAnnotation, unit_count: int, *, round_boundary=round) -> list[int]:
     if unit_count <= 0:
         return [ruby.pos_start_ms, ruby.pos_end_ms]
     boundaries = [ruby.pos_start_ms]
@@ -402,7 +405,7 @@ def _ruby_reading_boundaries(ruby: RubyAnnotation, unit_count: int) -> list[int]
         start = boundaries[-1]
         remaining = unit_count - len(boundaries) + 1
         for step in range(1, remaining):
-            boundaries.append(start + round((ruby.pos_end_ms - start) * step / remaining))
+            boundaries.append(start + round_boundary((ruby.pos_end_ms - start) * step / remaining))
     boundaries.append(max(boundaries[-1], ruby.pos_end_ms))
     return boundaries
 

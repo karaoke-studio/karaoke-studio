@@ -1,7 +1,7 @@
 """Prepare canonical geometry and feed the existing shared page/layout policy.
 
-Ruby is supported at this preparation boundary. The product IR entry keeps its
-own drawing feature gates until the final ruby glyph/clip protocol is complete.
+Ruby is supported at this preparation boundary. The product IR entry controls
+which drawing profiles may consume the prepared geometry and clocks.
 """
 from dataclasses import dataclass
 

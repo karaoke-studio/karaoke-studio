@@ -64,6 +64,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 不支持版本化分段走字，请重新构建')
             if ('p05_resolved_ruby' not in ready.get('profiles', []) or ready.get('resolved_ruby_schema') != 1):
                 raise NativeRendererError('Skia sidecar 不支持最终注音组，请重新构建')
+            if ('p05_upper_ruby' not in ready.get('profiles', []) or ready.get('upper_ruby_schema') != 1):
+                raise NativeRendererError('Skia sidecar 不支持产品上注音入口，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

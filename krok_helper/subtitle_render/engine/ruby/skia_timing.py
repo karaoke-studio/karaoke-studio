@@ -7,6 +7,7 @@ Ruby visual-unit intervals remain separate from the main-text clock.
 from dataclasses import dataclass
 import math
 import struct
+from strange_uta_game.backend.domain.graphemes import split_graphemes
 
 from .timing import (ruby_main_wipe_intervals, ruby_visual_units_and_intervals,
                      ruby_main_uses_base_timing, is_utopia_group_marker)
@@ -18,6 +19,11 @@ WipeCurve = tuple[tuple[int, float], ...]
 def _f32(value):
     """Match the existing GPU projection's intermediate float arithmetic."""
     return struct.unpack('f', struct.pack('f', value))[0]
+
+
+def _gpu_boundary(value):
+    # Fallback reading boundaries use C++ round(duration), not Python ties-to-even.
+    return math.floor(value + .5)
 
 
 @dataclass(frozen=True)
@@ -84,14 +90,15 @@ def prepare_ruby_wipe_timing(line, prepared_line, mode):
         ruby, indices = target.effective, target.indices
         if not indices or any(type(i) is not int or not 0 <= i < len(line.chars) for i in indices):
             raise ValueError('注音走字目标超出正文单元范围')
-        timed_units = ruby_visual_units_and_intervals(ruby)
+        timed_units = ruby_visual_units_and_intervals(ruby, round_boundary=_gpu_boundary, split_reading_units=split_graphemes)
         readings.append(RubyUnitClock(target.annotation_index,
             tuple(u for u, _interval in timed_units), tuple(interval for _u, interval in timed_units)))
         if is_utopia_group_marker(ruby) or assigned.intersection(indices):
             continue
         if not ruby_main_uses_base_timing(line, list(indices)):
             first, last = min(indices), max(indices)
-            curves = main_wipe_points(ruby_main_wipe_intervals(ruby, mode), last-first+1)
+            curves = main_wipe_points(ruby_main_wipe_intervals(ruby, mode, round_boundary=_gpu_boundary,
+                                                            split_reading_units=split_graphemes), last-first+1)
             main[first:last+1] = curves
         assigned.update(indices)
     return RubyWipeTiming(tuple(main), tuple(readings))

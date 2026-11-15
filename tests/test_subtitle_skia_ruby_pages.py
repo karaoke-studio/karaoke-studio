@@ -1,7 +1,7 @@
 """Canonical ruby anchors enter shared paging, SmartHorizon and main-ink ports.
 
 The drawing probe deliberately renders only main text from the prepared plan;
-product ruby glyph/clip gates remain closed until their protocol is complete.
+the product assertion also verifies the integrated upper-ruby placement.
 """
 from dataclasses import replace
 import json
@@ -49,8 +49,7 @@ def prepare(binary, track, style, *, resolve_font=resolve_skia_font, **kwargs):
 
 
 def main_probe_ir(track, style, prepared):
-    # Test adapter, not a product fallback: source annotations are intentionally
-    # absent so the existing native ruby rejection still protects real projects.
+    # Test adapter: omit annotations to isolate the final main-text geometry.
     ir = build_render_ir(replace(track, rubies=[]), style, width=641, height=720, fps=60,
                          layout_plan_builder=lambda *a, **k: prepared.plan)
     geometry = prepared.geometry
@@ -202,7 +201,7 @@ def test_ruby_anchor_preparation_keeps_shared_source_span_timing(binary, pages, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_prepared_main_geometry_draws_and_seek_is_stable_without_enabling_ruby(binary, pages, target):
+def test_prepared_main_geometry_draws_and_product_ruby_uses_same_placement(binary, pages, target):
     track, style = pages
     prepared = prepare(binary, track, style)
     ir = main_probe_ir(track, style, prepared)
@@ -212,9 +211,13 @@ def test_prepared_main_geometry_draws_and_seek_is_stable_without_enabling_ruby(b
         frames, _ = collect(process, [100, 10000, 100, 13000])
     assert np.array_equal(frames[0], frames[2]) and frames[0].any() and not frames[3].any()
     with SkiaTextMetricsProcess(binary) as metrics:
-        with pytest.raises(ValueError, match='注音'):
-            build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve_skia_font,
-                                 width=641, height=720, fps=60)
+        product = build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve_skia_font,
+                                      width=641, height=720, fps=60)
+    assert 'p05_upper_ruby' in product['required_features']
+    assert all(l['ruby_groups'] for l in product['skia_layout']['lines'])
+    for expected, actual in zip(ir['skia_layout']['lines'], product['skia_layout']['lines'], strict=True):
+        assert [(c['origin_x'], c['baseline_y']) for c in expected['cells']] == [
+            (c['origin_x'], c['baseline_y']) for c in actual['cells']]
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU reference is Windows-only')

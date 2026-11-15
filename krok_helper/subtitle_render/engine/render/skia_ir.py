@@ -9,12 +9,14 @@ from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from .render_ir import build_render_ir
+from .skia_ruby_ir import prepared_ruby_layout
+from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 
 
 def _validate_style(style):
     if (style.vertical or style.right_to_left or style.layout_semantics not in {'legacy', 'n3_1074'}
             or style.lower_ruby_enabled):
-        raise ValueError('Skia 当前规范布局仅支持横排，不支持注音或导唱符')
+        raise ValueError('Skia 当前规范布局仅支持横排，尚不支持下方注音或导唱符')
     if style.dual_line_layout:
         if style.line_horizontal_layout == 'asymmetric' and style.smart_horizontal not in {'none','center_position','equal_margins'}:
             raise ValueError('Skia 智能水平布局模式无效')
@@ -29,8 +31,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
-        if source.rubies or any(c.vector_glyph for l in source.lines for c in l.chars):
-            raise ValueError('Skia 当前规范布局尚不支持注音或导唱符')
+        if any(c.vector_glyph for l in source.lines for c in l.chars):
+            raise ValueError('Skia 当前规范布局尚不支持导唱符')
+        if any(is_utopia_group_marker(ruby) for ruby in source.rubies):
+            raise ValueError('Skia 最终注音组尚未验收空读音或短语标记')
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -50,4 +54,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
+    if geometry.ruby is not None:
+        ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'])
+        ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
     return ir

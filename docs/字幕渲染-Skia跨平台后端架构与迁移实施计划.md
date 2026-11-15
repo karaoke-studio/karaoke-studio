@@ -1552,6 +1552,20 @@ Mac CI [43680422676](https://github.com/karaoke-studio/karaoke-studio/actions/ru
 
 日志/样例前缀 `build/p05-ruby-groups-*`；新增第十三份规范样例 `ruby-group-layout.json`，覆盖最终路径快照、主字曲线、组/单元时钟与无机器路径的字体实例参数。此批仅修改 Skia 私有核心/适配模块及其协议，不修改 D2D 源码或默认后端。Linux 真硬件、新 Mac 真机与完整画质门槛仍保留，未做 4K。
 
+### 14.24 P05.6 产品上注音子集接入（2026-11-15）
+
+**源码显式启用 Skia 时，产品预览/导出已接入基础上注音；P05.6 完整注音和全后端迁移仍未完成。** 本批沿用 §14.23 的公共 C++ 组裁剪、§14.22 的页面几何与 §14.21 的双层时钟，将已验证子集接入 `build_skia_render_ir`，不改 D2D 默认、GPU 偏好、发布版本号和打包排除规则。`000e8c56`（4.4.6.1）已包含 `69faf726` 的发布隔离与 `9cb4fdd6` 的生产分页隔离；本批保持这些边界，Skia 仍只在源码运行中显式 opt-in，发布包不携带实验模块。
+
+- 产品入口在存在源注音时调用同一 `prepared_ruby_layout`，输出规范主字曲线、上注音最终单元和字体实例；IR **保留原始 `track.rubies` 来源信息**，没有先删注音再近似绘制。新增 `p05_upper_ruby` 能力与 `upper_ruby_schema=1` 握手；旧的仅最终组 sidecar 在选择后端前被拒绝。
+- native `skiaSceneFromIr` 对带源注音的载荷要求 `p05_upper_ruby` / `p05_resolved_ruby`、`ruby_schema=1`、完整逐行 `ruby_groups` 和一致行数。源注音仅作来源信息；它不调用旧 Qt ruby 投影，不重新选目标、测量或把注音时长差当成全局 offset。下方注音明确拒绝，最终组的字体/几何/时钟严格校验和失败保留旧场景仍由原公共边界执行。
+- 本批开放：legacy/N3 正向横排基础上注音、显式字体资源/英数字体槽/逐字角色实色、两种主字进度模式、reading parts 的空暂停、规范多行分页/SmartHorizon、页面平移、主字显式内部边界、源/style/roll 时间偏移与 DPR。真正的 G5 异步预览和短 MP4 导出均走该产品入口，GPU 关闭或 Vulkan loader 失败时回到 Skia Raster。
+- 门禁继续限制：下方注音、空读音/`^` 纯短语标记、跨 parts 塑形单元边界、主字/注音描边与装饰、反向/no_wipe/utopia、入退场/粒子/走字线、附加轨等尚未支持组合。失败明确报告且保留先前有效配置，不能回落 QPainter 或静默删层。§14.18–23 的“产品源注音一律拒绝”是各批历史状态，以本节的受限上注音入口为准。
+- 无 reading parts 的读音 fallback 还存在 C++ half-up 与 Python ties-to-even、小假名可视字素与拍单位的历史差异。共享 `ruby/timing.py` 增加可注入 `round_boundary` / `split_reading_units`，默认保持旧行为；只有 Skia 双层时钟显式注入 GPU 正向 duration half-up 与 SUG 字素拆分。例如 5ms 的 `AA` 或 `きゃ` 两个读音单元在 GPU 为 `[0,3],[3,5]`，旧默认仍为 `[0,2],[2,5]`。新增可移植假名字体样例实际执行该边界；本地含小假名的 **8,000 次**随机默认结果逐值对照 `000e8c56`，全部一致，没有改生产 D2D/Painter 时钟。
+
+本机验证：Windows 完整 Skia 组合 **432 通过**；随后补充小假名边界后的最终产品专项 **41 通过**。Linux X11/Wayland 完整组合各 **373 通过、59 跳过**；补充边界后的产品与分段时钟专项 **75 通过、12 跳过**。相关架构/分页/下方注音/时间及构建工具 **290 通过**。四种本地 Vulkan/CPU-only 均完整重建，CTest 各 **3/3**，native 源码摘要统一为 `e53df85d668ef32c8eb3ebfa5e50dde6255a30d5ffcce4600400e59deb1e2ef0`。Mac 结果在本轮 CI 完成后补录。
+
+日志/样例前缀 `build/p05-upper-product-*`，新增第十四份规范样例 `upper-ruby-product.json`，含源注音、最终曲线/组及能力声明。新测试同时对比真实产品入口与既有最终组探针的内容和像素，八组 D2D GPU 对照（两种语义 × 两种主字模式 × 有无 fallback parts）各十时刻，保留 **1px** 条件；布局缓存身份因 `style_for_track` 预物化继承字段可不同，不把这个身份当画面几何比较。公共绘制核心与字体算法未改，只有 Skia 源 IR 投影与 sidecar 能力改变；Linux 真硬件、此轮 Mac 真机及严格画质门槛继续保留，未做 4K。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

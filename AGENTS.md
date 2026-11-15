@@ -290,7 +290,8 @@ git submodule status
    `p05_resolved_horizontal`：legacy / n3_1074 横排，左/中/右与顶/中/底定位、
    主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
    多行网格已接入共享分页、碰撞时间压缩、整页平移、段内填充及两种智能水平布局。
-   彩色/位图字形、注音等仍拒绝；完整 N3 几何兼容尚未验收。
+   已接入 §14.24 的基础实色上注音产品子集；彩色/位图字形、下方注音、描边/装饰与
+   特效等组合仍拒绝，完整 N3 几何兼容尚未验收。
    旧 P04 ASCII profile 仅保留协议兼容测试。不是已经替换 D2D。
    带 `--qt-root` 的 GPU/CPU-only 构建均产出
    新 sidecar；不传 Qt SDK 仍可构建纯 Skia 基础目标。Unix 的 Skia ring 使用序列化
@@ -385,6 +386,14 @@ git submodule status
    公共 `skia/core/wipe_group` 按整组锋面裁剪全部路径，暂停、互斥半透明、完成后释放裁剪与
    零时长起点须保持 GPU 语义，不能换成独立字形裁剪。门禁仍限制描边/装饰、下方注音、
    空读音/短语标记、no_wipe/反向和特效；测试探针不是产品源注音近似路径。
+
+   P05.6 产品上注音子集见 §14.24：源码 opt-in 的 Skia 预览/导出调用同一最终组编译器，
+   原始 `track.rubies` 保留为来源信息，`p05_upper_ruby` / `upper_ruby_schema=1` 门控新入口。
+   native 只消费已验证的最终逐行组，不得再次调用旧 Qt ruby 目标/几何/时钟投影。
+   §14.18–23 的总门禁是历史状态；当前仅开放正向横排实色无描边上注音，其他组合继续拒绝。
+   共享读音时钟的 `round_boundary` / `split_reading_units` 默认保持原行为，仅 Skia 显式注入
+   GPU duration half-up 和可视字素规则，不能把小假名 fallback 重新按拍分配；
+   不得为对齐 Skia 擅自改变旧生产时钟。保留 4.4.6.1 的源码 opt-in/发布包排除及生产分页隔离。
 
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层

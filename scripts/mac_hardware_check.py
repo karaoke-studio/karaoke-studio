@@ -194,6 +194,9 @@ def main(argv=None) -> int:
     if manifest.get("ruby_groups", 0) >= 1:
         steps["ruby_groups"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                 "tests/test_subtitle_skia_ruby_groups.py", "--basetemp", logs / "ruby-group-tests"]
+    if manifest.get("upper_ruby_product", 0) >= 1:
+        steps["upper_ruby_product"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                       "tests/test_subtitle_skia_upper_product.py", "--basetemp", logs / "upper-ruby-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"
