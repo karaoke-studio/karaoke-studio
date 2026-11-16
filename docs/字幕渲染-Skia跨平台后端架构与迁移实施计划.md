@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 781ac253
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43843074722 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 197f944e
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43855328248 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1763,7 +1763,13 @@ Codex Linux 首轮发现测试恢复 mtime 的纳秒精度不适用于 WSL/NTFS�
 - 全面启用终点后，原非法曲线回归暴露：边界解析的曲线末点可能被独立 overlap 终点覆盖，使非法末点绕过公共核心检查。`backends/skia/resolved_wipe.cpp` 先验证原始曲线起止为 0/1，再应用独立终点；错误仍保留旧场景。公共绘制核心和 D2D 实现不改。
 - 新增 `test_subtitle_skia_forward_endpoints.py`：独立 numpy float32 公式、接触/重叠/间隔/pause/首零时长/全零时长/角色/上注音/正反同行、wipe/no_wipe、legacy/N3 与 DPR 1/1.5，覆盖原始 D2D GPU、GPU/Raster seek/偏移、半透明、非法协议保留旧场景、真实 G5 预览和短 MP4、GPU 关闭及缺 loader 的 Skia Raster 回退。历史严格 xfail 改为普通回归，**不放宽 1 物理像素预算**。新增第 27 份规范样例 `forward-endpoint-layout.json`，Mac 验收包声明 `forward_endpoints=1`。
 
-验证进度：首轮 **72 组实际 D2D GPU 原始路径对照全部通过**。最终边界修正后 Windows 独立专项 **79 通过**（含历史严格 xfail 现为普通通过）；四份 Windows/Linux Vulkan 与 CPU-only 均 `--clean-first` 重建，CTest 各 **3/3**，native 源码身份统一为 `5a863dbe340cf3ed5b38df9f71172dd7bb9115899662c10a2beaf59a55fabb65`。独立 CPU-only sidecar 的非法曲线/终点和公式专项 Windows/Linux 各 **54 通过**。关联架构/协议/字体/构建与预览回归 **532 通过、10 项环境专用跳过**。Linux X11 完整组合首轮 **889 通过、398 跳过、1 失败**：预览测试先设置轨道会立即排队，偶尔以用户保存的 Windows 字体渲染，早于测试指定的 Linux 字体生效；只修正测试先设置明确样式再设置轨道，产品预览不改。修正后 X11/Wayland 协议各 **28 通过**。完整组合和跨平台样例仍在验收，未完成项不计为通过。日志前缀 `build/p05-forward-endpoints-*`。本批保留默认 realization 完整画质、Linux 真硬件、本轮 Mac 真机与完整 P05 门槛；未做 4K。
+验证进度：首轮 **72 组实际 D2D GPU 原始路径对照全部通过**。最终边界修正后 Windows 独立专项 **79 通过**（含历史严格 xfail 现为普通通过）；最终完整 Skia 组合按文件分组、双 worker **1281 通过、7 项 POSIX 专用跳过**，包含新文件全部 **150 项**及历史正向缺口回归。四份 Windows/Linux Vulkan 与 CPU-only 均 `--clean-first` 重建，CTest 各 **3/3**，native 源码身份统一为 `5a863dbe340cf3ed5b38df9f71172dd7bb9115899662c10a2beaf59a55fabb65`。独立 CPU-only sidecar 的非法曲线/终点和公式专项 Windows/Linux 各 **54 通过**。关联架构/协议/字体/构建与预览回归 **532 通过、10 项环境专用跳过**。
+
+Linux X11 首轮 **889 通过、398 跳过、1 失败**：预览测试先设置轨道会立即排队，偶尔以用户保存的 Windows 字体渲染，早于测试指定的 Linux 字体生效；只修正测试先设置明确样式再设置轨道，产品预览不改。修正后 X11/Wayland 协议各 **28 通过**，最终完整组合两边均 **890 通过、398 项平台专用跳过**。27 份本批 Windows/X11/Wayland 规范样例最大误差全部为 **0**。与上一批 26 份样例直接比较：8 份完全不变，18 份只有有意新增的终点字段、overlap 能力声明或该声明的列表次序变化；旧样例已有的终点/版本逐值不变，去除这些明确差异后字体身份、glyph/cluster、原区间、时钟所有权与最终几何误差均为 **0**。
+
+实现提交 `197f944e` 的 Mac CI [43855328248](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43855328248)：arm64/x64 产品组合各 **864 通过、424 项平台专用跳过**，新文件各 **76 通过、74 跳过**（72 项 D2D 专用及 2 项 Vulkan loader 注入）；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**。27 份跨架构规范样例最大误差为 **0px**；下载后与 Windows/X11/Wayland 五方直接比较，27 份样例最大误差仍全部为 **0**。两架构 Metal/Raster 四份 native 指纹与本地四份同一源码身份。该轮 CI **5 项全部成功**。两份干净 Mac 一键验收包均退出 **0**，新增步骤 `forward_endpoints=0`、`functional_passed=true`；托管虚拟设备的 `metal_hardware_smoke` 与 `native_capabilities` 均退出 **1**，`hardware_gate_passed=false` 正确保留，不能计作真机硬件验收。§14.6 朋友复测入口已更新到本轮提交与验收包。
+
+本批保留默认 realization 完整画质、Linux 真硬件、本轮 Mac 真机、RTL/竖排、反向行绘制注音及完整 P05 门槛；未做 4K。日志/样例前缀 `build/p05-forward-endpoints-*`。
 
 ## 15. 前期探针清理范围
 
