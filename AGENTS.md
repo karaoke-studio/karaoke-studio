@@ -440,8 +440,10 @@ git submodule status
    整字变色子集见 §14.35：`p07_no_wipe` / `no_wipe_schema=1` 仅开放实色正向横排。
    逐行动画覆盖先由既有 IR 编排完成，`ResolvedLine.noWipe` 只向同一 GPU/Raster 核心传值。
    基本时钟以结束阈值切换，分段时钟只读首/末进度；不可重分配时间或省略 overlap/组裁剪。
-   正文时钟起点（含零时长）before 优先；no_wipe＋零时长注音组合在 Python/native 明确拒绝，
-   不改变普通 wipe 的零时长规则。Utopia、反向、竖排和其他特效仍拒绝。
+   正文时钟起点（含零时长）before 优先；注音组合扩展见 §14.41，普通 wipe 的零时长规则不改。
+   `p07_zero_ruby_no_wipe` / `zero_ruby_no_wipe_schema=1` 门控 no_wipe 零时长注音；首单元恰好起点时
+   复现 D2D 的 before/after 叠加（半透明 alpha 128→192→128），不能改写为互斥绘制或移动时钟。
+   空源窗口仍省略；反向行仍省略注音，故不要求该能力。Utopia、竖排和其他特效继续拒绝。
 
    正文反向横排子集见 §14.36：`p05_reverse_wipe` / `reverse_wipe_schema=1`，仅改变演唱方向。
    最终 `clock_index` 严格等于 n-1-source_index，原字形/run/实色不换位，原区间不重新分时；

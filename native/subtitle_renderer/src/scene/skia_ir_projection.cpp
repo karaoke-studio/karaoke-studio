@@ -31,6 +31,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_ruby_markers" && feature.toString() != "p05_ruby_units"
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
+            && feature.toString() != "p07_zero_ruby_no_wipe"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
     }
@@ -54,6 +55,10 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_no_wipe")
         && ir.value("skia_layout").toObject().value("no_wipe_schema").toDouble(-1) != 1)
         throw BackendError("Skia 整字变色布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_zero_ruby_no_wipe")
+        && (ir.value("skia_layout").toObject().value("zero_ruby_no_wipe_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p07_no_wipe")))
+        throw BackendError("Skia 零时长注音整字变色缺少版本化能力声明");
     if (ir.value("required_features").toArray().contains("p05_reverse_wipe")
         && ir.value("skia_layout").toObject().value("reverse_wipe_schema").toDouble(-1) != 1)
         throw BackendError("Skia 反向走字布局版本无效");

@@ -239,6 +239,9 @@ def main(argv=None) -> int:
     if manifest.get("font_registry", 0) >= 1:
         steps["font_registry"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                   "tests/test_subtitle_skia_font_registry.py", "--basetemp", logs / "font-registry-tests"]
+    if manifest.get("zero_ruby_no_wipe", 0) >= 1:
+        steps["zero_ruby_no_wipe"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                       "tests/test_subtitle_skia_zero_ruby.py", "--basetemp", logs / "zero-ruby-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

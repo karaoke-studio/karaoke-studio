@@ -220,18 +220,23 @@ def test_reverse_singing_order_and_translucent_alpha(binary, marker_source, targ
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_zero_duration_ruby_on_reverse_line_is_omitted_but_forward_gate_remains(binary, marker_source, target):
+def test_zero_duration_ruby_is_omitted_on_reverse_and_versioned_on_forward(binary, marker_source, target):
     # A reverse line draws no annotation, so its zero-duration source cannot
-    # violate the no_wipe whole-cell gate; the same source on a forward line can.
+    # require the forward zero-duration annotation drawing capability.
     track, style, resolve = reverse_source(marker_source, 'upper', 'no_wipe', zero=True)
     ir = ir_for(binary, (track, style, resolve))
     assert ir['skia_layout']['lines'][0]['ruby_groups'] == []
+    assert 'p07_zero_ruby_no_wipe' not in ir['required_features']
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir); frames, _ = collect(process, [450, 2400])
     assert frames[0].any() and not np.array_equal(frames[0], frames[1])
     forward = (replace(track, lines=[replace(track.lines[0], wipe_reverse=False)]), style, resolve)
-    with pytest.raises(ValueError, match='零时长注音'):
-        ir_for(binary, forward)
+    final = ir_for(binary, forward)
+    assert final['skia_layout']['lines'][0]['ruby_groups']
+    assert 'p07_zero_ruby_no_wipe' in final['required_features']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, final); frames, _ = collect(process, [199, 200, 201])
+    assert all(frame.any() for frame in frames)
 
 
 @pytest.mark.parametrize('mutation', ['groups', 'lower_group', 'overlap_feature', 'overlap_value',

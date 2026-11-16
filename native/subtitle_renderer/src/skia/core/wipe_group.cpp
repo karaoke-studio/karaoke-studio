@@ -12,8 +12,6 @@ PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, boo
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
     for (const auto& cell : cells_) {
-        if (noWipe_ && cell.startMs == cell.endMs)
-            throw std::runtime_error("Skia 整字变色的零时长注音尚未完成 GPU 画质兼容");
         if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
             || cell.right < cell.left || cell.startMs < previousEnd || cell.endMs < cell.startMs
             || cell.endMs > 172800000
@@ -39,9 +37,6 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
     };
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs >= c.endMs; });
-    // Before wins at a wholly zero-duration group's initial timestamp.
-    if (before) { draw(false); return; }
-    if (complete) { draw(true); return; }
     float edge = bounds_.left();
     for (const auto& cell : cells_) {
         if (timeMs < cell.startMs) break;
@@ -52,6 +47,23 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
         edge = cell.left + (cell.right - cell.left) * (progress * endpoint);
         if (timeMs <= cell.endMs) break;
     }
+    if (before) {
+        draw(false);
+        // D2D's no-wipe endpoint is already 1 at an initial zero-duration
+        // unit. Its Before stack is uncut, and the After stack is also drawn
+        // through that endpoint (or uncut if the whole group is complete).
+        // This singular boundary intentionally preserves that alpha overlap.
+        if (noWipe_ && cells_.front().startMs == cells_.front().endMs
+            && timeMs == cells_.front().startMs && edge > bounds_.left()) {
+            canvas.save();
+            if (!complete)
+                canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f), SkClipOp::kIntersect, antialiasClip_);
+            draw(true);
+            canvas.restore();
+        }
+        return;
+    }
+    if (complete) { draw(true); return; }
     // Disjoint clips preserve translucent alpha; completed groups release
     // their clip so overhangs keep the established full-after appearance.
     canvas.save();

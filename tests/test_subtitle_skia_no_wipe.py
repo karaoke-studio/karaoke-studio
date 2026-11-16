@@ -219,15 +219,11 @@ def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_zero_duration_ruby_is_rejected_without_losing_old_scene(binary, mark_source, target):
+def test_zero_duration_ruby_requires_its_own_capability_without_losing_old_scene(binary, mark_source, target):
     source = discrete(mark_source, 'ruby_zero')
-    with pytest.raises(ValueError, match='零时长注音'): ir_for(binary, source)
-    track, style, resolve = source
-    # Exercise the C++ boundary too, bypassing only the Python product gate.
-    bad = ir_for(binary, (track, replace(style, karaoke_anim='none'), resolve))
-    bad['track']['lines'][0]['karaoke_anim'] = 'no_wipe'
-    bad['required_features'].append('p07_no_wipe')
-    bad['skia_layout']['no_wipe_schema'] = 1
+    bad = ir_for(binary, source)
+    assert 'p07_zero_ruby_no_wipe' in bad['required_features']
+    bad['required_features'].remove('p07_zero_ruby_no_wipe')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir_for(binary, discrete(mark_source, 'upper')))
         before, _ = collect(process, [700])

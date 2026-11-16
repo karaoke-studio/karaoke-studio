@@ -97,6 +97,10 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
             const auto interval = times.toArray();
             const int start = integer(interval[0], -86400000, 86400000);
             const int end = integer(interval[1], start, 86400000);
+            if (start == end && line.karaokeAnimation == "no_wipe"
+                && (!ir.value("required_features").toArray().contains("p07_zero_ruby_no_wipe")
+                    || ir.value("skia_layout").toObject().value("zero_ruby_no_wipe_schema").toDouble(-1) != 1))
+                throw BackendError("Skia 零时长注音整字变色缺少版本化能力声明");
             const auto shiftedStart = std::int64_t(start) + offset, shiftedEnd = std::int64_t(end) + offset;
             if (shiftedStart < -172800000 || shiftedEnd > 172800000)
                 throw BackendError("Skia 注音最终时间偏移超限");
