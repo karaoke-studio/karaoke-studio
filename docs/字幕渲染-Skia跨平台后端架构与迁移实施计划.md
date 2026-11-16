@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout ef73d51e
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43893886547 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 58dfb9bb
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43905588991 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1800,7 +1800,7 @@ Linux X11 首轮 **889 通过、398 跳过、1 失败**：预览测试先设置�
 
 本地验证进度：专项首轮 **109 通过**，含 **80 组实际 D2D GPU 原始路径对照**（5 类时钟 × 上/上下层 × 2 时钟模式 × 2 布局 × 2 DPR），墨迹包络、归一唱色前沿与按墨迹高度换算的 alpha 面积均保持 **≤1 物理像素**。后补的非矩阵专项 **39 通过**，来源空窗口/行内角色 **4 通过**，更新后的反向/正向旧断言 **2 通过**。独立 CPU-only sidecar 专项 Windows/Linux 各 **16 通过**；首轮运行器误选了 6 个 GPU 参数，已修正 CPU 用例选择后完整通过，不把未编译 GPU 的预期拒绝计为回归。关联架构/协议/字体/构建与预览 **532 通过、10 项环境专用跳过**。
 
-Windows/Linux Vulkan 与 CPU-only 四份均因 native 源码变化干净重建，CTest 各 **3/3**；源码身份统一为 `47ead5ab91b332d5ea67decbec3cf6d9f13051b51bdae600686c1fb8e7064650`。新增第 28 份规范样例 `zero-ruby-no-wipe-layout.json`，Mac 验收包声明 `zero_ruby_no_wipe=1`。完整产品组合、跨平台样例与 Mac CI 仍在验收，不计为已通过。日志前缀 `build/p05-zero-ruby-*`。保留默认 realization 完整画质、Linux 真硬件、本轮 Mac 真机、其他特效/方向组合和完整 P05；未做 4K。
+Windows/Linux Vulkan 与 CPU-only 四份均因 native 源码变化干净重建，CTest 各 **3/3**；源码身份统一为 `47ead5ab91b332d5ea67decbec3cf6d9f13051b51bdae600686c1fb8e7064650`。新增第 28 份规范样例 `zero-ruby-no-wipe-layout.json`，Mac 验收包声明 `zero_ruby_no_wipe=1`。Windows 完整组合首轮 **1336 通过、7 项 POSIX 专用跳过、2 项旧门禁断言失败**（新 80 组 D2D 矩阵单独运行，完整组合未重复）；这两项断言已更新并单独通过，另补来源空窗口/角色 4 项通过。Linux X11/Wayland 首轮完整组合各 **943 通过、480 项平台专用跳过、同样 2 项旧门禁断言失败**，更新后相关组合各 **43 通过、82 项 D2D 专用跳过**。28 份 Windows/X11/Wayland 规范样例最大误差全部为 **0**，此前 27 份样例逐字段不变。实现提交 `58dfb9bb` 的 Mac CI [43905588991](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43905588991)：arm64/x64 产品组合各 **921 通过、508 项平台专用跳过**，新文件各 **39 通过、84 跳过**（80 组 D2D 矩阵、2 项 GPU 边界预言及 2 项 Vulkan loader 注入）；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**。两架构 Metal/Raster 四份 native 指纹与本地四份一致；28 份 Windows/X11/Wayland/Mac arm64/Mac x64 样例用现有比较器五方直接比较，误差全部为 **0**，此前 27 份不变样例仍为 **0**。实现冻结后另补 **8 项 Windows D2D GPU 对照全部通过**，覆盖零 advance 的独立附加符在首零时长/全组可见单元零时长、上/上下层、DPR 1/1.5 的组合；测试提交 `cad1709c` 同时统一新文件 LF 换行，不改变 native 源码或上述 CI 的功能实现。该轮 CI **5 项全部成功**。两份无 SDK/构建缓存的干净 Mac 一键验收包均退出 **0**，`zero_ruby_no_wipe=0`（新增步骤退出码）、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能计为真机验收。§14.6 朋友复测入口已更新到该提交与包。日志前缀 `build/p05-zero-ruby-*`。保留默认 realization 完整画质、Linux 真硬件、本轮 Mac 真机、其他特效/方向组合和完整 P05；未做 4K。
 
 ## 15. 前期探针清理范围
 
