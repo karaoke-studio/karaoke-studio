@@ -8,6 +8,7 @@ from krok_helper.subtitle_render.engine.layout.display.section_edges import sect
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
+from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_lower_ir import lower_sources
@@ -43,8 +44,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         prepared.append(result)
         return result.plan
 
-    ir = build_render_ir(track, style, layout_plan_builder=build_plan,
-                         serialize_source_baselines=False, **kwargs)
+    with font_snapshot(resolve_font):  # Every plan of this IR shares one content snapshot.
+        ir = build_render_ir(track, style, layout_plan_builder=build_plan,
+                             serialize_source_baselines=False, **kwargs)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     lines = []

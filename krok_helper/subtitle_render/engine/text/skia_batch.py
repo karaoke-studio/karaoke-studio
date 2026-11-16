@@ -1,7 +1,18 @@
 """Deduplicated, explicit font instances shared by canonical text consumers."""
+from contextlib import nullcontext
 import hashlib
 import json
 import math
+
+
+def font_snapshot(resolve_font):
+    """Optional resolver capability: one physical content snapshot per preparation.
+
+    Every batch of a canonical preparation then exports the same digest for a
+    path; the next preparation rereads the content instead of reusing it.
+    """
+    snapshot = getattr(resolve_font, 'snapshot', None)
+    return snapshot() if snapshot is not None else nullcontext()
 
 
 class TextMeasurementBatch:

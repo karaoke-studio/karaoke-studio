@@ -12,6 +12,7 @@ from ..display.skia_schedule import display_lines
 from ..line.style import style_for_line
 from ...ruby.skia_geometry import prepare_ruby_geometry
 from ...text.skia_metrics import MeasuredTrack, measure_track
+from ...text.skia_batch import font_snapshot
 from .model import TrackLayoutPlan
 from .page_offsets import PageOffsetResolvers, resolve_page_offset_windows
 from .semantic import LayoutPlanResolvers, build_track_layout_plan
@@ -25,7 +26,7 @@ class PreparedSkiaLayout:
 
 
 def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
-    with layout_pass():
+    with layout_pass(), font_snapshot(resolve_font):
         section_edge_context(track, style)
         styles = [style_for_line(style, line) for line in track.lines]
         measured = measure_track(track, style, styles, measure=measure, resolve_font=resolve_font)

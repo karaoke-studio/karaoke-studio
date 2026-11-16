@@ -1,8 +1,10 @@
 """Explicit physical font chains reach final glyph drawing and shared timing."""
+from collections import Counter
 import copy
 from dataclasses import replace
 import hashlib
 import json
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,6 +25,7 @@ from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weigh
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
+from krok_helper.subtitle_render.native.skia_font_preparation import iter_prepare_skia_fallbacks
 from krok_helper.subtitle_render.native.skia_fonts import SkiaFontResolver
 from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
 
@@ -317,6 +320,133 @@ def test_platform_font_replacement_invalidates_prewarmed_chain(binary, source, t
         QFontDatabase.setApplicationFallbackFontFamilies(script,previous)
         QFontDatabase.removeApplicationFont(handle)
         clear_font_weight_cache()
+
+
+@pytest.fixture
+def mutable_primary(source, tmp_path, monkeypatch):
+    """Pin platform discovery to one physical path whose bytes change in place.
+
+    Both variants only differ in the primary ``A`` advance, so every table and
+    the file size are identical; the restored mtime defeats any stat heuristic.
+    """
+    from fontTools.ttLib import TTFont
+    from krok_helper.subtitle_render.native import skia_fonts
+    variants = []
+    for advance in (600, 700):
+        with TTFont(source[2].paths[0], recalcTimestamp=False) as font:
+            font['hmtx']['A'] = (advance, 50)
+            font.save(tmp_path / f'variant-{advance}.ttf')
+        variants.append((tmp_path / f'variant-{advance}.ttf').read_bytes())
+    assert len(variants[0]) == len(variants[1]) and variants[0] != variants[1]
+    path = tmp_path / 'mutable-primary.ttf'
+    path.write_bytes(variants[0])
+    stamp = path.stat().st_mtime_ns
+    # Capture utime's round-trip precision (DrvFS may truncate nanoseconds).
+    os.utime(path, ns=(stamp, stamp))
+    stamp = path.stat().st_mtime_ns
+
+    def write(index):
+        path.write_bytes(variants[index])
+        os.utime(path, ns=(stamp, stamp))
+        assert (path.stat().st_size, path.stat().st_mtime_ns) == (len(variants[0]), stamp)
+        return hashlib.sha256(variants[index]).hexdigest()
+
+    discover = skia_fonts.resolve_font_instance
+    monkeypatch.setattr(skia_fonts, 'resolve_font_instance',
+                        lambda *a, **k: replace(discover(*a, **k), resource_path=str(path)))
+    list(iter_prepare_skia_fallbacks(*source[:2]))
+    return path, write
+
+
+def primary_digest(ir, path):
+    digests = {f['sha256'] for f in ir['skia_layout']['fonts'].values() if f['path'] == str(path)}
+    assert len(digests) == 1  # One snapshot never mixes two contents of one path.
+    return digests.pop()
+
+
+def test_reused_resolver_consumes_in_place_replacement_across_preparations(binary, source, mutable_primary):
+    track, style, _ = source
+    path, write = mutable_primary
+    resolver = SkiaFontResolver()
+    old = write(0)
+    before = ir_for(binary, (track, style, resolver))
+    assert primary_digest(before, path) == old
+    new = write(1)
+    after = ir_for(binary, (track, style, resolver))
+    assert primary_digest(after, path) == new != old
+    cells = [ir['skia_layout']['lines'][0]['cells'] for ir in (before, after)]
+    assert [c['metrics']['selected_font'] for c in cells[1]] == [0, 1, 1, 0]
+    assert cells[0][0]['metrics']['font_identity'] != cells[1][0]['metrics']['font_identity']
+    assert cells[0][1]['metrics']['font_identity'] == cells[1][1]['metrics']['font_identity']
+    assert before['skia_layout']['metrics_identity'] != after['skia_layout']['metrics_identity']
+    for target in ['gpu', 'raster']:
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            with pytest.raises(NativeRendererError, match='SHA-256'): configure(process, before)
+            configure(process, after)
+            frames, _ = collect(process, [700])
+        assert frames[0][..., 3].max() > 0
+
+
+def test_preparation_reads_each_physical_face_once_across_instances(binary, source, mutable_primary, monkeypatch):
+    from krok_helper.subtitle_render.native import skia_fonts
+    track, _, _ = source
+    path, write = mutable_primary
+    # The same physical face as a bold+italic role keeps independent simulations.
+    style = replace(source[1], custom_style_schemes={'lead': SubtitleStyleScheme(
+        font_family='LinK Fallback Primary', font_size_px=60, font_weight=700, italic=True)})
+    track = replace(track, lines=track.lines*8)
+    reads, digest = [], skia_fonts._file_sha256
+    monkeypatch.setattr(skia_fonts, '_file_sha256', lambda p: reads.append(str(p)) or digest(p))
+    resolver = SkiaFontResolver()
+    for _ in range(2):
+        reads.clear()
+        ir = ir_for(binary, (track, style, resolver))
+        # Primary and Backup once per preparation, not per cell, instance or batch.
+        assert sorted(Counter(reads).values()) == [1, 1] and str(path) in reads
+        runs = ir['skia_layout']['runs']
+        assert {(r['synthetic_bold'], r['synthetic_italic']) for r in runs} == {(False, False), (True, True)}
+        assert len({r['font_ids'][0] for r in runs}) == 1
+
+
+def test_removed_face_fails_then_recovers_by_content_identity(binary, source, mutable_primary):
+    track, style, _ = source
+    path, write = mutable_primary
+    resolver = SkiaFontResolver()
+    original = ir_for(binary, (track, style, resolver))
+    path.unlink()
+    with pytest.raises(OSError): ir_for(binary, (track, style, resolver))
+    new = write(1)
+    replaced = ir_for(binary, (track, style, resolver))
+    assert primary_digest(replaced, path) == new
+    write(0)
+    restored = ir_for(binary, (track, style, resolver))
+    assert restored['skia_layout'] == original['skia_layout']
+    assert replaced['skia_layout']['metrics_identity'] != original['skia_layout']['metrics_identity']
+
+
+def test_replacement_during_one_preparation_is_rejected_not_mixed(binary, source, mutable_primary):
+    track, style, _ = source
+    path, write = mutable_primary
+    track = replace(track, lines=[replace(track.lines[0], chars=[TimingChar('字',200)])], rubies=[
+        RubyAnnotation('字','なぐ',pos_start_ms=200,pos_end_ms=1400,target_line_index=0,
+                       target_char_start=0,target_char_end=1)])
+    style = replace(style, custom_style_schemes={}, lower_ruby_enabled=True,
+        _lower_romaji_options=(False,False,False,False), ruby_font_size_px=25,
+        ruby_stroke_width_px=0, ruby_stroke2_enabled=False)
+    list(iter_prepare_skia_fallbacks(track, style))
+    resolver, requested = SkiaFontResolver(), []
+    write(0)
+    with SkiaTextMetricsProcess(binary) as process:
+        def measure(fonts, runs):
+            requested.append({f['sha256'] for f in fonts.values() if f['path'] == str(path)})
+            try: return process.measure(fonts, runs)
+            finally: write(1)  # Later batches of this same preparation see new bytes.
+        with pytest.raises(NativeRendererError, match='SHA-256'):
+            build_skia_render_ir(track, style, resolve_font=resolver, measure=measure,
+                                 width=800, height=600, fps=60)
+    assert len(requested) >= 2 and len(set.union(*requested)) == 1
+    # The next canonical preparation starts a new snapshot.
+    assert primary_digest(ir_for(binary, (track, style, resolver)), path) == write(1)
 
 
 def test_selected_color_face_stays_gated_instead_of_skipping_to_monochrome(binary, source, tmp_path):

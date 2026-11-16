@@ -1725,6 +1725,16 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 
 验证进度：Windows 专项首轮 **86 项全部通过**，含 6 类来源（普通/共享块/暂停/首窗口零时长/整行零时长/单字）× 2 种走字模式 × legacy/N3 × DPR 1/1.5 的 **48 组实际 D2D GPU 原始路径对照**；alpha 几何和按实际墨迹高度换算的归一唱色前沿均保持 **1 物理像素**条件，不冒充默认 realization 完整画质验收。追加的重配、空行、非法/未支持协议及相关页计划 **9 项通过**（与前轮有 1 项重叠）。Linux 专项首轮 **38 通过、48 项 D2D 专用跳过**。Windows/Linux Vulkan 与 CPU-only 四份均按共享头变化干净重建，CTest 各 **3/3**，源码身份统一为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`。独立 CPU-only sidecar 的 Raster 专项在 Windows/Linux 各 **10 通过**。相关架构/协议/字体/构建与预览回归 **532 通过、10 项环境专用跳过**。Linux X11/Wayland 完整组合各 **738 通过、279 项平台专用跳过**；25 份跨 X11/Wayland 规范样例误差全部为 **0**，上一批 24 份与本批 X11 比较也全部为 **0**。Windows 完整组合首轮进程中止且未生成最终报告，不计为通过，已重新运行。实现提交 `ad8bebde` 的 Mac CI [43822180126](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43822180126)：arm64/x64 产品组合各 **716 通过、301 项平台专用跳过**，字体资源契约各 **3 通过**、预览/原生能力各 **21 通过、1 跳过**；25 份跨架构规范样例误差全部为 **0**。两架构 Metal/Raster 四份 native 指纹也已与本地四份核对一致。正常 arm64 协议证据包为 **51,192 字节**，规范数据和报告完整。Windows 最终完整组合按文件分组、双 worker **1010 通过、7 项 POSIX 专用跳过**；25 份 Windows/X11/Wayland/Mac arm64 规范样例已直接比较，同字体身份、glyph/cluster、原区间、时钟所有权及最终几何误差全部为 **0**。该轮 Mac CI **5 项全部成功**；两份干净验收包均退出 **0**，`reverse_wipe=0`（步骤退出码）、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。§14.6 朋友复测入口已指向本轮提交和包。新增第 **25** 份规范样例 `reverse-wipe-layout.json`，Mac 验收包声明 `reverse_wipe=1`。Linux 真硬件、本轮 Mac 真机与完整 P05 画质门槛继续保留，未做 4K。日志/样例前缀 `build/p05-reverse-*`。
 
+### 14.37 P05.8 准备过程的字体内容快照生命周期（2026-11-16）
+
+**本批补强复用字体 resolver 的内容失效边界，不关闭 P05.8 或完整 P05。** 用户授权由本机 Claude Code 的 `claude-opus-5-5` 实现代码，Codex 审查并独立验收；CLI 从 2.1.195 更新到 2.1.325，使用已登录的官方 Claude 订阅账号，不使用全局自定义服务入口或默认映射模型。生产 D2D 与共享字体发现/计时规则未改。
+
+- 原 `SkiaFontResolver._exports` 以路径、大小、mtime 和实例参数缓存摘要。复用 resolver 时，同路径等长写入并恢复 mtime 会返回旧 SHA-256；现有 native 会严格拒绝旧摘要，不能把该失败写成“线上已静默绘制错误字形”。生产 `SkiaRendererProcess.configure` 本来就每次构造新 resolver，本批主要保证公共准备入口的复用与单次内容一致性。
+- `SkiaFontResolver.snapshot()` 将 `{资源路径: 首次内容摘要}` 限定在一次准备过程和当前线程内，嵌套入口共享同一字典，最外层退出（含异常）即释放。每次新的准备重新读取内容，不依赖 stat 推测身份；同一准备中重复字号/角色/axes/模拟/缩放只复用摘要，实例参数仍逐次输出。直接使用 resolver 的导出也不保留跨次内容缓存。文件读取采用流式 SHA-256，不为缓存长期持有字体字节。
+- 纯 `text/skia_batch.font_snapshot` 是可选 resolver 能力端口；没有该能力的已有显式 resolver 保持原行为。`build_skia_render_ir` 与 `prepare_skia_layout` 在配置期持有快照，使正文、上下读音和参考行框批次共用第一次摘要。准备中变更字节由现有 native SHA-256 校验拒绝；下一次准备重新读取并可恢复，不能把多个内容身份拼为同一次最终 IR。绘制帧循环不读取字体，不改变协议或 native 源码。
+
+验证进度：Claude 添加真实字体等长替换/恢复 mtime、删除恢复、准备中变更及读取次数回归。原实现 3 项内容生命周期用例复现旧摘要失败；另 1 项读取次数用例是新边界的性能约束。修复后专项 **4 通过**，Codex 独立 Windows 再跑也 **4 通过**；临时关闭快照边界时读取次数与禁止混用两项均失败，恢复后通过。Claude 字体/fallback/混排/字体槽组合 **133 通过**；扩展回归首轮 **632 通过、1 失败**，失败为原有 `ruby_markers` 的实际 D2D GPU 完成前 1ms 唱色前沿约 1.13px，该文件串行复验 **69 项全部通过**，未放宽阈值。Claude 追加正文反向/独立附加符组合 **165 通过**，使用 Codex 修正后的夹具重新运行完整 fallback 文件 **42 通过**。Codex Linux 首轮发现测试恢复 mtime 的纳秒精度不适用于 WSL/NTFS，须先记录文件系统实际保存的时间后再做等值恢复，不能将该测试夹具错误计作生产失败或跳过。Codex 已按实际文件系统的 utime 往返精度修正夹具，仍严格检查写入后大小/mtime 与基线完全一致；X11/Wayland 的专项各 **4 通过**。最终 X11 完整组合 **742 通过、279 项平台专用跳过**；上一批 25 份规范样例与本批 X11 比较误差全部为 **0**。Wayland 完整组合、独立产品补测和 Mac 双架构 CI 结果待补录。native 源码身份仍为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`；未触及 C++/头文件，无需重建该产物。Linux 真硬件、本轮 Mac 真机、其他字体注册/移除和完整 P05 门槛继续保留；未做 4K。日志前缀 `build/p05-font-lifecycle-*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

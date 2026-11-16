@@ -1,6 +1,7 @@
 """Platform font discovery exports bytes/instance decisions, never layout metrics."""
+from contextlib import contextmanager
 import hashlib
-from pathlib import Path
+import threading
 from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance
 from .backend import NativeRendererError
 
@@ -10,11 +11,16 @@ def resolve_skia_font(style):
     return _export_instance(instance, style.font_family)
 
 
-def _export_instance(instance, family):
+def _file_sha256(path):
+    with open(path, 'rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def _export_instance(instance, family, digest=None):
     if not instance.resource_path:
         raise NativeRendererError(f'无法取得 Skia 字体资源：{family}')
     resource = {'path': instance.resource_path, 'face_index': 0,
-                'sha256': hashlib.sha256(Path(instance.resource_path).read_bytes()).hexdigest(),
+                'sha256': digest or _file_sha256(instance.resource_path),
                 'axes': dict(instance.axis_values)}
     return resource, {'synthetic_bold': instance.synthetic_bold,
                       'synthetic_italic': instance.synthetic_italic,
@@ -26,22 +32,39 @@ class SkiaFontResolver:
 
     Qt is only a platform resource discovery adapter. HarfBuzz checks complete
     cell coverage, and the final scene revalidates the same explicit chain.
+
+    Content digests live only inside ``snapshot()``: one canonical preparation
+    reads each physical file once, whatever its instances or cells. File stat
+    is never an identity, so a later preparation rereads replaced bytes even at
+    the same path, size and mtime; a change inside one snapshot keeps the first
+    digest and is rejected by native SHA-256 validation rather than mixed.
     """
     allow_mixed_fonts = True
 
     def __init__(self):
-        self._exports = {}
+        self._local = threading.local()  # Per preparation thread: {path: sha256}.
+
+    @contextmanager
+    def snapshot(self):
+        outer = getattr(self._local, 'digests', None) is None
+        if outer:
+            self._local.digests = {}
+        try:
+            yield self
+        finally:
+            if outer:
+                self._local.digests = None
 
     def _export(self, instance, family):
         if not instance.resource_path:
             return _export_instance(instance, family)  # Keep the precise error.
-        path = Path(instance.resource_path)
-        stat = path.stat()
-        key = (str(path), stat.st_size, stat.st_mtime_ns, instance.axis_values,
-               instance.synthetic_bold, instance.synthetic_italic, instance.fallback_scale)
-        if key not in self._exports:
-            self._exports[key] = _export_instance(instance, family)
-        return self._exports[key]
+        with self.snapshot():
+            digests = self._local.digests
+            path = str(instance.resource_path)
+            if path not in digests:
+                digests[path] = _file_sha256(path)
+            # Axes/simulations/scale are recomputed per instance, never cached.
+            return _export_instance(instance, family, digests[path])
 
     def __call__(self, style):
         instance = resolve_font_instance(style.font_family, style.font_weight, italic=style.italic)

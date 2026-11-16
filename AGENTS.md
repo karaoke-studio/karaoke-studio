@@ -447,6 +447,11 @@ git submodule status
    不得翻转 HarfBuzz 文本方向来实现反向演唱。整轨注音/下方读音及 overlap 终点组合暂时拒绝；
    §14.35 的正向限制由本子集扩展，RTL/竖排、反向注音和其他特效仍拒绝。
 
+   字体内容快照生命周期见 §14.37：`SkiaFontResolver.snapshot()` 只缓存本次准备的首次内容摘要，
+   `text/skia_batch.font_snapshot` 是可选端口，IR/plan 的嵌套边界共用同一线程快照，退出即释放。
+   下次准备必须重新读内容，不能用路径/大小/mtime 作为内容身份。axes/模拟/缩放不缓存为摘要。
+   准备中字体改变须由既有 native SHA-256 校验拒绝；不得静默混合批次，帧绘制不读字体。
+
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，
    `native/skia_ipc.py` 统一处理确认和退出/abort 兜底。必须检查 `shared_memory_lifecycle_schema=1`。
