@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 9fc52c09
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43739980718 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 6ddfba84
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43789386030 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1635,7 +1635,7 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - native 在 Skia Qt/IR 边界检查源标记所需的能力及版本，Python 在选择后端前拒绝旧 sidecar；缺能力/错版本保持旧有效场景。公共 Skia 绘图核心无新增算法，未引入 Qt 帧内测量或旧注音投影。
 - 新增 `tests/test_subtitle_skia_ruby_markers.py`：空读音、caret、空白与带空白 caret 的源保真/正文时钟；标记与后续有效注音叠加、上下层、两种主字模式下的暂停 parts、GPU/Raster seek、source/style/roll 偏移与 DPR、真实 G5 和短 MP4、GPU 关闭/loader 失败后 Skia Raster、旧 sidecar/非法配置保留旧场景。Utopia/no_wipe 动画仍显式失败。D2D GPU 对照 **32 组**（4 种标记 × 下方开关 × legacy/N3 × DPR 1/1.5），每组 10 个时刻；逐层 alpha 墨迹包络与规范化已唱颜色覆盖的前沿误差均要求 **≤1 物理像素**，不使用 QPainter 图像 oracle。
 
-四份本地 Windows/Linux Vulkan/CPU-only 均完整重建通过，CTest 各 **3/3**，native 源码摘要 `c3aabcb58331af80f2a3060357dac6da251465618f45e26b5f4c68b590dc989e`。最终标记产品专项 **69 通过**；原最终组的两项“修改目标后几何不一致”检查也通过。Windows 完整 Skia 组合 **603 通过**；架构/协议/字体资源/验收与构建工具相关组合 **339 通过**。Linux X11 完整组合 **492 通过、111 项平台专用跳过**；Wayland 和 Mac CI 待结束后补录。Mac 验收包新增 `ruby_markers=1`，新增第 **19** 份规范样例 `ruby-markers.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛继续保留；未做 4K。日志/样例前缀 `build/p05-ruby-markers-*`。
+四份本地 Windows/Linux Vulkan/CPU-only 均完整重建通过，CTest 各 **3/3**，native 源码摘要 `c3aabcb58331af80f2a3060357dac6da251465618f45e26b5f4c68b590dc989e`。最终标记产品专项 **69 通过**；原最终组的两项“修改目标后几何不一致”检查也通过。Windows 完整 Skia 组合 **603 通过**；架构/协议/字体资源/验收与构建工具相关组合 **339 通过**。Linux X11/Wayland 完整组合各 **492 通过、111 项平台专用跳过**，19 份 Windows/X11/Wayland 规范样例最大误差均为 **0**。实现提交 `6ddfba84` 的 Mac CI [43789386030](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43789386030) **5 项全部成功**：arm64/x64 完整产品组合各 **482 通过、121 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。从 arm64 证据包按字节范围提取的 19 份规范 JSON，与 Windows/X11/Wayland 再比较全部为 **0**；两架构 Metal/Raster 四份指纹均核对为本节同一 native 源码身份，与本地四份一致。CI 的 19 份跨架构样例比较最大误差也全部为 **0**。两份干净 Mac 验收包均退出 **0**，`ruby_markers` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能代表本轮真机门槛已过。§14.6 复测入口已指向本批代码及验收包。Mac 验收包新增 `ruby_markers=1`，新增第 **19** 份规范样例 `ruby-markers.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛继续保留；未做 4K。日志/样例前缀 `build/p05-ruby-markers-*`。
 
 ## 15. 前期探针清理范围
 
