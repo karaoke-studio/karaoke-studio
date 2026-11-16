@@ -438,7 +438,8 @@ git submodule status
    整字变色子集见 §14.35：`p07_no_wipe` / `no_wipe_schema=1` 仅开放实色正向横排。
    逐行动画覆盖先由既有 IR 编排完成，`ResolvedLine.noWipe` 只向同一 GPU/Raster 核心传值。
    基本时钟以结束阈值切换，分段时钟只读首/末进度；不可重分配时间或省略 overlap/组裁剪。
-   零时长注音组初始时刻保持 before 优先。Utopia、反向、竖排和其他特效仍拒绝。
+   正文时钟起点（含零时长）before 优先；no_wipe＋零时长注音组合在 Python/native 明确拒绝，
+   不改变普通 wipe 的零时长规则。Utopia、反向、竖排和其他特效仍拒绝。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，

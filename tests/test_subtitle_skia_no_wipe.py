@@ -25,8 +25,15 @@ from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 def discrete(source, kind='upper', mode='reading_units'):
     track, style, resolve = (marked(source, lower=kind == 'lower', mode=mode) if kind == 'mark'
                              else reading(source, 'nfc', lower=kind == 'lower', mode=mode))
-    if kind == 'main':
+    if kind in {'main', 'first_zero', 'all_zero'}:
         track = replace(track, rubies=[])
+    if kind in {'first_zero', 'all_zero'}:
+        line = track.lines[0]
+        chars = [replace(line.chars[0], pause_release_ms=200), line.chars[1]]
+        if kind == 'all_zero': chars = [replace(c, start_ms=200) for c in chars]
+        track = replace(track, lines=[replace(line, chars=chars, end_ms=200 if kind == 'all_zero' else line.end_ms)])
+    if kind == 'ruby_zero':
+        track = replace(track, rubies=[replace(track.rubies[0], reading_part_ms=[0, 800])])
     return track, replace(style, karaoke_anim='no_wipe'), resolve
 
 
@@ -91,7 +98,7 @@ def test_zero_duration_uses_end_threshold_and_offsets_once(binary, mark_source, 
             configure(process, ir)
             frames, _ = collect(process, [t+(766 if shifted else 0) for t in [199, 200, 201, 199]])
         assert np.array_equal(frames[0], frames[-1])
-        assert np.array_equal(frames[1], frames[2]) and not np.array_equal(frames[0], frames[1])
+        assert np.array_equal(frames[0], frames[1]) and not np.array_equal(frames[1], frames[2])
         outputs.append(frames)
     assert all(np.array_equal(a, b) for a, b in zip(*outputs, strict=True))
 
@@ -163,7 +170,7 @@ def test_real_discrete_mp4(binary, mark_source, monkeypatch, tmp_path, gpu, miss
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('kind', ['main', 'upper', 'lower', 'mark'])
+@pytest.mark.parametrize('kind', ['main', 'upper', 'lower', 'mark', 'first_zero', 'all_zero'])
 @pytest.mark.parametrize('mode', ['reading_units', 'checkpoint_segments'])
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('dpr', [1, 1.5])
@@ -171,7 +178,7 @@ def test_discrete_matches_actual_d2d_gpu(binary, mark_source, kind, mode, semant
     from test_subtitle_render_gpu_backend import _render_g1_frames
     track, style, resolve = discrete(mark_source, kind, mode)
     style = replace(style, layout_semantics=semantics)
-    times = [199, 200, 450, 599, 600, 750, 999, 1000, 1200, 1699, 1700, 1900]
+    times = [199, 200, 201, 450, 599, 600, 601, 750, 999, 1000, 1001, 1200, 1699, 1700, 1701, 1900]
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
             width=900, height=600, dpr=dpr, realization_enabled=False)
@@ -209,3 +216,21 @@ def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
     monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
     with pytest.raises(NativeRendererError, match='整字变色'): SkiaRendererProcess(binary).start()
     assert not sent
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_zero_duration_ruby_is_rejected_without_losing_old_scene(binary, mark_source, target):
+    source = discrete(mark_source, 'ruby_zero')
+    with pytest.raises(ValueError, match='零时长注音'): ir_for(binary, source)
+    track, style, resolve = source
+    # Exercise the C++ boundary too, bypassing only the Python product gate.
+    bad = ir_for(binary, (track, replace(style, karaoke_anim='none'), resolve))
+    bad['track']['lines'][0]['karaoke_anim'] = 'no_wipe'
+    bad['required_features'].append('p07_no_wipe')
+    bad['skia_layout']['no_wipe_schema'] = 1
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir_for(binary, discrete(mark_source, 'upper')))
+        before, _ = collect(process, [700])
+        with pytest.raises(NativeRendererError, match='零时长注音'): configure(process, bad)
+        after, _ = collect(process, [700], generation=2)
+    assert np.array_equal(before[0], after[0])

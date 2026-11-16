@@ -1709,10 +1709,10 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 **本批接通 `no_wipe` 的有界产品子集，不关闭 P05/P07，也不解除竖排、反向、Utopia 或其他特效门禁。** 现有 D2D GPU 的 `no_wipe` 在单元最终结束时刻切换唱色；具有分段曲线时只取首/末进度，不随内部 checkpoint 插值。正文与上下读音、暂停和单个独立附加符均保留原计时单元，未修改共享布局/时钟策略或 D2D 实现。
 
 - `skia_ir` 消费已完成逐行覆盖的 `track.lines[].karaoke_anim`，仅实际使用整字变色的场景声明 `p07_no_wipe` / `no_wipe_schema=1`。native 边界保留该逐行策略，验证版本和能力后进入公共核心；旧 sidecar 在选择后端前即拒绝。缺能力、错误版本/类型的配置失败后保留旧场景。
-- `ResolvedLine.noWipe` 是最终绘制值，不携带样式解析或平台判断。`PreparedScene` 正文和 `PreparedWipeGroup` 注音共用同一策略：基本时钟在结束时切换，分段时钟读取终点。既有互斥透明裁剪、overlap 终点、下一字符接管和整组完成释放继续保留；完全零时长注音组的初始时刻仍由 before 优先，不能用统一 `>=` 掩盖该既有边界。
+- `ResolvedLine.noWipe` 是最终绘制值，不携带样式解析或平台判断。`PreparedScene` 正文和 `PreparedWipeGroup` 注音共用同一策略：基本时钟在结束时切换，分段时钟读取终点。既有互斥透明裁剪、overlap 终点、下一字符接管和整组完成释放继续保留。正文在最终时钟起点由 before 优先，零时长也在下一采样才切换；不能只用 `>= end` 忽略该边界。
 - GPU/Raster 使用同一源码和最终几何；无新增 Qt/平台依赖、独立动画时钟或字体测量。P04 ASCII 兼容 profile 仍拒绝 no_wipe；本批不更改生产默认、发布包隔离和用户 GPU 偏好。
 
-验证进度：Windows 专项首轮 **67 项通过**，包含 4 类来源（正文/上读音/上下读音/独立重音）× 2 种主字时钟 × legacy/N3 × DPR 1/1.5 的 **32 组实际 D2D GPU 原始路径对照**，保持 alpha 几何与归一唱色面积 **1 物理像素**条件；不冒充默认 realization 完整画质验收。Linux 专项首轮 **35 通过、32 项 D2D 专用跳过**。Windows/Linux Vulkan 与 CPU-only 四份 native 均按源码变化干净重建并通过 CTest **3/3**。新增 GPU/Raster 同 IR 像素、空读音/短语标记及完整相关组合仍在验证；Mac 两架构和干净验收包结果待补录。新增第 **24** 份规范样例 `no-wipe-layout.json`，Mac 验收包声明 `no_wipe=1`。Linux 真硬件、本轮 Mac 真机与完整 P05 画质门槛保留，未做 4K。日志/样例前缀 `build/p05-no-wipe-*`。
+验证进度：Windows 专项首轮 **67 项通过**，包含 4 类来源（正文/上读音/上下读音/独立重音）× 2 种主字时钟 × legacy/N3 × DPR 1/1.5 的 **32 组实际 D2D GPU 原始路径对照**，保持 alpha 几何与归一唱色面积 **1 物理像素**条件；不冒充默认 realization 完整画质验收。Linux 专项首轮 **35 通过、32 项 D2D 专用跳过**。Windows/Linux Vulkan 与 CPU-only 四份 native 均按源码变化干净重建并通过 CTest **3/3**。新增 GPU/Raster 同 IR 像素和空读音/短语标记已随首轮 Linux X11/Wayland 完整组合各 **690 通过、215 跳过**；相关架构/协议/字体/构建与预览回归 **532 通过、10 跳过**。补充零时长实际 GPU 对照发现正文起点提前变色，已修正；正文首字/整行零时长的 **16 组实际 D2D GPU 对照**、GPU/Raster 时差检查及双边界注音拒绝共 **20 项通过**；首个零时长注音在同一帧命中 D2D before/after 两栈，与公共互斥透明裁剪不同，Python 最终 IR 与 C++ 组构造均明确拒绝 no_wipe＋任一零时长注音单元，保留旧场景；不改变普通 wipe 的既有零时长行为。旧提交 `d024b239` 的 Mac CI 43815554977 因该补修取消，不能作为最终验收；修正后四份 native 已重新干净构建，CTest 各 **3/3**，统一源码身份为 `ce3342a218fd626a8672b71958e15c60d8c1b9a5112442dac1003d02743a46d7`；最终完整组合、Mac 两架构和干净验收包结果待补录。新增第 **24** 份规范样例 `no-wipe-layout.json`，Mac 验收包声明 `no_wipe=1`。Linux 真硬件、本轮 Mac 真机与完整 P05 画质门槛保留，未做 4K。日志/样例前缀 `build/p05-no-wipe-*`。
 
 ## 15. 前期探针清理范围
 

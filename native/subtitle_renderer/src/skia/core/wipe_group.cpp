@@ -12,6 +12,8 @@ PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, boo
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
     for (const auto& cell : cells_) {
+        if (noWipe_ && cell.startMs == cell.endMs)
+            throw std::runtime_error("Skia 整字变色的零时长注音尚未完成 GPU 画质兼容");
         if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
             || cell.right < cell.left || cell.startMs < previousEnd || cell.endMs < cell.startMs
             || cell.endMs > 172800000

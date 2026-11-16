@@ -78,6 +78,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p05_mixed_fonts')
         ir['skia_layout']['mixed_font_schema'] = 1
     if any(line.get("karaoke_anim") == "no_wipe" for line in ir["track"]["lines"]):
+        for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True):
+            if source.get('karaoke_anim') == 'no_wipe' and any(
+                    cell['interval_ms'][0] == cell['interval_ms'][1]
+                    for group in final.get('ruby_groups', []) for cell in group['units']):
+                raise ValueError('Skia 整字变色的零时长注音尚未完成 GPU 画质兼容')
         ir["required_features"].append("p07_no_wipe")
         ir["skia_layout"]["no_wipe_schema"] = 1
     return ir

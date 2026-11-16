@@ -125,6 +125,10 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         }
         const auto rawProgress = [&](const Cell& cell) {
             if (line.noWipe) {
+                // The existing GPU's Before phase wins at the initial sample,
+                // including a zero-duration cell. Switch on the next sample.
+                const int start = cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs;
+                if (tMs <= start) return 0.f;
                 if (!cell.wipePoints.empty())
                     return tMs >= cell.wipePoints.back().timeMs
                         ? cell.wipePoints.back().position : cell.wipePoints.front().position;
