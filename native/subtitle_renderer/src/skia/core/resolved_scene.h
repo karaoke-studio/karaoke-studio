@@ -24,6 +24,7 @@ struct ResolvedLine {
     // are final values; neither grouping nor timing is resolved while drawing.
     std::vector<std::vector<ResolvedCell>> rubyGroups;
     bool noWipe = false; // Whole-cell color switches at the final clock endpoint.
+    bool reverseWipe = false; // Singing direction, never text shaping direction.
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

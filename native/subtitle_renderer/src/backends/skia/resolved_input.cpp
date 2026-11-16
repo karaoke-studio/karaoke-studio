@@ -8,6 +8,7 @@
 #include "../../scene/skia_text_projection.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
+#include <algorithm>
 
 namespace krok::subtitle::native {
 namespace {
@@ -63,11 +64,17 @@ std::uint32_t argb(const RgbaColor& c) {
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
+        prepared.reverseWipe = line.wipeReverse;
         for (const auto& window : line.placementWindows)
             prepared.translations.push_back({window.startMs, window.endMs, window.offsetX, window.offsetY});
         for (int j = 0; j < cells.size(); ++j) {
             const auto cell = cells[j].toObject();
-            const auto interval = intervals[j].toArray();
+            const int clock = line.wipeReverse ? cells.size()-1-j : j;
+            if ((line.wipeReverse && (!cell.value("clock_index").isDouble()
+                    || cell.value("clock_index").toDouble(-1) != clock))
+                || (!line.wipeReverse && cell.contains("clock_index")))
+                throw BackendError("Skia 反向走字时钟所有权无效");
+            const auto interval = intervals[clock].toArray();
             if (interval.size() != 2 || !interval[0].isDouble() || !interval[1].isDouble()
                 || !std::isfinite(interval[0].toDouble()) || !std::isfinite(interval[1].toDouble())
                 || std::floor(interval[0].toDouble()) != interval[0].toDouble()
@@ -76,9 +83,9 @@ std::uint32_t argb(const RgbaColor& c) {
                 || interval[1].toDouble() < interval[0].toDouble())
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
-            auto glyph = glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[j].startMs, line.chars[j].endMs,
+            auto glyph = glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs, line.chars[clock].endMs,
                 argb(paint.beforeFillPaint.color), argb(paint.afterFillPaint.color));
-            glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[j].startMs - int(interval[0].toDouble()), totalPoints);
+            glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
                 if (glyph.wipePoints.empty()) glyph.wipePoints = {{glyph.startMs, 0.f}, {glyph.endMs, 1.f}};
                 glyph.wipePoints.back().position = *end;
@@ -89,6 +96,7 @@ std::uint32_t argb(const RgbaColor& c) {
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset, totalCells, totalGroups);
+        if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
         out.lines.push_back(std::move(prepared));
     }
     return out;

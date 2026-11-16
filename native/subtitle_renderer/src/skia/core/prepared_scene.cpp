@@ -22,6 +22,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
         line.noWipe = source.noWipe;
+        line.reverseWipe = source.reverseWipe;
+        if (source.reverseWipe && !source.rubyGroups.empty())
+            throw std::runtime_error("Skia 反向走字暂不支持注音组合");
         if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
         for (const auto& translation : source.translations) {
             if (!std::isfinite(translation.x) || !std::isfinite(translation.y)
@@ -35,6 +38,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
+            if (source.reverseWipe && cell.adjustedWipeEnd)
+                throw std::runtime_error("Skia 反向走字暂不支持重叠终点");
             if (cell.adjustedWipeEnd && cell.wipePoints.empty())
                 throw std::runtime_error("Skia 重叠走字缺少基本时钟");
             if (!cell.wipePoints.empty()) {
@@ -124,6 +129,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
         }
         const auto rawProgress = [&](const Cell& cell) {
+            if (line.reverseWipe && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
+                return 0.f;
             if (line.noWipe) {
                 // The existing GPU's Before phase wins at the initial sample,
                 // including a zero-duration cell. Switch on the next sample.
@@ -142,7 +149,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         for (std::size_t index = 0; index < line.cells.size(); ++index) {
             const auto& cell = line.cells[index];
             float progress = rawProgress(cell);
-            float edge = cell.left + (cell.right-cell.left)*progress;
+            float edge = line.reverseWipe ? cell.right-(cell.right-cell.left)*progress
+                                          : cell.left+(cell.right-cell.left)*progress;
             if (cell.adjustedWipeEnd) {
                 const int start = cell.wipePoints.front().timeMs, end = cell.wipePoints.back().timeMs;
                 const Cell* next = index+1 < line.cells.size() ? &line.cells[index+1] : nullptr;
@@ -162,7 +170,9 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             // Two disjoint clips avoid painting translucent after color over before color.
             if (progress < 1) {
                 canvas.save();
-                canvas.clipRect(SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f),
+                canvas.clipRect(line.reverseWipe
+                    ? SkRect::MakeLTRB(-1e6f, -1e6f, progress == 0 ? 1e6f : edge, 1e6f)
+                    : SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.before);
                 canvas.drawPath(cell.path, paint);
@@ -170,7 +180,9 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
             if (progress > 0) {
                 canvas.save();
-                canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f),
+                canvas.clipRect(line.reverseWipe
+                    ? SkRect::MakeLTRB(progress == 1 ? -1e6f : edge, -1e6f, 1e6f, 1e6f)
+                    : SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.after);
                 canvas.drawPath(cell.path, paint);

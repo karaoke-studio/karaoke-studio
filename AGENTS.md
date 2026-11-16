@@ -441,6 +441,12 @@ git submodule status
    正文时钟起点（含零时长）before 优先；no_wipe＋零时长注音组合在 Python/native 明确拒绝，
    不改变普通 wipe 的零时长规则。Utopia、反向、竖排和其他特效仍拒绝。
 
+   正文反向横排子集见 §14.36：`p05_reverse_wipe` / `reverse_wipe_schema=1`，仅改变演唱方向。
+   最终 `clock_index` 严格等于 n-1-source_index，原字形/run/实色不换位，原区间不重新分时；
+   `render/skia_direction_ir` 只投影一次。native 验证后按时间序准备，公共 `reverseWipe` 只改裁剪。
+   不得翻转 HarfBuzz 文本方向来实现反向演唱。整轨注音/下方读音及 overlap 终点组合暂时拒绝；
+   §14.35 的正向限制由本子集扩展，RTL/竖排、反向注音和其他特效仍拒绝。
+
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，
    `native/skia_ipc.py` 统一处理确认和退出/abort 兜底。必须检查 `shared_memory_lifecycle_schema=1`。

@@ -11,6 +11,7 @@ from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_ski
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_lower_ir import lower_sources
+from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 
 
@@ -31,6 +32,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
+        validate_reverse_source(source, [style_for_line(source_style, line) for line in source.lines])
         if any(c.vector_glyph for l in source.lines for c in l.chars):
             raise ValueError('Skia 当前规范布局尚不支持导唱符')
         with layout_pass():
@@ -85,4 +87,5 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                 raise ValueError('Skia 整字变色的零时长注音尚未完成 GPU 画质兼容')
         ir["required_features"].append("p07_no_wipe")
         ir["skia_layout"]["no_wipe_schema"] = 1
+    project_reverse_wipe(ir)
     return ir
