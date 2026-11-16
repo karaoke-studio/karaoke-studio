@@ -7,6 +7,7 @@ Ruby visual-unit intervals remain separate from the main-text clock.
 from dataclasses import dataclass
 import math
 import struct
+import unicodedata
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 
 from .timing import (ruby_main_wipe_intervals, ruby_visual_units_and_intervals,
@@ -31,6 +32,11 @@ class RubyUnitClock:
     annotation_index: int
     units: tuple[str, ...]
     intervals: tuple[tuple[int, int], ...]
+
+    @property
+    def glyph_units(self):
+        """GPU normalizes each timed unit, never across a part boundary."""
+        return tuple(unicodedata.normalize('NFC', unit) for unit in self.units)
 
 
 @dataclass(frozen=True)

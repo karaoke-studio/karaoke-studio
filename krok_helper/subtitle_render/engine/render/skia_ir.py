@@ -63,8 +63,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         if markers:
             ir['required_features'].append('p05_ruby_markers')
+        if 'ruby_unit_schema' in ir['skia_layout']:
+            ir['required_features'].append('p05_ruby_units')
         if lower_enabled:
             ir['required_features'] += ['p05_lower_ruby', 'p05_overlap_wipe']
-        elif markers:
+        elif markers or 'ruby_unit_schema' in ir['skia_layout']:
             ir['required_features'].append('p05_overlap_wipe')
     return ir

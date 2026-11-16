@@ -29,6 +29,8 @@ int main(int argc, char** argv) {
     profiles.append("p05_overlap_wipe");
     profiles.append("p05_lower_ruby");
     profiles.append("p05_ruby_markers");
+    profiles.append("p05_ruby_units");
+    ready.insert("ruby_unit_schema", 1);
     ready.insert("ruby_marker_schema", 1);
     ready.insert("lower_ruby_schema", 1);
     ready.insert("overlap_schema", 1);

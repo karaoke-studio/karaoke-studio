@@ -63,13 +63,22 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
             if (!text.isString() || text.toString().isEmpty() || text.toString().toUtf8().size() > 4096
                 || !times.isArray() || times.toArray().size() != 2 || cell.contains("wipe_points"))
                 throw BackendError("Skia 注音文本或最终时间区间无效");
+            QString drawingText = text.toString();
+            if (cell.contains("glyph_text")) {
+                const auto glyphText = cell.value("glyph_text");
+                if (!ir.value("required_features").toArray().contains("p05_ruby_units")
+                    || ir.value("skia_layout").toObject().value("ruby_unit_schema").toDouble(-1) != 1
+                    || !glyphText.isString() || glyphText.toString() != drawingText.normalized(QString::NormalizationForm_C))
+                    throw BackendError("Skia 注音字形文本缺少能力声明或不是来源单元的 NFC");
+                drawingText = glyphText.toString();
+            }
             const auto interval = times.toArray();
             const int start = integer(interval[0], -86400000, 86400000);
             const int end = integer(interval[1], start, 86400000);
             const auto shiftedStart = std::int64_t(start) + offset, shiftedEnd = std::int64_t(end) + offset;
             if (shiftedStart < -172800000 || shiftedEnd > 172800000)
                 throw BackendError("Skia 注音最终时间偏移超限");
-            auto glyph = glyphs.cell(cell, text.toString(), int(shiftedStart), int(shiftedEnd),
+            auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
                 before, after);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
                 glyph.wipePoints = {{int(shiftedStart), 0.f}, {int(shiftedEnd), *end}};

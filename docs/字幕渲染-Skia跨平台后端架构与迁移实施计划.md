@@ -520,7 +520,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
-- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28，空读音/短语标记兼容见 §14.29；完整注音组合尚未验收。
+- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28，空读音/短语标记兼容见 §14.29，part 局部字形与单元级 NFC 子集见 §14.30；完整注音组合尚未验收。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
@@ -1636,6 +1636,19 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - 新增 `tests/test_subtitle_skia_ruby_markers.py`：空读音、caret、空白与带空白 caret 的源保真/正文时钟；标记与后续有效注音叠加、上下层、两种主字模式下的暂停 parts、GPU/Raster seek、source/style/roll 偏移与 DPR、真实 G5 和短 MP4、GPU 关闭/loader 失败后 Skia Raster、旧 sidecar/非法配置保留旧场景。Utopia/no_wipe 动画仍显式失败。D2D GPU 对照 **32 组**（4 种标记 × 下方开关 × legacy/N3 × DPR 1/1.5），每组 10 个时刻；逐层 alpha 墨迹包络与规范化已唱颜色覆盖的前沿误差均要求 **≤1 物理像素**，不使用 QPainter 图像 oracle。
 
 四份本地 Windows/Linux Vulkan/CPU-only 均完整重建通过，CTest 各 **3/3**，native 源码摘要 `c3aabcb58331af80f2a3060357dac6da251465618f45e26b5f4c68b590dc989e`。最终标记产品专项 **69 通过**；原最终组的两项“修改目标后几何不一致”检查也通过。Windows 完整 Skia 组合 **603 通过**；架构/协议/字体资源/验收与构建工具相关组合 **339 通过**。Linux X11/Wayland 完整组合各 **492 通过、111 项平台专用跳过**，19 份 Windows/X11/Wayland 规范样例最大误差均为 **0**。实现提交 `6ddfba84` 的 Mac CI [43789386030](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43789386030) **5 项全部成功**：arm64/x64 完整产品组合各 **482 通过、121 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。从 arm64 证据包按字节范围提取的 19 份规范 JSON，与 Windows/X11/Wayland 再比较全部为 **0**；两架构 Metal/Raster 四份指纹均核对为本节同一 native 源码身份，与本地四份一致。CI 的 19 份跨架构样例比较最大误差也全部为 **0**。两份干净 Mac 验收包均退出 **0**，`ruby_markers` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能代表本轮真机门槛已过。§14.6 复测入口已指向本批代码及验收包。Mac 验收包新增 `ruby_markers=1`，新增第 **19** 份规范样例 `ruby-markers.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛继续保留；未做 4K。日志/样例前缀 `build/p05-ruby-markers-*`。
+
+### 14.30 P05.6 分段注音字形单元与单元级 NFC（2026-11-16）
+
+**本批接通按 reading parts 划分的显式字形单元及单元内 NFC 子集，不代表完整 Unicode/注音或 P05 已验收。** 生产 GPU 的 `rubyUtopiaReadingUnitsAndIntervals` 先按各 part 拆单元并分配整数时间，`gpu_scene_projection.cpp` 再逐单元 NFC 规范化后绘制；不能对整个 reading 合成一次再反推原 checkpoints。Skia 此前将整段 reading 的字素几何与 part 局部时钟比较，跨界时直接拒绝；本批让几何明确消费同一计时单元规则。
+
+- `RubyUnitClock.units/intervals` 保留原始单元文本和时间，`glyph_units` 仅逐单元执行 NFC。`measure_timed_readings` 复用原批量度量端口、字体实例去重及单位宽度策略，按这些显式单元选择字体槽、读取规范几何。`measure_readings` 的默认整段字素调用保持原语义；显式注入单元时校验拼接文本及数量，不能丢字、替字。源范围、正文区间、暂停、时间偏移和正文走字模式没有重分配。
+- `RubyGeometry.glyph_units` 保存实际测量的绘制单元，正式 IR 编译器校验其与时钟的单元级 NFC 一致。原 `text` 和 reading parts 继续留在最终组与来源；仅需新投影的场景添加 `glyph_text`，以及 `p05_ruby_units` / `ruby_unit_schema=1`，并复用已有重叠裁剪能力。普通未跨界且无需 NFC 的场景不新增该布局字段，已有规范样例保持原内容。
+- native 在 Qt/IR 边界校验新能力、版本和 `glyph_text == NFC(text)`，再用该文本进行原有字体/cluster 快照校验和轮廓准备。任意替字、整段合成冒充局部单元、错类型/版本/能力、伪造 cluster 均失败并保留旧场景。客户端在选择后端前拒绝旧 sidecar。公共 Skia 绘制核心、HarfBuzz/FreeType 算法、共享 D2D 时钟和生产默认均未改变。
+- 已验证：单元内拉丁分解重音与片假名浊音的 NFC；被 part 边界切开的韩文 Jamo 和 IPA 连结符组合保留各自单元，不能跨 part 重新合成；空 part 保留暂停。上下读音共享该准备规则，独立 lower 原文仍按原下方来源校验。**以独立组合标记开头的 part 继续明确拒绝**：其 standalone shaping/可能插入 dotted circle 尚未完成 GPU 兼容，不借隐式字体回退或删除该单元掩盖。彩色/位图字形与完整 fallback 链仍按既有门槛拒绝。
+
+新增 `tests/test_subtitle_skia_ruby_units.py` 最终 **66 通过**（首轮未扩展 N3 时 50 项）。覆盖源与绘制单元分离、part 边界改变几何及缓存身份、规范批量去重、暂停/seek、两种主字模式、上下层、source/style/roll 偏移及 DPR、非法快照保留旧场景、旧 sidecar、真实 G5/短 MP4、GPU 关闭/loader 失败后 Skia Raster。D2D GPU 对照扩为 **32 组**（4 类文本 × 两种主字模式 × legacy/N3 × DPR 1/1.5），各 **12** 个时刻，保留精确边界帧；逐层墨迹与已唱覆盖前沿误差均要求 **≤1 物理像素**，不使用 QPainter 图像 oracle。正文在精确单元结束点可按 GPU 规则交接裁剪，暂停不变断言取暂停内部，不混淆两者。
+
+四份 Windows/Linux Vulkan/CPU-only 均完整构建通过，CTest 各 **3/3**，native 源码摘要 `54b1eb956242ba5937e838af2cbb39b3d21633d0323a6ab3b1cf539e859c117c`。Windows 完整 Skia 组合 **669 通过**；关联架构/协议/字体资源/验收与构建工具组合 **339 通过**。Linux X11 完整组合 **526 通过、143 项平台专用跳过**；Wayland 与本批 Mac CI 待结束后补录。Mac 验收包新增 `ruby_units=1`，新增第 **20** 份规范样例 `ruby-unit-layout.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-ruby-units-*`。
 
 ## 15. 前期探针清理范围
 

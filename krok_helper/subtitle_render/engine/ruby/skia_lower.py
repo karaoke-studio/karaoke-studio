@@ -7,13 +7,11 @@ Lower readings never own main-text wipe curves; settings must be frozen.
 from dataclasses import dataclass, replace
 import hashlib
 
-from strange_uta_game.backend.domain.graphemes import split_graphemes
-
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from .lower_semantics import LowerRuby, lower_rubies_for_line
 from .selection import active_rubies_for_line, ruby_target_indices
-from .skia_metrics import MeasuredRubyReading, MeasuredRubyReadings, measure_readings
+from .skia_metrics import MeasuredRubyReading, MeasuredRubyReadings, measure_timed_readings
 from .skia_timing import RubyUnitClock, ruby_unit_clock
 from .style_semantics import ruby_script_stroke_style
 
@@ -63,8 +61,6 @@ def select_lower_targets(track, style, line_styles, measured):
                 raise ValueError('Skia 下方注音缺少有效正文目标')
             effective_style = ruby_script_stroke_style(ruby.render_style, ruby.reading)
             clock = ruby_unit_clock(ruby, count)
-            if clock.units != tuple(split_graphemes(ruby.reading)):
-                raise ValueError('Skia 下方注音的分段边界拆开了塑形单元')
             groups.append(LowerReadingTarget(indices, ruby, effective_style, clock))
             count += 1
         pending.append(groups)
@@ -74,8 +70,8 @@ def select_lower_targets(track, style, line_styles, measured):
 def prepare_lower_readings(track, style, line_styles, measured, *, resolve_font, measure):
     """Batch explicit fonts for selected targets; never enable product drawing."""
     pending = select_lower_targets(track, style, line_styles, measured)
-    readings = [(g.effective.reading, g.style) for groups in pending for g in groups]
-    metrics = measure_readings(readings, resolve_font=resolve_font, measure=measure)
+    readings = [(g.effective, g.style) for groups in pending for g in groups]
+    metrics = measure_timed_readings(readings, resolve_font=resolve_font, measure=measure)
     offset, lines = 0, []
     for groups in pending:
         result = []

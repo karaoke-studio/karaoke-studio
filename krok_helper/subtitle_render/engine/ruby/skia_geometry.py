@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.engine.style.style_semantics import style_for_r
 from krok_helper.subtitle_render.engine.text.font_slots import font_style_for_cell
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from .selection import active_rubies_for_line, ruby_target_indices, effective_ruby_for_target, ruby_target_x_range
-from .skia_metrics import MeasuredRubyReadings, measure_readings
+from .skia_metrics import MeasuredRubyReadings, measure_timed_readings
 from .style_semantics import ruby_style_for_target_indices, ruby_script_stroke_style, ruby_stroke_width
 from .skia_lower import select_lower_targets
 from .skia_reference import measure_references
@@ -38,6 +38,7 @@ class RubyGeometry:
     span: tuple[float, float]
     baseline_offset: float
     cells: tuple
+    glyph_units: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,15 +107,15 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             ruby_style = ruby_script_stroke_style(brush, effective.reading)
             target = RubyTarget(annotation_indices[id(ruby)], tuple(indices), effective, ruby_style)
             line_targets.append(target)
-            readings.append((effective.reading, ruby_style))
+            readings.append((effective, ruby_style))
         for generated in lower[index]:
             target = RubyTarget(-1-generated.clock.annotation_index, generated.indices,
                                 generated.effective, generated.style, True)
             line_targets.append(target)
-            readings.append((target.effective.reading, target.style))
+            readings.append((target.effective, target.style))
             reference_pairs.append((ruby_style_for_target_indices(appearance, line, list(target.indices)), target.style))
         targets.append(line_targets)
-    ruby_metrics = measure_readings(readings, resolve_font=resolve_font, measure=measure)
+    ruby_metrics = measure_timed_readings(readings, resolve_font=resolve_font, measure=measure)
     references = measure_references(reference_pairs, resolve_font=resolve_font, measure=measure)
     lower_targets = [t for group in targets for t in group if t.lower]
     lower_baselines = {target.annotation_index: round(reference.lower_baseline(target.style.ruby_gap_px))
@@ -167,7 +168,8 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                               'layout_left': origin, 'layout_right': origin + width,
                               'wipe_left': x + ink[0] if visible else origin,
                               'wipe_right': x + ink[2] if visible else origin + width})
-            rubies.append(RubyGeometry(target, tuple(span), baseline, tuple(cells)))
+            rubies.append(RubyGeometry(target, tuple(span), baseline, tuple(cells),
+                                       tuple(unit[0] for unit in metrics.unit_layouts)))
         # Generated lower ink now participates in the source's placement and
         # collision envelope; authored upper readings remain outside it.
         boxes = [local.ink] if local.ink else []

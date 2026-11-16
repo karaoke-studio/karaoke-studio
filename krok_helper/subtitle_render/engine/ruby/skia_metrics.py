@@ -7,6 +7,7 @@ are preparation inputs, not permission to render an unsupported ruby profile.
 from dataclasses import dataclass, asdict
 import hashlib
 import json
+import unicodedata
 
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 
@@ -32,19 +33,27 @@ class MeasuredRubyReadings:
     identity: str
 
 
-def measure_readings(readings, *, resolve_font, measure) -> MeasuredRubyReadings:
+def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> MeasuredRubyReadings:
     """Measure (reading, effective Style) entries without Qt font measurement.
 
     Graphemes, rather than mora or authored timing parts, own geometry. Empty
     pause parts are handled by the shared timing policy, never shaped as glyphs.
     The Japanese ruby slot owns the baseline even for all-Latin/empty readings.
     """
+    readings = tuple(readings)
+    if visual_units is None:
+        visual_units = [tuple(split_graphemes(text)) for text, _ in readings]
+    else:
+        visual_units = tuple(visual_units)
+        for (reading, _), units in zip(readings, visual_units, strict=True):
+            if any(not isinstance(u, str) or not u for u in units) or ''.join(units) != reading:
+                raise ValueError('Skia 注音计时单元与来源文本不一致')
     batch, references = TextMeasurementBatch(resolve_font), []
-    for reading, style in readings:
+    for (reading, style), text_units in zip(readings, visual_units, strict=True):
         main, _ = font_style_for_ruby_cell(style, '')
         baseline_run = batch.instance(main)
         units = []
-        for unit in split_graphemes(reading):
+        for unit in text_units:
             selected, stretch = font_style_for_ruby_cell(style, unit)
             stroke = ruby_stroke_width(ruby_script_stroke_style(style, unit))
             run = batch.instance(selected, stretch)
@@ -70,3 +79,20 @@ def measure_readings(readings, *, resolve_font, measure) -> MeasuredRubyReadings
     signature = [asdict(r) for r in results]
     identity = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     return MeasuredRubyReadings(batch.fonts, batch.resolved_runs(), tuple(results), identity)
+
+
+def measure_timed_readings(readings, *, resolve_font, measure):
+    """Measure the GPU's part-local clock units, normalized independently.
+
+    The clock retains authored text; normalization is only the glyph boundary.
+    An isolated combining mark needs a separately verified shaping contract.
+    """
+    from .skia_timing import ruby_unit_clock
+    readings = tuple(readings)
+    clocks = [ruby_unit_clock(ruby, index) for index, (ruby, _) in enumerate(readings)]
+    units = [clock.glyph_units for clock in clocks]
+    if any(unicodedata.category(unit[0]).startswith('M') for row in units for unit in row):
+        raise ValueError('Skia 注音 part 以独立组合标记开头，尚未完成 GPU 字形兼容')
+    # Normalizing each unit can differ from normalizing the concatenated text.
+    return measure_readings([(''.join(row), style) for row, (_, style) in zip(units, readings, strict=True)],
+                            visual_units=units, resolve_font=resolve_font, measure=measure)

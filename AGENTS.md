@@ -413,6 +413,12 @@ git submodule status
    源标记保留但不能覆盖正文时钟或占用后续读音的时钟归属；`^` 按实际 GPU 单元绘制，
    空读音不伪造字形。标记场景复用重叠终点/裁剪能力，Utopia 动画仍属 P07、继续拒绝。
 
+   P05.6 分段字形单元见 §14.30：`RubyUnitClock.units` 保留 part 局部原文/时钟，
+   `glyph_units` 仅逐单元 NFC；几何必须经 `measure_timed_readings` 消费这些单元，不能
+   按整段 reading 重组 checkpoints。需要新投影时声明 `p05_ruby_units` / `ruby_unit_schema=1`，
+   `text` 保留原文，`glyph_text` 必须等于该单元 NFC；native 验证字体/cluster 后仍绘制最终路径。
+   不能跨 part 合成韩文/IPA 单元；以独立组合标记开头的 part 仍明确拒绝，完整 fallback 待做。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的

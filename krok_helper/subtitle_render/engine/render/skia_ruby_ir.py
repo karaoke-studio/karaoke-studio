@@ -18,7 +18,12 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     if lower_source_indices is None and any(group.target.lower for line in ruby.lines for group in line.rubies):
         raise ValueError('Skia 下方注音最终绘制需要完整来源映射')
     markers = any(is_utopia_group_marker(r) for r in geometry.track.rubies)
-    adjusted_wipes = lower_source_indices is not None or markers
+    timings = [prepare_ruby_wipe_timing(item.line, local, item.layout_style.ruby_main_progress_mode)
+               for item, local in zip(prepared.plan.lines, ruby.lines, strict=True)]
+    unit_projection = any(c.units != tuple(split_graphemes(g.target.effective.reading)) or c.glyph_units != c.units
+        for local, timing in zip(ruby.lines, timings, strict=True)
+        for g, c in zip(local.rubies, timing.readings, strict=True))
+    adjusted_wipes = lower_source_indices is not None or markers or unit_projection
     fonts = dict(measured.fonts)
     for key, resource in ruby.measured.fonts.items():
         if key in fonts and fonts[key] != resource:
@@ -26,9 +31,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         fonts[key] = resource
     run_offset = len(measured.runs)
     lines = []
-    for item, local in zip(prepared.plan.lines, ruby.lines, strict=True):
+    for item, local, timing in zip(prepared.plan.lines, ruby.lines, timings, strict=True):
         position = geometry.position(item, width, height)
-        timing = prepare_ruby_wipe_timing(item.line, local, item.layout_style.ruby_main_progress_mode)
         overlap = (prepare_overlap_wipes(local, measured.lines[item.track_index], timing, dpr=dpr)
                    if adjusted_wipes else None)
         cells = positioned_cells(local.main, position)
@@ -39,8 +43,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 cell['wipe_points'] = wipe_points_to_ir(curve)
         groups = []
         for group_index, (group, clock) in enumerate(zip(local.rubies, timing.readings, strict=True)):
-            if clock.units != tuple(split_graphemes(group.target.effective.reading)):
-                raise ValueError('Skia 注音 parts 跨越塑形单元边界，尚不支持此组合')
+            if clock.glyph_units != group.glyph_units:
+                raise ValueError('Skia 注音计时单元与已测量字形不一致')
             if len(clock.units) != len(group.cells):
                 raise ValueError('Skia 注音最终时钟与已测量字形数量不一致')
             if not clock.units:
@@ -54,6 +58,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                     **{key: cell[key]+position.offset_x for key in ('origin_x', 'wipe_left', 'wipe_right')}})
                 if overlap is not None:
                     units[-1]['wipe_end_position'] = overlap[1][group_index][unit_index]
+                if unit_projection:
+                    units[-1]['glyph_text'] = clock.glyph_units[unit_index]
             serialized = {'style_cell': style_cell, 'units': units}
             if group.target.lower:
                 serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index],
@@ -62,6 +68,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         lines.append({'cells': cells, 'ruby_groups': groups})
     return {'version': 2, 'wipe_schema': 1, 'ruby_schema': 1, 'metrics_identity': ruby.identity,
             **({'ruby_marker_schema': 1} if markers else {}),
+            **({'ruby_unit_schema': 1} if unit_projection else {}),
             **({'overlap_schema': 1} if adjusted_wipes else {}),
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}
