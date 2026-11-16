@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     ready.insert("pixel_formats", QJsonArray{"rgba8888", "bgra8888_premultiplied"});
     ready.insert("text_metrics_schema", 1);
     ready.insert("font_chain_schema", 1);
+    ready.insert("mixed_font_schema", 1);
     ready.insert("resolved_layout_schema", 2);
     ready.insert("resolved_wipe_schema", 1);
     ready.insert("resolved_ruby_schema", 1);
@@ -33,6 +34,7 @@ int main(int argc, char** argv) {
     profiles.append("p05_ruby_markers");
     profiles.append("p05_ruby_units");
     profiles.append("p05_font_fallback");
+    profiles.append("p05_mixed_fonts");
     ready.insert("ruby_unit_schema", 1);
     ready.insert("ruby_marker_schema", 1);
     ready.insert("lower_ruby_schema", 1);

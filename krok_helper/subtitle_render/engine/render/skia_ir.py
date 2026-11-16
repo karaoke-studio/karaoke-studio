@@ -72,4 +72,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
         ir['skia_layout']['font_chain_schema'] = 1
+    if any(run.get('mixed_fallback') for run in ir['skia_layout']['runs']):
+        ir['required_features'].append('p05_mixed_fonts')
+        ir['skia_layout']['mixed_font_schema'] = 1
     return ir

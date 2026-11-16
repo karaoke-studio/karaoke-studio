@@ -6,6 +6,8 @@
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkTypeface.h"
 #include "include/ports/SkFontMgr_empty.h"
+#include "third_party/externals/harfbuzz/src/hb.h"
+#include "third_party/externals/harfbuzz/src/hb-ot.h"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -67,11 +69,25 @@ FontInstance::FontInstance(const FontSpec& spec) {
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
-    key << "skia-m150-hb-ft-v2:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
+    key << "skia-m150-hb-ft-v3:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
         << ':' << std::bit_cast<std::uint32_t>(spec.scaleX) << ':' << spec.syntheticBold << ':' << spec.syntheticItalic;
     for (const auto& axis : coordinates) key << ':' << axis.axis << '=' << std::bit_cast<std::uint32_t>(axis.value);
     identity_ = key.str();
     outlines_ = std::make_unique<GlyphOutlineSource>(spec);
+    // Use the pinned OT tables directly. Skia's FreeType advance callback
+    // quantizes even at em size and can truncate multi-glyph integer boxes.
+    auto blob = std::shared_ptr<hb_blob_t>(hb_blob_create(
+        reinterpret_cast<const char*>(source.bytes.data()), unsigned(source.bytes.size()),
+        HB_MEMORY_MODE_DUPLICATE, nullptr, nullptr), hb_blob_destroy);
+    auto hbFace = std::shared_ptr<hb_face_t>(hb_face_create(blob.get(), unsigned(source.faceIndex)), hb_face_destroy);
+    const auto em = hb_face_get_upem(hbFace.get());
+    if (!em || em > 65536) throw std::runtime_error("Skia HarfBuzz 字体 em 无效");
+    shapingFace_ = std::shared_ptr<hb_font_t>(hb_font_create(hbFace.get()), hb_font_destroy);
+    hb_ot_font_set_funcs(shapingFace_.get());
+    hb_font_set_scale(shapingFace_.get(), int(em*64), int(em*64));
+    std::vector<hb_variation_t> variations;
+    for (const auto& axis : coordinates) variations.push_back({axis.axis, axis.value});
+    hb_font_set_variations(shapingFace_.get(), variations.data(), unsigned(variations.size()));
 }
 FontInstance::~FontInstance() = default;
 GlyphGeometry FontInstance::glyphGeometry(SkGlyphID glyph) const {

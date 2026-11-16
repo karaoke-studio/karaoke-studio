@@ -31,7 +31,8 @@ QJsonObject measureSkiaText(const QJsonObject& request) {
             totalTextBytes += text.size();
             if (totalTextBytes > 4u * 1024 * 1024) throw std::runtime_error("Skia 度量文本批次超过 4 MiB");
             cells.append(scene::skiaCellMetricsJson(::subtitle::skia::text::shapeCell(text.toStdString(), fonts,
-                run.value("language").toString("und").toStdString(), run.value("rtl").toBool())));
+                run.value("language").toString("und").toStdString(), run.value("rtl").toBool(),
+                run.value("mixed_fallback").toBool())));
             protocol::emitProgress("skia_text_metrics", ++processedCells, totalCells);
         }
         const auto& primary = *fonts.front();

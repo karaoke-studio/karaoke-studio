@@ -27,6 +27,8 @@ class SkiaFontResolver:
     Qt is only a platform resource discovery adapter. HarfBuzz checks complete
     cell coverage, and the final scene revalidates the same explicit chain.
     """
+    allow_mixed_fonts = True
+
     def __init__(self):
         self._exports = {}
 
@@ -49,18 +51,22 @@ class SkiaFontResolver:
         from PyQt6.QtCore import QThread
         from PyQt6.QtGui import QGuiApplication
         from krok_helper.subtitle_render.engine.text.font_fallback import (
-            prewarm_fallback, lookup_fallback_instance,
+            prewarm_fallback, lookup_fallback_instance, grapheme_clusters,
         )
+        texts = list(dict.fromkeys([text, *grapheme_clusters(text)]))
         app = QGuiApplication.instance()
         if app is not None and QThread.currentThread() is app.thread():
-            prewarm_fallback(style.font_family, style.font_weight, style.italic, [text])
+            prewarm_fallback(style.font_family, style.font_weight, style.italic, texts)
         primary = self(style)
-        fallback = lookup_fallback_instance(style.font_family, style.font_weight, style.italic, text)
-        if fallback is None:
-            return [primary]
-        resource, options = self._export(fallback, fallback.family)
-        # A platform fallback's pixel-size adjustment applies to both axes.
-        options = dict(options, size=style.font_size_px * fallback.fallback_scale, scale_x=1)
-        if (resource, options) == primary:
-            return [primary]
-        return [primary, (resource, options)]
+        chain = [primary]
+        # Preserve the previous whole-cell candidate's priority. Additional
+        # physical faces are only consumed if none covers the complete cell.
+        for unit in texts:
+            fallback = lookup_fallback_instance(style.font_family, style.font_weight, style.italic, unit)
+            if fallback is None:
+                continue
+            resource, options = self._export(fallback, fallback.family)
+            options = dict(options, size=style.font_size_px * fallback.fallback_scale, scale_x=1)
+            if (resource, options) not in chain:
+                chain.append((resource, options))
+        return chain

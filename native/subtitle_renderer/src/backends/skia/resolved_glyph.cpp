@@ -25,7 +25,8 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
         if (a.size() != e.size()) valid = false;
         else for (int i = 0; i < a.size(); ++i) same(e[i], a[i], key);
     } else if (valid && actual.isDouble()) {
-        const bool discrete = key == "id" || key == "cluster_start" || key == "cluster_end" || key == "selected_font";
+        const bool discrete = key == "id" || key == "cluster_start" || key == "cluster_end" || key == "selected_font"
+            || key == "font_index" || key == "byte_start" || key == "byte_end";
         valid = std::isfinite(expected.toDouble()) && std::isfinite(actual.toDouble())
             && std::abs(expected.toDouble() - actual.toDouble()) <= (discrete ? 0 : 1e-4);
     } else if (valid) valid = expected == actual;
@@ -39,7 +40,8 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
         || runIndex < 0 || runIndex >= fonts.size())
         throw BackendError("Skia 最终单元引用了无效字体实例");
     const auto text = sourceText.toUtf8();
-    auto shaped = ::subtitle::skia::text::shapeCell(text.toStdString(), fonts[int(runIndex)], languages[int(runIndex)]);
+    auto shaped = ::subtitle::skia::text::shapeCell(text.toStdString(), fonts[int(runIndex)], languages[int(runIndex)],
+                                                  false, mixedFallback[int(runIndex)]);
     same(cell.value("metrics"), scene::skiaCellMetricsJson(shaped));
     if (!shaped.outlineAvailable) throw BackendError("Skia 当前绘制仅支持有矢量轮廓的字体单元");
     const auto x = finite(cell, "origin_x"), y = finite(cell, "baseline_y");

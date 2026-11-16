@@ -1680,6 +1680,19 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 
 实现提交 `64913202` 的 Mac CI [43802105265](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43802105265) **5 项全部成功**：arm64/x64 完整产品组合各 **553 通过、161 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。新增 fallback 文件两架构各 **32 通过、6 跳过**：4 项为 D2D 对照，2 项为 Vulkan loader 专用注入，Metal 平台正确跳过；真实 GPU/Raster、预览、MP4、字体链与资源失效均执行。21 份跨架构样例最大误差全为 **0**；按字节范围提取 arm64 的同一 21 份 JSON 后，与 Windows/X11/Wayland 再比较也全为 **0**。两架构 Metal/Raster 四份 native 指纹与本地四份统一核对为上述源码摘要。两份干净 Mac 验收包均退出 **0**，新增 `font_fallback` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能作为本轮真机门槛通过。§14.6 的朋友复测入口已更新到本批提交与验收包。验收包声明 `font_fallback=1`。Linux 真硬件、本轮 Mac 真机、完整 Unicode/字体回退和 P05 画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-fallback-*`。
 
+### 14.33 P05.2 单元内多字体矢量塑形与精确 advance（2026-11-16）
+
+**本批为正向横排增加保守的单元内混合字体子集，不代表完整跨字体 Unicode、emoji 或 P05 已验收。** §14.32 的整个单元候选优先级保持不变：只要一个显式候选能完整塑形，仍由它负责整单元；全部失败且显式启用混排时，才进入新路径。正文、角色、上下注音使用同一字体链与最终路径准备，不拆歌词单元、不按字体重新分配时间。
+
+- `skia/text/fallback_ranges` 将锁定 ICU 的字素边界与所有候选 HarfBuzz cluster 边界取交集，防止拆组合符、连字或任一候选的不可分塑形簇。只在完整可覆盖的安全区间选第一个可用候选，相邻相同字体合并；最多 1024 个字体片段。连接文字、ZWJ/ZWNJ、emoji 序列、IPA 双基字连结簇的混排继续拒绝。若整单元可由一个 face 覆盖，保留既有单字体行为。
+- `native/SkiaFontResolver` 保留原整单元备用候选的优先级，并读取 GUI 按字素准备的物理 face 超集。多个缺字簇需要不同字体时，不再只保留最后一个备用 face。worker 不调用 Qt 发现或度量。字体尺寸、axes、模拟、缩放与完整候选链的缓存身份沿用 §14.32。
+- `skia/text/font_shaping` 使用锁定的 HarfBuzz OpenType 表及显式 axes，以 26.6 设计 em 坐标对完整原文的字体区间塑形；保留原文前后文、语言和 script，不通过字符串拼接伪造字形。`mixed_cell` 在同一基线上组合各 face 的精细轮廓，各自字号/拉伸仅应用一次；设计 advance/bearing 统一到主字体的逻辑 em，不能直接相加不同字体的原始 em 数值。公共 `core` 最终仍只消费一个 `ResolvedCell` 路径和原走字时钟。
+- 本批对照暴露了旧单字体也存在的 advance 精度问题：三字单元的名义 `130px` 在 Skia/FreeType advance 回调下变成略小的值，累计墨迹宽度被整数布局截断。把 SkFont 塑形字号改成 em 仍保留量化误差，不能当最终修复；最终直接使用同一锁定 HarfBuzz 的 OpenType 数据，并用生成字体精确断言 `advance=130`、墨迹宽 `125`、共享策略单元宽 `129`。字体几何身份升为 `skia-m150-hb-ft-v3`，旧快照不能混用。不是放宽画面或几何容差。
+- 新增 `p05_mixed_fonts` / `mixed_font_schema=1`，run 的 `mixed_fallback` 必须为布尔。单字体快照保持原字段；混排快照明确 `selected_font=-1`，逐 glyph 的 `font_index` 与 `font_runs`（UTF-8 半开字节区间、字体索引、实际字体身份）进入最终校验。native 重塑形后逐项核对，索引/字节边界严格整数一致；缺能力/版本、错误来源或伪造快照均失败并保留旧场景。比较脚本也将新离散字段加入零误差集合。
+- 只允许矢量绘制；选中的彩色 face 即使有单色基底或后续备用候选，仍显式失败。独立组合标记开头的注音 part、完整 RTL/竖排和复杂连接文字跨字体兼容仍有门槛。
+
+验证进度：文本/轮廓与混排首轮 **70 项通过**；最终四份构建、完整回归、GPU 对照及三平台样例待补录。D2D 的旧 `TimingChar` 只使用一个 outline face，因此新增对照使用由完全相同源字形与度量构造的受控合并字体：它验证 D2D GPU 画面，不宣称旧产品已支持单元内多 face；另直接核对混排与该单字体 Skia 的最终几何与逐像素结果。曾观察 N3、DPR 1.5 下 2px 差异，最终 OpenType advance 路径已消除此横向偏差。四组 D2D GPU 原始路径（`realization_enabled=False`）对照已通过原 1px 条件；默认 realization 路径在完成边界曾观察约 1.03px 的唱色面积差异（3 组通过、1 组失败），与同批混排/合并字体 Skia 的逐像素一致性分开记录，不将原始路径通过冒充 realization 严格验收。该观察保留至完整 GPU 画质/历史无关验收，不放宽阈值。临时 D2D 配置参数诊断源码已完整还原，并按匹配 BuildTools 14.50 再次 `--clean-first` **88/88** 重建；未修改 D2D 渲染逻辑。新增第 **22** 份规范样例 `mixed-font-layout.json`，Mac 验收包加入 `mixed_fonts=1`。Linux 真硬件、本轮 Mac 真机和完整 P05 门槛继续保留；未做 4K。日志/样例前缀 `build/p05-mixed-fonts-*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

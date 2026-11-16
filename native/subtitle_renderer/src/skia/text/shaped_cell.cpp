@@ -1,12 +1,11 @@
 #include "text/shaped_cell.h"
+#include "text/mixed_cell.h"
+#include "text/font_shaping.h"
 #include "include/core/SkMatrix.h"
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkTypeface.h"
-#include "modules/skshaper/include/SkShaper_harfbuzz.h"
-#include "modules/skunicode/include/SkUnicode_icu.h"
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
 
 namespace subtitle::skia::text {
@@ -30,63 +29,39 @@ std::vector<SkUnichar> decode(const std::string& text) {
     }
     return out;
 }
-class Handler final : public SkShaper::RunHandler {
-public:
-    std::vector<SkGlyphID> ids;
-    std::vector<SkPoint> positions;
-    std::vector<std::uint32_t> clusters;
-    std::vector<ShapedGlyph> output;
-    float advance = 0;
-    void beginLine() override {}
-    void runInfo(const RunInfo&) override {}
-    void commitRunInfo() override {}
-    Buffer runBuffer(const RunInfo& info) override {
-        ids.resize(info.glyphCount); positions.resize(info.glyphCount); clusters.resize(info.glyphCount);
-        return {ids.data(), positions.data(), nullptr, clusters.data(), {advance, 0}};
-    }
-    void commitRunBuffer(const RunInfo& info) override {
-        for (std::size_t i = 0; i < ids.size(); ++i) output.push_back({ids[i], positions[i], clusters[i], 0});
-        advance += info.fAdvance.x();
-    }
-    void commitLine() override {}
-};
+
 }
 ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<const FontInstance>>& fonts,
-                     const std::string& language, bool rightToLeft) {
+                     const std::string& language, bool rightToLeft, bool allowMixed) {
     if (utf8.empty() || utf8.size() > 65536 || fonts.empty()) throw std::runtime_error("Skia 度量单元或字体链无效");
     decode(utf8);
-    auto unicode = SkUnicodes::ICU::Make();
-    auto shaper = SkShapers::HB::ShapeDontWrapOrReorder(unicode, nullptr);
-    if (!unicode || !shaper) throw std::runtime_error("Skia HarfBuzz/ICU shaping 初始化失败");
-    Handler handler;
+    ShapedRange handler;
     std::size_t selected = 0;
+    std::vector<std::vector<ShapedGlyph>> candidates;
     for (; selected < fonts.size(); ++selected) {
         if (!fonts[selected]) throw std::runtime_error("Skia 字体链包含空实例");
-        const auto& font = fonts[selected]->shapingFont();
-        auto script = SkShapers::HB::ScriptRunIterator(utf8.data(), utf8.size());
-        if (!script) throw std::runtime_error("Skia script iterator 初始化失败");
-        SkShaper::TrivialFontRunIterator fontRuns(font, utf8.size());
-        SkShaper::TrivialBiDiRunIterator bidi(rightToLeft ? 1 : 0, utf8.size());
-        SkShaper::TrivialLanguageRunIterator languages(language.c_str(), utf8.size());
-        Handler candidate;
-        shaper->shape(utf8.data(), utf8.size(), fontRuns, bidi, *script, languages, nullptr, 0,
-                      std::numeric_limits<float>::max(), &candidate);
+        auto candidate = shapeFontRange(utf8, *fonts[selected], 0, std::uint32_t(utf8.size()), language, rightToLeft);
         // Coverage is the SHAPED result: cmap-only checks wrongly reject a +
         // combining mark when the face supplies its precomposed glyph instead.
-        if (!candidate.output.empty() && std::all_of(candidate.output.begin(), candidate.output.end(),
+        if (!candidate.glyphs.empty() && std::all_of(candidate.glyphs.begin(), candidate.glyphs.end(),
                                                     [](const auto& glyph) { return glyph.id != 0; })) {
             handler = std::move(candidate);
             break;
         }
+        if (allowMixed) candidates.push_back(std::move(candidate.glyphs));
     }
-    if (selected == fonts.size()) throw std::runtime_error("Skia 显式字体链缺少该歌词单元的完整字形");
+    if (selected == fonts.size()) {
+        if (allowMixed && !rightToLeft && fonts.size() > 1)
+            return shapeMixedCell(utf8, fonts, language, candidates);
+        throw std::runtime_error("Skia 显式字体链缺少该歌词单元的完整字形");
+    }
     const auto& instance = *fonts[selected];
     const auto& font = instance.shapingFont();
     ShapedCell result;
     result.fontIdentity = instance.identity(); result.selectedFont = selected;
     result.advance = handler.advance * instance.horizontalScale();
     result.ascent = instance.ascent(); result.descent = instance.descent(); result.leading = instance.leading();
-    result.glyphs = std::move(handler.output);
+    result.glyphs = std::move(handler.glyphs);
     std::vector<GlyphGeometry> geometries;
     for (const auto& glyph : result.glyphs) {
         geometries.push_back(instance.glyphGeometry(glyph.id));

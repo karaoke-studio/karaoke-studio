@@ -16,6 +16,9 @@ class SkiaTextMetricsProcess(SkiaSidecarProcess):
         if ready.get('font_chain_schema') != 1:
             self.abort(reason='Skia font chain handshake failed')
             raise NativeRendererError('Skia sidecar 不支持独立字体链实例，请重新构建')
+        if ready.get('mixed_font_schema') != 1:
+            self.abort(reason='Skia mixed font handshake failed')
+            raise NativeRendererError('Skia sidecar 不支持单元内混合字体，请重新构建')
         return ready
 
     def measure(self, fonts: dict, runs: list[dict]) -> list[dict]:

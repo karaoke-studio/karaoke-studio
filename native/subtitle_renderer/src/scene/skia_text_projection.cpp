@@ -47,13 +47,24 @@ std::shared_ptr<const Resource> loadFont(const QJsonObject& object) {
 }
 QJsonObject skiaCellMetricsJson(const ::subtitle::skia::text::ShapedCell& cell) {
     QJsonArray glyphs;
-    for (const auto& g : cell.glyphs) glyphs.append(QJsonObject{{"id", int(g.id)}, {"x", g.position.x()},
-        {"y", g.position.y()}, {"cluster_start", int(g.clusterStart)}, {"cluster_end", int(g.clusterEnd)}});
-    return {{"font_identity", QString::fromStdString(cell.fontIdentity)}, {"selected_font", int(cell.selectedFont)},
+    for (const auto& g : cell.glyphs) {
+        QJsonObject glyph{{"id", int(g.id)}, {"x", g.position.x()}, {"y", g.position.y()},
+            {"cluster_start", int(g.clusterStart)}, {"cluster_end", int(g.clusterEnd)}};
+        if (cell.selectedFont == -1) glyph.insert("font_index", int(g.fontIndex));
+        glyphs.append(glyph);
+    }
+    QJsonObject out{{"font_identity", QString::fromStdString(cell.fontIdentity)}, {"selected_font", cell.selectedFont},
         {"design_advance", cell.designAdvance}, {"design_left_bearing", cell.designLeftBearing},
         {"design_right_bearing", cell.designRightBearing}, {"advance", cell.advance}, {"ascent", cell.ascent}, {"descent", cell.descent}, {"leading", cell.leading},
         {"ink", QJsonArray{cell.ink.left(), cell.ink.top(), cell.ink.right(), cell.ink.bottom()}},
         {"glyphs", glyphs}, {"outline_available", cell.outlineAvailable}};
+    if (cell.selectedFont == -1) {
+        QJsonArray runs;
+        for (const auto& r : cell.fontRuns) runs.append(QJsonObject{{"byte_start", int(r.byteStart)},
+            {"byte_end", int(r.byteEnd)}, {"font_index", int(r.fontIndex)}, {"font_identity", QString::fromStdString(r.identity)}});
+        out.insert("font_runs", runs);
+    }
+    return out;
 }
 FontResourceTable loadSkiaFontResources(const QJsonObject& table) {
     FontResourceTable out;
@@ -73,6 +84,8 @@ std::vector<std::shared_ptr<const ::subtitle::skia::text::FontInstance>> skiaRun
     std::vector<std::shared_ptr<const Instance>> fonts;
     if (!run.value("font_ids").isArray()) throw std::runtime_error("Skia 显式字体链必须为数组");
     const auto ids = run.value("font_ids").toArray();
+    if (run.contains("mixed_fallback") && !run.value("mixed_fallback").isBool())
+        throw std::runtime_error("Skia 混合字体开关必须为布尔值");
     const auto options = run.value("font_options");
     if (options.isUndefined() == false && (!options.isArray() || options.toArray().size() != ids.size()))
         throw std::runtime_error("Skia 字体链实例参数数量或类型无效");

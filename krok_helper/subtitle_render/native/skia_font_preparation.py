@@ -55,9 +55,10 @@ def fallback_requests(track, style):
 
 
 def iter_prepare_skia_fallbacks(track, style):
-    from krok_helper.subtitle_render.engine.text.font_fallback import prewarm_fallback
+    from krok_helper.subtitle_render.engine.text.font_fallback import prewarm_fallback, grapheme_clusters
     from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance
     for (family, weight, italic), texts in fallback_requests(track, style).items():
         resolve_font_instance(family, weight, italic)
+        texts = texts | {unit for text in texts for unit in grapheme_clusters(text)}
         prewarm_fallback(family, weight, italic, sorted(texts))
         yield

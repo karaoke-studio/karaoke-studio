@@ -218,6 +218,9 @@ def main(argv=None) -> int:
     if manifest.get("font_fallback", 0) >= 1:
         steps["font_fallback"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                   "tests/test_subtitle_skia_fallback.py", "--basetemp", logs / "font-fallback-tests"]
+    if manifest.get("mixed_fonts", 0) >= 1:
+        steps["mixed_fonts"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                "tests/test_subtitle_skia_mixed_fonts.py", "--basetemp", logs / "mixed-font-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

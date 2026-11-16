@@ -423,6 +423,12 @@ git submodule status
    `font_chain_schema=1` / `p05_font_fallback` 门控逐候选 `font_options`；主字体基线不随缺字改变，
    缓存身份必须含所有候选实例。一个完整单元须由一个候选 face 覆盖，彩色/位图与单元内跨字体
    混排仍拒绝。worker 不发现系统字体；只在源码 Skia opt-in 的 GUI 准备层增加预热。
+   §14.32 的单元内混排门禁已由 §14.33 的保守子集扩展：`fallback_ranges` 仅在 ICU 字素与全部
+   候选 HB cluster 的共同边界换 face，`font_shaping` 直接消费锁定 HarfBuzz 的 OpenType 表，
+   `mixed_cell` 组合一次路径且保留整个歌词单元时钟。`p05_mixed_fonts` / `mixed_font_schema=1`
+   门控 `mixed_fallback`，混排 glyph/frame 快照须含严格字节边界、字体索引与内容身份。
+   字体身份现为 `skia-m150-hb-ft-v3`；不能改回像素字号的 Skia FT advance 回调，它使
+   多字单元的近整数墨迹宽度被截断。连接文字/IPA/ZWJ/emoji 的混排仍拒绝。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，

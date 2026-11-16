@@ -26,6 +26,18 @@ def test_ttf_ink_width_does_not_truncate_below_exact_integer(binary,project):
     assert cells[1]['design_left_bearing']==50 and cells[1]['design_right_bearing']==50
 
 
+def test_multiglyph_advance_does_not_lose_integer_cell_width(binary,project):
+    track,style=project
+    resource,options=resolve_skia_font(style)
+    with SkiaTextMetricsProcess(binary) as process:
+        cells=process.measure({'main':resource},[{'font_ids':['main'],'size':50,
+            'cells':['A字한','字한A'],**options}])[0]['cells']
+    for text,cell in zip(['A字한','字한A'],cells,strict=True):
+        assert cell['advance']==130
+        assert cell['ink'][2]-cell['ink'][0]==125
+        assert cell_geometry(text,cell,style)[0]==129
+
+
 def test_cff_outline_uses_the_same_design_precision(binary,tmp_path):
     path=make_cff_font(tmp_path/'canonical.otf')
     with SkiaTextMetricsProcess(binary) as process:

@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+struct hb_font_t;
 
 namespace subtitle::skia::text {
 struct Axis { std::uint32_t tag; float value; };
@@ -29,6 +30,7 @@ public:
     const SkFont& shapingFont() const { return font_; }
     float horizontalScale() const { return scaleX_; }
     const std::string& identity() const { return identity_; }
+    hb_font_t* shapingFace() const { return shapingFace_.get(); }
     float ascent() const;
     float descent() const;
     float leading() const;
@@ -38,5 +40,6 @@ private:
     float scaleX_ = 1;
     std::string identity_;
     std::unique_ptr<GlyphOutlineSource> outlines_;
+    std::shared_ptr<hb_font_t> shapingFace_;
 };
 }

@@ -31,6 +31,8 @@ class TextMeasurementBatch:
             run = {'font_ids': ids, 'size': appearance.font_size_px, **instances[0]}
             if len(chain) > 1:
                 run['font_options'] = instances
+                if getattr(self.resolve_font, 'allow_mixed_fonts', False):
+                    run['mixed_fallback'] = True
             # Different texts sharing the same explicit chain still batch once.
             chain_key = json.dumps(run, sort_keys=True)
             existing = self._chains.get(chain_key)
