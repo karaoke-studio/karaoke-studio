@@ -1812,7 +1812,17 @@ Windows/Linux Vulkan 与 CPU-only 四份均因 native 源码变化干净重建�
 - 首轮扩展对照发现 `fi` 单元在 DPR 1.5 的墨迹边缘约差 2px，分解重音 `a+U+0301` 的单元宽度会令后续字位约差 3px。独立左至右复现相同差异，预组合 `á` 则与 GPU 一致；不改源文本/字体槽/时钟来掩盖差异，不放宽 1px 预算。新文件保留两项 `strict=True`、仅接收断言失败的旧 LTR 预期失败，完整多码点几何留给 P05.2 校准，RTL 对这些输入明确拒绝。
 - 测试覆盖正/反向演唱、普通/no_wipe、暂停/零时长、角色字体/颜色、负字距、空白、时间偏移、重复/倒序 seek、半透明、共享页级布局、真实 G5/MP4、GPU 关闭与 loader 失败后的 Skia Raster；Mac workflow/一键验收包增加 `horizontal_rtl=1` 和第 29 份规范样例 `rtl-flow-layout.json`。
 
-本地已完成的实际 D2D GPU 对照：主矩阵 **96 通过**（6 类输入 × 2 演唱方向 × 2 唱字方式 × 2 布局 × 2 DPR），预组合字/空格及行锚点 **12 通过**，极端负字距 **4 通过**；全部保留原 **≤1 物理像素**墨迹包络及归一唱色前沿预算。两项旧 LTR 差异为预期失败；此前使用多码点扩展输入的失败记录保留在 `build/p05-rtl-*`，不能记作一次全绿。关联架构/协议/字体/构建/预览回归 **532 通过、10 跳过**。Windows 首轮完整 Skia 组合 **1490 通过、7 跳过**（96 组新 D2D 主矩阵单跑，未重复）；最终单码点门禁的独立 CPU-only 专项 Windows/Linux 各 **27 通过**。Windows/Linux Vulkan 与 CPU-only 四份均干净重建，CTest 各 **3/3**，源码身份统一为 `ebc4eea37df3e891a012bed07aed4e9af83ea7d758b3cb91ee806dda0ba66c71`。最终 Windows GPU 专项 **67 通过、2 项上述严格预期失败**。Linux X11/Wayland 最终完整组合各 **1016 通过、602 项平台专用跳过**；29 份 Windows/X11/Wayland 规范样例误差均为 **0**，此前 28 份样例不变。实现提交 `e4ae8603` 已推送，Mac CI [43920641750](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43920641750) 正在验收，尚不记作已通过；Linux 真硬件、Mac 真机、默认 realization 完整画质及完整 P05 继续保留。
+本地已完成的实际 D2D GPU 对照：主矩阵 **96 通过**（6 类输入 × 2 演唱方向 × 2 唱字方式 × 2 布局 × 2 DPR），预组合字/空格及行锚点 **12 通过**，极端负字距 **4 通过**；全部保留原 **≤1 物理像素**墨迹包络及归一唱色前沿预算。两项旧 LTR 差异为预期失败；此前使用多码点扩展输入的失败记录保留在 `build/p05-rtl-*`，不能记作一次全绿。关联架构/协议/字体/构建/预览回归 **532 通过、10 跳过**。
+
+Windows 首轮完整 Skia 组合 **1490 通过、7 跳过**（96 组新 D2D 主矩阵单跑，未重复）；最终单码点门禁的独立 CPU-only 专项 Windows/Linux 各 **27 通过**。Windows/Linux Vulkan 与 CPU-only 四份均干净重建，CTest 各 **3/3**，源码身份统一为 `ebc4eea37df3e891a012bed07aed4e9af83ea7d758b3cb91ee806dda0ba66c71`。最终 Windows GPU 专项 **67 通过、2 项上述严格预期失败**。Linux X11/Wayland 最终完整组合各 **1016 通过、602 项平台专用跳过**；29 份 Windows/X11/Wayland 规范样例误差均为 **0**，此前 28 份样例不变。
+
+实现提交 `e4ae8603` 已推送，Mac CI [43920641750](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43920641750) 的 arm64/x64 产品组合各 **986 通过、632 项平台专用跳过**，新文件各 **65 通过、116 跳过**（112 项 Windows D2D 对照、2 项上述 Windows 严格预期失败记录、2 项 Vulkan loader 注入）；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**。两架构 Metal/Raster 四份 native 指纹与本地四份一致；29 份 Windows/X11/Wayland/Mac arm64/Mac x64 样例五方直接比较误差全部为 **0**，原有 28 份不变。
+
+x64 干净验收包退出 **0**、`horizontal_rtl=0`、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。arm64 验收包首轮及单独重跑（job `133498407598` / `133509012306`）均排队约 15 分钟后被 GitHub 取消：annotations 明确记录 arm64 容量不足、未取得 hosted runner；两次均无执行机、无步骤，不是测试失败。该干净包门槛仍未通过，整轮 CI 最终为 failure，不能写作“五项全绿”。§14.6 的朋友入口因此仍保留上一轮已完成干净包验收的提交与产物；恢复容量后只需重跑本轮 arm64 bundle-check，无需改代码、重建或重跑已通过项。
+
+Claude Opus 5.5 恢复额度后完成只读审查，未发现阻断问题、未修改代码；其核对了实际 D2D 单元反射、四种方向的 overlap 终点、时钟归属、塑形与源/最终门禁。
+
+Linux 真硬件、Mac 真机、默认 realization 完整画质及完整 P05 继续保留。
 
 ## 15. 前期探针清理范围
 
