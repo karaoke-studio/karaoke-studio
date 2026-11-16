@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 8babf729
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43816937569 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout ad8bebde
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43822180126 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1723,7 +1723,7 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - native 只按明确索引核对最终区间与源字形，再在配置期将已配对单元组织为演唱时间序；公共 `ResolvedLine.reverseWipe` 只选择右至左的互斥裁剪方向，不改变 HarfBuzz 的文本方向或字体发现。GPU/Raster 使用同一源码，逐行正反向、角色字体/配色、单字/空行、普通 pause/共享块和零时长端点各自保持归属。正文初始时刻 before 优先，不把零时长提前变色当成方向切换。
 - Mac CI 正常证据改为 JUnit、规范 JSON 与日志；失败时另上传完整测试现场。原生证据和朋友的一键验收包保持完整，避免每轮正常对照上传接近 GB 的临时依赖副本。
 
-验证进度：Windows 专项首轮 **86 项全部通过**，含 6 类来源（普通/共享块/暂停/首窗口零时长/整行零时长/单字）× 2 种走字模式 × legacy/N3 × DPR 1/1.5 的 **48 组实际 D2D GPU 原始路径对照**；alpha 几何和按实际墨迹高度换算的归一唱色前沿均保持 **1 物理像素**条件，不冒充默认 realization 完整画质验收。追加的重配、空行、非法/未支持协议及相关页计划 **9 项通过**（与前轮有 1 项重叠）。Linux 专项首轮 **38 通过、48 项 D2D 专用跳过**。Windows/Linux Vulkan 与 CPU-only 四份均按共享头变化干净重建，CTest 各 **3/3**，源码身份统一为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`。Windows CPU-only sidecar 的 Raster 专项 **10 通过**。最终完整组合、跨平台规范样例、Mac 两架构与干净验收包结果待补录。新增第 **25** 份规范样例 `reverse-wipe-layout.json`，Mac 验收包声明 `reverse_wipe=1`。Linux 真硬件、本轮 Mac 真机与完整 P05 画质门槛继续保留，未做 4K。日志/样例前缀 `build/p05-reverse-*`。
+验证进度：Windows 专项首轮 **86 项全部通过**，含 6 类来源（普通/共享块/暂停/首窗口零时长/整行零时长/单字）× 2 种走字模式 × legacy/N3 × DPR 1/1.5 的 **48 组实际 D2D GPU 原始路径对照**；alpha 几何和按实际墨迹高度换算的归一唱色前沿均保持 **1 物理像素**条件，不冒充默认 realization 完整画质验收。追加的重配、空行、非法/未支持协议及相关页计划 **9 项通过**（与前轮有 1 项重叠）。Linux 专项首轮 **38 通过、48 项 D2D 专用跳过**。Windows/Linux Vulkan 与 CPU-only 四份均按共享头变化干净重建，CTest 各 **3/3**，源码身份统一为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`。独立 CPU-only sidecar 的 Raster 专项在 Windows/Linux 各 **10 通过**。相关架构/协议/字体/构建与预览回归 **532 通过、10 项环境专用跳过**。Linux X11/Wayland 完整组合各 **738 通过、279 项平台专用跳过**；25 份跨 X11/Wayland 规范样例误差全部为 **0**，上一批 24 份与本批 X11 比较也全部为 **0**。Windows 完整组合首轮进程中止且未生成最终报告，不计为通过，已重新运行。实现提交 `ad8bebde` 的 Mac CI [43822180126](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43822180126)：arm64/x64 产品组合各 **716 通过、301 项平台专用跳过**，字体资源契约各 **3 通过**、预览/原生能力各 **21 通过、1 跳过**；25 份跨架构规范样例误差全部为 **0**。两架构 Metal/Raster 四份 native 指纹也已与本地四份核对一致。正常 arm64 协议证据包为 **51,192 字节**，规范数据和报告完整。Windows 最终完整组合按文件分组、双 worker **1010 通过、7 项 POSIX 专用跳过**；25 份 Windows/X11/Wayland/Mac arm64 规范样例已直接比较，同字体身份、glyph/cluster、原区间、时钟所有权及最终几何误差全部为 **0**。该轮 Mac CI **5 项全部成功**；两份干净验收包均退出 **0**，`reverse_wipe=0`（步骤退出码）、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。§14.6 朋友复测入口已指向本轮提交和包。新增第 **25** 份规范样例 `reverse-wipe-layout.json`，Mac 验收包声明 `reverse_wipe=1`。Linux 真硬件、本轮 Mac 真机与完整 P05 画质门槛继续保留，未做 4K。日志/样例前缀 `build/p05-reverse-*`。
 
 ## 15. 前期探针清理范围
 
