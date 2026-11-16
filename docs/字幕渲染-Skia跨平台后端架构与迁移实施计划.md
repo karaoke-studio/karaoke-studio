@@ -515,8 +515,8 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 ### P05：字体、规范度量与完整几何
 
-- [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；完整槽位/fallback 绘制与字体校准尚未完成，见 §14.10/§14.11。
-- [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；ruby checkpoint、完整 emoji 和绘制回退链待完成。
+- [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；显式单元级矢量 fallback 产品接入见 §14.32，完整字体链与字体校准尚未完成，见 §14.10/§14.11。
+- [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；分段注音单元见 §14.30，单元级绘制回退链见 §14.32，完整 emoji 与 Unicode/跨字体边界仍待完成。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 0725a505
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43797476161 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 64913202
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43802105265 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1668,13 +1668,17 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 **本批接通显式单元级矢量字体回退，不代表完整 fallback、Unicode 或 P05 已验收。** 既有 HarfBuzz 度量与 `ResolvedGlyphContext` 已能选择一条显式资源链中的完整单元字形；此前产品 `TextMeasurementBatch` 只提供一个字体，Qt 边界还拒绝旧来源缺字提示。本批让正文、角色、上下注音及规范参考字形共用同一链路，默认仍为 D2D。
 
 - `native/SkiaFontResolver` 导出 GUI 预热表里已钉住的物理 face、内容摘要、axes、粗斜体模拟与平台字号补偿。Qt 只负责平台字体资源发现，实际覆盖与塑形仍由锁定的 HarfBuzz/FreeType 校验。worker 只读取预热资源；`native/skia_font_preparation` 收集字体/文本的超集，不选择注音目标、不分配时间、不计算布局。主字/英数、逐行/角色、上下注音均按既有纯槽位规则准备。源码 opt-in 才增加这批预热；发布隔离规则不变。
-- `TextMeasurementBatch` 保留原单字体 resolver 契约，并可消费显式 `resolve_cell_fonts` 能力；按整条资源/实例链去重，重复文本只测一次。每个候选字体可分别携带 `size`、`scale_x`、`synthetic_bold`、`synthetic_italic`，不会把主字体的模拟方式强加给回退 face。主字体基线与行框始终查询第一实例；单元实际墨迹和区间来自实际选中的 face。
+- `TextMeasurementBatch` 保留原单字体 resolver 契约，并可消费显式 `resolve_cell_fonts` 能力；按整条资源/实例链去重，重复文本只测一次。每个候选字体可分别携带 `size`、`scale_x`、`synthetic_bold`、`synthetic_italic`，不会把主字体的模拟方式强加给回退 face。主字体基线与源行框始终查询各请求槽位的第一实例；单元实际墨迹和区间来自实际选中的 face。`MeasuredLine.slot_metrics` 保存逐槽位的独立字体框，防止同一槽的首字恰好使用较高备用字体时，行框随字符顺序改变。
 - CPU 度量返回所有候选实例的内容身份；正文、注音与参考行框的缓存身份包含整条链，即使替换的备用字体尚未实际命中，也使新计划失效。resolver 的文件摘要缓存仅在本次配置对象内复用，并检查路径、大小及修改时间，避免按每个歌词单元重复读取大字体；native 仍校验实际文件 SHA-256。
 - 新增 `font_chain_schema=1`、`p05_font_fallback` 能力声明。`skia_layout.runs` 保留有序 `font_ids`，可用同长度 `font_options` 表表达逐候选实例参数；共用的 `scene/skia_text_projection` 同时校验度量请求与最终绘制请求。未知字段、错数量/类型、非有限参数、调换字体顺序、伪造命中索引/快照、缺能力/版本均失败并保留旧场景。旧 D2D family hint 只保留来源信息；Skia 不据此在 native 重新匹配字体。
 - 当前每个完整歌词/读音单元由链内**一个**候选 face 覆盖。无候选能完整塑形时明确失败，不把多个 face 的碎片拼成一个单元。彩色/位图字形仍拒绝；即使后面存在单色候选，也不能跳过已命中的彩色 face 冒充完整支持。完整 emoji、独立组合标记、跨字体的单元内部混排仍有门槛。
 - 本批架构检查修复两处依赖边界：源码 backend 选择条件移到独立 `native/backend_selection`，旧 `native.backend.skia_requested` 保持导出，避免字体准备与进程封装形成环；既有 `scene/skia_lower_projection` 直接引用定义 `BackendError` 的 `model/backend_caps.h`，不再包含整个后端接口。未改 D2D 绘制算法、共享时钟或公共 Skia draw 核心。
 
-验证进度：新增 `tests/test_subtitle_skia_fallback.py` 专项最终 **37 项通过**；Linux 初轮 **29 通过、4 项 D2D 专用跳过**（新增缓存/资源门槛用例将在最终组合复验）。覆盖主字/角色与上下注音、整条候选链、独立模拟/字号/缩放、worker 无 Qt 发现、未命中备用字体替换和注册字体切换失效、彩色门禁、真实 G5/短 MP4、GPU 关闭/loader 失败后 Skia Raster，以及两种语义 × DPR 1/1.5 的 **4 组 D2D GPU** 1 物理像素对照。最终完整回归、四份构建身份、三平台样例及 Mac CI 结果待补录。一次 Windows 回归与同目录重建重叠，清理中的 sidecar 启动错误不作为验收结果；最终回归必须在构建结束后单独运行。新增第 **21** 份规范样例 `fallback-layout.json`；Mac 验收包声明 `font_fallback=1`。日志/样例前缀 `build/p05-fallback-*`。
+验证：新增 `tests/test_subtitle_skia_fallback.py` 专项 **38 项**，覆盖主字/角色与上下注音、整条候选链、独立模拟/字号/缩放、worker 无 Qt 发现、未命中备用字体替换与注册字体切换失效、源行框不随首字回退改变、彩色门禁、真实 G5/短 MP4、GPU 关闭/loader 失败后 Skia Raster，以及两种语义 × DPR 1/1.5 的 **4 组 D2D GPU** 1 物理像素对照。Windows/Linux Vulkan/CPU-only 四份 target 均完整重建，各 CTest **3/3** 通过，native 源码摘要为 `ba624ab5306b182ecf2056c33b744c0945203dcc8e44213099913da9c4f8c44b`。
+
+最终 Windows 完整 Skia 组合按文件分组、双 worker 运行 **707 通过、7 项 POSIX 专用跳过**；架构/协议/字体解析/N3 fallback/构建与验收工具组合 **350 通过**。Linux X11/Wayland 完整组合各 **567 通过、147 项平台专用跳过**。新增第 **21** 份规范样例 `fallback-layout.json`，Windows/X11/Wayland 的同字体身份、glyph/cluster、区间与几何比较最大误差均为 **0**。首轮 Windows 四 worker 并行组合有一项旧标记 GPU 对照在终点前 1ms 观察到约 **1.13px** 误差，其他 **706 通过、7 跳过**；完整标记文件串行复核 **69 通过**，最终完整分组复验也通过。该并行观测保留记录，不放宽 1px 条件，也不据此宣称所有 D2D 严格回访问题已消失。另有一次 Windows 回归与同目录重建重叠，清理中的 sidecar 启动错误整轮作废；最终回归在构建结束后单独运行。
+
+实现提交 `64913202` 的 Mac CI [43802105265](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43802105265) **5 项全部成功**：arm64/x64 完整产品组合各 **553 通过、161 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。新增 fallback 文件两架构各 **32 通过、6 跳过**：4 项为 D2D 对照，2 项为 Vulkan loader 专用注入，Metal 平台正确跳过；真实 GPU/Raster、预览、MP4、字体链与资源失效均执行。21 份跨架构样例最大误差全为 **0**；按字节范围提取 arm64 的同一 21 份 JSON 后，与 Windows/X11/Wayland 再比较也全为 **0**。两架构 Metal/Raster 四份 native 指纹与本地四份统一核对为上述源码摘要。两份干净 Mac 验收包均退出 **0**，新增 `font_fallback` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能作为本轮真机门槛通过。§14.6 的朋友复测入口已更新到本批提交与验收包。验收包声明 `font_fallback=1`。Linux 真硬件、本轮 Mac 真机、完整 Unicode/字体回退和 P05 画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-fallback-*`。
 
 ## 15. 前期探针清理范围
 
