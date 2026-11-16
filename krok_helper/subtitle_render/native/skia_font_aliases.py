@@ -1,11 +1,9 @@
 """Verified localized family aliases for explicit Skia font resources.
 
-Qt's platform matcher can resolve a localized family spelling (for example a
-Japanese name record of an application font under fontconfig) although
-``QFontDatabase.families()`` only lists the English name. The shared
-capability layer then reports ``missing_family``. Skia accepts Qt's match only
-when the matched face's own ``name`` table lists the requested spelling as a
-family name, so a platform fallback substitute is never exported.
+The shared capability layer may report ``missing_family`` for an unlisted
+localized spelling. Skia verifies the platform match against its own ``name``
+table, or lazily indexes the actual Qt families' name tables when the platform
+matcher omits that spelling too. A substitute without that name is rejected.
 
 Verification runs on the GUI thread; workers only read the decision recorded
 for the current font generation. Shared CPU/D2D family resolution is unchanged.
@@ -20,6 +18,7 @@ _FAMILY_NAME_IDS = {1, 16}  # Family and typographic family, every language.
 _LOCK = threading.Lock()
 _ALIASES = {}  # {family: canonical family or None}, current generation only.
 _GENERATION = None
+_FAMILY_INDEX = None  # Built lazily on the GUI thread for an unmatched spelling.
 
 
 def family_names(table: bytes) -> set:
@@ -43,11 +42,43 @@ def family_names(table: bytes) -> set:
 
 
 def _current():
-    global _GENERATION
+    global _GENERATION, _FAMILY_INDEX
     generation = capabilities_generation()
     if generation != _GENERATION:
         _ALIASES.clear()
+        _FAMILY_INDEX = None
         _GENERATION = generation
+
+
+def _indexed_alias(family):
+    """GUI-only name-table index when the platform matcher omits aliases.
+
+    CoreText need not match names outside its current locale. Enumerate the
+    current Qt families once per font generation, reading their actual face
+    tables; never scan files or ask a worker to create a font engine.
+    """
+    global _FAMILY_INDEX
+    from PyQt6.QtGui import QFont, QFontDatabase, QRawFont
+    with _LOCK:
+        _current()
+        generation, index = _GENERATION, _FAMILY_INDEX
+    if index is None:
+        index = {}
+        for canonical in QFontDatabase.families():
+            raw = QRawFont.fromFont(QFont(canonical))
+            if not raw.isValid():
+                continue
+            names = family_names(bytes(raw.fontTable('name')))
+            if canonical.casefold() not in {name.casefold() for name in names}:
+                continue  # An unrelated platform substitute is not this family.
+            for name in names:
+                index.setdefault(name.casefold(), canonical)
+        with _LOCK:
+            _current()
+            if generation != _GENERATION:
+                return None  # Registry moved while this index was being built.
+            _FAMILY_INDEX = index
+    return index.get(family.casefold())
 
 
 def verify_alias(family: str):
@@ -61,6 +92,8 @@ def verify_alias(family: str):
         wanted = family.casefold()
         if any(name.casefold() == wanted for name in family_names(bytes(raw.fontTable('name')))):
             alias = matched
+    if alias is None:
+        alias = _indexed_alias(family)
     with _LOCK:
         _current()
         _ALIASES[family] = alias

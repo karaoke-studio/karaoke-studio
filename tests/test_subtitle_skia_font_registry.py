@@ -117,6 +117,19 @@ def used_fonts(ir):
             'ruby': {digest(u) for g in line['ruby_groups'] for u in g['units']}}
 
 
+def drawing_geometry(value):
+    """Run indices can differ when unused platform fallback chains differ.
+
+    Keep every actual glyph/metric/clock/coordinate field. Used resource
+    identities are compared separately by ``used_fonts``.
+    """
+    if isinstance(value, dict):
+        return {key: drawing_geometry(item) for key, item in value.items() if key != 'run_index'}
+    if isinstance(value, list):
+        return [drawing_geometry(item) for item in value]
+    return value
+
+
 def frames(binary, ir, target):
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
@@ -194,11 +207,12 @@ def test_localized_and_english_family_names_select_the_same_bytes(binary, regist
         registry.add(key, extra)
     track, style = source()
     resolver = SkiaFontResolver()
-    english = prepare(binary, track, style, resolver)
+    # Resolve the localized spelling cold: no earlier English preparation may
+    # be required to seed its resource identity.
     localized = prepare(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED), resolver)
+    english = prepare(binary, track, style, resolver)
     assert used_fonts(localized) == used_fonts(english)
-    assert localized['skia_layout']['lines'] == english['skia_layout']['lines']
-    assert localized['skia_layout']['fonts'] == english['skia_layout']['fonts']
+    assert drawing_geometry(localized['skia_layout']['lines']) == drawing_geometry(english['skia_layout']['lines'])
     # Workers read the GUI-verified alias; they never query Qt themselves.
     worker = _prepare_on_worker(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED),
                                 resolver)
@@ -214,7 +228,13 @@ def test_duplicate_family_faces_select_physical_weights(binary, registry):
     regular = registry.font('dup-regular', MAIN, 610, weight=400)
     bold = registry.font('dup-bold', MAIN, 910, weight=700, ps_name='LinK-Registry-Main-Bold')
     with TTFont(bold) as font:
-        font['name'].setName('Bold', 2, 3, 1, 0x409)
+        # CoreText reads the Mac records too. Keep every existing platform's
+        # style/full/unique names consistent with the physical bold face.
+        for record in list(font['name'].names):
+            values = {2: 'Bold', 3: MAIN + ' Bold', 4: MAIN + ' Bold'}
+            if record.nameID in values:
+                font['name'].setName(values[record.nameID], record.nameID,
+                                     record.platformID, record.platEncID, record.langID)
         font['OS/2'].fsSelection = (font['OS/2'].fsSelection & ~0x40) | 0x20
         font['head'].macStyle |= 1
         font.save(bold)
@@ -436,7 +456,7 @@ def test_unlisted_locale_record_resolves_to_its_own_bytes_or_fails_explicitly(bi
         assert korean in str(exc)
     else:
         assert used_fonts(aliased) == used_fonts(english)
-        assert aliased['skia_layout']['lines'] == english['skia_layout']['lines']
+        assert drawing_geometry(aliased['skia_layout']['lines']) == drawing_geometry(english['skia_layout']['lines'])
 
 
 def test_registry_change_drops_an_inflight_frame_before_gui_repreparation(binary, registry, monkeypatch):

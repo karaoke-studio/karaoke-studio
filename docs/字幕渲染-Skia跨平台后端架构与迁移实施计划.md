@@ -1778,10 +1778,12 @@ Linux X11 首轮 **889 通过、398 跳过、1 失败**：预览测试先设置�
 - FontTools 受控字体证明：同一个 resolver、相同轨道/样式经过 file/data 注册、同族不同字节替换、移除/恢复、正文/上注音/角色字体及同族 Regular/Bold 物理 face 时，既有内容身份与度量失效机制已能正确工作，不为此另加跨准备内容缓存。本地化名的作者样式不同可以保留不同保守缓存键，实际资源与几何必须相同。
 - 两项实际缺口先红后绿：字体代际变化后，Skia worker 可能回到 Qt 字体发现；同一预览状态不会因字体库变化主动重新准备。共享 `font_weight.prepared_font_instance` 只查当前代际已准备的资源决策，既有 resolver 与 D2D 调用语义不改；Skia 边界仅允许 GUI 线程发现字体，worker 未准备时明确抛出 `SkiaFontNotPreparedError`。真实资源错误仍失败，不以系统替身继续绘制。
 - Skia G5 预览订阅 `fontDatabaseChanged`，通过自有、合并的零延时 QTimer 在 GUI 线程按当前状态重新准备并重绘最后请求；stop 断开信号并停表。只压制已被字体代际变化或待准备取代的未备错误，当前真实错误仍上报。Codex 追加在途帧检查：版本未更新时，待准备标记或字体代际变化也使旧帧失效；移除字体报告错误，重新注册后同状态恢复。
-- Linux fontconfig 可能能匹配应用字体的本地化 `name` 记录，却只在 family 列表公开英文名。独立 `native/skia_font_aliases` 只在 GUI 线程读取匹配 face 的 OpenType family/typographic-family 名称（name ID 1/16），确认确有请求名后才接受规范族名；worker 只读当前代际已核验别名。未核验的 Qt/OS 替身明确失败，系统不能匹配的语言记录也明确失败，不冒充全语言别名支持。共享 family 发现与 D2D 不变。
+- 平台可能只在 family 列表公开英文名，Linux fontconfig 仍能匹配部分本地化 `name` 记录，Mac CoreText 的直接匹配则可能遗漏。独立 `native/skia_font_aliases` 只在 GUI 线程读取匹配 face 的 OpenType family/typographic-family 名称（name ID 1/16）；直接匹配不成立时，按当前字体代际惰性建立 Qt 公开族的真实 face 名称表索引，一代只建一次，不扫描系统文件。确认确有请求名后才接受规范族名；worker 只读当前代际已核验别名。未核验的 Qt/OS 替身明确失败，字体表也无此名时失败；不依赖先用英文名准备来“热身”。共享 family 发现与 D2D 不变。
 - 新测试单独注册和回收字体，不清缓存来制造通过；涵盖资源摘要/物理字重、替换后几何、GPU/Raster、GUI/worker、本地化名、同状态重绘、在途旧帧和失败恢复。Mac workflow 与一键验收包新增 `font_registry=1`。未改 C++/头文件，native 源码身份仍为 §14.39 的 `5a863dbe340cf3ed5b38df9f71172dd7bb9115899662c10a2beaf59a55fabb65`，本批无需重建。
 
 验证进度：Claude 原实现的两个新增缺陷回归均失败，修复后专项 14 项在 Windows/X11/Wayland 通过。Codex 最终补强后 Windows 专项 **17 通过**。Windows 完整扩展组合首轮 **1273 通过、9 跳过、46 失败和 4 setup 错误**，4 个旧 resolver 测试接缝已恢复；多项子进程启动返回 `0xC0000142`，涉及 FFmpeg、原生 smoke 和 Qt 探针。最终按原节点复跑（排除 4 项独立 DPR 生命周期）**46 项全部通过**；单独预览组合 **55 通过、2 项验证层/平台专用跳过**。DPR 生命周期发现探针可能在副屏创建窗口，而 native helper 只调整主屏；脚本现明确选择并定位到主屏，原 DPR/所有权/生命周期断言不改，最终 **4 项通过**，不改变产品窗口位置。最终关联架构/协议/字体/构建与预览回归 **565 通过、15 项环境专用跳过**；Linux X11/Wayland 最终完整产品组合各 **907 通过、398 项平台专用跳过**，含新文件 **17 项全部通过**；独立 CPU-only sidecar 专项 Windows/Linux 各 **16 通过**（仅排除需 GPU 的双目标对照）。早期 Linux 混合 native 组合中的两项 llvmpipe 硬件冒烟失败仍作为硬件门槛保留，不计作硬件通过。Mac CI 尚在验收，不记作已通过。
+
+首轮 Mac CI [43886076675](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43886076675) 两架构均 **879 通过、424 跳过、2 失败**，预览/生命周期各 **21 通过、1 跳过**。失败一为上述直接匹配遗漏，已补名称表索引；失败二为测试粗体文件只更新了 Windows styleName，Mac 记录仍是 Regular，现统一所有已有平台的 style/full/unique 名称，不放宽物理粗体身份断言。本地化请求的未使用 fallback 链可能不同，测试分别严格检查实际选中字节与字形/度量/坐标，允许 run 表编号随未用资源链变化。修正后 Windows 专项 **17 通过**，架构/字体回归 **200 通过、15 跳过**；Linux 扩展回归与 Mac 复验进行中。
 
 保留：系统级字体安装/卸载和更广注册压力、真实多屏产品生命周期、默认 realization 完整画质、Linux 真硬件、本轮 Mac 真机与完整 P05；未做 4K。日志前缀 `build/p05-font-registry-*`。
 
