@@ -417,7 +417,7 @@ git submodule status
    `glyph_units` 仅逐单元 NFC；几何必须经 `measure_timed_readings` 消费这些单元，不能
    按整段 reading 重组 checkpoints。需要新投影时声明 `p05_ruby_units` / `ruby_unit_schema=1`，
    `text` 保留原文，`glyph_text` 必须等于该单元 NFC；native 验证字体/cluster 后仍绘制最终路径。
-   不能跨 part 合成韩文/IPA 单元；以独立组合标记开头的 part 仍明确拒绝，完整 fallback 待做。
+   不能跨 part 合成韩文/IPA 单元；独立组合标记的已验收子集见 §14.34，其他组合继续拒绝。
    P05 显式单元字体回退见 §14.32：`native/SkiaFontResolver` 导出 GUI 预热的物理 face，
    `TextMeasurementBatch` 按完整字体链去重，正文/角色/上下注音共用同一度量与最终绘制。
    `font_chain_schema=1` / `p05_font_fallback` 门控逐候选 `font_options`；主字体基线不随缺字改变，
@@ -429,6 +429,11 @@ git submodule status
    门控 `mixed_fallback`，混排字形/单元快照须含严格字节边界、字体索引与内容身份。
    字体身份现为 `skia-m150-hb-ft-v3`；不能改回像素字号的 Skia FT advance 回调，它使
    多字单元的近整数墨迹宽度被截断。连接文字/IPA/ZWJ/emoji 的混排仍拒绝。
+   P05.6 单个独立非间距附加符见 §14.34：`ruby/skia_standalone_marks` 只开放单个 Mn 的
+   U+0300–036F（不含 CGJ/双基字连结符）与 U+3099/U+309A。`p05_standalone_marks` /
+   `standalone_mark_schema=1` 门控，须同时使用单元 NFC 与 overlap 终点；标记必须为单字体、
+   单个原位字形，不加占位圆圈，不跨 part 合成，不移动源时钟。多标记、变体选择符、复杂
+   脚本或补充平面标记继续拒绝。native 按 Unicode 码点检查，不能按 UTF-16 半个代理对放行。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，

@@ -8,6 +8,7 @@ from krok_helper.subtitle_render.engine.ruby.skia_timing import prepare_ruby_wip
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import prepare_overlap_wipes
 from .skia_lower_ir import lower_solid_paint
+from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
 def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None):
@@ -20,7 +21,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     markers = any(is_utopia_group_marker(r) for r in geometry.track.rubies)
     timings = [prepare_ruby_wipe_timing(item.line, local, item.layout_style.ruby_main_progress_mode)
                for item, local in zip(prepared.plan.lines, ruby.lines, strict=True)]
-    unit_projection = any(c.units != tuple(split_graphemes(g.target.effective.reading)) or c.glyph_units != c.units
+    standalone_marks = any(starts_with_mark(unit) for timing in timings for c in timing.readings for unit in c.glyph_units)
+    unit_projection = standalone_marks or any(c.units != tuple(split_graphemes(g.target.effective.reading)) or c.glyph_units != c.units
         for local, timing in zip(ruby.lines, timings, strict=True)
         for g, c in zip(local.rubies, timing.readings, strict=True))
     adjusted_wipes = lower_source_indices is not None or markers or unit_projection
@@ -69,6 +71,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     return {'version': 2, 'wipe_schema': 1, 'ruby_schema': 1, 'metrics_identity': ruby.identity,
             **({'ruby_marker_schema': 1} if markers else {}),
             **({'ruby_unit_schema': 1} if unit_projection else {}),
+            **({'standalone_mark_schema': 1} if standalone_marks else {}),
             **({'overlap_schema': 1} if adjusted_wipes else {}),
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}

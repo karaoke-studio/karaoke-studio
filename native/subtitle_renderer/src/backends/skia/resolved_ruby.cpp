@@ -23,6 +23,27 @@ std::uint32_t rgbaPaint(const QJsonValue& value) {
     const auto b = integer(color[2], 0, 255), a = integer(color[3], 0, 255);
     return (std::uint32_t(a) << 24) | (std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) | b;
 }
+void validateStandaloneMark(const QString& text, const QJsonObject& cell, const QJsonObject& ir) {
+    const auto code = text.toUcs4().front();
+    if (!QChar::isMark(code)) return;
+    const auto layout = ir.value("skia_layout").toObject();
+    if (!ir.value("required_features").toArray().contains("p05_standalone_marks")
+        || layout.value("standalone_mark_schema").toDouble(-1) != 1
+        || !ir.value("required_features").toArray().contains("p05_ruby_units")
+        || layout.value("ruby_unit_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 独立组合标记缺少版本化能力声明");
+    if (text.size() != 1 || QChar::category(code) != QChar::Mark_NonSpacing
+        || !((code >= 0x300 && code <= 0x36f && code != 0x34f && !(code >= 0x35c && code <= 0x362))
+             || code == 0x3099 || code == 0x309a))
+        throw BackendError("Skia 该独立组合标记尚未完成 GPU 字形兼容");
+    const auto metrics = cell.value("metrics").toObject();
+    const auto glyphs = metrics.value("glyphs").toArray();
+    if (glyphs.size() != 1 || !glyphs[0].isObject()
+        || glyphs[0].toObject().value("x").toDouble(1) != 0
+        || glyphs[0].toObject().value("y").toDouble(1) != 0
+        || metrics.value("selected_font").toDouble(-1) < 0)
+        throw BackendError("Skia 独立组合标记必须是单字体原位字形");
+}
 }
 std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
@@ -72,6 +93,7 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
                     throw BackendError("Skia 注音字形文本缺少能力声明或不是来源单元的 NFC");
                 drawingText = glyphText.toString();
             }
+            validateStandaloneMark(drawingText, cell, ir);
             const auto interval = times.toArray();
             const int start = integer(interval[0], -86400000, 86400000);
             const int end = integer(interval[1], start, 86400000);

@@ -7,7 +7,6 @@ are preparation inputs, not permission to render an unsupported ruby profile.
 from dataclasses import dataclass, asdict
 import hashlib
 import json
-import unicodedata
 
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 
@@ -15,6 +14,7 @@ from krok_helper.subtitle_render.engine.text.skia_batch import TextMeasurementBa
 from krok_helper.subtitle_render.engine.text.skia_width import cell_geometry
 from krok_helper.subtitle_render.engine.text.metric_snapshot import CellMetric
 from .style_semantics import font_style_for_ruby_cell, ruby_script_stroke_style, ruby_stroke_width
+from .skia_standalone_marks import starts_with_mark, supported_standalone_mark, validate_mark_metrics
 
 
 @dataclass(frozen=True)
@@ -87,14 +87,19 @@ def measure_timed_readings(readings, *, resolve_font, measure):
     """Measure the GPU's part-local clock units, normalized independently.
 
     The clock retains authored text; normalization is only the glyph boundary.
-    An isolated combining mark needs a separately verified shaping contract.
+    Validated isolated marks keep their own face, origin and authored clock.
     """
     from .skia_timing import ruby_unit_clock
     readings = tuple(readings)
     clocks = [ruby_unit_clock(ruby, index) for index, (ruby, _) in enumerate(readings)]
     units = [clock.glyph_units for clock in clocks]
-    if any(unicodedata.category(unit[0]).startswith('M') for row in units for unit in row):
+    if any(starts_with_mark(unit) and not supported_standalone_mark(unit) for row in units for unit in row):
         raise ValueError('Skia 注音 part 以独立组合标记开头，尚未完成 GPU 字形兼容')
     # Normalizing each unit can differ from normalizing the concatenated text.
-    return measure_readings([(''.join(row), style) for row, (_, style) in zip(units, readings, strict=True)],
-                            visual_units=units, resolve_font=resolve_font, measure=measure)
+    result = measure_readings([(''.join(row), style) for row, (_, style) in zip(units, readings, strict=True)],
+                              visual_units=units, resolve_font=resolve_font, measure=measure)
+    for row, measured in zip(units, result.readings, strict=True):
+        for unit, metrics in zip(row, measured.cells, strict=True):
+            if starts_with_mark(unit):
+                validate_mark_metrics(unit, metrics)
+    return result

@@ -156,7 +156,7 @@ def test_invalid_unit_projection_keeps_previous_scene(binary,unit_source,mutatio
 
 def test_dangling_combining_mark_remains_explicitly_unsupported(binary,unit_source):
     track,style,_=reading(unit_source,'nfc')
-    ruby=replace(track.rubies[0],reading='a\u0301',reading_parts=['a','\u0301'],reading_part_ms=[400])
+    ruby=replace(track.rubies[0],reading='a\u0301\u0300',reading_parts=['a','\u0301\u0300'],reading_part_ms=[400])
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(track,style,width=900,height=600,fps=60)
         before,_=collect(process,[450])

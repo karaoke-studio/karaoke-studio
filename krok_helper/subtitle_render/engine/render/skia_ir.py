@@ -65,6 +65,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p05_ruby_markers')
         if 'ruby_unit_schema' in ir['skia_layout']:
             ir['required_features'].append('p05_ruby_units')
+        if 'standalone_mark_schema' in ir['skia_layout']:
+            ir['required_features'].append('p05_standalone_marks')
         if lower_enabled:
             ir['required_features'] += ['p05_lower_ruby', 'p05_overlap_wipe']
         elif markers or 'ruby_unit_schema' in ir['skia_layout']:

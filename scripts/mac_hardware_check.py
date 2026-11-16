@@ -221,6 +221,9 @@ def main(argv=None) -> int:
     if manifest.get("mixed_fonts", 0) >= 1:
         steps["mixed_fonts"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                 "tests/test_subtitle_skia_mixed_fonts.py", "--basetemp", logs / "mixed-font-tests"]
+    if manifest.get("standalone_marks", 0) >= 1:
+        steps["standalone_marks"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                     "tests/test_subtitle_skia_standalone_marks.py", "--basetemp", logs / "standalone-mark-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"
