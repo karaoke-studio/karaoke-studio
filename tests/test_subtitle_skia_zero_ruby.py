@@ -29,6 +29,8 @@ def zero_reading(source, kind='leading', *, lower=False, mode='reading_units', t
         # A trailing empty pause keeps the source annotation window alive
         # while every visible unit has a zero-duration clock.
         'all_zero': (['A', 'W', ''], [0, 0], 1700),
+        'leading_mark': (['\u0301', '', 'W'], [0, 800], 1700),
+        'all_zero_mark': (['\u0301', 'W', ''], [0, 0], 1700),
     }[kind]
     ruby = replace(track.rubies[0], reading=''.join(parts), reading_parts=parts,
                    reading_part_ms=checkpoints, pos_end_ms=end)
@@ -239,3 +241,12 @@ def test_inline_role_geometry_and_paints_keep_zero_ruby_clock(binary, mark_sourc
         y = int(cell['baseline_y']+(ink[1]+ink[3])/2)
         assert np.max(abs(frames[0][y, x].astype(int)-before)) <= 1
         assert np.max(abs(frames[3][y, x].astype(int)-after)) <= 1
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind', ['leading_mark', 'all_zero_mark'])
+@pytest.mark.parametrize('lower', [False, True])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_zero_advance_standalone_marks_keep_the_gpu_endpoint(binary, mark_source, kind, lower, dpr):
+    test_zero_ruby_matches_actual_d2d_gpu(binary, mark_source, kind, lower,
+                                        'reading_units', 'n3_1074', dpr)
