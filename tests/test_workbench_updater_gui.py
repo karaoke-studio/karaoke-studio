@@ -240,3 +240,82 @@ def test_update_progress_ring_survives_workbench_stylesheet_refresh(qapp, monkey
     finally:
         window.close()
         qapp.setStyleSheet(original_style)
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+@pytest.mark.parametrize("dark", [False, True])
+def test_update_prompt_colors_follow_theme_while_open(qapp, monkeypatch, platform, dark):
+    from PyQt6.QtCore import QObject, pyqtSignal
+    from PyQt6.QtGui import QColor, QPalette
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QLabel, QTextBrowser, QWidget
+    from krok_helper import theme_workbench
+    from krok_helper.updater import dialogs, macos_metadata
+
+    class PreviewTheme(QObject):
+        changed = pyqtSignal()
+        is_dark = dark
+
+    preview_theme = PreviewTheme()
+    monkeypatch.setattr(theme_workbench, "theme", preview_theme)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(macos_metadata, "is_auto_update_available", lambda: True)
+    release = SimpleNamespace(
+        version="4.4.6.2", published_at="2026-11-15", assets=[],
+        html_url="https://github.com/karaoke-studio/karaoke-studio/releases/tag/v4.4.6.2",
+        body='## 更新标题\n\n<span style="color:#d64545"><b>反馈群</b></span>\n\n'
+             '正文 [贡献者](https://github.com/Myosotis11037)\n\n' + "更新条目\n\n" * 80,
+    )
+    host = QWidget()
+    dialog = dialogs.WorkbenchUpdateDialog(
+        release, local_version="4.4.6", source_label="GitHub Release（官方）", parent=host,
+    )
+    dialog.resize(800, 620)
+    dialog.show()
+
+    def contrast(first, second):
+        def luminance(color):
+            channels = (color.redF(), color.greenF(), color.blueF())
+            linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+            return sum(c * w for c, w in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        low, high = sorted((luminance(first), luminance(second)))
+        return (high + 0.05) / (low + 0.05)
+
+    def assert_readable():
+        qapp.processEvents()
+        p = theme_workbench.palette()
+        background = dialog.grab().toImage().pixelColor(8, 8)
+        assert background == QColor(p.shell_bg)
+        for label in dialog.findChildren(QLabel):
+            if label.text().startswith(("发现新版本", "v4.", "当前版本", "更新内容")):
+                assert contrast(label.palette().color(QPalette.ColorRole.WindowText), background) >= 4.5
+        view = dialog.findChild(QTextBrowser)
+        image = view.viewport().grab().toImage()
+        body_background = image.pixelColor(image.width() - 3, image.height() - 3)
+        assert body_background == QColor(p.panel_bg)
+        assert contrast(view.palette().color(QPalette.ColorRole.Text), body_background) >= 4.5
+        assert "#d64545" in view.toHtml()
+        assert 'href="https://github.com/Myosotis11037"' in view.toHtml()
+
+    try:
+        host.setStyleSheet(theme_workbench.build_app_qss())
+        assert_readable()
+        view = dialog.findChild(QTextBrowser)
+        view.verticalScrollBar().setValue(90)
+        cursor = view.document().find("正文")
+        view.setTextCursor(cursor)
+        scroll_position = view.verticalScrollBar().value()
+        for next_dark in (not dark, dark):
+            preview_theme.is_dark = next_dark
+            host.setStyleSheet(theme_workbench.build_app_qss())
+            preview_theme.changed.emit()
+            QTest.qWait(theme_workbench.THEME_REFRESH_DELAY_MS + 100)
+            assert_readable()
+            assert view.textCursor().selectedText() == "正文"
+            assert view.verticalScrollBar().value() == scroll_position
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        host.close()
+        host.deleteLater()

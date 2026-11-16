@@ -30,6 +30,7 @@ from qfluentwidgets import (
 
 from krok_helper.config import APP_TITLE
 from krok_helper.qfluent_compat import ModelessDialog
+from krok_helper.theme_workbench import palette, themed
 from krok_helper.updater.sources import SOURCE_IDS, SOURCE_LABELS, normalize_order
 
 __all__ = ["UpdateSourceOrderDialog", "WorkbenchUpdateDialog"]
@@ -169,10 +170,52 @@ class WorkbenchUpdateDialog(ModelessDialog):
             if assets and not any(asset.name == FEED_NAME for asset in assets):
                 self._auto_update_available = False
         self.setWindowTitle(APP_TITLE)
+        self.setObjectName("WorkbenchUpdateDialog")
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumSize(720, 560)
         self._build_ui(release, local_version, source_label, all_releases or [])
+        themed(self, self._theme_qss)
+
+    @staticmethod
+    def _theme_qss() -> str:
+        p = palette()
+        return f"""
+            QDialog#WorkbenchUpdateDialog {{
+                background: {p.shell_bg};
+            }}
+            QLabel#UpdateTitle, QLabel#UpdateVersion, QLabel#UpdateMeta,
+            QLabel#UpdateContentLabel {{
+                font-family: "Microsoft YaHei UI";
+                color: {p.text_primary};
+            }}
+            QLabel#UpdateTitle {{
+                font-size: 22pt;
+                font-weight: 700;
+                color: {p.panel_title};
+            }}
+            QLabel#UpdateVersion {{
+                font-size: 15pt;
+                font-weight: 700;
+                color: {p.panel_title};
+            }}
+            QLabel#UpdateMeta {{
+                font-size: 10pt;
+                color: {p.text_secondary};
+            }}
+            QLabel#UpdateContentLabel {{ font-size: 10.5pt; }}
+            QTextBrowser#UpdateChangelog {{
+                background: {p.panel_bg};
+                border: 1px solid {p.input_border};
+                border-radius: 8px;
+                padding: 12px;
+                font-family: "Microsoft YaHei UI";
+                font-size: 10.5pt;
+                color: {p.text_primary};
+                selection-background-color: {p.preview_selection_bg};
+                selection-color: {p.preview_selection_text};
+            }}
+        """
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -206,11 +249,11 @@ class WorkbenchUpdateDialog(ModelessDialog):
         layout.setSpacing(14)
 
         title = QLabel("发现新版本")
-        title.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 22pt; font-weight: 700; color: #111827;')
+        title.setObjectName("UpdateTitle")
         layout.addWidget(title)
 
         version = QLabel(f"v{release.version}")
-        version.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 15pt; font-weight: 700; color: #111827;')
+        version.setObjectName("UpdateVersion")
         layout.addWidget(version)
 
         published_at = release.published_at[:10] if getattr(release, "published_at", "") else "未知日期"
@@ -218,7 +261,7 @@ class WorkbenchUpdateDialog(ModelessDialog):
         if source_label:
             meta_parts.append(f"下载源：{source_label}")
         meta = QLabel("  |  ".join(meta_parts))
-        meta.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10pt; color: #6b7280;')
+        meta.setObjectName("UpdateMeta")
         meta.setWordWrap(True)
         layout.addWidget(meta)
 
@@ -228,26 +271,14 @@ class WorkbenchUpdateDialog(ModelessDialog):
             if release_count > 1
             else "更新内容："
         )
-        content_label.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10.5pt; color: #111827;')
+        content_label.setObjectName("UpdateContentLabel")
         layout.addWidget(content_label)
 
         body_view = QTextBrowser()
+        body_view.setObjectName("UpdateChangelog")
         body_view.setReadOnly(True)
         body_view.setOpenExternalLinks(True)
         body_view.setMinimumHeight(300)
-        body_view.setStyleSheet(
-            """
-            QTextBrowser {
-                background: #ffffff;
-                border: 1px solid #d9dfe8;
-                border-radius: 8px;
-                padding: 12px;
-                font-family: "Microsoft YaHei UI";
-                font-size: 10.5pt;
-                color: #111827;
-            }
-            """
-        )
         if body_text:
             try:
                 body_view.setMarkdown(body_text)
