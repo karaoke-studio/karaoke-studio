@@ -45,7 +45,8 @@ def ir_for(binary, source, *, roll_shift_ms=0, dpr=1):
     ir = build_render_ir(replace(track, rubies=[]), style, width=641, height=720, fps=60, dpr=dpr,
                          roll_shift_ms=roll_shift_ms, layout_plan_builder=lambda *a, **k: prepared.plan,
                          serialize_source_baselines=False)
-    ir['required_features'] = ['p05_resolved_horizontal', 'p05_segmented_wipe', 'p05_resolved_ruby']
+    # Final ruby layouts always carry the GPU endpoint contract (§14.39).
+    ir['required_features'] = ['p05_resolved_horizontal', 'p05_segmented_wipe', 'p05_resolved_ruby', 'p05_overlap_wipe']
     ir['skia_layout'] = prepared_ruby_layout(prepared, width=641, height=720)
     apply_resolved_font_faces(ir)
     return ir

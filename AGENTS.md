@@ -453,7 +453,10 @@ git submodule status
    反向行最终 `ruby_groups` 必须为空，不能自行发明反向注音时钟或逐字裁剪；下方注音开关仍决定源行框。
    GPU 对反向行总是应用右至左 overlap 终点：`skia_overlap.reverse_main_endpoints` 按源单元几何准备，
    终点随几何不随时钟移动。`p05_reverse_overlap` / `reverse_overlap_schema=1` 门控，旧 sidecar 选择前拒绝。
-   未带重叠终点的历史正向场景在 DPR 1.5 结束前 1ms 有约 1.05px 前沿缺口，已记录为残留，未改历史路径。
+   正向终点统一策略见 §14.39：`skia_overlap.line_endpoints` 为全部规范横排正文与注音单元准备终点，
+   `p05_overlap_wipe` / `overlap_schema=1` 属基础契约；旧反向入口只是同一实现的窄包装。
+   原 DPR 1.5 结束前 1ms 约 1.05px 缺口已恢复为普通回归，不放宽 1px 预算。
+   native 先校验原始分段曲线起止 0/1，再应用独立 overlap 终点，禁止用覆盖后的值掩盖非法协议。
 
    字体内容快照生命周期见 §14.37：`SkiaFontResolver.snapshot()` 只缓存本次准备的首次内容摘要，
    `text/skia_batch.font_snapshot` 是可选端口，IR/plan 的嵌套边界共用同一线程快照，退出即释放。

@@ -36,8 +36,12 @@ std::vector<WipePoint> resolvedSkiaWipePoints(const QJsonObject& cell, const QJs
             throw BackendError("Skia 分段走字节点包含无效或非有限值");
         out.push_back({int(shifted), float(p)});
     }
-    // Sorted time/progress and endpoint invariants are also enforced by the
-    // shared drawing core, including callers that do not originate in JSON.
+    // An IR curve always spans [0, 1]. The GPU overlap endpoint is a separate
+    // field applied afterwards, so it must never launder an invalid curve end.
+    if (out.front().position != 0 || out.back().position != 1)
+        throw BackendError("Skia 分段走字端点无效");
+    // Sorted time/progress invariants are also enforced by the shared drawing
+    // core, including callers that do not originate in JSON.
     return out;
 }
 }

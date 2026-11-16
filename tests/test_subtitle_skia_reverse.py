@@ -52,7 +52,8 @@ def test_final_clock_map_keeps_geometry_and_authored_intervals(binary, project, 
     assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
     cells = ir['skia_layout']['lines'][0]['cells']
     assert [c['clock_index'] for c in cells] == list(range(len(cells)-1, -1, -1))
-    assert [{k: v for k, v in c.items() if k not in {'clock_index', 'wipe_end_position'}} for c in cells] == plain['skia_layout']['lines'][0]['cells']
+    strip = lambda c: {k: v for k, v in c.items() if k not in {'clock_index', 'wipe_end_position'}}
+    assert [strip(c) for c in cells] == [strip(c) for c in plain['skia_layout']['lines'][0]['cells']]
     # Every reverse cell carries the GPU's right-to-left endpoint; the
     # leftmost cell is sung last and keeps the basic endpoint.
     assert all(0 <= c['wipe_end_position'] <= 1 for c in cells) and cells[0]['wipe_end_position'] == 1
@@ -74,8 +75,8 @@ def test_final_clock_map_keeps_geometry_and_authored_intervals(binary, project, 
 def test_final_clock_projection_moves_curves_without_moving_source_cells():
     points = [[{'time_ms': 100*i, 'position': 0}, {'time_ms': 100*i+50, 'position': 1}] for i in range(3)]
     ends = [1, .9, .8]
-    ir = {'track': {'lines': [{'wipe_reverse': True}]}, 'required_features': [],
-          'skia_layout': {'lines': [{'cells': [{'source': i, 'wipe_points': p, 'wipe_end_position': e}
+    ir = {'track': {'lines': [{'wipe_reverse': True}]}, 'required_features': ['p05_overlap_wipe'],
+          'skia_layout': {'overlap_schema': 1, 'lines': [{'cells': [{'source': i, 'wipe_points': p, 'wipe_end_position': e}
                                                for i, (p, e) in enumerate(zip(points, ends))]}]}}
     unadjusted = copy.deepcopy(ir)
     project_reverse_wipe(ir)
@@ -85,6 +86,9 @@ def test_final_clock_projection_moves_curves_without_moving_source_cells():
     # Endpoints are geometry of the source cell, never moved with the clock.
     assert [c['wipe_end_position'] for c in cells] == ends
     with pytest.raises(ValueError, match='重复投影'): project_reverse_wipe(ir)
+    undeclared = copy.deepcopy(unadjusted)
+    undeclared['required_features'].remove('p05_overlap_wipe')
+    with pytest.raises(ValueError, match='重叠走字能力'): project_reverse_wipe(undeclared)
     del unadjusted['skia_layout']['lines'][0]['cells'][1]['wipe_end_position']
     with pytest.raises(ValueError, match='重叠终点'): project_reverse_wipe(unadjusted)
 

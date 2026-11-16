@@ -1,4 +1,12 @@
-"""Configuration-time GPU wipe endpoints for overlapping annotation boxes."""
+"""Configuration-time GPU wipe endpoints for every canonical horizontal line.
+
+The existing GPU gives every main and annotation character basic wipe points
+and always applies ``AdjustWipeEnd`` (``d2d_backend_configure.cpp``): main
+cells chain in singing order, annotation units chain per layer across groups.
+These functions prepare that single final endpoint once; no time changes.
+"""
+import math
+
 from .skia_timing import _f32
 
 
@@ -19,55 +27,61 @@ def _reverse_endpoint(left, right, following_right, dpr):
     return _endpoint(-right, -left, -following_right, dpr)
 
 
-def reverse_main_endpoints(cells, measured, *, dpr=1):
-    """Main endpoints of a reverse-singing line, cells kept in source order.
-
-    The GPU reverses its cells into singing order and always applies this
-    adjustment, so each cell is compared with its LEFT neighbour and the
-    leftmost (sung last) keeps the basic endpoint. Coordinates are local.
-    """
-    import math
+def _valid_dpr(dpr):
     if not math.isfinite(dpr) or dpr <= 0:
         raise ValueError('Skia 走字终点需要有效像素比例')
+
+
+def _main_endpoints(cells, measured, dpr, reverse):
     lefts = [c['origin_x']-offset for c, offset in zip(cells, measured.offsets, strict=True)]
     rights = [left+width for left, width in zip(lefts, measured.widths, strict=True)]
-    return (1.,)*min(len(lefts), 1) + tuple(
-        _reverse_endpoint(lefts[i], rights[i], rights[i-1], dpr) for i in range(1, len(lefts)))
-
-
-def prepare_overlap_wipes(local, measured, timing, *, dpr=1, reverse=False):
-    """Mirror the GPU's final-point adjustment without changing any time.
-
-    The +1 in its width is a physical pixel. Ruby groups are ordered spatially
-    and upper/lower layers are independent; group-complete still releases the
-    clip. The terminal compiler owns the optional endpoint protocol feature.
-
-    ``reverse`` lines use :func:`reverse_main_endpoints`. They never carry
-    annotations in the existing GPU; receiving one here is a contract error.
-    """
-    import math
-    if not math.isfinite(dpr) or dpr <= 0:
-        raise ValueError('Skia 走字终点需要有效像素比例')
-    if reverse and local.rubies:
-        raise ValueError('Skia 反向走字行不能携带注音组（现有 GPU 省略该行注音）')
+    main = [1.]*len(lefts)
     if reverse:
-        if len(timing.main) != len(local.main.cells):
-            raise ValueError('Skia 反向走字终点与正文单元数量不一致')
-        return reverse_main_endpoints(local.main.cells, measured, dpr=dpr), ()
-    main = [1.]*len(timing.main)
-    lefts = [c['origin_x']-offset for c, offset in zip(local.main.cells, measured.offsets, strict=True)]
-    for i in range(len(lefts)-1):
-        endpoint = _endpoint(lefts[i], lefts[i]+measured.widths[i], lefts[i+1], dpr)
-        main[i] = endpoint
-    ends = [[1.]*len(g.cells) for g in local.rubies]
+        # Source order is kept; the GPU sings right-to-left, so each cell is
+        # compared with its LEFT neighbour and the leftmost keeps 1.
+        for i in range(1, len(lefts)):
+            main[i] = _reverse_endpoint(lefts[i], rights[i], rights[i-1], dpr)
+    else:
+        for i in range(len(lefts)-1):
+            main[i] = _endpoint(lefts[i], rights[i], lefts[i+1], dpr)
+    return tuple(main)
+
+
+def _ruby_endpoints(rubies, dpr):
+    ends = [[1.]*len(g.cells) for g in rubies]
     previous = None
-    for index, group in sorted(enumerate(local.rubies), key=lambda p: (p[1].target.lower, min(p[1].target.indices))):
-        if previous is not None and local.rubies[previous[0]].target.lower != group.target.lower:
+    for index, group in sorted(enumerate(rubies), key=lambda p: (p[1].target.lower, min(p[1].target.indices))):
+        if previous is not None and rubies[previous[0]].target.lower != group.target.lower:
             previous = None
         for unit, cell in enumerate(group.cells):
             if previous is not None:
                 gi, ui = previous
-                before = local.rubies[gi].cells[ui]
+                before = rubies[gi].cells[ui]
                 ends[gi][ui] = _endpoint(before['layout_left'], before['layout_right'], cell['layout_left'], dpr)
             previous = index, unit
-    return tuple(main), tuple(tuple(row) for row in ends)
+    return tuple(tuple(row) for row in ends)
+
+
+def line_endpoints(main_cells, measured, rubies=(), *, dpr=1, reverse=False):
+    """Final ``(main, per-group annotation)`` endpoints of one prepared line.
+
+    The +1 in the width is a physical pixel. Upper/lower layers are separate
+    chains; group completion still releases the clip in the drawing core.
+    Reverse lines never carry annotations in the existing GPU.
+    """
+    _valid_dpr(dpr)
+    if reverse and rubies:
+        raise ValueError('Skia 反向走字行不能携带注音组（现有 GPU 省略该行注音）')
+    return _main_endpoints(main_cells, measured, dpr, reverse), _ruby_endpoints(rubies, dpr)
+
+
+def reverse_main_endpoints(cells, measured, *, dpr=1):
+    """Main endpoints of a reverse-singing line, cells kept in source order."""
+    return line_endpoints(cells, measured, dpr=dpr, reverse=True)[0]
+
+
+def prepare_overlap_wipes(local, measured, timing, *, dpr=1, reverse=False):
+    """Endpoints for a prepared annotation line; ``timing`` fixes the cell count."""
+    if len(timing.main) != len(local.main.cells):
+        raise ValueError('Skia 走字终点与正文单元数量不一致')
+    return line_endpoints(local.main.cells, measured, local.rubies, dpr=dpr, reverse=reverse)

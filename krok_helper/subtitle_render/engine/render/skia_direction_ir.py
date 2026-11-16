@@ -46,6 +46,6 @@ def project_reverse_wipe(ir):
     if overlap or (reverse and 'p05_resolved_ruby' in ir['required_features']):
         ir['required_features'].append('p05_reverse_overlap')
         ir['skia_layout']['reverse_overlap_schema'] = 1
-    if overlap and 'p05_overlap_wipe' not in ir['required_features']:
-        ir['required_features'].append('p05_overlap_wipe')
-        ir['skia_layout']['overlap_schema'] = 1
+    if overlap and ('p05_overlap_wipe' not in ir['required_features']
+                    or ir['skia_layout'].get('overlap_schema') != 1):
+        raise ValueError('Skia 反向走字终点缺少重叠走字能力声明')

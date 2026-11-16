@@ -13,7 +13,7 @@ from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_lower_ir import lower_sources
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
-from krok_helper.subtitle_render.engine.ruby.skia_overlap import reverse_main_endpoints
+from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 
 
@@ -54,15 +54,17 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     for index, item in enumerate(plan.lines):
         position = geometry.position(item, kwargs['width'], kwargs['height'])
         cells = positioned_cells(geometry.locals[index], position)
-        if item.line.wipe_reverse:
-            ends = reverse_main_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
-                                          dpr=kwargs.get('dpr', 1))
-            for cell, end in zip(cells, ends, strict=True):
-                cell['wipe_end_position'] = end
+        ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
+                                 dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse)
+        for cell, end in zip(cells, ends, strict=True):
+            cell['wipe_end_position'] = end
         lines.append({'cells': cells})
+    # Every canonical line carries the GPU's final wipe endpoint, so the
+    # overlap contract is part of the base canonical feature set.
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles',
-                               'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe']
-    ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'metrics_identity': measured.identity,
+                               'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe',
+                               'p05_overlap_wipe']
+    ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
@@ -79,9 +81,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if 'standalone_mark_schema' in ir['skia_layout']:
             ir['required_features'].append('p05_standalone_marks')
         if lower_enabled:
-            ir['required_features'] += ['p05_lower_ruby', 'p05_overlap_wipe']
-        elif markers or 'ruby_unit_schema' in ir['skia_layout']:
-            ir['required_features'].append('p05_overlap_wipe')
+            ir['required_features'].append('p05_lower_ruby')
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
         ir['skia_layout']['font_chain_schema'] = 1

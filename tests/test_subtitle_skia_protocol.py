@@ -301,8 +301,10 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
         canvas.resize(640, 360)
         canvas.show()
         canvas.set_output_size(640, 360)
-        canvas.set_track(supported_project[0])
         canvas.set_style(supported_project[1])
+        # Installing a track queues work immediately. Give the fixture its
+        # explicit font first, rather than briefly rendering the user's style.
+        canvas.set_track(supported_project[0])
         canvas.set_time(550)
         deadline = time.monotonic() + 30
         while (not frames or frames[-1][1] != 550 or canvas._subtitle_item._async_image is None) and not errors and time.monotonic() < deadline:

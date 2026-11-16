@@ -75,7 +75,7 @@ def test_marker_retains_source_without_owning_main_clock(binary,marker_source,te
     assert ir['track']['rubies'][0]['reading']==text
     assert 'p05_ruby_markers' in ir['required_features'] and ir['skia_layout']['ruby_marker_schema']==1
     cells=ir['skia_layout']['lines'][0]['cells']
-    assert [{k:v for k,v in cell.items() if k!='wipe_end_position'} for cell in cells]==base['skia_layout']['lines'][0]['cells']
+    assert cells==base['skia_layout']['lines'][0]['cells']
     assert all('wipe_points' not in c for c in cells)
     groups=ir['skia_layout']['lines'][0]['ruby_groups']
     assert bool(groups)==bool(text)  # Empty source is provenance, never a fake unit.

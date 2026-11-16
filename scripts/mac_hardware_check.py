@@ -233,6 +233,9 @@ def main(argv=None) -> int:
     if manifest.get("reverse_ruby", 0) >= 1:
         steps["reverse_ruby"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                  "tests/test_subtitle_skia_reverse_ruby.py", "--basetemp", logs / "reverse-ruby-tests"]
+    if manifest.get("forward_endpoints", 0) >= 1:
+        steps["forward_endpoints"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                      "tests/test_subtitle_skia_forward_endpoints.py", "--basetemp", logs / "forward-endpoint-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

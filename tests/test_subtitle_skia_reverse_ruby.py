@@ -368,10 +368,9 @@ def test_empty_reverse_line_needs_no_endpoint_capability(binary, marker_source, 
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason='Pre-existing forward gap recorded in plan §14.38: historical forward '
-                   'scenes without an overlap requirement omit the GPU endpoint (about 1.05 physical px at '
-                   'end-1ms, DPR 1.5, touching full-cell glyphs). Not changed by the reverse batch.')
 def test_recorded_forward_endpoint_gap_without_overlap_requirement(binary, marker_source):
+    # Formerly a strict xfail (plan §14.38): about 1.05 physical px at end-1ms,
+    # DPR 1.5. Closed by §14.39's universal GPU endpoint; same 1px budget.
     from test_subtitle_render_gpu_backend import _render_g1_frames
     track, style, resolve = without_ruby(reverse_source(marker_source, 'upper'))
     track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
