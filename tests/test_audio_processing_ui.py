@@ -526,12 +526,14 @@ class TestAcceptanceCriteria:
         page = _make_separation_page()
         assert page.current_view() == "welcome"
         titles = [card._title.text() for card in page._welcome._cards]
-        assert titles == [
+        import sys
+        expected = [
             "安装 PyMSS 和推荐模型",
             "仅安装 PyMSS，复用 MSST 模型",
             "使用已有 PyMSS",
             "使用已有 MSST",
         ]
+        assert titles == (["使用已安装的 PyMSS Studio", "使用已有 MSST"] if sys.platform == "darwin" else expected)
 
     def test_state_changes_preserve_inputs_and_results(self, tmp_path) -> None:
         """§14.1：服务状态变化与安装损坏修复不得清空输入、输出目录和历史结果。"""

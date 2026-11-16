@@ -96,6 +96,7 @@ def test_external_environment_probes_hide_the_windows_console(
             return Service()
 
     monkeypatch.setattr(real_backend_module.subprocess, "run", run)
+    monkeypatch.setattr(real_backend_module, "prepare_ai_python", lambda *_: str(executable))
     monkeypatch.setattr(
         real_backend_module,
         "hidden_subprocess_kwargs",

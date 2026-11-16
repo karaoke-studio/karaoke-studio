@@ -327,10 +327,20 @@ def _gpu_preview_default_enabled() -> bool:
     return os.name == "nt" and qpa_platform not in {"offscreen", "minimal"}
 
 
+def gpu_preview_supported() -> bool:
+    """Whether this platform has a selected GPU subtitle backend.
+
+    MPS/MLX inference support does not supply the Windows Direct2D renderer.
+    Explicit source-only Skia opt-in keeps its own capability/fallback checks.
+    """
+    from krok_helper.subtitle_render.native.backend import skia_requested
+    return os.name == "nt" or skia_requested()
+
+
 def gpu_preview_enabled() -> bool:
     """Enable GPU preview by default on Windows (direct present or G5 fallback)."""
     default = "1" if _gpu_preview_default_enabled() else "0"
-    return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", default)
+    return gpu_preview_supported() and _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", default)
 
 
 def native_due_queue_capacity(
@@ -567,6 +577,7 @@ class _AsyncSubtitleWorker(QObject):
 
     frame_ready = Signal(QImage, int)
     render_progress = Signal(int, str)
+    request_finished = Signal()
     finished = Signal()
 
     def __init__(self, width: int, height: int) -> None:
@@ -632,6 +643,7 @@ class _AsyncSubtitleWorker(QObject):
         logical_h = self._logical_h
         dpr = self._device_pixel_ratio
         if track is None or style is None:
+            self.request_finished.emit()
             return
 
         self._rendering = True
@@ -663,6 +675,7 @@ class _AsyncSubtitleWorker(QObject):
             self.frame_ready.emit(image, int(t_ms))
         finally:
             self._rendering = False
+            self.request_finished.emit()
 
         if self._stopping:
             self.finished.emit()
@@ -697,6 +710,8 @@ class AsyncSubtitleRenderer(QObject):
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._stopped = False
+        self._request_in_flight = False
+        self._pending_request: int | None = None
         self._thread = QThread(self)
         self._thread.setObjectName("subtitle-preview-render")
         self._worker = _AsyncSubtitleWorker(self._logical_w, self._logical_h)
@@ -706,6 +721,7 @@ class AsyncSubtitleRenderer(QObject):
         self._frame_requested.connect(self._worker.request)
         self._worker.frame_ready.connect(self.frame_ready)
         self._worker.render_progress.connect(self.renderProgress)
+        self._worker.request_finished.connect(self._on_request_finished)
         self._worker.finished.connect(self._thread.quit)
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.start()
@@ -758,7 +774,22 @@ class AsyncSubtitleRenderer(QObject):
         """投递一帧渲染请求；只保留最新 t（合并掉过期请求）。"""
         if self._stopped:
             return
-        self._frame_requested.emit(int(t_ms))
+        self._pending_request = int(t_ms)
+        self._dispatch_pending_request()
+
+    def _dispatch_pending_request(self) -> None:
+        # Coalesce before crossing the Qt queue, including while the worker is
+        # painting. State/target signals stay ordered before the next request.
+        if self._stopped or self._request_in_flight or self._pending_request is None:
+            return
+        t_ms, self._pending_request = self._pending_request, None
+        self._request_in_flight = True
+        self._frame_requested.emit(t_ms)
+
+    @Slot()
+    def _on_request_finished(self) -> None:
+        self._request_in_flight = False
+        self._dispatch_pending_request()
 
     def set_playing(self, playing: bool) -> None:  # noqa: ARG002
         """Playback state hook kept for API symmetry with the native preview path."""

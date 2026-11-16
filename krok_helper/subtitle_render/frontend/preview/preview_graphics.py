@@ -612,8 +612,11 @@ class PreviewGraphicsView(QGraphicsView):
         self._sync_native_subtitle_visibility()
         return True
 
-    def set_gpu_preview_enabled(self, enabled: bool) -> None:
+    def set_gpu_preview_enabled(self, enabled: bool) -> bool:
         """Switch the subtitle worker between GPU and Painter at runtime."""
+        from .preview_async import gpu_preview_supported
+        if enabled and not gpu_preview_supported():
+            return False
         from krok_helper.subtitle_render.native.backend import skia_requested
         skia = skia_requested()
         if skia:
@@ -624,14 +627,14 @@ class PreviewGraphicsView(QGraphicsView):
             target_cls = GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
         if type(self._async_renderer) is target_cls:
             if not skia or self._async_renderer.selection == SkiaSelection.from_environment(gpu_enabled=enabled):
-                return
+                return True
         self._stop_async_renderer()
         if not skia and not enabled and not async_preview_enabled():
             self._subtitle_item.set_async_mode(False)
             self._subtitle_item.set_time(self._t_ms)
             # 同步 QPainter 模式（async 全关）后端确定是 CPU，也必须通知 UI。
             self.renderBackendChanged.emit(self.render_backend_label())
-            return
+            return True
         self._async_renderer = target_cls(self._output_w, self._output_h, self, **({"gpu_enabled": enabled} if skia else {}))
         self._async_renderer.frame_ready.connect(
             self._on_async_frame, Qt.ConnectionType.QueuedConnection
@@ -647,6 +650,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._refresh_async_target()
         self._refresh_async_state()
         self.renderBackendChanged.emit(self.render_backend_label())
+        return True
 
     def set_preview_quality(self, quality: object) -> None:
         """Update the preview-only subtitle raster target without restarting video."""

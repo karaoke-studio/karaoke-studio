@@ -7,6 +7,12 @@
 from __future__ import annotations
 
 import inspect
+import io
+import json
+import threading
+from types import SimpleNamespace
+
+import pytest
 
 from krok_helper.audio_processing.separation.client import PyMSSClient
 from krok_helper.audio_processing.separation.pymss_service import (
@@ -245,6 +251,47 @@ class TestCancellation:
         source = inspect.getsource(PyMSSWorker.stop)
         assert "force" in source
         assert "if not force" in source
+
+
+@pytest.mark.parametrize('device,backend,expected', [
+    ('mps', 'mlx_full', 'Apple GPU（MLX）'),
+    ('mps', 'torch', 'Apple GPU（MPS）'),
+    ('cpu', 'torch', 'CPU'),
+    ('cuda:0', 'torch', 'cuda:0'),
+])
+def test_bridge_reports_loaded_backend_including_mlx_fallback(tmp_path, monkeypatch, device, backend, expected):
+    # Execute the generated sidecar, with EOF on stdin so its command loop exits.
+    monkeypatch.setattr('sys.stdin', io.StringIO(''))
+    monkeypatch.setattr('sys.stdout', io.StringIO())
+    namespace = {}
+    exec(write_bridge(tmp_path).read_text(encoding='utf-8'), namespace)
+    messages = []
+    namespace['_reply'] = messages.append
+    separator = SimpleNamespace(device=device, model=SimpleNamespace(mps_model_backend=backend))
+    namespace['_report_device'](separator)
+    assert messages[-1]['device'] == expected
+    if backend == 'mlx_full':
+        separator.model.mps_model_backend = 'torch'
+        namespace['_report_device'](separator)
+        assert messages[-1]['device'] == 'Apple GPU（MPS）'
+
+
+def test_device_event_reaches_callback_and_health_without_extra_request():
+    events = [dict(event='device', device='Apple GPU（MLX）'),
+              dict(event='done', ok=True, path='/output.wav')]
+    process = SimpleNamespace(poll=lambda:None, stdin=io.StringIO(),
+                              stdout=io.StringIO('\n'.join(map(json.dumps, events))+'\n'))
+    worker = PyMSSWorker(process, io.StringIO(), threading.Lock())
+    engine = PyMSSBridgeEngine(worker)
+    assert engine.health()['device'] == '待模型加载后确认'
+    devices = []
+    result = engine.separate_file(model='test', stem='vocals', input_path='/input.wav',
+                                  output_dir='/', on_device=devices.append)
+    assert result == '/output.wav'
+    assert devices == ['Apple GPU（MLX）']
+    assert engine.health()['device'] == devices[-1]
+    process.poll = lambda:1
+    assert engine.health()['device'] == '待模型加载后确认'
 
 
 class TestBridgeServiceProcessDropsIn:

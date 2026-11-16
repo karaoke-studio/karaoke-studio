@@ -189,8 +189,9 @@ class WelcomeView(QWidget):
             ),
             EntryCard(
                 FIF.LINK,
-                "使用已有 PyMSS",
-                "电脑上已有兼容环境，或服务已在运行。",
+                "使用已安装的 PyMSS Studio" if sys.platform == "darwin" else "使用已有 PyMSS",
+                "自动检测 Studio，复用分离运行时并准备 AI 打轴环境。" if sys.platform == "darwin"
+                else "电脑上已有兼容环境，或服务已在运行。",
                 self,
             ),
             EntryCard(
@@ -203,6 +204,9 @@ class WelcomeView(QWidget):
         flows = (FLOW_FULL, FLOW_REUSE_MSST, FLOW_EXISTING, FLOW_MSST)
         self._cards: list[EntryCard] = []
         for card, flow in zip(entries, flows):
+            if sys.platform == "darwin" and flow in (FLOW_FULL, FLOW_REUSE_MSST):
+                card.hide()
+                continue
             card.clicked.connect(lambda f=flow: self.flowSelected.emit(f))
             layout.addWidget(card)
             self._cards.append(card)
@@ -714,12 +718,30 @@ class ConnectStep(WizardStep):
         exe_row.setSpacing(8)
         self._exe_edit = LineEdit(self._exe_row)
         self._exe_edit.setPlaceholderText("例如 D:/tools/pymss/runtime/python.exe")
+        if sys.platform == "darwin":
+            self._exe_edit.setPlaceholderText("选择 Pymss Studio.app 或 Python 解释器")
+            from .studio_runtime import discover_studio
+
+            studio = discover_studio()
+            if studio:
+                self._exe_edit.setText(str(studio))
         self._exe_edit.textChanged.connect(lambda _t: self.wizard.refresh_footer())
         exe_row.addWidget(self._exe_edit, 1)
         browse = PushButton(FIF.FOLDER, "浏览", self._exe_row)
         browse.clicked.connect(self._browse_exe)
         exe_row.addWidget(browse)
         layout.addWidget(self._exe_row)
+
+        self._model_row = QWidget(self)
+        model_row = QHBoxLayout(self._model_row)
+        model_row.setContentsMargins(30, 0, 0, 0)
+        self._model_edit = LineEdit(self._model_row)
+        self._model_edit.setPlaceholderText("已有模型目录（可选；留空使用 PyMSS 默认缓存）")
+        model_row.addWidget(self._model_edit, 1)
+        model_browse = PushButton(FIF.FOLDER, "模型目录", self._model_row)
+        model_browse.clicked.connect(self._browse_models)
+        model_row.addWidget(model_browse)
+        layout.addWidget(self._model_row)
 
         layout.addWidget(self._url_option)
 
@@ -760,18 +782,35 @@ class ConnectStep(WizardStep):
         self._exe_option.set_checked(exe)
         self._url_option.set_checked(not exe)
         self._exe_row.setVisible(exe)
+        self._model_row.setVisible(exe and sys.platform == "darwin")
         self._url_row.setVisible(not exe)
         self._api_key_row.setVisible(not exe)
         self.wizard.refresh_footer()
 
     def _browse_exe(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择 PyMSS 可执行环境")
+        if sys.platform == "darwin":
+            # Qt's native open panel can descend into .app packages. A directory
+            # picker explicitly lets the user select the bundle itself.
+            path = QFileDialog.getExistingDirectory(
+                self, "选择 Pymss Studio.app（也可在输入框填写 Python 路径）", "/Applications",
+                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontUseNativeDialog,
+            )
+        else:
+            path, _ = QFileDialog.getOpenFileName(self, "选择 PyMSS 可执行环境")
         if path:
             self._exe_edit.setText(path)
 
+    def _browse_models(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择已有 PyMSS 模型目录")
+        if path:
+            self._model_edit.setText(path)
+
     def target(self) -> dict[str, str]:
         if self._exe_option.is_checked():
-            return {"executable": self._exe_edit.text().strip(), "server_url": "", "api_key": ""}
+            target = {"executable": self._exe_edit.text().strip(), "server_url": "", "api_key": ""}
+            if sys.platform == "darwin":
+                target["model_dir"] = self._model_edit.text().strip()
+            return target
         return {
             "executable": "",
             "server_url": self._url_edit.text().strip(),
