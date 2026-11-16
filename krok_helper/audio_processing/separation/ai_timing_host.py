@@ -413,6 +413,11 @@ class KaraokeAiTimingHost:
         托管 runtime 未安装（SUG 引导去分离页，或经确认后独立安装兜底）。
         """
         try:
+            external = getattr(self._backend, "external_ai_python", None)
+            if callable(external):
+                prepared = external()
+                if prepared:
+                    return prepared
             snap = self._backend.snapshot()
             install_dir = str(getattr(snap, "install_dir", "") or "")
             if not install_dir:

@@ -260,13 +260,13 @@ class SeparationBackend(QObject):
         raise NotImplementedError
 
     def start_existing_check(
-        self, *, executable: str = "", server_url: str = "", api_key: str = ""
+        self, *, executable: str = "", server_url: str = "", api_key: str = "", model_dir: str = ""
     ) -> None:
         """Asynchronously probe an existing environment or server."""
         raise NotImplementedError
 
     def connect_existing(
-        self, *, executable: str = "", server_url: str = "", api_key: str = ""
+        self, *, executable: str = "", server_url: str = "", api_key: str = "", model_dir: str = ""
     ) -> None:
         raise NotImplementedError
 
@@ -730,7 +730,7 @@ class MockSeparationBackend(SeparationBackend):
         return str(self._external_bindings.get(task, ""))
 
     def start_existing_check(
-        self, *, executable: str = "", server_url: str = "", api_key: str = ""
+        self, *, executable: str = "", server_url: str = "", api_key: str = "", model_dir: str = ""
     ) -> None:
         del api_key
         target = server_url or executable
@@ -747,7 +747,7 @@ class MockSeparationBackend(SeparationBackend):
         self._delay(200, lambda: self.existingCheckFinished.emit(results))
 
     def connect_existing(
-        self, *, executable: str = "", server_url: str = "", api_key: str = ""
+        self, *, executable: str = "", server_url: str = "", api_key: str = "", model_dir: str = ""
     ) -> None:
         del api_key
         self._settings["external_executable"] = executable

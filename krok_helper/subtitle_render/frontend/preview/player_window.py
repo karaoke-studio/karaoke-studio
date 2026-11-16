@@ -30,6 +30,7 @@ from krok_helper.subtitle_render.frontend.preview.preview_view import (
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import themed
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import FluentMessageDialog
+from krok_helper.subtitle_render.frontend.preview.preview_async import gpu_preview_supported
 
 def fit_size_to_aspect(box: QSize, aspect_ratio: float) -> QSize:
     """把 ``box`` 缩到给定宽高比的最大内接尺寸（用于跟随画布形状的下限/建议值）。"""
@@ -521,18 +522,23 @@ class PreviewPlayerWindow(QWidget):
     def _set_render_backend_label(self, label: str) -> None:
         """跟随真实出帧后端更新指示，并突出 CPU 状态及 GPU 恢复建议。"""
         is_cpu = label == "CPU"
-        self._backend_label.setEnabled(is_cpu and not self._gpu_preview_confirmation_open)
+        can_request_gpu = is_cpu and gpu_preview_supported()
+        self._backend_label.setEnabled(can_request_gpu and not self._gpu_preview_confirmation_open)
         self._backend_label.setCursor(
-            Qt.CursorShape.PointingHandCursor if is_cpu else Qt.CursorShape.ArrowCursor
+            Qt.CursorShape.PointingHandCursor if can_request_gpu else Qt.CursorShape.ArrowCursor
         )
         self._backend_label.setFocusPolicy(
-            Qt.FocusPolicy.StrongFocus if is_cpu else Qt.FocusPolicy.NoFocus
+            Qt.FocusPolicy.StrongFocus if can_request_gpu else Qt.FocusPolicy.NoFocus
         )
         self._backend_label.setText(
-            "CPU渲染中\n建议开启 GPU 渲染" if is_cpu else f"{label}渲染中"
+            ("CPU渲染中\n建议开启 GPU 渲染" if can_request_gpu else
+             "CPU渲染中\n字幕 GPU 暂不可用") if is_cpu else f"{label}渲染中"
         )
         self._backend_label.setFixedSize(144 if is_cpu else 76, 34 if is_cpu else 28)
         self._backend_label.setToolTip(
+            "当前平台尚未提供正式 GPU 字幕渲染后端，正在使用 CPU 绘制。"
+            "可降低预览质量以改善流畅度。"
+            if is_cpu and not can_request_gpu else
             "当前使用 CPU 渲染，建议在「导出」页开启「使用 GPU 渲染字幕预览」，"
             "以提升预览流畅度。\n"
             "如果是从 GPU 渲染回退到 CPU 渲染，可以尝试先关闭再开启该选项。\n"
@@ -551,7 +557,7 @@ class PreviewPlayerWindow(QWidget):
 
     def _confirm_gpu_preview(self) -> None:
         if (self._backend_label.property("renderBackend") != "CPU"
-                or self._gpu_preview_confirmation_open):
+                or self._gpu_preview_confirmation_open or not gpu_preview_supported()):
             return
         # 无蒙版、非模态确认期间避免重复点击打开多个确认框。
         self._gpu_preview_confirmation_open = True
@@ -565,7 +571,7 @@ class PreviewPlayerWindow(QWidget):
             dialog.deleteLater()
             self._gpu_preview_confirmation_open = False
             self._backend_label.setEnabled(
-                self._backend_label.property("renderBackend") == "CPU"
+                self._backend_label.property("renderBackend") == "CPU" and gpu_preview_supported()
             )
         if confirmed:
             self.gpuPreviewRequested.emit()

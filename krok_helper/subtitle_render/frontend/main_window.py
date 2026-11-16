@@ -9728,10 +9728,14 @@ class SubtitleRenderWindow(QWidget):
         self._save_persisted_state()
 
     def _warn_gpu_preview_unavailable(self) -> None:
+        from .preview.preview_async import gpu_preview_supported
         fluent_warning(
             self,
             "GPU 预览不可用",
-            "当前预览模式不支持 GPU 字幕层，已继续使用 Painter。",
+            ("当前预览模式不支持 GPU 字幕层，已继续使用 Painter。"
+             if gpu_preview_supported() else
+             "当前平台尚未提供正式 GPU 字幕渲染后端，已继续使用 CPU 绘制。"
+             "可降低预览质量以改善流畅度。"),
         )
 
     def _on_preview_quality_changed(self, quality: str) -> None:
