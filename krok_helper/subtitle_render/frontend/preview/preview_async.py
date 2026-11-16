@@ -327,10 +327,20 @@ def _gpu_preview_default_enabled() -> bool:
     return os.name == "nt" and qpa_platform not in {"offscreen", "minimal"}
 
 
+def gpu_preview_supported() -> bool:
+    """Whether this platform has a selected GPU subtitle backend.
+
+    MPS/MLX inference support does not supply the Windows Direct2D renderer.
+    Explicit source-only Skia opt-in keeps its own capability/fallback checks.
+    """
+    from krok_helper.subtitle_render.native.backend import skia_requested
+    return os.name == "nt" or skia_requested()
+
+
 def gpu_preview_enabled() -> bool:
     """Enable GPU preview by default on Windows (direct present or G5 fallback)."""
     default = "1" if _gpu_preview_default_enabled() else "0"
-    return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", default)
+    return gpu_preview_supported() and _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", default)
 
 
 def native_due_queue_capacity(

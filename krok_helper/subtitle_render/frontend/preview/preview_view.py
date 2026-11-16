@@ -795,8 +795,7 @@ class PreviewPanel(DropPanel):
         setter = getattr(self._canvas, "set_gpu_preview_enabled", None)
         if setter is None:
             return False
-        setter(bool(enabled))
-        return True
+        return setter(bool(enabled)) is not False
 
     def current_subtitle_frame(self) -> QImage | None:
         getter = getattr(self._canvas, "current_subtitle_frame", None)
