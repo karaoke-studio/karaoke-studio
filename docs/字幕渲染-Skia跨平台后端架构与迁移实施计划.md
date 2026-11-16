@@ -546,7 +546,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 - [ ] P07.1 基础显隐、fade、slide、rise、char_fade、char_drip、spin_flip；全局/逐行覆盖、时长零值和阶段重叠规则。
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
-- [ ] P07.3 普通 wipe/no_wipe、反向、共享计时块、空 pause、角色边界、Utopia、ruby Utopia、zoom_pulse、stroke_flash，含完成后的外层释放与下一字符接管。
+- [ ] P07.3 普通 wipe/no_wipe、反向、共享计时块、空 pause、角色边界、Utopia、ruby Utopia、zoom_pulse、stroke_flash，含完成后的外层释放与下一字符接管。实色正向横排 no_wipe 子集见 §14.35；完整方向/特效组合仍待验收。
 - [ ] P07.4 全部已支持粒子种类与伴生层、sprite 覆盖、双色/跟随字体/复用配色、数量/速度、front/back、geometry/decor、逐字锚点及整行锚点。
 - [ ] P07.5 普通高亮带、color/brighten/role、宽度与亮度/发光；与 Utopia/zoom_pulse/ruby 联动。
 - [ ] P07.6 烈焰、水泡、自定义静态/动画图片走字线；图片选帧、缩放、偏移、tint/stroke/decor、素材缺失回退规则。
@@ -1703,6 +1703,16 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - 正文与上下读音、角色继承、单独一枚标记的 reading、零 advance/零时长、暂停、DPR 与 source/style/roll 偏移沿用现有几何/时间管线。显式备用 face 可以覆盖缺少的标记，但不能借前一个 part 的基字组成新字形。生产 D2D 默认、共享时间策略和发布隔离保持不变。
 
 验证进度：新增 `tests/test_subtitle_skia_standalone_marks.py`，Windows 专项 **71 项全部通过**，Linux 首轮 **39 通过、32 项 D2D 专用跳过**。Windows 32 组 D2D GPU 原始路径对照覆盖 4 类来源 × 2 种主字进度模式 × legacy/N3 × DPR 1/1.5，保持每 band 的 alpha 几何与归一唱色前沿 **1 物理像素**条件；不把此对照当作默认 realization 完整画质验收。其他用例覆盖上下读音、源信息保留、空暂停/零时长、能力拒绝、非法快照保持旧场景、显式 fallback、真实 G5/短 MP4、GPU 关闭和 loader 失败后的 Skia Raster。四份 Windows/Linux Vulkan/CPU-only 均完整构建，CTest 各 **3/3**，native 源码身份统一为 `0c369c9b380c233bfde22c4caa3e8a64541cb5954f97acfa4edb84f04535b771`；相关架构/协议/字体/构建与预览回归 **532 通过、10 项环境专用跳过**。Linux X11/Wayland 完整组合各 **647 通过、183 项平台专用跳过**；上一批 22 份规范样例与本批 X11 再比较最大误差也全部为 **0**。Windows 完整组合按文件分组、双 worker **823 通过、7 项 POSIX 专用跳过**。23 份 Windows/X11/Wayland 与本批 Mac arm64 规范样例的同字体身份、glyph/cluster、区间与最终几何已直接比较，最大误差全部为 **0**。实现提交 `e63710c4` 的 Mac CI [43811698473](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43811698473)：arm64/x64 产品组合各 **629 通过、201 项平台专用跳过**，字体资源契约各 **3 通过**、预览/原生能力各 **21 通过、1 跳过**；23 份跨架构规范样例的最大误差全部为 **0**。两架构 Metal/Raster 四份 native 指纹与本地四份核对一致。该轮 CI **5 项全部成功**；两份干净 Mac 验收包均退出 **0**，`standalone_marks=0`（步骤退出码）、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。§14.6 朋友复测入口已指向本轮提交和包。新增第 **23** 份规范样例 `standalone-mark-layout.json`，Mac 验收包声明 `standalone_marks=1`。Linux 真硬件、本轮 Mac 真机、复杂 Unicode/注音与完整 P05 画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-standalone-marks-*`。
+
+### 14.35 P05.6 / P07.3 实色正向横排整字变色（2026-11-16）
+
+**本批接通 `no_wipe` 的有界产品子集，不关闭 P05/P07，也不解除竖排、反向、Utopia 或其他特效门禁。** 现有 D2D GPU 的 `no_wipe` 在单元最终结束时刻切换唱色；具有分段曲线时只取首/末进度，不随内部 checkpoint 插值。正文与上下读音、暂停和单个独立附加符均保留原计时单元，未修改共享布局/时钟策略或 D2D 实现。
+
+- `skia_ir` 消费已完成逐行覆盖的 `track.lines[].karaoke_anim`，仅实际使用整字变色的场景声明 `p07_no_wipe` / `no_wipe_schema=1`。native 边界保留该逐行策略，验证版本和能力后进入公共核心；旧 sidecar 在选择后端前即拒绝。缺能力、错误版本/类型的配置失败后保留旧场景。
+- `ResolvedLine.noWipe` 是最终绘制值，不携带样式解析或平台判断。`PreparedScene` 正文和 `PreparedWipeGroup` 注音共用同一策略：基本时钟在结束时切换，分段时钟读取终点。既有互斥透明裁剪、overlap 终点、下一字符接管和整组完成释放继续保留；完全零时长注音组的初始时刻仍由 before 优先，不能用统一 `>=` 掩盖该既有边界。
+- GPU/Raster 使用同一源码和最终几何；无新增 Qt/平台依赖、独立动画时钟或字体测量。P04 ASCII 兼容 profile 仍拒绝 no_wipe；本批不更改生产默认、发布包隔离和用户 GPU 偏好。
+
+验证进度：Windows 专项首轮 **67 项通过**，包含 4 类来源（正文/上读音/上下读音/独立重音）× 2 种主字时钟 × legacy/N3 × DPR 1/1.5 的 **32 组实际 D2D GPU 原始路径对照**，保持 alpha 几何与归一唱色面积 **1 物理像素**条件；不冒充默认 realization 完整画质验收。Linux 专项首轮 **35 通过、32 项 D2D 专用跳过**。Windows/Linux Vulkan 与 CPU-only 四份 native 均按源码变化干净重建并通过 CTest **3/3**。新增 GPU/Raster 同 IR 像素、空读音/短语标记及完整相关组合仍在验证；Mac 两架构和干净验收包结果待补录。新增第 **24** 份规范样例 `no-wipe-layout.json`，Mac 验收包声明 `no_wipe=1`。Linux 真硬件、本轮 Mac 真机与完整 P05 画质门槛保留，未做 4K。日志/样例前缀 `build/p05-no-wipe-*`。
 
 ## 15. 前期探针清理范围
 

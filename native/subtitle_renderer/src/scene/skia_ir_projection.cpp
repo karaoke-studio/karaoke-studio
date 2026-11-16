@@ -30,7 +30,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_overlap_wipe" && feature.toString() != "p05_lower_ruby"
             && feature.toString() != "p05_ruby_markers" && feature.toString() != "p05_ruby_units"
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
-            && feature.toString() != "p05_standalone_marks")
+            && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -50,6 +50,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p05_standalone_marks")
         && ir.value("skia_layout").toObject().value("standalone_mark_schema").toDouble(-1) != 1)
         throw BackendError("Skia 独立组合标记布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_no_wipe")
+        && ir.value("skia_layout").toObject().value("no_wipe_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 整字变色布局版本无效");
     if (!ir.value("screen").isObject() || !ir.value("style").isObject() || !ir.value("track").isObject())
         throw BackendError("Skia IR: screen/style/track objects are required");
     const auto screen = ir.value("screen").toObject();
@@ -144,7 +147,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     for (const auto& source : cfg.lines) {
         if (source.annotationBaselineY || source.wipeReverse
             || source.entryAnimation != "none" || source.exitAnimation != "none"
-            || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
+            || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
+                && source.karaokeAnimation != "no_wipe")
             || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled
             || !source.fxBursts.empty())
             throw BackendError("Skia P04: unsupported line feature");
@@ -165,7 +169,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         applyLineLayout(style, source.layout, source.lane, source.centerOverride, source.pageLineCount, cfg.dpr);
         style.layoutOffsetX += float(source.layoutOffsetX * cfg.dpr);
         style.layoutOffsetY += float(source.layoutOffsetY * cfg.dpr);
+        if (source.karaokeAnimation == "no_wipe"
+            && (!features.contains("p07_no_wipe")
+                || ir.value("skia_layout").toObject().value("no_wipe_schema").toDouble(-1) != 1))
+            throw BackendError("Skia 整字变色缺少版本化能力声明");
         TextLine line;
+        line.karaokeAnimation = source.karaokeAnimation.toStdString();
         line.lane = source.lane;
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;

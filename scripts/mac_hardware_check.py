@@ -224,6 +224,9 @@ def main(argv=None) -> int:
     if manifest.get("standalone_marks", 0) >= 1:
         steps["standalone_marks"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                      "tests/test_subtitle_skia_standalone_marks.py", "--basetemp", logs / "standalone-mark-tests"]
+    if manifest.get("no_wipe", 0) >= 1:
+        steps["no_wipe"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                            "tests/test_subtitle_skia_no_wipe.py", "--basetemp", logs / "no-wipe-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

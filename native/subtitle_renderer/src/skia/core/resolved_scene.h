@@ -23,6 +23,7 @@ struct ResolvedLine {
     // One continuous wipe front clips every path in the group. Unit clocks
     // are final values; neither grouping nor timing is resolved while drawing.
     std::vector<std::vector<ResolvedCell>> rubyGroups;
+    bool noWipe = false; // Whole-cell color switches at the final clock endpoint.
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

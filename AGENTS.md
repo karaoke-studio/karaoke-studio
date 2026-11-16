@@ -435,6 +435,11 @@ git submodule status
    单个原位字形，不加占位圆圈，不跨 part 合成，不移动源时钟。多标记、变体选择符、复杂
    脚本或补充平面标记继续拒绝。native 按 Unicode 码点检查，不能按 UTF-16 半个代理对放行。
 
+   整字变色子集见 §14.35：`p07_no_wipe` / `no_wipe_schema=1` 仅开放实色正向横排。
+   逐行动画覆盖先由既有 IR 编排完成，`ResolvedLine.noWipe` 只向同一 GPU/Raster 核心传值。
+   基本时钟以结束阈值切换，分段时钟只读首/末进度；不可重分配时间或省略 overlap/组裁剪。
+   零时长注音组初始时刻保持 before 优先。Utopia、反向、竖排和其他特效仍拒绝。
+
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，
    `native/skia_ipc.py` 统一处理确认和退出/abort 兜底。必须检查 `shared_memory_lifecycle_schema=1`。

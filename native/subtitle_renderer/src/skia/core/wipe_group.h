@@ -6,11 +6,12 @@ class SkCanvas;
 namespace subtitle::skia {
 class PreparedWipeGroup {
 public:
-    explicit PreparedWipeGroup(const std::vector<ResolvedCell>&);
+    explicit PreparedWipeGroup(const std::vector<ResolvedCell>&, bool noWipe = false);
     void draw(SkCanvas&, int timeMs) const;
 private:
     std::vector<ResolvedCell> cells_;
     SkRect bounds_;
     bool antialiasClip_ = false;
+    bool noWipe_ = false;
 };
 }

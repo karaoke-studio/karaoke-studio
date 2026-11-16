@@ -53,6 +53,7 @@ private:
         int startMs, endMs;
         std::vector<ResolvedLine::Translation> translations;
         std::vector<PreparedWipeGroup> rubyGroups;
+        bool noWipe = false;
     };
     int width_, height_;
     std::vector<Line> lines_;

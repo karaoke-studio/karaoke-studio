@@ -6,7 +6,8 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
-PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells) : cells_(cells) {
+PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, bool noWipe)
+    : cells_(cells), noWipe_(noWipe) {
     if (cells.empty() || cells.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -42,7 +43,8 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
     float edge = bounds_.left();
     for (const auto& cell : cells_) {
         if (timeMs < cell.startMs) break;
-        const float progress = timeMs <= cell.startMs ? 0.f : (timeMs >= cell.endMs ? 1.f
+        const float progress = noWipe_ ? (timeMs >= cell.endMs ? 1.f : 0.f)
+            : timeMs <= cell.startMs ? 0.f : (timeMs >= cell.endMs ? 1.f
             : float(timeMs - cell.startMs) / float(cell.endMs - cell.startMs));
         const float endpoint = cell.wipePoints.empty() ? 1.f : cell.wipePoints.back().position;
         edge = cell.left + (cell.right - cell.left) * (progress * endpoint);

@@ -77,4 +77,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(run.get('mixed_fallback') for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_mixed_fonts')
         ir['skia_layout']['mixed_font_schema'] = 1
+    if any(line.get("karaoke_anim") == "no_wipe" for line in ir["track"]["lines"]):
+        ir["required_features"].append("p07_no_wipe")
+        ir["skia_layout"]["no_wipe_schema"] = 1
     return ir

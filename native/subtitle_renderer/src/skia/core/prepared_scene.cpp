@@ -21,6 +21,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
+        line.noWipe = source.noWipe;
         if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
         for (const auto& translation : source.translations) {
             if (!std::isfinite(translation.x) || !std::isfinite(translation.y)
@@ -60,7 +61,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
-            line.rubyGroups.emplace_back(group);
+            line.rubyGroups.emplace_back(group, source.noWipe);
         }
         lines_.push_back(std::move(line));
     }
@@ -123,6 +124,12 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
         }
         const auto rawProgress = [&](const Cell& cell) {
+            if (line.noWipe) {
+                if (!cell.wipePoints.empty())
+                    return tMs >= cell.wipePoints.back().timeMs
+                        ? cell.wipePoints.back().position : cell.wipePoints.front().position;
+                return tMs >= cell.endMs ? 1.f : 0.f;
+            }
             return !cell.wipePoints.empty()
                 ? krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, tMs)
                 : (cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)

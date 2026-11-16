@@ -199,7 +199,7 @@ def test_marker_requires_versioned_capability_and_keeps_previous_scene(binary,ma
     assert np.array_equal(before[0],after[0])
 
 
-@pytest.mark.parametrize('effect',['utopia','no_wipe'])
+@pytest.mark.parametrize('effect',['utopia','zoom_pulse'])
 def test_marker_support_does_not_enable_unimplemented_motion(binary,marker_source,effect):
     track,style,_=source_with_marker(marker_source,'^')
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:

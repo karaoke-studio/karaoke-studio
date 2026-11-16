@@ -85,6 +85,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 不支持单元内混合字体，请重新构建')
             if ready.get('standalone_mark_schema') != 1 or 'p05_standalone_marks' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia sidecar 不支持独立组合标记，请重新构建')
+            if ready.get("no_wipe_schema") != 1 or "p07_no_wipe" not in ready.get("profiles", []):
+                raise NativeRendererError("Skia sidecar 不支持整字变色，请重新构建")
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",
