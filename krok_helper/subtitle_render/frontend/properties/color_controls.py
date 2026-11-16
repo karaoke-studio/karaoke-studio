@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QScreen,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -390,6 +391,46 @@ class ColorButton(QWidget):
             self._end_color_entry()
 
 
+class _ScreenColorOverlay(QWidget):
+    """One native window per monitor, using that monitor's own DPI scale."""
+
+    def __init__(self, picker: "ScreenColorPicker", screen_index: int) -> None:
+        super().__init__(picker, picker.windowFlags())
+        self._picker = picker
+        self._screen_index = screen_index
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        self._picker._paint_screen(self, self._screen_index)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self._picker.mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self._picker.mouseDoubleClickEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._picker.mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        self._picker.mouseMoveEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        self._picker.keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        self._picker.keyReleaseEvent(event)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.accept()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._picker.closeEvent(event)
+
+
 class ScreenColorPicker(QWidget):
     """Opaque desktop snapshots that consume the entire color-picking click."""
 
@@ -405,8 +446,11 @@ class ScreenColorPicker(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint,
         )
         self._active = True
+        self._started = False
         self._last_hovered_rgba: Optional[int] = None
         self._screens: list[tuple[QRect, QImage | QPixmap]] = []
+        self._overlays: list[_ScreenColorOverlay] = []
+        self._input_surface: QWidget = self
         self._pressed_buttons = Qt.MouseButton.NoButton
         self._pending_button = Qt.MouseButton.NoButton
         self._pending_color = QColor()
@@ -418,9 +462,6 @@ class ScreenColorPicker(QWidget):
         self._hover_timer.timeout.connect(
             lambda: self._emit_hovered_color(QCursor.pos())
         )
-        desktop_geometry = QRect()
-        for screen in QApplication.screens():
-            desktop_geometry = desktop_geometry.united(screen.geometry())
         # Alpha-zero pixels of a Windows layered window are hit-test transparent.
         # Paint captured pixels opaquely instead, so other apps cannot receive
         # either half of the picking click. Capture only when start() is called.
@@ -428,45 +469,88 @@ class ScreenColorPicker(QWidget):
         self.setCursor(Qt.CursorShape.CrossCursor)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        if desktop_geometry.isValid():
-            self.setGeometry(desktop_geometry)
+        screens = QApplication.screens()
+        if screens:
+            self.setGeometry(screens[0].geometry())
 
     def start(self) -> None:
-        if not self._active:
+        if not self._active or self._started:
             return
+        self._started = True
+        sources = []
         if not self._screens:
             for screen in QApplication.screens():
-                pixmap = screen.grabWindow(0)
-                if not pixmap.isNull():
-                    # Keep the pixmap: converting a whole 4K desktop to QImage
-                    # is expensive. Only convert the picked 1x1 pixel below.
-                    self._screens.append((QRect(screen.geometry()), pixmap))
+                try:
+                    geometry = QRect(screen.geometry())
+                    pixmap = screen.grabWindow(0)
+                except RuntimeError:
+                    # The monitor may disappear while its snapshot is taken.
+                    self._screens.clear()
+                    break
+                if pixmap.isNull() or not geometry.isValid():
+                    # Never cover a failed monitor with an opaque black window.
+                    self._screens.clear()
+                    break
+                # Keep the pixmap: converting a whole 4K desktop to QImage
+                # is expensive. Only convert the picked 1x1 pixel below.
+                self._screens.append((geometry, pixmap))
+                sources.append(screen)
         if not self._screens:
             logging.getLogger(__name__).warning("无法截取屏幕，已取消屏幕取色")
             self._finish()
             return
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.setFocus(Qt.FocusReason.OtherFocusReason)
-        self.grabMouse()
-        self.grabKeyboard()
+        # A spanning native window has a single DPR. Windows also leaves screen
+        # origins in physical desktop coordinates while Qt scales their sizes,
+        # so their union cannot be painted as one continuous logical surface.
+        # Capture every monitor before showing *any* overlay, then bind each
+        # window to its own QScreen before applying that screen's geometry.
+        for index, (geometry, _image) in enumerate(self._screens):
+            surface = self if index == 0 else _ScreenColorOverlay(self, index)
+            if surface is not self:
+                self._overlays.append(surface)
+            if index < len(sources) and isinstance(sources[index], QScreen):
+                surface.winId()
+                surface.windowHandle().setScreen(sources[index])
+                sources[index].geometryChanged.connect(self._screen_configuration_changed)
+            surface.setGeometry(geometry)
+        app = QApplication.instance()
+        app.screenAdded.connect(self._screen_configuration_changed)
+        app.screenRemoved.connect(self._screen_configuration_changed)
+        surfaces = [self, *self._overlays]
+        for surface in surfaces:
+            surface.show()
+            if not self._active:
+                return
+        position = QCursor.pos()
+        self._input_surface = next((s for s in surfaces if s.geometry().contains(position)), self)
+        self._input_surface.raise_()
+        self._input_surface.activateWindow()
+        self._input_surface.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._input_surface.grabMouse()
+        self._input_surface.grabKeyboard()
         self._emit_hovered_color(QCursor.pos())
         # Poll as well as handling mouse moves to keep the preview responsive
         # across the virtual desktop.
         self._hover_timer.start()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
+        self._paint_screen(self, 0)
+
+    def _screen_configuration_changed(self, *_args) -> None:
+        self.cancel()
+
+    def _paint_screen(self, surface: QWidget, screen_index: int) -> None:
+        painter = QPainter(surface)
         try:
-            painter.fillRect(self.rect(), Qt.GlobalColor.black)
-            for geometry, image in self._screens:
-                target = geometry.translated(-self.geometry().topLeft())
+            painter.fillRect(surface.rect(), Qt.GlobalColor.black)
+            if screen_index < len(self._screens):
+                _geometry, image = self._screens[screen_index]
                 if isinstance(image, QPixmap):
-                    painter.drawPixmap(target, image)
+                    painter.drawPixmap(surface.rect(), image)
                 else:
-                    painter.drawImage(target, image)
-            self._paint_color_preview(painter)
+                    painter.drawImage(surface.rect(), image)
+            preview = self._preview_rect.translated(self.geometry().topLeft() - surface.geometry().topLeft())
+            self._paint_color_preview(painter, preview)
         finally:
             painter.end()
 
@@ -492,12 +576,11 @@ class ScreenColorPicker(QWidget):
                 return rect
         return QRect()
 
-    def _paint_color_preview(self, painter: QPainter) -> None:
+    def _paint_color_preview(self, painter: QPainter, rect: QRect) -> None:
         if self._preview_rect.isEmpty() or not self._preview_color.isValid():
             return
         painter.save()
         try:
-            rect = self._preview_rect
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(QPen(QColor("#687384"), 1))
             painter.setBrush(QColor("#20242C"))
@@ -581,7 +664,8 @@ class ScreenColorPicker(QWidget):
             dirty = self._preview_rect.united(rect).adjusted(-1, -1, 1, 1)
             self._preview_rect = rect
             self._preview_color = QColor(color)
-            self.update(dirty)
+            for surface in [self, *self._overlays]:
+                surface.update(dirty.translated(self.geometry().topLeft() - surface.geometry().topLeft()))
         if not color.isValid() or color.rgba() == self._last_hovered_rgba:
             return
         self._last_hovered_rgba = color.rgba()
@@ -616,8 +700,12 @@ class ScreenColorPicker(QWidget):
             return
         self._active = False
         self._hover_timer.stop()
-        self.releaseMouse()
-        self.releaseKeyboard()
+        self._input_surface.releaseMouse()
+        self._input_surface.releaseKeyboard()
+        for overlay in self._overlays:
+            overlay.hide()
+            overlay.deleteLater()
+        self._overlays.clear()
         self.hide()
         self.finished.emit()
         self.deleteLater()

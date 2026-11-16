@@ -189,6 +189,147 @@ def test_capture_failure_cancels_before_showing_a_black_overlay(qapp, monkeypatc
     assert not picker._active and not picker._hover_timer.isActive()
 
 
+@pytest.mark.parametrize("ratios", [(1.5, 1.25), (1.25, 2.0), (2.0, 1.0)])
+@pytest.mark.parametrize("secondary_origin", [QPoint(256, 0), QPoint(-160, -120)])
+def test_mixed_dpi_monitors_paint_full_snapshots_in_separate_windows(qapp, monkeypatch, ratios, secondary_origin):
+    geometries = [QRect(0, 0, 160, 120), QRect(secondary_origin, QRect(0, 0, 160, 120).size())]
+    colors = ("#A12643", "#245CAD")
+    class Screen:
+        def __init__(self, index):
+            self.index = index
+
+        def geometry(self):
+            return geometries[self.index]
+
+        def grabWindow(self, _window):
+            ratio = ratios[self.index]
+            pixmap = QPixmap(round(160 * ratio), round(120 * ratio))
+            pixmap.setDevicePixelRatio(ratio)
+            pixmap.fill(QColor(colors[self.index]))
+            # Distinct bottom-right pixels expose cropped or offset snapshots.
+            from PyQt6.QtGui import QPainter
+            painter = QPainter(pixmap)
+            painter.fillRect(QRect(80, 60, 80, 60), QColor("#37A758"))
+            painter.end()
+            return pixmap
+
+    monkeypatch.setattr(QApplication, "screens", staticmethod(lambda: [Screen(0), Screen(1)]))
+    picker = ScreenColorPicker()
+    picker.start()
+    qapp.processEvents()
+    try:
+        surfaces = [picker, *picker._overlays]
+        assert len(surfaces) == 2
+        for index, surface in enumerate(surfaces):
+            assert surface.geometry() == geometries[index]
+            rendered = surface.grab().toImage()
+            dpr = rendered.devicePixelRatio()
+            assert rendered.pixelColor(round(20 * dpr), round(20 * dpr)) == QColor(colors[index])
+            assert rendered.pixelColor(round(140 * dpr), round(100 * dpr)) == QColor("#37A758")
+            assert picker.color_at(geometries[index].topLeft() + QPoint(20, 20)) == QColor(colors[index])
+            assert picker.color_at(geometries[index].topLeft() + QPoint(140, 100)) == QColor("#37A758")
+    finally:
+        picker.cancel()
+    assert all(not surface.isVisible() for surface in surfaces)
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert all(sip.isdeleted(surface) for surface in surfaces)
+
+
+def test_one_failed_monitor_aborts_all_overlays_before_show(qapp, monkeypatch):
+    class Screen:
+        def __init__(self, x):
+            self.x = x
+
+        def geometry(self):
+            return QRect(self.x, 0, 160, 120)
+
+        def grabWindow(self, _window):
+            pixmap = QPixmap(160, 120) if self.x == 0 else QPixmap()
+            pixmap.fill(QColor("#123456"))
+            return pixmap
+
+    monkeypatch.setattr(QApplication, "screens", staticmethod(lambda: [Screen(0), Screen(160)]))
+    picker = ScreenColorPicker()
+    shown, finished = [], []
+    monkeypatch.setattr(picker, "show", lambda: shown.append(True))
+    picker.finished.connect(lambda: finished.append(True))
+    picker.start()
+    assert shown == [] and finished == [True]
+    assert not picker._screens and not picker._overlays
+
+
+def test_secondary_press_and_primary_release_share_one_pick_and_cleanup(qapp):
+    picker = ScreenColorPicker()
+    first, second = QImage(160, 120, QImage.Format.Format_RGB32), QImage(160, 120, QImage.Format.Format_RGB32)
+    first.fill(QColor("#123456"))
+    second.fill(QColor("#ABCDEF"))
+    picker._screens = [(QRect(0, 0, 160, 120), first), (QRect(256, 0, 160, 120), second)]
+    picked, finished = [], []
+    picker.colorPicked.connect(picked.append)
+    picker.finished.connect(lambda: finished.append(True))
+    picker.start()
+    overlay = picker._overlays[0]
+    for surface, event_type, global_point, buttons in (
+        (overlay, QEvent.Type.MouseButtonPress, QPoint(286, 30), Qt.MouseButton.LeftButton),
+        (picker, QEvent.Type.MouseButtonRelease, QPoint(30, 30), Qt.MouseButton.NoButton),
+    ):
+        event = QMouseEvent(event_type, QPointF(30, 30), QPointF(global_point), Qt.MouseButton.LeftButton,
+                            buttons, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(surface, event)
+        assert event.isAccepted()
+    assert picked == [QColor("#ABCDEF")]
+    assert finished == [True]
+    assert not picker.isVisible() and not overlay.isVisible()
+
+
+def test_secondary_preview_is_painted_only_on_its_own_monitor(qapp):
+    picker = ScreenColorPicker()
+    images = []
+    for color in ("#123456", "#ABCDEF"):
+        image = QImage(640, 480, QImage.Format.Format_RGB32)
+        image.fill(QColor(color))
+        images.append(image)
+    screens = [QRect(-640, 0, 640, 480), QRect(160, -100, 640, 480)]
+    picker._screens = list(zip(screens, images))
+    picker.start()
+    try:
+        picker._emit_hovered_color(QPoint(260, 0))
+        overlay = picker._overlays[0]
+        preview_global = picker._preview_rect.translated(picker.geometry().topLeft())
+        assert screens[1].contains(preview_global)
+        local = preview_global.translated(-overlay.geometry().topLeft())
+        rendered = overlay.grab().toImage()
+        dpr = rendered.devicePixelRatio()
+        point = local.topLeft() + QPoint(8, 8)
+        assert rendered.pixelColor(round(point.x() * dpr), round(point.y() * dpr)) == QColor("#20242C")
+        assert picker.color_at(preview_global.topLeft() + QPoint(8, 8)) == QColor("#ABCDEF")
+        assert picker.grab().toImage().pixelColor(20, 20) == QColor("#123456")
+    finally:
+        picker.cancel()
+
+
+@pytest.mark.parametrize("cancel_action", ["right", "escape"])
+def test_secondary_cancellation_waits_for_release_and_closes_every_monitor(qapp, cancel_action):
+    picker = ScreenColorPicker()
+    image = QImage(160, 120, QImage.Format.Format_RGB32)
+    image.fill(QColor("#123456"))
+    picker._screens = [(QRect(0, 0, 160, 120), image), (QRect(256, 0, 160, 120), image)]
+    picked, finished = [], []
+    picker.colorPicked.connect(picked.append)
+    picker.finished.connect(lambda: finished.append(True))
+    picker.start()
+    overlay = picker._overlays[0]
+    button = Qt.MouseButton.RightButton if cancel_action == "right" else Qt.MouseButton.LeftButton
+    QTest.mousePress(overlay, button, pos=QPoint(30, 30))
+    if cancel_action == "escape":
+        QTest.keyClick(overlay, Qt.Key.Key_Escape)
+    assert picker.isVisible() and overlay.isVisible()
+    assert picked == finished == []
+    QTest.mouseRelease(overlay, button, pos=QPoint(30, 30))
+    assert picked == [] and finished == [True]
+    assert not picker.isVisible() and not overlay.isVisible()
+
+
 def test_pointer_preview_shows_the_sample_color_and_follows_same_color_pixels(picker):
     picker.setGeometry(0, 0, 640, 480)
     image = QImage(640, 480, QImage.Format.Format_ARGB32)
