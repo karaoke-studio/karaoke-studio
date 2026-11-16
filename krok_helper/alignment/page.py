@@ -258,15 +258,17 @@ class AlignmentPage(QWidget):
         )
 
     def eventFilter(self, watched, event):  # noqa: N802
-        """滚轮落在波形区时交给波形画布缩放。
+        """将波形区的滚动和原生捏合手势路由到画布。
 
         过滤器是本页装在自己的滚动区上的，接收端也必须在本页 —— 留在外壳的话
         滚轮缩放会静默失效（歌词页的浮动按钮就栽过这一次）。
         """
-        if event.type() == QEvent.Type.Wheel and self._should_route_alignment_wheel(watched, event):
-            self.waveform_view.wheelEvent(event)
+        if event.type() in (QEvent.Type.Wheel, QEvent.Type.NativeGesture) and self._should_route_alignment_wheel(watched, event):
+            if event.type() == QEvent.Type.Wheel:
+                self.waveform_view.wheelEvent(event)
+            else:
+                self.waveform_view.handle_native_gesture(event)
             if event.isAccepted():
-                self._sync_alignment_zoom_slider()
                 return True
             return False
         return super().eventFilter(watched, event)
@@ -458,6 +460,8 @@ class AlignmentPage(QWidget):
         )
         if not any(watched is widget for widget in watched_widgets if widget is not None):
             return False
+        if waveform_view.owns_navigation_sequence(event.type()):
+            return True
         if hasattr(event, "globalPosition"):
             global_pos = event.globalPosition().toPoint()
         else:
@@ -519,6 +523,7 @@ class AlignmentPage(QWidget):
         self._align_volume_refresh_timer.setInterval(120)
         self._align_volume_refresh_timer.timeout.connect(self._apply_alignment_preview_volume)
         self.waveform_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.waveform_view.zoomChanged.connect(self._sync_alignment_zoom_slider)
         self.waveform_view.setMinimumHeight(300)
         self.wave_view = self.waveform_view
 

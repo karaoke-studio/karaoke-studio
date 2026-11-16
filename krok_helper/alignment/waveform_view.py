@@ -6,8 +6,12 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+import math
+import sys
+import time
+
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QInputDevice, QPainter, QPen
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from krok_helper.audio_alignment import WaveformData, format_offset
@@ -20,6 +24,7 @@ class WaveformView(QWidget):
     playheadChanged = Signal(float)
     offsetChanged = Signal(float)
     trimChanged = Signal(object)
+    zoomChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -39,13 +44,49 @@ class WaveformView(QWidget):
         self.track_label_width = 190
         self.right_reserved_width = 58
         self._auto_fit_view = True
+        self._manual_view_until = 0.0
+        self._scroll_active = False
+        self._scroll_axis: str | None = None
+        self._pinch_active = False
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(280)
         self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
         self.setMouseTracking(True)
+        if sys.platform == "darwin":
+            self.setToolTip("双指左右移动视图，捏合缩放；手动操作后暂停跟随播放头 6 秒。")
+
+    def _reset_navigation(self) -> None:
+        self._manual_view_until = 0.0
+        self._scroll_active = False
+        self._scroll_axis = None
+        self._pinch_active = False
+        self._drag_kind = ""
+
+    def owns_navigation_sequence(self, event_type) -> bool:
+        """Keep receiving the end of a gesture if the pointer leaves the plot."""
+        return (
+            event_type == QEvent.Type.NativeGesture and self._pinch_active
+        ) or (
+            event_type == QEvent.Type.Wheel
+            and self._scroll_active and self._scroll_axis == "horizontal"
+        )
+
+    def _manual_view_changed(self) -> None:
+        self._auto_fit_view = False
+        if sys.platform == "darwin":
+            self._manual_view_until = time.monotonic() + 6.0
+
+    def _following_suspended(self) -> bool:
+        return (
+            self._pinch_active
+            or (self._scroll_active and self._scroll_axis == "horizontal")
+            or (sys.platform == "darwin" and self._drag_kind == "pan")
+            or time.monotonic() < self._manual_view_until
+        )
 
     def clear(self) -> None:
+        self._reset_navigation()
         self.video_waveform = None
         self.audio_waveform = None
         self.offset_seconds = 0.0
@@ -56,6 +97,7 @@ class WaveformView(QWidget):
         self.update()
 
     def set_waveforms(self, *, video_waveform: WaveformData, audio_waveform: WaveformData) -> None:
+        self._reset_navigation()
         self.video_waveform = video_waveform
         self.audio_waveform = audio_waveform
         self.offset_seconds = 0.0
@@ -83,7 +125,7 @@ class WaveformView(QWidget):
 
     def set_playhead(self, seconds: float, *, keep_visible: bool = False) -> None:
         self.playhead_seconds = max(0.0, seconds)
-        if keep_visible:
+        if keep_visible and not self._following_suspended():
             self._ensure_visible(self.playhead_seconds)
         self.playheadChanged.emit(self.playhead_seconds)
         self.update()
@@ -99,7 +141,7 @@ class WaveformView(QWidget):
         self.update()
 
     def set_zoom(self, pixels_per_second: float) -> None:
-        self._auto_fit_view = False
+        self._manual_view_changed()
         self._zoom_to(pixels_per_second, self._playhead_anchor_x())
 
     def fit_to_waveforms(self) -> None:
@@ -110,9 +152,11 @@ class WaveformView(QWidget):
         self.pixels_per_second = max(0.5, min(1200.0, usable_width / 15.0))
         self.view_start_seconds = 0.0
         self._auto_fit_view = True
+        self.zoomChanged.emit(self.pixels_per_second)
         self.update()
 
     def reset_view(self) -> None:
+        self._reset_navigation()
         self.fit_to_waveforms()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -140,14 +184,96 @@ class WaveformView(QWidget):
         if not self.video_waveform or not self.audio_waveform:
             event.ignore()
             return
+        if sys.platform == "darwin" and (
+            not event.pixelDelta().isNull()
+            or event.phase() != Qt.ScrollPhase.NoScrollPhase
+            or event.pointingDevice().type() == QInputDevice.DeviceType.TouchPad
+        ):
+            self._trackpad_scroll(event)
+            return
         delta = event.angleDelta().y()
         if delta == 0:
             event.ignore()
             return
         factor = 1.15 if delta > 0 else (1 / 1.15)
-        self._auto_fit_view = False
+        self._manual_view_changed()
         self._zoom_to(self.pixels_per_second * factor, self._playhead_anchor_x())
         event.accept()
+
+    def _trackpad_scroll(self, event) -> None:
+        phase = event.phase()
+        if phase == Qt.ScrollPhase.ScrollBegin:
+            self._scroll_axis = None
+        if phase != Qt.ScrollPhase.NoScrollPhase:
+            self._scroll_active = phase != Qt.ScrollPhase.ScrollEnd
+        # Pixel deltas already reflect macOS natural scrolling. Do not invert
+        # them again or quantize them into mouse-wheel notches.
+        delta = event.pixelDelta()
+        if delta.isNull():
+            delta = event.angleDelta()
+            dx, dy = delta.x() / 120.0 * 40.0, delta.y() / 120.0 * 40.0
+        else:
+            dx, dy = float(delta.x()), float(delta.y())
+        if self._scroll_axis is None or phase == Qt.ScrollPhase.NoScrollPhase:
+            if dx or dy:
+                self._scroll_axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
+        horizontal = self._scroll_axis == "horizontal"
+        if horizontal:
+            self._manual_view_changed()
+            if dx:
+                video_end = self.video_waveform.duration + (
+                    self.offset_seconds if self.target_track == ALIGN_TARGET_VIDEO else 0.0
+                )
+                audio_end = self.audio_waveform.duration + (
+                    self.offset_seconds if self.target_track == ALIGN_TARGET_AUDIO else 0.0
+                )
+                _, width = self._plot_bounds()
+                limit = max(0.0, max(video_end, audio_end) - width / self.pixels_per_second)
+                self.view_start_seconds = max(0.0, min(
+                    limit, self.view_start_seconds - dx / self.pixels_per_second
+                ))
+                self.update()
+            event.accept()
+        else:
+            # Let the surrounding page handle vertical scrolling.
+            event.ignore()
+        if phase in (Qt.ScrollPhase.ScrollEnd, Qt.ScrollPhase.NoScrollPhase):
+            self._scroll_axis = None
+
+    def handle_native_gesture(self, event) -> bool:
+        """Consume Mac pinch gestures, including events routed by the page."""
+        if sys.platform != "darwin" or not self.video_waveform or not self.audio_waveform:
+            event.ignore()
+            return False
+        kind = event.gestureType()
+        if kind == Qt.NativeGestureType.BeginNativeGesture:
+            self._pinch_active = True
+        elif kind == Qt.NativeGestureType.EndNativeGesture:
+            if self._pinch_active:
+                self._manual_view_changed()
+            self._pinch_active = False
+        elif kind == Qt.NativeGestureType.ZoomNativeGesture:
+            factor = 1.0 + event.value()
+            if math.isfinite(factor) and factor > 0.0:
+                self._manual_view_changed()
+                # The event can originate at the enclosing scroll viewport;
+                # always map its global anchor into the waveform's coordinates.
+                anchor = self.mapFromGlobal(event.globalPosition()).x()
+                self._zoom_to(self.pixels_per_second * factor, anchor)
+        else:
+            event.ignore()
+            return False
+        event.accept()
+        return True
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.NativeGesture:
+            if self.handle_native_gesture(event):
+                return True
+        elif event.type() in (QEvent.Type.WindowDeactivate, QEvent.Type.Hide):
+            # An interrupted gesture must not leave following disabled forever.
+            self._reset_navigation()
+        return super().event(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if not self.video_waveform or not self.audio_waveform:
@@ -172,6 +298,8 @@ class WaveformView(QWidget):
             self._set_playhead_from_x(event.position().x())
             return
         if self._drag_kind == "pan":
+            if sys.platform == "darwin":
+                self._manual_view_changed()
             delta_seconds = (event.position().x() - self._drag_start_x) / self.pixels_per_second
             self.view_start_seconds = max(0.0, self._drag_start_view - delta_seconds)
             self.update()
@@ -182,6 +310,8 @@ class WaveformView(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._drag_kind == "pan" and sys.platform == "darwin":
+                self._manual_view_changed()
             self._drag_kind = ""
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -197,6 +327,7 @@ class WaveformView(QWidget):
             if abs(fitted - self.pixels_per_second) > 0.01:
                 self.pixels_per_second = fitted
                 self.view_start_seconds = 0.0
+                self.zoomChanged.emit(self.pixels_per_second)
 
         if not self.video_waveform or not self.audio_waveform:
             return
@@ -379,10 +510,11 @@ class WaveformView(QWidget):
     def _zoom_to(self, pixels_per_second: float, anchor_x: float) -> None:
         plot_left, plot_width = self._plot_bounds()
         anchor_x = min(plot_left + plot_width, max(plot_left, anchor_x))
-        old_pixels_per_second = max(1.0, self.pixels_per_second)
+        old_pixels_per_second = max(0.5, self.pixels_per_second)
         anchor_seconds = self.view_start_seconds + (anchor_x - plot_left) / old_pixels_per_second
         self.pixels_per_second = max(0.5, min(1200.0, pixels_per_second))
         self.view_start_seconds = max(0.0, anchor_seconds - (anchor_x - plot_left) / self.pixels_per_second)
+        self.zoomChanged.emit(self.pixels_per_second)
         self.update()
 
     def _playhead_anchor_x(self) -> float:
