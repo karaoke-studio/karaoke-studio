@@ -263,6 +263,10 @@ def track_signature_for_windows(track) -> Hashable:
             sing_fx="inherit",
         )
 
+    cache = getattr(_LAYOUT_PASS, "signatures", None)
+    key = ("window_track", id(track))
+    if cache is not None and key in cache:
+        return cache[key]
     normalized_lines = tuple(
         (
             line
@@ -275,7 +279,11 @@ def track_signature_for_windows(track) -> Hashable:
         )
         for line in track.lines
     )
-    return value_signature(_dc_replace(track, lines=list(normalized_lines)))
+    result = value_signature(_dc_replace(track, lines=list(normalized_lines)))
+    if cache is not None:
+        cache[key] = result
+        _LAYOUT_PASS.signature_refs.append(track)
+    return result
 
 
 def value_signature(value) -> Hashable:

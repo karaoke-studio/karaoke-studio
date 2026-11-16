@@ -312,6 +312,11 @@ def style_for_state(style: Style, *, after: bool) -> Style:
     existing paint primitive unchanged while making all four colour cards
     truly independent.
     """
+    from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
+    cache = getattr(_LAYOUT_PASS, "state_styles", None)
+    key = (id(style), bool(after))
+    if cache is not None and key in cache:
+        return cache[key][1]
     kind = decoration_kind_for_state(style, after=after)
     concentration = glow_concentration_level(style, after=after)
     shadow_x = shadow_offset_x(style, after=after)
@@ -353,7 +358,12 @@ def style_for_state(style: Style, *, after: bool) -> Style:
         changes["ruby_shadow_before_offset_x"] = ruby_shadow_x
     if style.ruby_shadow_before_offset_y != ruby_shadow_y:
         changes["ruby_shadow_before_offset_y"] = ruby_shadow_y
-    return replace(style, **changes) if changes else style
+    result = replace(style, **changes) if changes else style
+    if cache is not None:
+        # Retain the input as well: projected temporary styles may otherwise
+        # be collected and have their identities reused within the same frame.
+        cache[key] = (style, result)
+    return result
 
 
 def text_visual_padding(style: Style, *, after: bool) -> int:
