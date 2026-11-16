@@ -33,8 +33,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         _validate_style(source_style)
         if any(c.vector_glyph for l in source.lines for c in l.chars):
             raise ValueError('Skia 当前规范布局尚不支持导唱符')
-        if any(is_utopia_group_marker(ruby) for ruby in source.rubies):
-            raise ValueError('Skia 最终注音组尚未验收空读音或短语标记')
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -62,6 +60,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
+        markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
+        if markers:
+            ir['required_features'].append('p05_ruby_markers')
         if lower_enabled:
             ir['required_features'] += ['p05_lower_ruby', 'p05_overlap_wipe']
+        elif markers:
+            ir['required_features'].append('p05_overlap_wipe')
     return ir

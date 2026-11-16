@@ -520,7 +520,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
-- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28；完整注音组合尚未验收。
+- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28，空读音/短语标记兼容见 §14.29；完整注音组合尚未验收。
 - [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
@@ -1625,6 +1625,17 @@ Mac 工作流与验收包加入 `lower_ruby_geometry=1`，新增 `lower-ruby-ref
 新增产品专项 **45 项通过**：来源完整性与旧场景保留、独立半透明配色、角色/两行来源隔离、无上注音的假名自读、无可转换文本、GPU/Raster seek/暂停、源/style/roll 偏移与 DPR、真实异步 G5 预览、短 MP4、GPU 关闭和 Vulkan loader 失败后使用 Skia Raster。实际 D2D GPU 对照包括 §14.27 同样的 **8 组**基础布局，以及独立半透明实色的 **4 组**（两种语义 × DPR 1/1.5）；只比较 GPU，不使用 QPainter 图像 oracle。
 
 Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；native 源码摘要为 `653c415b8f7ef05f6c07fc516ef5dbf31b04751aaa29de0a938c9abf7806a43c`。本地 Windows 完整 Skia 组合 **534 通过**，关联生产/架构/协议/字体/构建工具组合 **438 通过**（显式排除 §14.27 已在原始 main 复现的 3 项基线失败）。Linux X11/Wayland 完整组合各 **455 通过、79 项平台专用跳过**，18 份 Windows/X11/Wayland 规范样例最大误差均为 **0**。实现提交 `9fc52c09` 的 Mac CI [43739980718](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43739980718) **5 项全部成功**：arm64/x64 完整产品组合各 **447 通过、87 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**；18 份跨架构规范样例误差均为 **0**。以字节范围读取 arm64 证据包中的 18 份 JSON 后，与 Windows/X11/Wayland 再比较也全部为 **0**，不依赖仅看平台各自断言。两架构 Metal/Raster 四份指纹与本地四份统一核对为本节同一 native 源码身份。两份干净 Mac 验收包均退出 **0**，`lower_ruby_product` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能代表本轮真机门槛已过。§14.6 已指向本批代码和 CI 包。Mac 验收包加入 `lower_ruby_product=1`，新增第 **18** 份规范样例 `lower-ruby-product.json`。Linux 真硬件、Mac 本轮真机和完整画质预算仍保留；未做 4K。日志/样例前缀 `build/p05-lower-product-*`。
+
+### 14.29 P05.6 空读音与短语标记产品边界（2026-11-16）
+
+**本批接入空读音及 `^` 短语标记的静态/基础走字兼容，不开放 Utopia 动画或完整 P05。** 以生产 `qt_ruby_wipe.cpp::applyRubyMainWipeProjection` 和 `gpu_scene_projection.cpp` 为准：纯空白/`^` 且所有 reading parts 也仅含空白/`^` 的来源不改写正文时钟，也不抢占后续正常注音的时钟归属。`^` 仍按既有 GPU 注音单元绘制，不能主观当成不可见控制符删除；真正的空读音没有可绘制单元，来源保留在 IR。共享源语义、D2D 代码与默认后端未改。
+
+- `build_skia_render_ir` 解除该子集的总门禁，声明 `p05_ruby_markers` / `ruby_marker_schema=1`。正式注音编译器继续使用原有规范几何、逐组时钟与来源；空读音不伪造 glyph，空白单元不伪造墨迹，带暂停的 parts 保留原空档。补充逐组时钟与已测字形数量校验，防止修改目标后静默丢掉已准备几何。跨 parts 塑形单元边界仍明确拒绝。
+- 纯标记不生成正文重分配曲线；后续有效读音仍按原 first-match 规则分配。标记场景显式消费已有 `p05_overlap_wipe`，包括一个物理像素的终点补偿、后继单元延续/委托和抗锯齿裁剪。对照中发现仅上标记的正文需要同样的补偿，已复用 §14.27 公共实现修正；没有扩大既有无标记场景的渲染变更面。
+- native 在 Skia Qt/IR 边界检查源标记所需的能力及版本，Python 在选择后端前拒绝旧 sidecar；缺能力/错版本保持旧有效场景。公共 Skia 绘图核心无新增算法，未引入 Qt 帧内测量或旧注音投影。
+- 新增 `tests/test_subtitle_skia_ruby_markers.py`：空读音、caret、空白与带空白 caret 的源保真/正文时钟；标记与后续有效注音叠加、上下层、两种主字模式下的暂停 parts、GPU/Raster seek、source/style/roll 偏移与 DPR、真实 G5 和短 MP4、GPU 关闭/loader 失败后 Skia Raster、旧 sidecar/非法配置保留旧场景。Utopia/no_wipe 动画仍显式失败。D2D GPU 对照 **32 组**（4 种标记 × 下方开关 × legacy/N3 × DPR 1/1.5），每组 10 个时刻；逐层 alpha 墨迹包络与规范化已唱颜色覆盖的前沿误差均要求 **≤1 物理像素**，不使用 QPainter 图像 oracle。
+
+四份本地 Windows/Linux Vulkan/CPU-only 均完整重建通过，CTest 各 **3/3**，native 源码摘要 `c3aabcb58331af80f2a3060357dac6da251465618f45e26b5f4c68b590dc989e`。最终标记产品专项 **69 通过**；原最终组的两项“修改目标后几何不一致”检查也通过。Windows 完整 Skia 组合 **603 通过**；架构/协议/字体资源/验收与构建工具相关组合 **339 通过**。Linux X11 完整组合 **492 通过、111 项平台专用跳过**；Wayland 和 Mac CI 待结束后补录。Mac 验收包新增 `ruby_markers=1`，新增第 **19** 份规范样例 `ruby-markers.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛继续保留；未做 4K。日志/样例前缀 `build/p05-ruby-markers-*`。
 
 ## 15. 前期探针清理范围
 

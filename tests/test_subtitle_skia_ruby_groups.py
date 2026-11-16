@@ -169,7 +169,7 @@ def test_roles_multiline_page_offsets_and_ruby_fonts_are_resolved_before_draw(bi
 
 
 @pytest.mark.parametrize('marker', ['', '^'])
-def test_unverified_phrase_markers_remain_explicitly_gated(binary, reading, marker):
+def test_final_ruby_compiler_still_rejects_mismatched_marker_geometry(binary, reading, marker):
     track, style = reading
     prepared = prepare(binary, track, style)
     local = prepared.geometry.ruby.lines[0]
@@ -178,7 +178,9 @@ def test_unverified_phrase_markers_remain_explicitly_gated(binary, reading, mark
         reading=marker, reading_parts=[marker], reading_part_ms=[]))
     prepared.geometry.ruby = replace(prepared.geometry.ruby,
         lines=(replace(local, rubies=(replace(group, target=target),)),))
-    with pytest.raises(ValueError, match='标记'):
+    # Altering only the target of already-measured geometry is not a valid
+    # marker preparation; the unit clock cannot match the original glyphs.
+    with pytest.raises(ValueError):
         prepared_ruby_layout(prepared, width=641, height=720)
 
 

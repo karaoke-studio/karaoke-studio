@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <algorithm>
 
 namespace krok::subtitle::native::scene {
 namespace {
@@ -26,7 +27,8 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_fixed_row_grid" && feature.toString() != "p05_page_collisions"
             && feature.toString() != "p05_smart_horizontal" && feature.toString() != "p05_segmented_wipe"
             && feature.toString() != "p05_resolved_ruby" && feature.toString() != "p05_upper_ruby"
-            && feature.toString() != "p05_overlap_wipe" && feature.toString() != "p05_lower_ruby")
+            && feature.toString() != "p05_overlap_wipe" && feature.toString() != "p05_lower_ruby"
+            && feature.toString() != "p05_ruby_markers")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -89,6 +91,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const auto parsed = protocol::parseRenderConfig(ir, &error);
     if (!parsed) throw BackendError(error.toStdString());
     const auto& cfg = *parsed;
+    const auto features = ir.value("required_features").toArray();
+    const bool markerFeature = features.contains("p05_ruby_markers");
+    if (markerFeature && ir.value("skia_layout").toObject().value("ruby_marker_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 短语标记布局版本无效");
+    for (const auto& ruby : cfg.rubies) {
+        const auto reading = ruby.reading.trimmed();
+        const bool marker = (reading.isEmpty() || reading == QStringLiteral("^"))
+            && std::all_of(ruby.readingParts.begin(), ruby.readingParts.end(), [](const QString& part) {
+                return part.trimmed().isEmpty() || part.trimmed() == QStringLiteral("^");
+            });
+        if (marker && !markerFeature) throw BackendError("Skia 空读音或短语标记缺少能力声明");
+    }
     if (!cfg.rubies.empty()) {
         const auto features = ir.value("required_features").toArray();
         const auto layout = ir.value("skia_layout").toObject();

@@ -17,8 +17,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         raise ValueError('Skia 最终注音布局缺少准备几何')
     if lower_source_indices is None and any(group.target.lower for line in ruby.lines for group in line.rubies):
         raise ValueError('Skia 下方注音最终绘制需要完整来源映射')
-    if any(is_utopia_group_marker(annotation) for annotation in geometry.track.rubies):
-        raise ValueError('Skia 最终注音组尚未验收空读音或短语标记')
+    markers = any(is_utopia_group_marker(r) for r in geometry.track.rubies)
+    adjusted_wipes = lower_source_indices is not None or markers
     fonts = dict(measured.fonts)
     for key, resource in ruby.measured.fonts.items():
         if key in fonts and fonts[key] != resource:
@@ -30,7 +30,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         position = geometry.position(item, width, height)
         timing = prepare_ruby_wipe_timing(item.line, local, item.layout_style.ruby_main_progress_mode)
         overlap = (prepare_overlap_wipes(local, measured.lines[item.track_index], timing, dpr=dpr)
-                   if lower_source_indices is not None else None)
+                   if adjusted_wipes else None)
         cells = positioned_cells(local.main, position)
         for index, (cell, curve) in enumerate(zip(cells, timing.main, strict=True)):
             if overlap is not None:
@@ -39,10 +39,10 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 cell['wipe_points'] = wipe_points_to_ir(curve)
         groups = []
         for group_index, (group, clock) in enumerate(zip(local.rubies, timing.readings, strict=True)):
-            if is_utopia_group_marker(group.target.effective):
-                raise ValueError('Skia 最终注音组尚未验收空读音或短语标记')
             if clock.units != tuple(split_graphemes(group.target.effective.reading)):
                 raise ValueError('Skia 注音 parts 跨越塑形单元边界，尚不支持此组合')
+            if len(clock.units) != len(group.cells):
+                raise ValueError('Skia 注音最终时钟与已测量字形数量不一致')
             if not clock.units:
                 continue
             indices = group.target.indices
@@ -61,5 +61,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             groups.append(serialized)
         lines.append({'cells': cells, 'ruby_groups': groups})
     return {'version': 2, 'wipe_schema': 1, 'ruby_schema': 1, 'metrics_identity': ruby.identity,
-            **({'lower_ruby_schema': 1, 'overlap_schema': 1} if lower_source_indices is not None else {}),
+            **({'ruby_marker_schema': 1} if markers else {}),
+            **({'overlap_schema': 1} if adjusted_wipes else {}),
+            **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}
