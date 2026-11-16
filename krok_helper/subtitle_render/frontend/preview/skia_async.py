@@ -4,11 +4,13 @@ from __future__ import annotations
 import threading
 import uuid
 
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QImage
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtGui import QGuiApplication, QImage
 
 from krok_helper.subtitle_render.native.backend import SharedFrameRingReader, NativeRendererError
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
+from krok_helper.subtitle_render.native.skia_fonts import SkiaFontNotPreparedError
+from krok_helper.subtitle_render.engine.text.font_capabilities import capabilities_generation
 
 
 class SkiaAsyncSubtitleRenderer(QObject):
@@ -26,16 +28,63 @@ class SkiaAsyncSubtitleRenderer(QObject):
         self._state = None
         self._version = 0
         self._pending = None
+        self._last_request = None
+        self._prepared_generation = None  # Font generation the state was GUI-prepared at.
+        self._font_change_pending = False  # A fontDatabaseChanged re-preparation is queued.
         self._stopped = False
         self._renderer = None
         self.current_backend_mode = None
         self.backend_label = "Skia 准备中"
         self._thread = threading.Thread(target=self._run, name="subtitle-preview-skia", daemon=True)
         self._thread.start()
+        # Workers only read GUI-prepared font resources. A registry change
+        # makes them stale even when track/style objects are unchanged.
+        # Owned, coalescing timer: a burst of registry changes prepares once,
+        # after the font-capability cache clear (another direct slot) has run,
+        # and nothing fires once this renderer is stopped or destroyed.
+        self._font_timer = QTimer(self)
+        self._font_timer.setSingleShot(True)
+        self._font_timer.setInterval(0)
+        self._font_timer.timeout.connect(self._reprepare_fonts)
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.fontDatabaseChanged.connect(self._font_database_changed)
+
+    def _font_database_changed(self):
+        with self._condition:
+            if self._stopped:
+                return
+            self._font_change_pending = True
+        self._font_timer.start()
+
+    def _reprepare_fonts(self):
+        from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
+        with self._condition:
+            state, stopped = self._state, self._stopped
+            if stopped or not state or state[0] is None or state[1] is None:
+                self._font_change_pending = False
+                return
+        try:
+            # GUI thread and synchronous: no set_state can interleave here.
+            prepare_fonts(state[0], state[1], state[2])
+        finally:
+            with self._condition:
+                self._font_change_pending = False
+        with self._condition:
+            if self._stopped:
+                return
+            # Always publish a new version: this also covers a state the host
+            # committed while the registry changed during its own preparation.
+            self._prepared_generation = capabilities_generation()
+            self._version += 1
+            if self._last_request is not None and self._pending is None:
+                self._pending = self._last_request
+            self._condition.notify()
 
     def set_state(self, track, style, extra_tracks=None, *, duration_ms=None, relayout_scope=None, roll_shift_ms=0):
         with self._condition:
             self._state = (track, style, list(extra_tracks or []), duration_ms, relayout_scope, roll_shift_ms)
+            self._prepared_generation = capabilities_generation()  # Owners prepare before set_state.
             self._version += 1
 
     def set_render_target(self, width, height, device_pixel_ratio=1.0):
@@ -54,10 +103,17 @@ class SkiaAsyncSubtitleRenderer(QObject):
     def request(self, t_ms):
         with self._condition:
             if not self._stopped:
-                self._pending = int(t_ms)
+                self._pending = self._last_request = int(t_ms)
                 self._condition.notify()
 
     def stop(self):
+        app = QGuiApplication.instance()
+        if app is not None:
+            try:
+                app.fontDatabaseChanged.disconnect(self._font_database_changed)
+            except TypeError:
+                pass
+        self._font_timer.stop()
         with self._condition:
             self._stopped = True
             self._condition.notify_all()
@@ -79,6 +135,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         return
                     t_ms, self._pending = self._pending, None
                     state, target, version = self._state, self._target, self._version
+                    font_generation = self._prepared_generation
                 if not state or state[0] is None or state[1] is None or version == failed_version:
                     continue
                 try:
@@ -122,7 +179,9 @@ class SkiaAsyncSubtitleRenderer(QObject):
                     if image is None:
                         raise NativeRendererError("Skia 字幕帧缺失")
                     with self._condition:
-                        valid = not self._stopped and version == self._version
+                        valid = (not self._stopped and version == self._version
+                                 and not self._font_change_pending
+                                 and font_generation == capabilities_generation())
                     if valid:
                         image.setText("preview_backend", "skia_" + self.current_backend_mode)
                         self.frame_ready.emit(image, t_ms)
@@ -134,7 +193,14 @@ class SkiaAsyncSubtitleRenderer(QObject):
                     with self._condition:
                         self._renderer = None
                         valid = not self._stopped and version == self._version
+                        # The registry changed after GUI preparation: the
+                        # fontDatabaseChanged re-preparation supersedes this.
+                        superseded = isinstance(exc, SkiaFontNotPreparedError) and (
+                            self._font_change_pending
+                            or capabilities_generation() != self._prepared_generation)
                     failed_version = version
+                    if superseded:
+                        continue
                     if valid:
                         self.backend_label = "Skia 错误"
                         self.renderError.emit("Skia 字幕渲染失败：" + str(exc))

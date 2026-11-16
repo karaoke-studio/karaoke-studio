@@ -236,6 +236,9 @@ def main(argv=None) -> int:
     if manifest.get("forward_endpoints", 0) >= 1:
         steps["forward_endpoints"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                       "tests/test_subtitle_skia_forward_endpoints.py", "--basetemp", logs / "forward-endpoint-tests"]
+    if manifest.get("font_registry", 0) >= 1:
+        steps["font_registry"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                  "tests/test_subtitle_skia_font_registry.py", "--basetemp", logs / "font-registry-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

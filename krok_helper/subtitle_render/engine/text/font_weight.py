@@ -106,6 +106,28 @@ def resolve_font_instance(
     return instance
 
 
+def prepared_font_instance(
+    family: str,
+    weight: int,
+    italic: bool = False,
+    stretch_pct: int = 100,
+) -> ResolvedFontInstance | None:
+    """Pure lookup of a decision prepared for the current font generation.
+
+    Never discovers fonts or creates a font engine. Returns ``None`` when the GUI thread has not prepared
+    this key since the last registry change; a prepared resource failure is
+    re-raised as the same ``FontResourceError``. ``resolve_font_instance``
+    keeps its existing behaviour for every other caller.
+    """
+    generation = capabilities_generation()
+    if generation != _RESOURCE_GENERATION:
+        return None
+    key = (generation, family, weight, italic, stretch_pct)
+    if key in _RESOURCE_ERRORS:
+        raise FontResourceError(_RESOURCE_ERRORS[key])
+    return _RESOURCE_INSTANCES.get(key)
+
+
 def instance_fields(instance: ResolvedFontInstance) -> dict[str, object]:
     """决策 → IR 载荷字段（native 侧按同一份数据执行，不再自行匹配）。"""
     return {
@@ -290,6 +312,7 @@ __all__ = [
     "build_weight_font",
     "canonical_family",
     "clear_font_weight_cache",
+    "prepared_font_instance",
     "get_capabilities",
     "instance_fields",
     "resolve",

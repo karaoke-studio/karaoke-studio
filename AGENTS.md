@@ -463,6 +463,12 @@ git submodule status
    下次准备必须重新读内容，不能用路径/大小/mtime 作为内容身份。axes/模拟/缩放不缓存为摘要。
    准备中字体改变须由既有 native SHA-256 校验拒绝；不得静默混合批次，帧绘制不读字体。
 
+   应用字体注册生命周期见 §14.40：Skia worker 只查 `prepared_font_instance`，不得重做 Qt 字体发现；
+   字体代际失效必须由 GUI 线程重新准备。Skia G5 预览在 fontDatabaseChanged 后合并准备并重绘，
+   待准备/代际变化使在途旧帧失效；当前真实错误仍上报，重注册可恢复，stop 断开信号并停表。
+   `native/skia_font_aliases` 只接受匹配 face 的 name 表确证的本地化族名，按字体代际失效；
+   不能接受未核验的系统替身，也不能更改共享 family 发现与生产 D2D 行为。
+
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，
    `native/skia_ipc.py` 统一处理确认和退出/abort 兜底。必须检查 `shared_memory_lifecycle_schema=1`。

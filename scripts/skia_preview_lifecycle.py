@@ -67,6 +67,11 @@ def main(argv=None):
     for generation in range(2):
         host = QWidget()
         host.resize(320, 180)
+        # The native test helper scales primaryScreen(). Keep this probe on
+        # that screen too; a mixed-DPI secondary screen must not silently turn
+        # the test into scaling a screen the window is not using.
+        host.setScreen(app.primaryScreen())
+        host.move(app.primaryScreen().availableGeometry().center() - host.rect().center())
         if options.host == "widget":
             # Importing/creating QQuickWidget affects the render loop, so the view control
             # must run in a process which has never imported it.

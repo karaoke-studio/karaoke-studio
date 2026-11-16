@@ -2,12 +2,42 @@
 from contextlib import contextmanager
 import hashlib
 import threading
-from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance
+from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance, prepared_font_instance
 from .backend import NativeRendererError
+from .skia_font_aliases import gui_font_instance, missing_family, prepared_alias
+
+
+class SkiaFontNotPreparedError(NativeRendererError):
+    """A worker needed a font decision the GUI thread has not prepared."""
+
+
+def _on_gui_thread():
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtGui import QGuiApplication
+    app = QGuiApplication.instance()
+    return app is None or QThread.currentThread() is app.thread()
+
+
+def font_instance(family, weight, italic):
+    """Qt discovery only on the GUI thread; workers read prepared decisions.
+
+    A registry change bumps the font generation, so a worker that would need
+    Qt again fails explicitly; its owner re-prepares on the GUI thread. A
+    family missing from Qt's family list may still be a verified localized
+    alias (``skia_font_aliases``); unverified substitutes stay missing.
+    """
+    if _on_gui_thread():
+        return gui_font_instance(family, weight, italic, resolve=resolve_font_instance)
+    instance = prepared_font_instance(family, weight, italic)
+    if missing_family(instance) and (alias := prepared_alias(family)):
+        instance = prepared_font_instance(alias, weight, italic)
+    if instance is None:
+        raise SkiaFontNotPreparedError(f'Skia 字体资源未在界面线程准备（字体库可能已变化）：{family}')
+    return instance
 
 
 def resolve_skia_font(style):
-    instance = resolve_font_instance(style.font_family, style.font_weight, italic=style.italic)
+    instance = font_instance(style.font_family, style.font_weight, style.italic)
     return _export_instance(instance, style.font_family)
 
 
@@ -67,18 +97,16 @@ class SkiaFontResolver:
             return _export_instance(instance, family, digests[path])
 
     def __call__(self, style):
-        instance = resolve_font_instance(style.font_family, style.font_weight, italic=style.italic)
+        instance = font_instance(style.font_family, style.font_weight, style.italic)
         return self._export(instance, style.font_family)
 
     def resolve_cell_fonts(self, style, text):
-        from PyQt6.QtCore import QThread
         from PyQt6.QtGui import QGuiApplication
         from krok_helper.subtitle_render.engine.text.font_fallback import (
             prewarm_fallback, lookup_fallback_instance, grapheme_clusters,
         )
         texts = list(dict.fromkeys([text, *grapheme_clusters(text)]))
-        app = QGuiApplication.instance()
-        if app is not None and QThread.currentThread() is app.thread():
+        if QGuiApplication.instance() is not None and _on_gui_thread():
             prewarm_fallback(style.font_family, style.font_weight, style.italic, texts)
         primary = self(style)
         chain = [primary]
