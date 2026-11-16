@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout ad8bebde
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43822180126 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 54849ab7
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43828963591 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1733,7 +1733,13 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - `SkiaFontResolver.snapshot()` 将 `{资源路径: 首次内容摘要}` 限定在一次准备过程和当前线程内，嵌套入口共享同一字典，最外层退出（含异常）即释放。每次新的准备重新读取内容，不依赖 stat 推测身份；同一准备中重复字号/角色/axes/模拟/缩放只复用摘要，实例参数仍逐次输出。直接使用 resolver 的导出也不保留跨次内容缓存。文件读取采用流式 SHA-256，不为缓存长期持有字体字节。
 - 纯 `text/skia_batch.font_snapshot` 是可选 resolver 能力端口；没有该能力的已有显式 resolver 保持原行为。`build_skia_render_ir` 与 `prepare_skia_layout` 在配置期持有快照，使正文、上下读音和参考行框批次共用第一次摘要。准备中变更字节由现有 native SHA-256 校验拒绝；下一次准备重新读取并可恢复，不能把多个内容身份拼为同一次最终 IR。绘制帧循环不读取字体，不改变协议或 native 源码。
 
-验证进度：Claude 添加真实字体等长替换/恢复 mtime、删除恢复、准备中变更及读取次数回归。原实现 3 项内容生命周期用例复现旧摘要失败；另 1 项读取次数用例是新边界的性能约束。修复后专项 **4 通过**，Codex 独立 Windows 再跑也 **4 通过**；临时关闭快照边界时读取次数与禁止混用两项均失败，恢复后通过。Claude 字体/fallback/混排/字体槽组合 **133 通过**；扩展回归首轮 **632 通过、1 失败**，失败为原有 `ruby_markers` 的实际 D2D GPU 完成前 1ms 唱色前沿约 1.13px，该文件串行复验 **69 项全部通过**，未放宽阈值。Claude 追加正文反向/独立附加符组合 **165 通过**，使用 Codex 修正后的夹具重新运行完整 fallback 文件 **42 通过**。Codex Linux 首轮发现测试恢复 mtime 的纳秒精度不适用于 WSL/NTFS，须先记录文件系统实际保存的时间后再做等值恢复，不能将该测试夹具错误计作生产失败或跳过。Codex 已按实际文件系统的 utime 往返精度修正夹具，仍严格检查写入后大小/mtime 与基线完全一致；X11/Wayland 的专项各 **4 通过**。最终 X11 完整组合 **742 通过、279 项平台专用跳过**；上一批 25 份规范样例与本批 X11 比较误差全部为 **0**。Wayland 完整组合、独立产品补测和 Mac 双架构 CI 结果待补录。native 源码身份仍为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`；未触及 C++/头文件，无需重建该产物。Linux 真硬件、本轮 Mac 真机、其他字体注册/移除和完整 P05 门槛继续保留；未做 4K。日志前缀 `build/p05-font-lifecycle-*`。
+验证进度：Claude 添加真实字体等长替换/恢复 mtime、删除恢复、准备中变更及读取次数回归。原实现 3 项内容生命周期用例复现旧摘要失败；另 1 项读取次数用例是新边界的性能约束。修复后专项 **4 通过**，Codex 独立 Windows 再跑也 **4 通过**；临时关闭快照边界时读取次数与禁止混用两项均失败，恢复后通过。
+
+Claude 字体/fallback/混排/字体槽组合 **133 通过**；扩展回归首轮 **632 通过、1 失败**，失败为原有 `ruby_markers` 的实际 D2D GPU 完成前 1ms 唱色前沿约 1.13px，该文件串行复验 **69 项全部通过**，未放宽阈值。Claude 追加正文反向/独立附加符组合 **165 通过**，使用 Codex 修正后的夹具重新运行完整 fallback 文件 **42 通过**。
+
+Codex Linux 首轮发现测试恢复 mtime 的纳秒精度不适用于 WSL/NTFS，须先记录文件系统实际保存的时间后再做等值恢复，不能将该测试夹具错误计作生产失败或跳过。Codex 已按实际文件系统的 utime 往返精度修正夹具，仍严格检查写入后大小/mtime 与基线完全一致；X11/Wayland 的专项各 **4 通过**。最终 X11/Wayland 完整组合各 **742 通过、279 项平台专用跳过**；上一批 25 份规范样例与本批 X11 比较误差全部为 **0**。Codex 独立产品入口补测 **191 通过、7 项 POSIX 专用跳过**，补齐 3 项规范样例用例均通过；25 份本批 Windows/X11/Wayland 样例的身份、字形、区间及几何误差全部为 **0**。独立 CPU-only sidecar 的生命周期专项 Windows/Linux 各 **3 通过**。
+
+实现提交 `54849ab7` 的 Mac CI [43828963591](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43828963591)：arm64/x64 产品组合各 **720 通过、301 项平台专用跳过**，字体资源契约各 **3 通过**、预览/原生能力各 **21 通过、1 跳过**；25 份跨架构样例误差也全部为 **0**；25 份 Windows/X11/Wayland/Mac arm64 样例已直接比较，误差全部为 **0**。Mac 两架构 Metal/Raster 四份 native 的 `renderer_sources_sha256` 与本地四份均一致。该轮 CI **5 项全部成功**；两份干净 Mac 验收包均退出 **0**，含新生命周期回归的 `font_fallback=0`（步骤退出码）、`functional_passed=true`。虚拟 Metal 的 `hardware_gate_passed=false` 正确保留；§14.6 朋友复测入口已指向本轮提交和包。native 源码身份仍为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`；未触及 C++/头文件，无需重建该产物。Linux 真硬件、本轮 Mac 真机、其他字体注册/移除和完整 P05 门槛继续保留；未做 4K。日志前缀 `build/p05-font-lifecycle-*`。
 
 ## 15. 前期探针清理范围
 
