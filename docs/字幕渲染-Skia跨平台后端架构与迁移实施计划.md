@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 64913202
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43802105265 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 725f6be5
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43807841703 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1691,7 +1691,7 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - 新增 `p05_mixed_fonts` / `mixed_font_schema=1`，run 的 `mixed_fallback` 必须为布尔。单字体快照保持原字段；混排快照明确 `selected_font=-1`，逐 glyph 的 `font_index` 与 `font_runs`（UTF-8 半开字节区间、字体索引、实际字体身份）进入最终校验。native 重塑形后逐项核对，索引/字节边界严格整数一致；缺能力/版本、错误来源或伪造快照均失败并保留旧场景。比较脚本也将新离散字段加入零误差集合。
 - 只允许矢量绘制；选中的彩色 face 即使有单色基底或后续备用候选，仍显式失败。独立组合标记开头的注音 part、完整 RTL/竖排和复杂连接文字跨字体兼容仍有门槛。
 
-验证进度：文本/轮廓与混排首轮 **70 项通过**；最终四份构建、完整回归、GPU 对照及三平台样例待补录。D2D 的旧 `TimingChar` 只使用一个 outline face，因此新增对照使用由完全相同源字形与度量构造的受控合并字体：它验证 D2D GPU 画面，不宣称旧产品已支持单元内多 face；另直接核对混排与该单字体 Skia 的最终几何与逐像素结果。曾观察 N3、DPR 1.5 下 2px 差异，最终 OpenType advance 路径已消除此横向偏差。四组 D2D GPU 原始路径（`realization_enabled=False`）对照已通过原 1px 条件；默认 realization 路径在完成边界曾观察约 1.03px 的唱色面积差异（3 组通过、1 组失败），与同批混排/合并字体 Skia 的逐像素一致性分开记录，不将原始路径通过冒充 realization 严格验收。该观察保留至完整 GPU 画质/历史无关验收，不放宽阈值。临时 D2D 配置参数诊断源码已完整还原，并按匹配 BuildTools 14.50 再次 `--clean-first` **88/88** 重建；未修改 D2D 渲染逻辑。新增第 **22** 份规范样例 `mixed-font-layout.json`，Mac 验收包加入 `mixed_fonts=1`。Linux 真硬件、本轮 Mac 真机和完整 P05 门槛继续保留；未做 4K。日志/样例前缀 `build/p05-mixed-fonts-*`。
+验证进度：文本/轮廓与混排首轮 **70 项通过**。Windows/Linux Vulkan 与 CPU-only 四份最终目标均完整构建，CTest 各 **3/3**，native 源码身份统一为 `d2c58dec2080e8ca9e09c18f88c68c6862250d0a54a80825a231572c1597de49`。实现提交 `771be288` 已与最新 main 的 macOS 音频处理、平台 GPU 门禁和 CPU 预览优化合并为 `725f6be5`，上游功能均保留。合并后相关架构/协议/字体/构建与验收工具 **350 项通过**；新增与相关预览/传输文件按其 offscreen 默认环境单独运行 **192 项通过**（第一次混入真实 Windows 平台后有 12 项默认 GPU 开关假设失败，未改生产行为或断言）。Linux X11 完整组合 **607 通过、151 项平台专用跳过**，Wayland 完整组合 **608 通过、151 跳过**；差额为回归运行期间追加的 1 项 GPOS 定位契约测试，该测试随后在 Windows Vulkan/Raster 与 X11 也分别单跑通过。它精确检查 `AW` 字距、组合符 anchor 和 cluster，不放宽数值条件。Windows 最终完整组合按文件分组、双 worker **751 通过、7 项 POSIX 专用跳过**；追加的 GPOS 定位用例另 **1 项通过**。第 22 份 `mixed-font-layout.json` 与其余规范样例已从本地 Windows/X11/Wayland 和本批 arm64 CI 证据包直接比较，同字体身份、glyph/cluster、区间和几何最大误差全部为 **0**。Mac arm64/x64 完整产品组合各 **591 通过、167 项平台专用跳过**，字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**；22 份跨架构规范样例误差也全部为 **0**。两架构 Metal/Raster 四份 native 指纹已与本地四份核对一致。Mac CI [43807841703](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43807841703) **5 项全部成功**。两份干净 Mac 验收包均退出 **0**，`mixed_fonts=0`（步骤退出码）、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能作为本轮真机门槛通过。§14.6 的朋友复测入口已指向该轮提交和包。该轮固定于 `725f6be5`，未包含其后追加的 GPOS 单测，但字体实现与本节全部 native 产物相同。D2D 的旧 `TimingChar` 只使用一个 outline face，因此新增对照使用由完全相同源字形与度量构造的受控合并字体：它验证 D2D GPU 画面，不宣称旧产品已支持单元内多 face；另直接核对混排与该单字体 Skia 的最终几何与逐像素结果。曾观察 N3、DPR 1.5 下 2px 差异，最终 OpenType advance 路径已消除此横向偏差。四组 D2D GPU 原始路径（`realization_enabled=False`）对照已通过原 1px 条件；默认 realization 路径在完成边界曾观察约 1.03px 的唱色面积差异（3 组通过、1 组失败），与同批混排/合并字体 Skia 的逐像素一致性分开记录，不将原始路径通过冒充 realization 严格验收。该观察保留至完整 GPU 画质/历史无关验收，不放宽阈值。临时 D2D 配置参数诊断源码已完整还原，并按匹配 BuildTools 14.50 再次 `--clean-first` **88/88** 重建；未修改 D2D 渲染逻辑。新增第 **22** 份规范样例 `mixed-font-layout.json`，Mac 验收包加入 `mixed_fonts=1`。Linux 真硬件、本轮 Mac 真机和完整 P05 门槛继续保留；未做 4K。日志/样例前缀 `build/p05-mixed-fonts-*`。
 
 ## 15. 前期探针清理范围
 

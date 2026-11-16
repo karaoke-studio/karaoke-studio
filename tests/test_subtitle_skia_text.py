@@ -214,6 +214,29 @@ def test_shaping_checks_composed_glyph_coverage_before_choosing_fallback(binary,
     assert composed[1]['glyphs'][0]['cluster_end'] == len('a\u0301'.encode())
 
 
+def test_opentype_positioning_preserves_kerning_and_mark_anchors(binary, tmp_path):
+    from skia_text_fixture import make_font
+    from fontTools.ttLib import TTFont
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    path = make_font(tmp_path / 'positioned.ttf')
+    with TTFont(path, recalcTimestamp=False) as font:
+        for cmap in font['cmap'].tables: cmap.cmap.pop(225, None)
+        addOpenTypeFeaturesFromString(font, '''
+            feature kern { pos A W -75; } kern;
+            markClass acutecomb <anchor 0 750> @top;
+            feature mark { pos base a <anchor 250 700> mark @top; } mark;
+        ''')
+        font.save(path)
+    with SkiaTextMetricsProcess(binary) as process:
+        pair, marked = run(process, path, ['AW', 'a\u0301'], size=50)
+    assert pair['advance'] == 66.25
+    assert pair['glyphs'][1]['x'] == 26.25
+    assert len(marked['glyphs']) == 2
+    assert marked['advance'] == 25
+    assert (marked['glyphs'][1]['x'], marked['glyphs'][1]['y']) == (12.5, 2.5)
+    assert {(g['cluster_start'], g['cluster_end']) for g in marked['glyphs']} == {(0, 3)}
+
+
 def test_registered_unicode_family_exports_physical_snapshot_and_invalidates_on_registry_change(binary, tmp_path):
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtGui import QFontDatabase

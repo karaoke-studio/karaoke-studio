@@ -322,7 +322,7 @@ git submodule status
    客户端还须检查 `p05_single_line_placement` 能力，不能让旧 sidecar 静默接受新布局。
    `src/skia/text/glyph_outline.*` 使用锁定 FreeType 的公开接口，在 em 尺度读取精细轮廓；
    不要改回 `SkFont::getPath` 的默认 64px 归一化再放大，它会使接近整数边界的单元宽度
-   被截断多丢 1px。字体几何身份已升为 `skia-m150-hb-ft-v2`；COLR 字形即使有非空
+   被截断多丢 1px。字体几何身份已按 §14.33 升为 `skia-m150-hb-ft-v3`；COLR 字形即使有非空
    单色基底也仍属未支持的彩色绘制，不能把基底当成完整结果。
    P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯
    `engine/style/style_semantics.py`，旧 text/layout 入口保留导出；角色视觉覆盖必须保留
@@ -426,7 +426,7 @@ git submodule status
    §14.32 的单元内混排门禁已由 §14.33 的保守子集扩展：`fallback_ranges` 仅在 ICU 字素与全部
    候选 HB cluster 的共同边界换 face，`font_shaping` 直接消费锁定 HarfBuzz 的 OpenType 表，
    `mixed_cell` 组合一次路径且保留整个歌词单元时钟。`p05_mixed_fonts` / `mixed_font_schema=1`
-   门控 `mixed_fallback`，混排 glyph/frame 快照须含严格字节边界、字体索引与内容身份。
+   门控 `mixed_fallback`，混排字形/单元快照须含严格字节边界、字体索引与内容身份。
    字体身份现为 `skia-m150-hb-ft-v3`；不能改回像素字号的 Skia FT advance 回调，它使
    多字单元的近整数墨迹宽度被截断。连接文字/IPA/ZWJ/emoji 的混排仍拒绝。
 
