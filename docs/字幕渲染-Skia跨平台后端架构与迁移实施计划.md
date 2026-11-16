@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 725f6be5
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43807841703 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout e63710c4
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43811698473 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1702,7 +1702,7 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - 新增 `p05_standalone_marks` / `standalone_mark_schema=1`。即使一个 leading mark 的整个 reading 与原字素切分相同，也显式启用 `p05_ruby_units`、单元 `glyph_text` 和既有 overlap 终点策略；原时间只在边界统一加偏移。native 在 Qt/IR 边界以 Unicode 码点检查子集，补充平面标记不能因 UTF-16 代理对漏过；独立标记的单字体/原位条件与最终 metrics 快照均须通过。缺能力、错版本/类型、伪造 glyph 文本或插入圆圈的配置失败并保留旧场景，Python 选择执行后端前即拒绝旧 sidecar。
 - 正文与上下读音、角色继承、单独一枚标记的 reading、零 advance/零时长、暂停、DPR 与 source/style/roll 偏移沿用现有几何/时间管线。显式备用 face 可以覆盖缺少的标记，但不能借前一个 part 的基字组成新字形。生产 D2D 默认、共享时间策略和发布隔离保持不变。
 
-验证进度：新增 `tests/test_subtitle_skia_standalone_marks.py`，Linux 首轮 **39 通过、32 项 D2D 专用跳过**。Windows 32 组 D2D GPU 原始路径对照覆盖 4 类来源 × 2 种主字进度模式 × legacy/N3 × DPR 1/1.5，保持每 band 的 alpha 几何与归一唱色前沿 **1 物理像素**条件；不把此对照当作默认 realization 完整画质验收。其他用例覆盖上下读音、源信息保留、空暂停/零时长、能力拒绝、非法快照保持旧场景、显式 fallback、真实 G5/短 MP4、GPU 关闭和 loader 失败后的 Skia Raster。最终四份 native 身份、完整组合、三平台比较及 Mac CI 待补录。新增第 **23** 份规范样例 `standalone-mark-layout.json`，Mac 验收包声明 `standalone_marks=1`。Linux 真硬件、本轮 Mac 真机、复杂 Unicode/注音与完整 P05 画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-standalone-marks-*`。
+验证进度：新增 `tests/test_subtitle_skia_standalone_marks.py`，Windows 专项 **71 项全部通过**，Linux 首轮 **39 通过、32 项 D2D 专用跳过**。Windows 32 组 D2D GPU 原始路径对照覆盖 4 类来源 × 2 种主字进度模式 × legacy/N3 × DPR 1/1.5，保持每 band 的 alpha 几何与归一唱色前沿 **1 物理像素**条件；不把此对照当作默认 realization 完整画质验收。其他用例覆盖上下读音、源信息保留、空暂停/零时长、能力拒绝、非法快照保持旧场景、显式 fallback、真实 G5/短 MP4、GPU 关闭和 loader 失败后的 Skia Raster。四份 Windows/Linux Vulkan/CPU-only 均完整构建，CTest 各 **3/3**，native 源码身份统一为 `0c369c9b380c233bfde22c4caa3e8a64541cb5954f97acfa4edb84f04535b771`；相关架构/协议/字体/构建与预览回归 **532 通过、10 项环境专用跳过**。Linux X11/Wayland 完整组合各 **647 通过、183 项平台专用跳过**；上一批 22 份规范样例与本批 X11 再比较最大误差也全部为 **0**。Windows 完整组合按文件分组、双 worker **823 通过、7 项 POSIX 专用跳过**。23 份 Windows/X11/Wayland 与本批 Mac arm64 规范样例的同字体身份、glyph/cluster、区间与最终几何已直接比较，最大误差全部为 **0**。实现提交 `e63710c4` 的 Mac CI [43811698473](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43811698473)：arm64/x64 产品组合各 **629 通过、201 项平台专用跳过**，字体资源契约各 **3 通过**、预览/原生能力各 **21 通过、1 跳过**；23 份跨架构规范样例的最大误差全部为 **0**。两架构 Metal/Raster 四份 native 指纹与本地四份核对一致。该轮 CI **5 项全部成功**；两份干净 Mac 验收包均退出 **0**，`standalone_marks=0`（步骤退出码）、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。§14.6 朋友复测入口已指向本轮提交和包。新增第 **23** 份规范样例 `standalone-mark-layout.json`，Mac 验收包声明 `standalone_marks=1`。Linux 真硬件、本轮 Mac 真机、复杂 Unicode/注音与完整 P05 画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-standalone-marks-*`。
 
 ## 15. 前期探针清理范围
 
