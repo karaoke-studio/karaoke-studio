@@ -419,6 +419,12 @@ git submodule status
    `text` 保留原文，`glyph_text` 必须等于该单元 NFC；native 验证字体/cluster 后仍绘制最终路径。
    不能跨 part 合成韩文/IPA 单元；以独立组合标记开头的 part 仍明确拒绝，完整 fallback 待做。
 
+   Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
+   `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，
+   `native/skia_ipc.py` 统一处理确认和退出/abort 兜底。必须检查 `shared_memory_lifecycle_schema=1`。
+   不能提前 unlink 尚未消费的批次，不能只清理正常退出，不能扫描删除其他进程的对象。
+   普通 D2D key 和共享 runtime 保持原行为。
+
    P03 宿主直画验证入口在 `src/preview/qt_skia`，采用不透明 QQuickWidget 画布。
    `frontend/preview/quick_graphics_api.select_quick_graphics_api()` 必须在所有顶层
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的

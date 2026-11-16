@@ -10,19 +10,13 @@
 #include <limits>
 
 namespace krok::subtitle::native::commands {
-void SkiaFrames::range(RenderBackend& backend, const QJsonObject& request, runtime::GenerationCancellation& cancellation) {
+void SkiaFrames::range(RenderBackend& backend, const QJsonObject& request, runtime::GenerationCancellation& cancellation, const QString& key) {
     const auto times = request.value("t_ms").toArray();
     const int generation = request.value("generation").toInt();
     const int slotCount = request.value("ring_slots").toInt();
     if (times.empty() || times.size() > 120 || slotCount < times.size() || slotCount > 120 || generation < 1)
         throw BackendError("Skia range requires 1..120 timestamps, unique generation and one retained slot per frame");
-    auto key = request.value("shm_key").toString();
     if (key.isEmpty()) throw BackendError("Skia range requires an explicit shared-memory key");
-#ifdef Q_OS_UNIX
-    // macOS's legacy System V limits can reject even one full-HD frame. This
-    // belongs to the transport adapter, never to subtitle geometry or drawing.
-    key = QSharedMemory::platformSafeKey(key, QNativeIpcKey::Type::PosixRealtime).toString();
-#endif
     const auto format = request.value("pixel_format").toString("rgba8888");
     const bool bgra = format == "bgra8888_premultiplied";
     if (!bgra && format != "rgba8888") throw BackendError("Unsupported Skia transfer pixel format");
@@ -48,6 +42,7 @@ void SkiaFrames::range(RenderBackend& backend, const QJsonObject& request, runti
             }
         }
         QString error;
+        if (i == 0) posix_.create(key, int(ringBytes));
         if (i == 0 && !ring_.ensure(key, slotCount, pixels.width, pixels.height, &error))
             throw BackendError(error.toStdString());
         cancellation.publishIfActive(generation, [&] {

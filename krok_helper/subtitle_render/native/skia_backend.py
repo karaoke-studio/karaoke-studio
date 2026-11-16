@@ -7,9 +7,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import os
+import time
+import subprocess
 from typing import Any
 from .backend import NativeRendererError, heartbeat_lease_s, skia_requested
 from .skia_process import SkiaSidecarProcess, resolve_skia_renderer_path
+from .skia_ipc import OwnedPosixRings
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,7 @@ class SkiaSelection:
 
 class SkiaRendererProcess(SkiaSidecarProcess):
     def __init__(self, executable_path=None, *, selection: SkiaSelection | None = None, on_backend_info=None, **kwargs) -> None:
+        self._posix_rings = OwnedPosixRings()
         super().__init__(executable_path, **kwargs)
         self.selection = selection or SkiaSelection.from_environment()
         self.skia_info: dict[str, Any] = {}
@@ -73,6 +77,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 不支持空读音与短语标记，请重新构建')
             if 'p05_ruby_units' not in ready.get('profiles', []) or ready.get('ruby_unit_schema') != 1:
                 raise NativeRendererError('Skia sidecar 不支持分段注音字形单元，请重新构建')
+            if ready.get('shared_memory_lifecycle_schema') != 1:
+                raise NativeRendererError('Skia sidecar 不支持共享帧所有权协议，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",
@@ -119,3 +125,23 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if alpha is None or event.get("alpha_type") != alpha or event.get("origin") != "top_left" or event.get("color_space") != "srgb":
                 raise NativeRendererError("Skia 帧格式、alpha、方向或色彩空间与声明不符")
         return event
+
+    def _read_response_or_none(self, *, timeout_s=None, waiting_for='protocol response'):
+        deadline = time.monotonic()+self._resolved_timeout(timeout_s)
+        while True:
+            event = super()._read_response_or_none(timeout_s=max(deadline-time.monotonic(), 0), waiting_for=waiting_for)
+            if event is None or not self._posix_rings.observe(event, send=self._send, is_running=lambda: self.is_running):
+                return event
+
+    def close(self):
+        try: super().close()
+        finally: self._posix_rings.cleanup()
+
+    def abort(self, **kwargs):
+        try:
+            super().abort(**kwargs)
+            if self._process is not None:
+                try: self._process.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired): pass
+        finally:
+            if not self.is_running: self._posix_rings.cleanup()

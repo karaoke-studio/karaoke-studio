@@ -1648,7 +1648,20 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 
 新增 `tests/test_subtitle_skia_ruby_units.py` 最终 **66 通过**（首轮未扩展 N3 时 50 项）。覆盖源与绘制单元分离、part 边界改变几何及缓存身份、规范批量去重、暂停/seek、两种主字模式、上下层、source/style/roll 偏移及 DPR、非法快照保留旧场景、旧 sidecar、真实 G5/短 MP4、GPU 关闭/loader 失败后 Skia Raster。D2D GPU 对照扩为 **32 组**（4 类文本 × 两种主字模式 × legacy/N3 × DPR 1/1.5），各 **12** 个时刻，保留精确边界帧；逐层墨迹与已唱覆盖前沿误差均要求 **≤1 物理像素**，不使用 QPainter 图像 oracle。正文在精确单元结束点可按 GPU 规则交接裁剪，暂停不变断言取暂停内部，不混淆两者。
 
-四份 Windows/Linux Vulkan/CPU-only 均完整构建通过，CTest 各 **3/3**，native 源码摘要 `54b1eb956242ba5937e838af2cbb39b3d21633d0323a6ab3b1cf539e859c117c`。Windows 完整 Skia 组合 **669 通过**；关联架构/协议/字体资源/验收与构建工具组合 **339 通过**。Linux X11 完整组合 **526 通过、143 项平台专用跳过**；Wayland 与本批 Mac CI 待结束后补录。Mac 验收包新增 `ruby_units=1`，新增第 **20** 份规范样例 `ruby-unit-layout.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-ruby-units-*`。
+四份 Windows/Linux Vulkan/CPU-only 均完整构建通过，CTest 各 **3/3**，native 源码摘要 `54b1eb956242ba5937e838af2cbb39b3d21633d0323a6ab3b1cf539e859c117c`。Windows 完整 Skia 组合 **669 通过**；关联架构/协议/字体资源/验收与构建工具组合 **339 通过**。Linux X11 完整组合 **526 通过、143 项平台专用跳过**；Wayland 首轮异常、持续复跑及共享内存修复后的最终验收见 §14.31；Mac 验收包新增 `ruby_units=1`，新增第 **20** 份规范样例 `ruby-unit-layout.json`。Linux 真硬件、Mac 本轮真机和完整字体/画质门槛仍保留；未做 4K。日志/样例前缀 `build/p05-ruby-units-*`。
+
+### 14.31 验证中发现的 Skia POSIX 共享帧累积泄漏（2026-11-16）
+
+本批 §14.30 的首次 Wayland 完整组合在旧走字协议用例首次 Raster 帧读取时出现一次 SIGBUS（非法配置尚未发送）。原样重跑走字文件 **42 通过、4 跳过**，连续 8 轮共 **336 通过、32 跳过**、持续约 **58 秒**，完整 Wayland 复跑 **526 通过、143 跳过**；但持续验证时明确观察到：测试进程结束后 POSIX 共享对象仍留存，累计 **781 个、约 4.17 GB**。不能把短复跑通过当作根因消失。
+
+[锁定 Qt 6.11.0 的 POSIX 实现](https://raw.githubusercontent.com/qt/qtbase/v6.11.0/src/corelib/ipc/qsharedmemory_posix.cpp) 在非 QNX 的 detach 路径只 munmap/close，不执行 shm_unlink。Skia 预览每次请求使用新 key，导出每批次也使用新 key；缺少明确所有者回收，长会话会持续累积。原 SIGBUS 没有可用用户态 core，不能把它唯一归因于某个峰值；这里已确认并修复的是可导致渐进性资源耗尽的确定性泄漏。
+
+- 新增小模块 `commands/skia/posix_ring_owner`，仅供独立 Skia sidecar 使用。每批次由服务端发放符合 Mac 长度限制的私有随机 POSIX 名称，以 `shm_open(O_EXCL)` 独占创建；不接受调用者指定对象的所有权。所有者跟踪创建/完成状态，拒绝释放未完成或非本会话拥有的名称。没有修改共享 `runtime/shared_frame_ring` 或 D2D 源码。
+- `range_started` 在首帧分配前公布私有 key，`range_done` 回显；客户端消费完成事件后发送 `release_frame_ring`，服务端执行 unlink 并返回确认。确认前名称仍存在，迟到的批次读者可以附加；确认后已经附加的映射仍可读，不截断或覆盖其数据。命名信号量同样按该私有 key 回收；已持有的内核句柄正常结束。
+- 新增 `shared_memory_lifecycle_schema=1` 握手。Python 小模块 `native/skia_ipc.py` 仅跟踪服务端发放的受限私有名称，在所有协议读取路径统一确认释放，不只在 UI 的 `read_event` 路径处理。释放确认从普通事件流中过滤；正常退出、abort 和外部杀进程由本会话跟踪信息兜底回收，不扫描删除其他进程的共享对象。
+- Windows 继续使用现有内核对象 key，普通 D2D 传输行为不变。Skia 的 GPU/Raster 四份本地目标均完整重建，CTest 各 **3/3**；按 §8.11/§8.14 也使用匹配的 BuildTools 14.50 对生产 D2D 执行 `--clean-first`，**88/88** 完整编译通过。
+
+新增 `tests/test_subtitle_skia_ipc.py` **7 项通过**：至少 **12 秒**持续请求并逐批断言名称已释放、延迟附加与已映射读者、正常退出/abort/外部强杀的未确认批次回收、非本会话对象保护和旧 sidecar 拒绝。最终本地 Windows 完整 Skia 组合 **669 通过、7 项 POSIX 专用跳过**，关联组合 **339 通过**；Linux X11 完整组合 **533 通过、143 项平台专用跳过**，Wayland 与本批 Mac CI 待结束后补录。最终 native 源码摘要为 `b8bbe81999f2985174ff4b5a4ba6ae1f79a1dffc77434964f116386165a12f0d`；§14.30 的 `54b1...` 是修复前的阶段产物，不可混作本节最终产物。Mac 验收包新增 `owned_posix_rings=1`。字体/几何规范样例仍为 **20 份**，传输生命周期不进入字幕布局身份。日志/样例前缀 `build/p05-ruby-units-owned-*`。
 
 ## 15. 前期探针清理范围
 

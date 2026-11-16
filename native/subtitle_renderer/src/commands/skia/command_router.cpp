@@ -104,20 +104,34 @@ bool SkiaCommandRouter::dispatch(const QJsonObject& request) {
             if (!session_ || !configured_) throw BackendError("Skia must be configured before rendering");
             const int generation = request.value("generation").toInt();
             if (generation < 1 || cancellation_->cancelled(generation)) throw BackendError("Invalid/cancelled generation");
-            const bool accepted = session_->submit(generation, [frames = frames_, cancellation = cancellation_, request, generation](RenderBackend& backend) {
-                auto started = response(true, "range_started"); started.insert("generation", generation); writeJson(started);
-                frames->range(backend, request, *cancellation);
-            }, [generation](runtime::JobCompletion result) {
+            const auto hint = request.value("shm_key").toString();
+            if (hint.isEmpty()) throw BackendError("Skia range requires an explicit shared-memory key");
+            const auto key = frames_->reserveKey(hint);
+            const bool accepted = session_->submit(generation, [frames = frames_, cancellation = cancellation_, request, generation, key](RenderBackend& backend) {
+                auto started = response(true, "range_started"); started.insert("generation", generation);
+                started.insert("shm_key", key); writeJson(started);
+                frames->range(backend, request, *cancellation, key);
+            }, [generation, key, frames = frames_](runtime::JobCompletion result) {
+                frames->completeKey(key);
                 auto out = response(result.outcome != runtime::JobOutcome::Failed, "range_done");
                 out.insert("generation", generation);
                 out.insert("cancelled", result.outcome == runtime::JobOutcome::Cancelled);
+                out.insert("shm_key", key);
                 if (result.error) {
                     try { std::rethrow_exception(result.error); }
                     catch (const std::exception& e) { out.insert("error", QString::fromUtf8(e.what())); }
                 }
                 writeJson(out);
             });
-            if (!accepted) throw BackendError("Skia owner busy; one outstanding operation is allowed");
+            if (!accepted) {
+                frames_->releaseKey(key, true);
+                throw BackendError("Skia owner busy; one outstanding operation is allowed");
+            }
+        } else if (cmd == "release_frame_ring") {
+            const auto key = request.value("shm_key").toString();
+            auto out = response(true, "ring_released");
+            out.insert("shm_key", key); out.insert("released", frames_->releaseKey(key));
+            writeJson(out);
         } else synchronous(request);
     } catch (const std::exception& e) {
         auto out = response(false, "error");
