@@ -35,6 +35,18 @@ def local_line_geometry(measured, style, *, char_gaps=None):
         if width > 0:
             cursor += (max(width + style.letter_spacing_px, 0)
                        if lefts is None and i + 1 < len(measured.cells) else width)
+    if style.right_to_left:
+        # D2D prepares each unmirrored glyph in logical order, then moves its
+        # complete cell box to width-oldRight. Glyph bearings stay unchanged.
+        ink_boxes = []
+        for index, cell in enumerate(cells):
+            left = cell['origin_x'] - measured.offsets[index]
+            shift = cursor - (left + measured.widths[index]) - left
+            cell.update({key: cell[key] + shift for key in ('origin_x', 'wipe_left', 'wipe_right')})
+            bounds = cell['metrics']['ink']
+            if bounds[2] > bounds[0] and bounds[3] > bounds[1]:
+                ink_boxes.append((cell['origin_x']+bounds[0], bounds[1],
+                                  cell['origin_x']+bounds[2], bounds[3]))
     ink = (min(b[0] for b in ink_boxes), min(b[1] for b in ink_boxes),
            max(b[2] for b in ink_boxes), max(b[3] for b in ink_boxes)) if ink_boxes else None
     return LocalLineGeometry(tuple(cells), ink, cursor)

@@ -18,8 +18,10 @@ from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marke
 
 
 def _validate_style(style):
-    if style.vertical or style.right_to_left or style.layout_semantics not in {'legacy', 'n3_1074'}:
-        raise ValueError('Skia 当前规范布局仅支持正向横排')
+    if style.vertical or style.layout_semantics not in {'legacy', 'n3_1074'}:
+        raise ValueError('Skia 当前规范布局仅支持横排')
+    if type(style.right_to_left) is not bool:
+        raise ValueError('Skia 右至左单元排列标记必须是布尔值')
     if style.dual_line_layout:
         if style.line_horizontal_layout == 'asymmetric' and style.smart_horizontal not in {'none','center_position','equal_margins'}:
             raise ValueError('Skia 智能水平布局模式无效')
@@ -34,6 +36,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
+        if source_style.right_to_left and (source.rubies or source_style.lower_ruby_enabled):
+            raise ValueError('Skia 右至左单元排列暂不支持注音组合')
+        if source_style.right_to_left:
+            if any(len(char.text) > 1 for line in source.lines for char in line.chars):
+                raise ValueError('Skia 右至左排列当前仅支持单码点计时单元，多码点单元尚未完成 GPU 校准')
         validate_reverse_source(source)
         if any(c.vector_glyph for l in source.lines for c in l.chars):
             raise ValueError('Skia 当前规范布局尚不支持导唱符')
@@ -55,7 +62,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         position = geometry.position(item, kwargs['width'], kwargs['height'])
         cells = positioned_cells(geometry.locals[index], position)
         ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
-                                 dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse)
+                                 dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,
+                                 right_to_left=item.layout_style.right_to_left)
         for cell, end in zip(cells, ends, strict=True):
             cell['wipe_end_position'] = end
         lines.append({'cells': cells})
@@ -66,6 +74,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_overlap_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
+    if style.right_to_left:
+        ir['required_features'].append('p05_horizontal_rtl')
+        ir['skia_layout']['horizontal_rtl_schema'] = 1
+        for final in lines:
+            final['text_flow'] = 'rtl'
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         sources, indices = lower_sources(prepared[0])

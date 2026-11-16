@@ -26,7 +26,7 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 void supportedStyle(const TextStyle& s, bool canonical) {
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
-        || s.vertical || s.rightToLeft || s.laneCount < 1 || s.laneCount > 32
+        || s.vertical || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
         || (!canonical && (s.dualLineLayout || s.laneCount != 1))
         || (canonical && s.smartHorizontal != "none" && s.smartHorizontal != "center_position" && s.smartHorizontal != "equal_margins")
         || (s.alignment != "left" && s.alignment != "center" && s.alignment != "right")

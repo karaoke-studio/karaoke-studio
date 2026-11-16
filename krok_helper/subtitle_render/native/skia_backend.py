@@ -95,6 +95,10 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                     or ready['zero_ruby_no_wipe_schema'] != 1
                     or 'p07_zero_ruby_no_wipe' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持零时长注音整字变色，请重新构建')
+            if (type(ready.get('horizontal_rtl_schema')) is not int
+                    or ready['horizontal_rtl_schema'] != 1
+                    or 'p05_horizontal_rtl' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持右至左单元排列，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

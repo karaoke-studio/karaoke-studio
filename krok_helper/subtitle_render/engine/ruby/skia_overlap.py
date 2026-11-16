@@ -32,18 +32,16 @@ def _valid_dpr(dpr):
         raise ValueError('Skia 走字终点需要有效像素比例')
 
 
-def _main_endpoints(cells, measured, dpr, reverse):
+def _main_endpoints(cells, measured, dpr, reverse, right_to_left):
     lefts = [c['origin_x']-offset for c, offset in zip(cells, measured.offsets, strict=True)]
     rights = [left+width for left, width in zip(lefts, measured.widths, strict=True)]
     main = [1.]*len(lefts)
-    if reverse:
-        # Source order is kept; the GPU sings right-to-left, so each cell is
-        # compared with its LEFT neighbour and the leftmost keeps 1.
-        for i in range(1, len(lefts)):
-            main[i] = _reverse_endpoint(lefts[i], rights[i], rights[i-1], dpr)
-    else:
-        for i in range(len(lefts)-1):
-            main[i] = _endpoint(lefts[i], rights[i], lefts[i+1], dpr)
+    for i in range(len(lefts)):
+        following = i-1 if reverse else i+1
+        if not 0 <= following < len(lefts):
+            continue
+        main[i] = (_reverse_endpoint(lefts[i], rights[i], rights[following], dpr)
+                   if right_to_left != reverse else _endpoint(lefts[i], rights[i], lefts[following], dpr))
     return tuple(main)
 
 
@@ -62,7 +60,7 @@ def _ruby_endpoints(rubies, dpr):
     return tuple(tuple(row) for row in ends)
 
 
-def line_endpoints(main_cells, measured, rubies=(), *, dpr=1, reverse=False):
+def line_endpoints(main_cells, measured, rubies=(), *, dpr=1, reverse=False, right_to_left=False):
     """Final ``(main, per-group annotation)`` endpoints of one prepared line.
 
     The +1 in the width is a physical pixel. Upper/lower layers are separate
@@ -72,7 +70,9 @@ def line_endpoints(main_cells, measured, rubies=(), *, dpr=1, reverse=False):
     _valid_dpr(dpr)
     if reverse and rubies:
         raise ValueError('Skia 反向走字行不能携带注音组（现有 GPU 省略该行注音）')
-    return _main_endpoints(main_cells, measured, dpr, reverse), _ruby_endpoints(rubies, dpr)
+    if right_to_left and rubies:
+        raise ValueError('Skia 右至左单元排列暂不支持注音组合')
+    return _main_endpoints(main_cells, measured, dpr, reverse, right_to_left), _ruby_endpoints(rubies, dpr)
 
 
 def reverse_main_endpoints(cells, measured, *, dpr=1):

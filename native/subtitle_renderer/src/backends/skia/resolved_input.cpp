@@ -64,7 +64,15 @@ std::uint32_t argb(const RgbaColor& c) {
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
-        prepared.reverseWipe = line.wipeReverse;
+        prepared.wipeRightToLeft = style.rightToLeft != line.wipeReverse;
+        if (style.rightToLeft || source.contains("text_flow")) {
+            if (!ir.value("required_features").toArray().contains("p05_horizontal_rtl")
+                || layout.value("horizontal_rtl_schema").toDouble(-1) != 1
+                || !source.value("text_flow").isString()
+                || source.value("text_flow").toString() != (style.rightToLeft ? "rtl" : "ltr")
+                || !source.value("ruby_groups").toArray().isEmpty())
+                throw BackendError("Skia 右至左单元排列缺少能力声明或最终方向无效");
+        }
         for (const auto& window : line.placementWindows)
             prepared.translations.push_back({window.startMs, window.endMs, window.offsetX, window.offsetY});
         for (int j = 0; j < cells.size(); ++j) {

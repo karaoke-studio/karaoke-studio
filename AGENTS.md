@@ -447,8 +447,13 @@ git submodule status
 
    正文反向横排子集见 §14.36：`p05_reverse_wipe` / `reverse_wipe_schema=1`，仅改变演唱方向。
    最终 `clock_index` 严格等于 n-1-source_index，原字形/run/实色不换位，原区间不重新分时；
-   `render/skia_direction_ir` 只投影一次。native 验证后按时间序准备，公共 `reverseWipe` 只改裁剪。
-   不得翻转 HarfBuzz 文本方向来实现反向演唱。§14.35 的正向限制由本子集扩展，RTL/竖排和其他特效仍拒绝。
+   `render/skia_direction_ir` 只投影一次。native 验证后按时间序准备，公共 `wipeRightToLeft` 只改物理裁剪方向。
+   不得翻转 HarfBuzz 文本方向来实现反向演唱。§14.35 的正向限制由本子集扩展，竖排和其他特效仍拒绝。
+   正文右至左单元排列子集见 §14.42：`p05_horizontal_rtl` / `horizontal_rtl_schema=1`，
+   当前每个计时单元最多一个 Unicode 码点；多码点、上下注音与竖排继续明确拒绝。
+   `skia_geometry` 按整单元框移位，不镜像字形；逻辑单元、字体塑形方向与时间归属不变。
+   物理走字方向为 `right_to_left XOR wipe_reverse`，不能用反转字符串或重新分配时钟实现。
+   单元内连字/分解重音在旧 LTR 路径也有 D2D 几何差异，保留严格预期失败，不放宽预算或宣称完整 bidi。
 
    含注音轨道的反向行见 §14.38：共享选择、下方派生、Painter 与 Qt→GPU 投影对反向行一律省略
    上/下注音（D2D 中的 ruby 索引重映射不可达），实际 D2D 有/无注音来源像素一致。因此 Skia 保留源注音，

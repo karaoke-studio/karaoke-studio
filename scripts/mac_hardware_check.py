@@ -242,6 +242,9 @@ def main(argv=None) -> int:
     if manifest.get("zero_ruby_no_wipe", 0) >= 1:
         steps["zero_ruby_no_wipe"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                        "tests/test_subtitle_skia_zero_ruby.py", "--basetemp", logs / "zero-ruby-tests"]
+    if manifest.get("horizontal_rtl", 0) >= 1:
+        steps["horizontal_rtl"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                    "tests/test_subtitle_skia_rtl_flow.py", "--basetemp", logs / "rtl-flow-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

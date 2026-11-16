@@ -54,7 +54,7 @@ private:
         std::vector<ResolvedLine::Translation> translations;
         std::vector<PreparedWipeGroup> rubyGroups;
         bool noWipe = false;
-        bool reverseWipe = false;
+        bool wipeRightToLeft = false;
     };
     int width_, height_;
     std::vector<Line> lines_;

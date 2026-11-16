@@ -22,9 +22,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
         line.noWipe = source.noWipe;
-        line.reverseWipe = source.reverseWipe;
-        // Matches the existing GPU, which never draws annotations on reverse lines.
-        if (source.reverseWipe && !source.rubyGroups.empty())
+        line.wipeRightToLeft = source.wipeRightToLeft;
+        // Annotation groups currently support only a left-to-right front.
+        if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
         if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
         for (const auto& translation : source.translations) {
@@ -128,7 +128,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
         }
         const auto rawProgress = [&](const Cell& cell) {
-            if (line.reverseWipe && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
+            if (line.wipeRightToLeft && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
                 return 0.f;
             if (line.noWipe) {
                 // The existing GPU's Before phase wins at the initial sample,
@@ -145,9 +145,9 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 : (cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)
                    : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f));
         };
-        // Reverse lines hold cells in singing order; the front runs leftwards.
+        // Cells are already in singing order; this flag only chooses the physical front.
         const auto front = [&](const Cell& cell, float progress) {
-            return line.reverseWipe ? cell.right-(cell.right-cell.left)*progress
+            return line.wipeRightToLeft ? cell.right-(cell.right-cell.left)*progress
                                     : cell.left+(cell.right-cell.left)*progress;
         };
         for (std::size_t index = 0; index < line.cells.size(); ++index) {
@@ -167,14 +167,14 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                     // N3 delegates the finishing cell's clip to its following
                     // cell (next in singing order) until that cell completes.
                     edge = front(*next, rawProgress(*next));
-                    const float covered = line.reverseWipe ? cell.right-edge : edge-cell.left;
+                    const float covered = line.wipeRightToLeft ? cell.right-edge : edge-cell.left;
                     progress = std::clamp(covered/std::max(cell.right-cell.left, 1.f), 0.f, 1.f);
                 }
             }
             // Two disjoint clips avoid painting translucent after color over before color.
             if (progress < 1) {
                 canvas.save();
-                canvas.clipRect(line.reverseWipe
+                canvas.clipRect(line.wipeRightToLeft
                     ? SkRect::MakeLTRB(-1e6f, -1e6f, progress == 0 ? 1e6f : edge, 1e6f)
                     : SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
@@ -184,7 +184,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
             if (progress > 0) {
                 canvas.save();
-                canvas.clipRect(line.reverseWipe
+                canvas.clipRect(line.wipeRightToLeft
                     ? SkRect::MakeLTRB(progress == 1 ? -1e6f : edge, -1e6f, 1e6f, 1e6f)
                     : SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);

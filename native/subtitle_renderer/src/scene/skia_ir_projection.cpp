@@ -32,6 +32,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
             && feature.toString() != "p07_zero_ruby_no_wipe"
+            && feature.toString() != "p05_horizontal_rtl"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
     }
@@ -59,6 +60,12 @@ void validateEnvelope(const QJsonObject& ir) {
         && (ir.value("skia_layout").toObject().value("zero_ruby_no_wipe_schema").toDouble(-1) != 1
             || !ir.value("required_features").toArray().contains("p07_no_wipe")))
         throw BackendError("Skia 零时长注音整字变色缺少版本化能力声明");
+    if (ir.value("required_features").toArray().contains("p05_horizontal_rtl")
+        && ir.value("skia_layout").toObject().value("horizontal_rtl_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 右至左单元排列布局版本无效");
+    if (ir.value("style").toObject().contains("right_to_left")
+        && !ir.value("style").toObject().value("right_to_left").isBool())
+        throw BackendError("Skia 右至左单元排列标记必须是布尔值");
     if (ir.value("required_features").toArray().contains("p05_reverse_wipe")
         && ir.value("skia_layout").toObject().value("reverse_wipe_schema").toDouble(-1) != 1)
         throw BackendError("Skia 反向走字布局版本无效");
@@ -149,7 +156,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         // Source annotations remain provenance only. Their layout and clocks
         // were materialized by Python; never invoke legacy Qt ruby projection.
     }
-    if (cfg.lineBand.enabled || cfg.vertical || cfg.rightToLeft
+    if (cfg.rightToLeft && (!features.contains("p05_horizontal_rtl")
+        || !cfg.rubies.empty()))
+        throw BackendError("Skia 右至左单元排列缺少能力声明或携带未支持注音");
+    if (cfg.lineBand.enabled || cfg.vertical
         || cfg.viewportScalePct != 100 || cfg.viewportRotationDeg || cfg.viewportOffsetX || cfg.viewportOffsetY)
         throw BackendError("Skia P04: annotations, line bands and viewport transforms require later phases");
     RenderScene out;
@@ -170,6 +180,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
         applyResolvedStyle(style, resolved, cfg.dpr);
+        style.rightToLeft = cfg.rightToLeft;
         style.layoutSemantics = cfg.layoutSemantics.toStdString();
         style.laneCount = cfg.dualLineLayout ? std::max(int(cfg.lineAlignments.size()), 1) : 1;
         style.dualLineLayout = cfg.dualLineLayout;
@@ -223,6 +234,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         for (const auto& cell : source.chars) {
+            if (cfg.rightToLeft && !cell.text.isEmpty()) {
+                if (cell.text.toUcs4().size() != 1)
+                    throw BackendError("Skia 右至左排列当前仅支持单码点计时单元");
+            }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (cell.vectorGlyph || cell.bitmapGuide
                 || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
