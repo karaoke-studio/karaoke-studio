@@ -106,14 +106,20 @@ class SkiaFontResolver:
             prewarm_fallback, lookup_fallback_instance, grapheme_clusters,
         )
         texts = list(dict.fromkeys([text, *grapheme_clusters(text)]))
+        instance = font_instance(style.font_family, style.font_weight, style.italic)
+        # A verified localized alias must use that same physical family for
+        # fallback discovery and lookup. Asking Qt for the missing spelling
+        # again can add unrelated (even unreadable) faces to an otherwise
+        # valid explicit chain on CoreText.
+        family = instance.family
         if QGuiApplication.instance() is not None and _on_gui_thread():
-            prewarm_fallback(style.font_family, style.font_weight, style.italic, texts)
-        primary = self(style)
+            prewarm_fallback(family, style.font_weight, style.italic, texts)
+        primary = self._export(instance, style.font_family)
         chain = [primary]
         # Preserve the previous whole-cell candidate's priority. Additional
         # physical faces are only consumed if none covers the complete cell.
         for unit in texts:
-            fallback = lookup_fallback_instance(style.font_family, style.font_weight, style.italic, unit)
+            fallback = lookup_fallback_instance(family, style.font_weight, style.italic, unit)
             if fallback is None:
                 continue
             resource, options = self._export(fallback, fallback.family)

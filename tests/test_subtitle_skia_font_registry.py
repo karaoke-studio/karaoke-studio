@@ -97,10 +97,22 @@ def source():
     return TimingTrack(lines=[line], rubies=[ruby]), style
 
 
-def prepare(binary, track, style, resolver, **kwargs):
+def prepare(binary, track, style, resolver, *, diagnostic_dir=None, **kwargs):
     list(iter_prepare_skia_fallbacks(track, style))  # GUI-thread prewarm, as in the product.
     with SkiaTextMetricsProcess(binary) as process:
-        ir = build_skia_render_ir(track, style, resolve_font=resolver, measure=process.measure,
+        def measure(fonts, runs):
+            try:
+                return process.measure(fonts, runs)
+            except NativeRendererError:
+                if diagnostic_dir is not None:
+                    import shutil
+                    destination = diagnostic_dir/'failed-fonts'
+                    destination.mkdir(exist_ok=True)
+                    (destination/'request.json').write_text(json.dumps({'fonts': fonts, 'runs': runs}), encoding='utf-8')
+                    for index, resource in enumerate(fonts.values()):
+                        shutil.copyfile(resource['path'], destination/f'{index}.otf')
+                raise
+        ir = build_skia_render_ir(track, style, resolve_font=resolver, measure=measure,
                                   width=640, height=360, fps=60, **kwargs)
     apply_resolved_font_faces(ir)
     return ir
@@ -209,7 +221,8 @@ def test_localized_and_english_family_names_select_the_same_bytes(binary, regist
     resolver = SkiaFontResolver()
     # Resolve the localized spelling cold: no earlier English preparation may
     # be required to seed its resource identity.
-    localized = prepare(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED), resolver)
+    localized = prepare(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED), resolver,
+                        diagnostic_dir=registry.root)
     english = prepare(binary, track, style, resolver)
     assert used_fonts(localized) == used_fonts(english)
     assert drawing_geometry(localized['skia_layout']['lines']) == drawing_geometry(english['skia_layout']['lines'])
@@ -451,7 +464,8 @@ def test_unlisted_locale_record_resolves_to_its_own_bytes_or_fails_explicitly(bi
     resolver = SkiaFontResolver()
     english = prepare(binary, track, style, resolver)
     try:
-        aliased = prepare(binary, track, replace(style, font_family=korean, font_family_latin=korean), resolver)
+        aliased = prepare(binary, track, replace(style, font_family=korean, font_family_latin=korean), resolver,
+                          diagnostic_dir=registry.root)
     except NativeRendererError as exc:
         assert korean in str(exc)
     else:
@@ -547,3 +561,36 @@ def test_preview_reports_removed_font_then_recovers_after_reregistration(binary,
         assert len(errors) == 1
     finally:
         renderer.stop()
+
+
+def test_verified_alias_uses_its_physical_family_for_fallback_preparation_and_lookup(registry, monkeypatch):
+    from krok_helper.subtitle_render.native import skia_fonts, skia_font_aliases
+    from krok_helper.subtitle_render.engine.text import font_fallback
+    for key, path in (('main', registry.font('main', MAIN, 600)), ('ruby', registry.font('ruby', RUBY, 500)),
+                      ('role', registry.font('role', ROLE, 760))):
+        registry.add(key, path)
+    physical = skia_font_aliases.gui_font_instance(MAIN, 400, False)
+    alias = 'LinK Verified Alias Boundary'
+    resolve = skia_fonts.font_instance
+    gui_resolve = skia_font_aliases.gui_font_instance
+    monkeypatch.setattr(skia_fonts, 'font_instance', lambda family, weight, italic:
+                        physical if family == alias else resolve(family, weight, italic))
+    monkeypatch.setattr(skia_font_aliases, 'gui_font_instance', lambda family, weight, italic:
+                        physical if family == alias else gui_resolve(family, weight, italic))
+    prewarm, lookup = font_fallback.prewarm_fallback, font_fallback.lookup_fallback_instance
+    prepared, consumed = [], []
+    def warm(family, *args):
+        prepared.append(family)
+        return prewarm(family, *args)
+    def find(family, *args):
+        consumed.append(family)
+        return lookup(family, *args)
+    monkeypatch.setattr(font_fallback, 'prewarm_fallback', warm)
+    monkeypatch.setattr(font_fallback, 'lookup_fallback_instance', find)
+    track, style = source()
+    style = replace(style, font_family=alias, font_family_latin=alias)
+    list(iter_prepare_skia_fallbacks(track, style))
+    assert physical.family in prepared and alias not in prepared
+    prepared.clear()
+    SkiaFontResolver().resolve_cell_fonts(style, 'A字')
+    assert prepared == [physical.family] and set(consumed) == {physical.family}
