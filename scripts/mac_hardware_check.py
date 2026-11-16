@@ -215,6 +215,9 @@ def main(argv=None) -> int:
     if manifest.get("owned_posix_rings", 0) >= 1:
         steps["owned_posix_rings"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                      "tests/test_subtitle_skia_ipc.py", "--basetemp", logs / "posix-ring-tests"]
+    if manifest.get("font_fallback", 0) >= 1:
+        steps["font_fallback"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                  "tests/test_subtitle_skia_fallback.py", "--basetemp", logs / "font-fallback-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

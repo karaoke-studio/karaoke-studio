@@ -36,6 +36,10 @@ std::uint32_t argb(const RgbaColor& c) {
     for (const auto& value : runs) {
         if (!value.isObject()) throw BackendError("Skia 字体实例必须为对象");
         const auto run = value.toObject();
+        if ((run.value("font_ids").toArray().size() > 1 || run.contains("font_options"))
+            && (!ir.value("required_features").toArray().contains("p05_font_fallback")
+                || layout.value("font_chain_schema").toDouble(-1) != 1))
+            throw BackendError("Skia 显式字体链缺少版本化能力声明");
         if (run.value("rtl").toBool()) throw BackendError("Skia 当前规范布局尚不支持 RTL");
         glyphs.fonts.push_back(scene::skiaRunFonts(run, resources));
         glyphs.languages.push_back(run.value("language").toString("und").toStdString());

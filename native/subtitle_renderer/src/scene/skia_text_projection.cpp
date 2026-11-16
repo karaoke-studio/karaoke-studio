@@ -71,17 +71,36 @@ FontResourceTable loadSkiaFontResources(const QJsonObject& table) {
 
 std::vector<std::shared_ptr<const ::subtitle::skia::text::FontInstance>> skiaRunFonts(const QJsonObject& run, const FontResourceTable& resources) {
     std::vector<std::shared_ptr<const Instance>> fonts;
-    for (const auto& id : run.value("font_ids").toArray()) {
+    if (!run.value("font_ids").isArray()) throw std::runtime_error("Skia 显式字体链必须为数组");
+    const auto ids = run.value("font_ids").toArray();
+    const auto options = run.value("font_options");
+    if (options.isUndefined() == false && (!options.isArray() || options.toArray().size() != ids.size()))
+        throw std::runtime_error("Skia 字体链实例参数数量或类型无效");
+    if (ids.isEmpty() || ids.size() > 32) throw std::runtime_error("Skia 显式字体链大小无效");
+    for (int index = 0; index < ids.size(); ++index) {
+        const auto id = ids[index];
+        auto instance = run;
+        if (options.isArray()) {
+            const auto entry = options.toArray()[index];
+            if (!entry.isObject()) throw std::runtime_error("Skia 字体链实例参数必须为对象");
+            const auto object = entry.toObject();
+            for (auto it = object.begin(); it != object.end(); ++it) {
+                if (it.key() != "size" && it.key() != "scale_x"
+                    && it.key() != "synthetic_bold" && it.key() != "synthetic_italic")
+                    throw std::runtime_error("Skia 字体链实例包含未知参数");
+                instance.insert(it.key(), it.value());
+            }
+        }
         const auto found = resources.find(id.toString());
         if (!id.isString() || found == resources.end()) throw std::runtime_error("Skia 度量引用未知字体资源");
         ::subtitle::skia::text::FontSpec spec;
         spec.resource = found->second;
-        spec.size = float(number(run, "size", 48, .1, 2048));
-        spec.scaleX = float(number(run, "scale_x", 1, .1, 8));
+        spec.size = float(number(instance, "size", 48, .1, 2048));
+        spec.scaleX = float(number(instance, "scale_x", 1, .1, 8));
         for (const auto* flag : {"synthetic_bold", "synthetic_italic", "rtl"})
-            if (run.contains(flag) && !run.value(flag).isBool()) throw std::runtime_error("Skia 字体/方向开关必须为布尔值");
-        spec.syntheticBold = run.value("synthetic_bold").toBool();
-        spec.syntheticItalic = run.value("synthetic_italic").toBool();
+            if (instance.contains(flag) && !instance.value(flag).isBool()) throw std::runtime_error("Skia 字体/方向开关必须为布尔值");
+        spec.syntheticBold = instance.value("synthetic_bold").toBool();
+        spec.syntheticItalic = instance.value("synthetic_italic").toBool();
         fonts.push_back(std::make_shared<Instance>(spec));
     }
     if (fonts.empty() || fonts.size() > 32) throw std::runtime_error("Skia 显式字体链大小无效");

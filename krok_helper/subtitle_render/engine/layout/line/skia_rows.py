@@ -52,7 +52,7 @@ def source_row_frames(track, style, styles, measured, *, resolve_frames=None):
         defaults.setdefault(layout, (appearance, metrics.baseline_metrics))
         if appearance.lower_ruby_enabled:
             enabled.add(layout)
-        for char, cell in zip(line.chars, metrics.cells, strict=True):
+        for index, (char, cell) in enumerate(zip(line.chars, metrics.cells, strict=True)):
             if char.vector_glyph is not None or not char.text.strip():
                 continue
             if line.singer_id is not None or char.role_label:
@@ -65,7 +65,10 @@ def source_row_frames(track, style, styles, measured, *, resolve_frames=None):
             seen.add(key)
             slot = main_script_stroke_style(style_for_role_in_layout(appearance, char.role_label), char.text)
             slot, _ = font_style_for_cell(slot, char.text)
-            boxes.setdefault(layout, []).append((slot, cell))
+            # A source slot owns its font box even when its first glyph uses a
+            # taller fallback. Actual glyph metrics still own ink and spacing.
+            primary = metrics.slot_metrics[index] if metrics.slot_metrics else cell
+            boxes.setdefault(layout, []).append((slot, primary))
     requests, indices = [], {}
     for layout, default in defaults.items():
         if not independent and layout not in enabled:

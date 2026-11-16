@@ -28,7 +28,8 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_smart_horizontal" && feature.toString() != "p05_segmented_wipe"
             && feature.toString() != "p05_resolved_ruby" && feature.toString() != "p05_upper_ruby"
             && feature.toString() != "p05_overlap_wipe" && feature.toString() != "p05_lower_ruby"
-            && feature.toString() != "p05_ruby_markers" && feature.toString() != "p05_ruby_units")
+            && feature.toString() != "p05_ruby_markers" && feature.toString() != "p05_ruby_units"
+            && feature.toString() != "p05_font_fallback")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -39,6 +40,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p05_ruby_units")
         && ir.value("skia_layout").toObject().value("ruby_unit_schema").toDouble(-1) != 1)
         throw BackendError("Skia 注音计时单元布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_font_fallback")
+        && ir.value("skia_layout").toObject().value("font_chain_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 字体链布局版本无效");
     if (!ir.value("screen").isObject() || !ir.value("style").isObject() || !ir.value("track").isObject())
         throw BackendError("Skia IR: screen/style/track objects are required");
     const auto screen = ir.value("screen").toObject();
@@ -167,9 +171,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         for (const auto& cell : source.chars) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (cell.vectorGlyph || cell.bitmapGuide || !cell.fallbackFamily.isEmpty()
+            if (cell.vectorGlyph || cell.bitmapGuide
+                || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
                 || !cell.resolvedEndMs)
-                throw BackendError("Skia 当前尚不支持导唱符、缺字回退或未解析计时");
+                throw BackendError("Skia 导唱符、未声明的缺字回退或未解析计时尚未支持");
             TextChar ch;
             if (&cellStyle != &resolved) {
                 auto [entry, inserted] = roleStyles.try_emplace(&cellStyle, int(out.charStyles.size()));
@@ -181,6 +186,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 ch.styleIndex = entry->second;
             }
             ch.text = cell.text.toStdWString();
+            // Legacy family hints are provenance only. The resolved font
+            // resource chain is verified by resolvedSkiaInput, never rematched.
             ch.startMs = cell.startMs + offset;
             ch.endMs = *cell.resolvedEndMs + offset;
             line.chars.push_back(std::move(ch));

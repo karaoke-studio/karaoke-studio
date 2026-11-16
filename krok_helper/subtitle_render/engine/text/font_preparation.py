@@ -77,6 +77,10 @@ def iter_prepare_fonts(
                 _prepare_one(lambda: apply_resolved_font_faces(titles_to_ir(track, style)), "标题样式")
                 yield
         yield from _iter_prewarm_font_fallback(track, style, extra_tracks)
+        from krok_helper.subtitle_render.native.backend_selection import skia_requested
+        if skia_requested() and track is not None and style is not None:
+            from krok_helper.subtitle_render.native.skia_font_preparation import iter_prepare_skia_fallbacks
+            yield from iter_prepare_skia_fallbacks(track, style)
     except Exception:  # noqa: BLE001 — 预热失败不阻断预览，渲染线程回退原路径
         _log.debug("字体能力缓存预热失败", exc_info=True)
 

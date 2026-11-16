@@ -418,6 +418,11 @@ git submodule status
    按整段 reading 重组 checkpoints。需要新投影时声明 `p05_ruby_units` / `ruby_unit_schema=1`，
    `text` 保留原文，`glyph_text` 必须等于该单元 NFC；native 验证字体/cluster 后仍绘制最终路径。
    不能跨 part 合成韩文/IPA 单元；以独立组合标记开头的 part 仍明确拒绝，完整 fallback 待做。
+   P05 显式单元字体回退见 §14.32：`native/SkiaFontResolver` 导出 GUI 预热的物理 face，
+   `TextMeasurementBatch` 按完整字体链去重，正文/角色/上下注音共用同一度量与最终绘制。
+   `font_chain_schema=1` / `p05_font_fallback` 门控逐候选 `font_options`；主字体基线不随缺字改变，
+   缓存身份必须含所有候选实例。一个完整单元须由一个候选 face 覆盖，彩色/位图与单元内跨字体
+   混排仍拒绝。worker 不发现系统字体；只在源码 Skia opt-in 的 GUI 准备层增加预热。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，

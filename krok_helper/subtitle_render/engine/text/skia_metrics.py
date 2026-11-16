@@ -23,6 +23,7 @@ class MeasuredLine:
     offsets: tuple[float, ...]
     baseline_metrics: dict
     row_frame: RowFrame | None = None
+    slot_metrics: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
             if char.role_label not in role_styles:
                 role_styles[char.role_label] = style_for_role_in_layout(appearance, char.role_label)
             selected, stretch = font_style_for_cell(role_styles[char.role_label], char.text)
-            run = instance(selected, stretch)
+            run = instance(selected, stretch, text=char.text)
             cells.append((run, batch.cell(run, char.text), selected))
         references.append((main, cells))
     measured = batch.measure(measure)
@@ -58,7 +59,8 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
                     for char, cell, (_, _, selected) in zip(line.chars, cells, references, strict=True)]
         widths = tuple(g[0] for g in geometry)
         lines.append(MeasuredLine(cells, tuple(r for r, _, _ in references), widths,
-                                  tuple(g[1] for g in geometry), measured[main]['font_metrics']))
+                                  tuple(g[1] for g in geometry), measured[main]['font_metrics'],
+                                  slot_metrics=tuple(measured[r]['font_metrics'] for r, _, _ in references)))
         snapshots.append(LineMetric.capture(line, style,
             [CellMetric.from_payload(c.text, m) for c, m in zip(line.chars, cells, strict=True)], layout_widths=widths))
     snapshot = TextMetricSnapshot(tuple(snapshots))
@@ -71,6 +73,8 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
     # A main-font replacement must invalidate even a line with only Latin glyphs.
     signature = {'cells': snapshot.identity, 'fonts': [r['font_metrics'] for r in measured],
                  'rows': [asdict(row) if row is not None else None for row in rows]}
+    if any(len(run['font_ids']) > 1 for run in batch.runs):
+        signature['font_chains'] = [r['font_chain'] for r in measured]
     identity = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     return MeasuredTrack(batch.fonts, batch.resolved_runs(),
                          tuple(lines), snapshot, identity)

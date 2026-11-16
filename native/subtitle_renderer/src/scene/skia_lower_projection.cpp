@@ -1,5 +1,5 @@
 #include "skia_lower_projection.h"
-#include "../backends/render_backend.h"
+#include "../model/backend_caps.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
 #include <set>

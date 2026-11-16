@@ -69,4 +69,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'] += ['p05_lower_ruby', 'p05_overlap_wipe']
         elif markers or 'ruby_unit_schema' in ir['skia_layout']:
             ir['required_features'].append('p05_overlap_wipe')
+    if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
+        ir['required_features'].append('p05_font_fallback')
+        ir['skia_layout']['font_chain_schema'] = 1
     return ir

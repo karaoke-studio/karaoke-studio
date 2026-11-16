@@ -29,6 +29,7 @@ from krok_helper.subtitle_render.engine.export.progress_watchdog import (
     sidecar_send_stall_grace_s,
 )
 from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+from .backend_selection import skia_requested
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.domain.models import Style
 
@@ -50,13 +51,6 @@ _ABANDONED_SHARED_MEMORY: list[Any] = []
 _ABANDONED_SHARED_MEMORY_LOCK = threading.Lock()
 
 _log = logging.getLogger(__name__)
-
-
-def skia_requested() -> bool:
-    """Allow the experimental backend only in an explicitly opted-in source run."""
-    return not getattr(sys, "frozen", False) and (
-        os.environ.get("KROK_SUBTITLE_RENDER_BACKEND", "").strip().lower() == "skia"
-    )
 
 
 def shared_memory_detach_timeout_s() -> float:

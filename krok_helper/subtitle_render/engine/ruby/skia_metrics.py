@@ -56,7 +56,7 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
         for unit in text_units:
             selected, stretch = font_style_for_ruby_cell(style, unit)
             stroke = ruby_stroke_width(ruby_script_stroke_style(style, unit))
-            run = batch.instance(selected, stretch)
+            run = batch.instance(selected, stretch, text=unit)
             units.append((unit, run, batch.cell(run, unit), selected, stroke))
         references.append((baseline_run, units))
     measured = batch.measure(measure)
@@ -77,6 +77,8 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
                                           measured[baseline_run]['font_metrics']))
     # Content-based metrics and geometry, independent of machine-local file paths.
     signature = [asdict(r) for r in results]
+    if any(len(run['font_ids']) > 1 for run in batch.runs):
+        signature.append({'font_chains': [r['font_chain'] for r in measured]})
     identity = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     return MeasuredRubyReadings(batch.fonts, batch.resolved_runs(), tuple(results), identity)
 

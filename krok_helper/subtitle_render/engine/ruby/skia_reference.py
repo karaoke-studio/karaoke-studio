@@ -37,6 +37,7 @@ class RubyReference:
     upper_size: int
     main_stroke: int
     upper_stroke: int
+    font_chains: tuple = ()
 
     @property
     def zero_upper_baseline(self):
@@ -62,7 +63,11 @@ def measure_references(pairs, *, resolve_font, measure):
     for upper, lower in pairs:
         japanese, _ = font_style_for_ruby_cell(upper, '')
         latin, stretch = font_style_for_ruby_cell(lower, 'a')
-        main_run, upper_run, lower_run = batch.instance(upper), batch.instance(japanese), batch.instance(latin, stretch)
+        # Baseline metrics stay on the requested slot; reference ink may use
+        # an explicitly supplied fallback, just like actual reading units.
+        main_run = batch.instance(upper, text=MAIN_REFERENCE)
+        upper_run = batch.instance(japanese, text=UPPER_REFERENCE)
+        lower_run = batch.instance(latin, stretch, text=LOWER_REFERENCE)
         pending.append((upper, japanese, main_run, batch.cell(main_run, MAIN_REFERENCE),
                         upper_run, batch.cell(upper_run, UPPER_REFERENCE),
                         lower_run, batch.cell(lower_run, LOWER_REFERENCE)))
@@ -80,7 +85,9 @@ def measure_references(pairs, *, resolve_font, measure):
             raise ValueError('Skia 下方注音缺少有效字体大写高度')
         references.append(RubyReference(result[mr]['font_metrics'], result[ur]['font_metrics'], lower_metrics,
             *(tuple(c['ink']) for c in cells), upper.font_size_px, japanese.font_size_px,
-            upper.stroke_width_px, ruby_stroke_width(upper)))
+            upper.stroke_width_px, ruby_stroke_width(upper),
+            tuple(tuple(result[r].get('font_chain', ())) for r in (mr, ur, lr))
+            if any(len(batch.runs[r]['font_ids']) > 1 for r in (mr, ur, lr)) else ()))
     return tuple(references)
 
 

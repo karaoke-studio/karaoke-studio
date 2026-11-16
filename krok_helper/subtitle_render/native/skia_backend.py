@@ -79,6 +79,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 不支持分段注音字形单元，请重新构建')
             if ready.get('shared_memory_lifecycle_schema') != 1:
                 raise NativeRendererError('Skia sidecar 不支持共享帧所有权协议，请重新构建')
+            if ready.get('font_chain_schema') != 1 or 'p05_font_fallback' not in ready.get('profiles', []):
+                raise NativeRendererError('Skia sidecar 不支持独立字体链实例，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",
@@ -94,12 +96,12 @@ class SkiaRendererProcess(SkiaSidecarProcess):
     def configure(self, track, style, *, progress=None, **kwargs):
         from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
         from .skia_text import SkiaTextMetricsProcess
-        from .skia_fonts import resolve_skia_font
+        from .skia_fonts import SkiaFontResolver
         from .protocol import apply_resolved_font_faces
         try:
             with SkiaTextMetricsProcess(self.executable_path) as metrics:
                 ir = build_skia_render_ir(track, style, measure=metrics.measure,
-                                          resolve_font=resolve_skia_font, **kwargs)
+                                          resolve_font=SkiaFontResolver(), **kwargs)
             apply_resolved_font_faces(ir)
         except (ValueError, OSError) as exc:
             raise NativeRendererError(str(exc)) from exc
