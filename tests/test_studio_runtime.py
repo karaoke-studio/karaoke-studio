@@ -200,6 +200,34 @@ def test_ai_adapter_preserves_unowned_runtime_behavior(tmp_path):
     assert [c[0] for c in calls] == ['probe', 'install']
 
 
+@pytest.mark.parametrize('cuda,mps,label', [
+    (False, True, 'Apple GPU（MPS 可用）'),
+    (False, False, 'CPU'),
+    (True, False, 'CUDA'),
+])
+def test_ai_probe_reports_available_hardware_without_cuda_upgrade_warning(monkeypatch, tmp_path, cuda, mps, label):
+    from krok_helper.audio_processing.separation import studio_ai
+    from strange_uta_game.backend.application.ai_timing.runtime import AiRuntimeManager
+
+    exe = tmp_path / 'overlay/bin/python3'
+    exe.parent.mkdir(parents=True)
+    exe.touch()
+    (exe.parent.parent / 'lin-k-ready.json').write_text('{}')
+    info = dict(torch='2.7.1', torchaudio='2.7.1', transformers='5.15.0',
+                cuda=cuda, mps=mps, gpu_name='NVIDIA' if cuda else '')
+    monkeypatch.setattr(studio_ai.subprocess, 'run', lambda *a, **kw:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(info)))
+    manager = AiRuntimeManager()
+    studio_ai.configure_runtime(manager)
+    status = manager.probe(str(exe))
+    assert status.available and status.summary.endswith(label)
+    assert status.cuda_available == cuda
+    assert status.mps_available == mps
+    assert not status.note
+    if mps:
+        assert not status.gpu_name  # SUG interprets this field as an NVIDIA GPU.
+
+
 def test_editor_adapter_keeps_service_runtime_reference():
     from krok_helper.audio_processing.separation.studio_ai import install_editor_adapter
     from strange_uta_game.backend.application.ai_timing.runtime import AiRuntimeManager

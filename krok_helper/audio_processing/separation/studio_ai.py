@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -26,6 +27,17 @@ def configure_runtime(runtime) -> None:
     original_probe = runtime.probe
     original_install = runtime.install_shared
 
+    @dataclass
+    class StudioRuntimeStatus(RuntimeStatus):
+        mps_available: bool = False
+
+        @property
+        def summary(self):
+            if not self.available or not self.mps_available or self.cuda_available:
+                return super().summary
+            return (f'PyTorch {self.torch_version} · Transformers '
+                    f'{self.transformers_version} · Apple GPU（MPS 可用）')
+
     def probe(python_exe='', timeout_s=30.0):
         if not is_studio_overlay(python_exe):
             return original_probe(python_exe, timeout_s=timeout_s)
@@ -34,7 +46,10 @@ def configure_runtime(runtime) -> None:
             'from transformers import Wav2Vec2ForCTC,Wav2Vec2Processor; '
             'from torchaudio.functional import resample; '
             'print(json.dumps({"torch":torch.__version__,"torchaudio":torchaudio.__version__, '
-            '"transformers":transformers.__version__}))'
+            '"transformers":transformers.__version__, '
+            '"cuda":torch.cuda.is_available(), '
+            '"gpu_name":torch.cuda.get_device_name(0) if torch.cuda.is_available() else "", '
+            '"mps":bool(getattr(torch.backends,"mps",None) and torch.backends.mps.is_available())}))'
         )
         try:
             result = subprocess.run([python_exe, '-c', code], capture_output=True,
@@ -43,9 +58,12 @@ def configure_runtime(runtime) -> None:
                 return RuntimeStatus(available=False, python_path=python_exe,
                                      message='对齐环境尚未就绪，请点击安装 / 修复。' + result.stderr[-500:])
             info = json.loads(result.stdout.strip().splitlines()[-1])
-            return RuntimeStatus(available=True, python_path=python_exe,
+            return StudioRuntimeStatus(available=True, python_path=python_exe,
                                  torch_version=info['torch'], torchaudio_version=info['torchaudio'],
-                                 transformers_version=info['transformers'])
+                                 transformers_version=info['transformers'],
+                                 cuda_available=bool(info.get('cuda')),
+                                 gpu_name=str(info.get('gpu_name') or ''),
+                                 mps_available=bool(info.get('mps')))
         except (OSError, ValueError, IndexError, subprocess.TimeoutExpired) as exc:
             return RuntimeStatus(available=False, python_path=python_exe, message=f'对齐环境检测失败：{exc}')
 

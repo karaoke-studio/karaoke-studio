@@ -108,8 +108,20 @@ def _ensure_separator(job):
     return _separator
 
 
+def _report_device(separator):
+    # Inspect the loaded model: MLX warmup can fall back to Torch/MPS.
+    device = str(getattr(separator, "device", "") or "未知")
+    if device == "mps":
+        backend = getattr(getattr(separator, "model", None), "mps_model_backend", "torch")
+        device = "Apple GPU（MLX）" if backend == "mlx_full" else "Apple GPU（MPS）"
+    elif device == "cpu":
+        device = "CPU"
+    _reply({"event": "device", "id": _job_id, "device": device})
+
+
 def _run(job):
     separator = _ensure_separator(job)
+    _report_device(separator)
     stem = job["stem"]
     output_dir = job["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
@@ -127,6 +139,7 @@ def _run(job):
             )
         separator.store_dirs = {stem: output_dir}
         separator.process_folder(staging)
+        _report_device(separator)
 
         name = os.path.splitext(os.path.basename(source))[0]
         produced = os.path.join(
@@ -285,6 +298,7 @@ class PyMSSWorker:
     process: subprocess.Popen
     log_stream: object
     _lock: threading.Lock
+    runtime_device: str = ""
 
     @property
     def running(self) -> bool:
@@ -366,13 +380,14 @@ class PyMSSWorker:
         self.stop(force=True)
         raise TimeoutError(f"PyMSS 桥接进程在 {timeout:.0f} 秒内没有就绪。详见日志：{log_path}")
 
-    def separate(self, job: dict, *, on_stage=None, on_progress=None) -> str:
+    def separate(self, job: dict, *, on_stage=None, on_progress=None, on_device=None) -> str:
         """提交一个分离任务并等待完成，返回产出的文件路径。"""
         with self._lock:
             if not self.running or self.process.stdin is None or self.process.stdout is None:
                 raise RuntimeError("PyMSS 桥接进程已退出。")
             self.process.stdin.write(json.dumps(job, ensure_ascii=False) + "\n")
             self.process.stdin.flush()
+            self.runtime_device = ""
             while True:
                 line = self.process.stdout.readline()
                 if not line:
@@ -382,6 +397,11 @@ class PyMSSWorker:
                 except ValueError:
                     continue
                 event = payload.get("event")
+                if event == "device":
+                    self.runtime_device = str(payload.get("device") or "未知")
+                    if on_device is not None:
+                        on_device(self.runtime_device)
+                    continue
                 if event == "stage":
                     if on_stage is not None:
                         on_stage(str(payload.get("stage") or ""))
@@ -477,7 +497,8 @@ class PyMSSBridgeEngine:
     # ── 与 PyMSSClient 同名的方法 ──────────────────────────────
     def health(self) -> dict:
         running = self._worker.running
-        return {"status": "ok" if running else "down", "device": "由 PyMSS 自行选择"}
+        device = getattr(self._worker, "runtime_device", "") if running else ""
+        return {"status": "ok" if running else "down", "device": device or "待模型加载后确认"}
 
     def catalog_models(self, *, supported: bool = True, category: str = "", query: str = "") -> list[dict]:
         data = self._call({"action": "catalog", "supported": supported, "source": self._source})
@@ -545,7 +566,7 @@ class PyMSSBridgeEngine:
 
     def separate_file(self, *, model: str, stem: str, input_path: str, output_dir: str,
                       output_format: str = "wav", device: str = "auto",
-                      on_stage=None, on_progress=None) -> str:
+                      on_stage=None, on_progress=None, on_device=None) -> str:
         """走文件路径，不再传输整段 PCM，也不生成内存里的 ZIP。"""
         self._next_id += 1
         return self._worker.separate(
@@ -561,6 +582,7 @@ class PyMSSBridgeEngine:
             },
             on_stage=on_stage,
             on_progress=on_progress,
+            on_device=on_device,
         )
 
 

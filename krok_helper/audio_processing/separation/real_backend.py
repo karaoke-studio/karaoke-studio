@@ -1352,6 +1352,11 @@ class RealSeparationBackend(SeparationBackend):
             else None
         )
 
+    def _set_separation_device(self, device: str) -> None:
+        with self._lock:
+            self._snap.device = device
+        self._emit()
+
     def _set_separation_progress(self, done: int, total: int) -> None:
         with self._lock:
             bounded_total = max(1, int(total))
@@ -2387,6 +2392,7 @@ class RealSeparationBackend(SeparationBackend):
                         step_out = work / f"step-{index}-out"
                         produced: dict[str, Path] = {}
                         for stem, label in zip(step.stems, step.output_labels):
+                            self._set_separation_device("待模型加载后确认")
                             path = client.separate_file(
                                 model=step.model,
                                 stem=stem,
@@ -2395,6 +2401,7 @@ class RealSeparationBackend(SeparationBackend):
                                 output_format=output_format,
                                 device=str(self._settings.get("device", "auto")),
                                 on_progress=self._set_separation_progress,
+                                on_device=self._set_separation_device,
                             )
                             produced[stem] = Path(path)
                             if label:
