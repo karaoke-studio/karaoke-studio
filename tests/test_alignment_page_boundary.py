@@ -15,9 +15,12 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtGui import QNativeGestureEvent, QPointingDevice, QWheelEvent
 
 from krok_helper.alignment.page import AlignmentHost, AlignmentPage
 from krok_helper.settings import AppSettings
+from krok_helper.audio_alignment import WaveformData
 
 PAGE = pathlib.Path(__file__).resolve().parents[1] / "krok_helper" / "alignment" / "page.py"
 
@@ -95,6 +98,47 @@ def test_the_page_builds_without_the_main_window(page) -> None:
     assert widget.waveform_view is not None
     assert widget.running_tasks() == []
     assert not widget.is_busy()
+
+
+def test_mac_gestures_route_from_scroll_viewport_and_sync_zoom_slider(page, monkeypatch):
+    from krok_helper.alignment import waveform_view as module
+    monkeypatch.setattr(module, 'sys', SimpleNamespace(platform='darwin'))
+    widget, _ = page
+    widget.resize(1400, 950)
+    widget.show()
+    wave = widget.waveform_view
+    sample = WaveformData(path=Path('test.wav'), duration=90, peaks_per_second=1, peaks=[.5]*90)
+    wave.set_waveforms(video_waveform=sample, audio_waveform=sample)
+    widget._refresh_align_target_ui()
+    QApplication.processEvents()
+    wave.set_zoom(100)
+    wave.view_start_seconds = 10
+    viewport = widget.align_scroll_viewport
+    anchor = QPointF(wave.track_label_width + 100, 100)
+    global_pos = wave.mapToGlobal(anchor)
+
+    def gesture(kind, value=0, position=global_pos):
+        local = viewport.mapFromGlobal(position)
+        return QNativeGestureEvent(kind, QPointingDevice.primaryPointingDevice(), 2,
+                                   local, local, position, value, QPointF())
+
+    assert widget.eventFilter(viewport, gesture(Qt.NativeGestureType.BeginNativeGesture))
+    zoom = gesture(Qt.NativeGestureType.ZoomNativeGesture, .1)
+    QApplication.sendEvent(viewport, zoom)
+    assert wave.pixels_per_second == pytest.approx(110)  # Exactly one delivery.
+    assert wave.view_start_seconds + 100/110 == pytest.approx(11)
+    assert widget.align_zoom_slider.value() == widget._pps_to_slider(110)
+    # The closing event must reach the original owner even outside the plot.
+    outside = wave.mapToGlobal(QPointF(-20, -20))
+    assert widget.eventFilter(viewport, gesture(Qt.NativeGestureType.EndNativeGesture, position=outside))
+    assert not wave._pinch_active
+
+    vertical = QWheelEvent(viewport.mapFromGlobal(global_pos), global_pos,
+                           QPoint(0, -30), QPoint(0, -120), Qt.MouseButton.NoButton,
+                           Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+    assert not widget.eventFilter(viewport, vertical)
+    assert not vertical.isAccepted()
+    assert wave.pixels_per_second == pytest.approx(110)
 
 
 def test_settings_round_trip_through_the_page(page) -> None:
