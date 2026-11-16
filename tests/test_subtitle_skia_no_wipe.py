@@ -201,7 +201,7 @@ def test_discrete_matches_actual_d2d_gpu(binary, mark_source, kind, mode, semant
             lo, hi = max(min(ya[0], yb[0])-2, 0), max(ya[-1], yb[-1])+3
             sung = lambda p: (p[lo:hi, :, 1].astype(float)*p[lo:hi, :, 3]/255**2).sum()
             full_a, full_b = sung(refs[-1]), sung(frames[-1])
-            width = (full_a+full_b)/(2*(hi-lo))
+            width = (full_a+full_b)/(2*(ya[-1]-ya[0]+1))
             assert abs(sung(a)/full_a-sung(b)/full_b)*width <= 1, (kind, mode, semantics, dpr, t)
 
 
