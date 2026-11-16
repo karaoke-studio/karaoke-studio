@@ -36,6 +36,9 @@ class BackgroundTask(QThread):
             result = self._runner(emit_log)
         except Exception as exc:  # noqa: BLE001
             task_log.exception("后台任务失败: %s", self._task_name)
+            from krok_helper.media_tools import report_missing_tool
+
+            report_missing_tool(exc)
             self.task_failed.emit(str(exc))
             return
         task_log.info("后台任务完成: %s", self._task_name)

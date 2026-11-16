@@ -90,6 +90,10 @@ def fluent_info(
     copyable: bool = False,
 ) -> None:
     """Show a single-button Fluent message dialog."""
+    from krok_helper.media_tools_ui import offer_media_tools
+
+    if offer_media_tools(parent, content):
+        return
     dialog = FluentMessageDialog(title, content, parent)
     dialog.yesButton.setText(ok_text)
     dialog.hideCancelButton()

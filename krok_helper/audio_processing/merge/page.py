@@ -1315,6 +1315,9 @@ class MergePage(QWidget):
                 except ExportCancelled:
                     raise
                 except ProcessingError as exc:
+                    from krok_helper.media_tools import report_missing_tool
+
+                    report_missing_tool(exc)
                     clip.error = str(exc)
                     failures.append(clip.path.name)
                     logger(f"分析失败: {clip.path.name}")

@@ -150,10 +150,14 @@ class _QuietYtDlpLogger:
         pass
 
     def warning(self, message: str) -> None:
-        pass
+        from krok_helper.media_tools import report_missing_tool
+
+        report_missing_tool(message)
 
     def error(self, message: str) -> None:
-        pass
+        from krok_helper.media_tools import report_missing_tool
+
+        report_missing_tool(message)
 
 
 class YtDlpService:
@@ -822,6 +826,10 @@ class YtDlpService:
             message = completed.stderr.strip() or completed.stdout.strip() or "yt-dlp failed"
             raise VideoDownloadError(self._normalize_error_message(RuntimeError(message)))
 
+        from krok_helper.media_tools import report_missing_tool
+
+        report_missing_tool(ANSI_ESCAPE_PATTERN.sub("", getattr(completed, "stderr", "") or ""))
+
         try:
             return json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
@@ -1142,6 +1150,10 @@ class YtDlpService:
                 if not line:
                     continue
                 output_lines.append(line)
+                if "WARNING:" in line or "ERROR:" in line:
+                    from krok_helper.media_tools import report_missing_tool
+
+                    report_missing_tool(ANSI_ESCAPE_PATTERN.sub("", line))
                 if self._is_cli_merge_line(line):
                     self._emit_merge_progress(progress_callback=progress_callback)
                 if task.cancel_requested and process.poll() is None:
@@ -1846,7 +1858,10 @@ class YtDlpService:
         """
         try:
             ffprobe = find_tool("ffprobe", Path(str(getattr(self._settings(), "ffmpeg_dir", "") or ".")).expanduser())
-        except Exception:  # noqa: BLE001 - 没有 ffprobe 就不做这项校验
+        except Exception as exc:  # noqa: BLE001 - 没有 ffprobe 就不做这项校验
+            from krok_helper.media_tools import report_missing_tool
+
+            report_missing_tool(exc)
             return None
 
         try:
@@ -2164,8 +2179,11 @@ class YtDlpService:
                 "多线程下载器 aria2c 下载失败，将先保留断点重试，仍失败时改用内置分块下载；"
                 "如果仍然失败，可以在下载设置里关掉「B 站使用多线程下载（aria2c）」。"
             )
-        if "ffmpeg" in lower and ("not found" in lower or "not installed" in lower):
-            return "未找到 ffmpeg，无法合并音视频或处理封面。请先安装 ffmpeg 并加入 PATH。"
+        from krok_helper.media_tools import missing_tool
+
+        missing = missing_tool(message)
+        if missing:
+            return f"未找到 {missing}，请前往「全局设置 → 工具 → FFmpeg」安装或配置工具包。"
         if "requested format is not available" in lower:
             return "当前清晰度不可用，请重新解析后选择其他格式。"
         if "downloaded file is empty" in lower or "empty file" in lower:

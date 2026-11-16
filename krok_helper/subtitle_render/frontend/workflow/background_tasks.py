@@ -397,7 +397,7 @@ class _RollMediaLoadWorker(QObject):
             result.error = f"无法读取图片： {self._path}"
             return
         source_duration_ms = 0
-        if reader.supportsAnimation() and reader.imageCount() > 1:
+        if self._ffprobe_path and reader.supportsAnimation() and reader.imageCount() > 1:
             try:
                 info = probe_media(self._ffprobe_path, self._path)
             except Exception:  # noqa: BLE001 - 探测失败不阻断选图

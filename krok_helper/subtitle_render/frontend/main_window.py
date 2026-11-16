@@ -4292,7 +4292,10 @@ class SubtitleRenderWindow(QWidget):
                     mode,
                     self._export_codec_value(),
                 )
-            except ProcessingError:
+            except ProcessingError as exc:
+                from krok_helper.media_tools import report_missing_tool
+
+                report_missing_tool(exc)
                 mode = ENCODER_CPU
         sync_export_quality_controls(self._export_controls, mode)
         sync_export_preset_enabled(
@@ -4623,6 +4626,15 @@ class SubtitleRenderWindow(QWidget):
     ) -> None:
         """在后台线程读取素材（ffprobe/首帧/帧数）并准备普通预览源。"""
 
+        try:
+            ffprobe_path = self._resolve_ffprobe_path()
+        except ProcessingError as exc:
+            fluent_error(self, "无法加载素材", str(exc))
+            if kind == "video":
+                return
+            # Still images and numbered sequences do not require ffprobe.
+            ffprobe_path = ""
+
         self._roll_media_load_generation += 1
         generation = self._roll_media_load_generation
         self._roll_media_generations[segment] = generation
@@ -4667,7 +4679,7 @@ class SubtitleRenderWindow(QWidget):
             segment,
             kind,
             path,
-            ffprobe_path=self._resolve_ffprobe_path(),
+            ffprobe_path=ffprobe_path,
             preview_fps=self._export_fps_value(),
             preview_quality=self._transport_bar.preview_quality(),
             sequence_fps=source_fps,
@@ -6712,8 +6724,13 @@ class SubtitleRenderWindow(QWidget):
         携带预探测结果，避免二次探测。探测失败回退为同步加载，沿用
         ``_probe`` 的错误弹窗语义。
         """
+        try:
+            ffprobe_path = self._resolve_ffprobe_path()
+        except ProcessingError as exc:
+            fluent_error(self, "无法加载媒体", str(exc))
+            return
         thread = QThread(self)
-        worker = _MediaProbeWorker(self._resolve_ffprobe_path(), path, as_video)
+        worker = _MediaProbeWorker(ffprobe_path, path, as_video)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.probed.connect(self._on_handoff_media_probed)
@@ -6770,8 +6787,8 @@ class SubtitleRenderWindow(QWidget):
     def _probe(self, path: Path, label: str) -> Optional[MediaInfo]:
         # ffprobe 是外置子进程（杀软/冷盘下可达几十秒）：工具路径在 GUI 线程
         # 解析（只读设置），子进程在 worker 里跑；用户取消 -> 干净的 None。
-        ffprobe_path = self._resolve_ffprobe_path()
         try:
+            ffprobe_path = self._resolve_ffprobe_path()
             result = self._run_cancelable_io(
                 lambda: probe_media(ffprobe_path, path),
                 label=f"探测{label}",

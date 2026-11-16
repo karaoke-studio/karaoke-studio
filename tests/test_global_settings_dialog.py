@@ -197,6 +197,37 @@ def test_set_ffmpeg_dir_accepts_none_as_system_path() -> None:
     host.close()
 
 
+def test_ffmpeg_setup_applies_and_saves_shared_configuration(monkeypatch, tmp_path) -> None:
+    from krok_helper import media_tools, media_tools_ui
+    from PyQt6.QtTest import QTest
+    from krok_helper.settings import load_app_settings
+
+    tool_dir = tmp_path / "FFmpeg" / "bin"
+    statuses = tuple(media_tools.ToolStatus(t, str(tool_dir / f"{t}.exe"), f"{t} version 9.0") for t in media_tools.TOOLS)
+    monkeypatch.setattr(media_tools_ui, "inspect_tools", lambda *_, **__: statuses)
+    app, dialog, host = _open_global_settings_dialog(monkeypatch)
+    controller = app._link_media_tools_controller()
+    card = next(card for card in dialog.findChildren(settings_page.PushSettingCard)
+                if card.titleLabel.text() == "FFmpeg 工具包")
+    card.button.click()
+    for _ in range(200):
+        QTest.qWait(10)
+        if not controller.is_busy():
+            break
+    controller.check(apply=True)
+    for _ in range(200):
+        QTest.qWait(10)
+        if not controller.is_busy():
+            break
+    assert not controller.is_busy()
+    assert host.ffmpeg_dir_text == str(tool_dir)
+    assert load_app_settings().ffmpeg_dir == str(tool_dir)
+    assert any(edit.text() == str(tool_dir) for edit in dialog.findChildren(settings_page.QLineEdit))
+    controller._dialog.close()
+    dialog.close()
+    host.close()
+
+
 def test_update_source_order_dialog_is_mask_free_and_modeless() -> None:
     app = QApplication.instance() or QApplication([])
     host = QWidget()

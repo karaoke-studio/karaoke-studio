@@ -343,7 +343,10 @@ def _resolve_ffmpeg_path() -> str | None:
     except Exception:
         try:
             return find_tool("ffmpeg.exe", ffmpeg_dir)
-        except Exception:
+        except Exception as exc:
+            from krok_helper.media_tools import report_missing_tool
+
+            report_missing_tool(exc)
             return None
 
 

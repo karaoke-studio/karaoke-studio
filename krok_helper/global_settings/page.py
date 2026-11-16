@@ -56,6 +56,7 @@ from krok_helper.config import (
 )
 from krok_helper.errors import ProcessingError
 from krok_helper.logging_config import get_active_log_dir
+from krok_helper.media_tools_ui import MediaToolsController
 from krok_helper.pipeline import (
     DEFAULT_OFF_NAME_TEMPLATE,
     DEFAULT_ON_NAME_TEMPLATE,
@@ -237,6 +238,24 @@ class SettingsDialogs(QObject):
         #: 对话框的父窗口，只用于定位与继承图标 —— 和 ``host`` 分开传，
         #: 这样 ``SettingsHost`` 不必顺带要求"你还得是个 QWidget"。
         self._parent = parent
+        self._media_tools = MediaToolsController(
+            parent,
+            directory=lambda: self._host.ffmpeg_dir_text,
+            apply_directory=self._apply_media_tools_directory,
+        )
+
+    def _apply_media_tools_directory(self, path: Path) -> None:
+        previous = self._host.settings.ffmpeg_dir
+        self._host.settings.ffmpeg_dir = str(path)
+        try:
+            save_app_settings(self._host.settings)
+        except Exception:
+            self._host.settings.ffmpeg_dir = previous
+            raise
+        self._host.set_ffmpeg_dir(path)
+
+    def media_tools_busy(self) -> bool:
+        return self._media_tools.is_busy()
 
     def open_page_settings(self, context: str) -> None:
         dialog = ModelessDialog(self._parent)
@@ -554,6 +573,14 @@ class SettingsDialogs(QObject):
         system_button.clicked.connect(lambda: ffmpeg_display.setText(""))
         add_setting_card_actions(ffmpeg_card, ffmpeg_display, choose_button, system_button)
         tools_group.addSettingCard(ffmpeg_card)
+        ffmpeg_setup_card = PushSettingCard(
+            "安装 / 检测", FIF.DOWNLOAD, "FFmpeg 工具包",
+            "一键安装 FFmpeg、FFprobe 和 FFplay，或检测已有工具。检测通过后立即应用，无需重启。",
+            tools_group,
+        )
+        ffmpeg_setup_card.clicked.connect(self._media_tools.open)
+        self._media_tools.configured.connect(ffmpeg_display.setText)
+        tools_group.addSettingCard(ffmpeg_setup_card)
 
         migrate_group = SettingCardGroup("数据迁移", dialog)
         import_card = PushSettingCard(
@@ -832,7 +859,7 @@ class SettingsDialogs(QObject):
 
         def _relax_all_setting_cards(available_width: int = 740) -> None:
             for _card in (
-                theme_card, ffmpeg_card, import_card,
+                theme_card, ffmpeg_card, ffmpeg_setup_card, import_card,
                 proxy_mode_card, proxy_manual_card, proxy_status_card,
                 auto_update_card, startup_check_card, interval_card, order_card, check_now_card,
                 product_card, github_card, log_card,

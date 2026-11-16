@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from krok_helper.errors import ExportCancelled, ProcessingError
+from krok_helper.errors import ExportCancelled, MissingMediaToolError, ProcessingError
 from krok_helper.macos_environment import macos_shell_path
 from krok_helper.models import MediaInfo
 from krok_helper.types import Logger
@@ -37,7 +37,7 @@ def _tool_name_candidates(tool_name: str) -> tuple[str, ...]:
 def _find_tool_in_dir(directory: Path, tool_name: str) -> str | None:
     for candidate_name in _tool_name_candidates(tool_name):
         for candidate in (directory / candidate_name, directory / "bin" / candidate_name):
-            if candidate.exists():
+            if candidate.is_file():
                 return str(candidate)
     return None
 
@@ -60,10 +60,7 @@ def find_tool(tool_name: str, ffmpeg_dir: Path | None = None) -> str:
             if resolved:
                 return resolved
 
-    raise ProcessingError(
-        f"找不到 {tool_name}。请先确认系统环境变量 PATH 中可用，"
-        "或者在界面里选择 ffmpeg 所在文件夹。"
-    )
+    raise MissingMediaToolError(tool_name)
 
 
 def describe_tool_source(tool_path: str, ffmpeg_dir: Path | None = None) -> str:
@@ -91,15 +88,18 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
         "json",
         str(media_path),
     ]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        **_build_subprocess_kwargs(),
-    )
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            **_build_subprocess_kwargs(),
+        )
+    except FileNotFoundError as exc:
+        raise MissingMediaToolError("ffprobe") from exc
     if result.returncode != 0:
         raise ProcessingError(f"无法读取媒体信息: {media_path.name}\n{result.stderr.strip()}")
 
@@ -202,15 +202,18 @@ def run_command(
 ) -> None:
     logger("执行命令:")
     logger(" ".join(f'"{part}"' if " " in part else part for part in command))
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **_build_subprocess_kwargs(),
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **_build_subprocess_kwargs(),
+        )
+    except FileNotFoundError as exc:
+        raise MissingMediaToolError("ffmpeg") from exc
     if on_process_started is not None:
         on_process_started(process)
 

@@ -615,6 +615,9 @@ class KrokHelperQtApp(QMainWindow):
         """Describe work that must finish before handing files to Updater."""
 
         labels: list[str] = []
+        settings_dialogs = getattr(self, "_settings_dialogs", None)
+        if settings_dialogs is not None and settings_dialogs.media_tools_busy():
+            labels.append("FFmpeg 安装或检测中")
         for fallback_label, attr_name in (
             ("波形对齐－后台任务运行中", "align_page"),
             ("歌词检索－后台任务运行中", "lyrics_page"),
@@ -2152,7 +2155,10 @@ class KrokHelperQtApp(QMainWindow):
         try:
             ffprobe_path = find_tool("ffprobe.exe", self._resolve_ffmpeg_dir())
             info = probe_media(ffprobe_path, path)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            from krok_helper.media_tools import report_missing_tool
+
+            report_missing_tool(exc)
             return f"{label}: 时长未知"
         duration_text = format_media_duration(info.duration)
         self._media_duration_cache[cache_key] = duration_text
@@ -2508,6 +2514,11 @@ class KrokHelperQtApp(QMainWindow):
             KrokHelperQtApp._release_lyrics_timing_resources(lyrics_page)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        settings_dialogs = getattr(self, "_settings_dialogs", None)
+        if settings_dialogs is not None and settings_dialogs.media_tools_busy():
+            show_fluent_info(self, "FFmpeg 安装或检测仍在运行，请等待完成后再退出。")
+            event.ignore()
+            return
         if getattr(self, "_force_quitting_for_update", False):
             self._prepare_force_quit_for_update()
             super().closeEvent(event)

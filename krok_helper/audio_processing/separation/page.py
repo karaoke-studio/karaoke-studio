@@ -293,6 +293,10 @@ class AudioSeparationPage(QWidget):
 
     # ── 状态应用（需求文档 §3.6） ──────────────────────────────────
     def _apply_snapshot(self, snapshot) -> None:
+        if snapshot.error:
+            from krok_helper.media_tools_ui import offer_media_tools
+
+            offer_media_tools(self, snapshot.error)
         if snapshot.state == ServiceState.UNCONFIGURED:
             self._wizard_active = False
             self._show_view(_VIEW_WELCOME)
@@ -518,6 +522,9 @@ class AudioSeparationPage(QWidget):
         return self._backend
 
     def _on_result_ready(self, result) -> None:
+        from krok_helper.media_tools_ui import offer_media_tools
+
+        offer_media_tools(self, result.error or "")
         self._results_panel.add_result(result)
         self._results_panel.setVisible(True)
         self._batch_results.append(result)

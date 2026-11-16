@@ -84,6 +84,25 @@ def test_media_probe_worker_preserves_success_and_fallback(monkeypatch) -> None:
     assert thread.quit_count == 2
 
 
+def test_animated_image_without_ffprobe_keeps_optional_loading(monkeypatch, tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "animated.gif"
+    Image.new("RGB", (8, 8), "red").save(
+        path, save_all=True, append_images=[Image.new("RGB", (8, 8), "blue")], duration=100,
+    )
+    def unexpected_probe(*_args):
+        raise AssertionError("Optional image loading must not execute an absent ffprobe")
+    monkeypatch.setattr(background_tasks, "probe_media", unexpected_probe)
+    worker = background_tasks._RollMediaLoadWorker(
+        1, "pre", "image", path, ffprobe_path="", preview_fps=60, preview_quality="high",
+    )
+    result = background_tasks.RollMediaLoadResult(1, "pre", "image")
+    worker._load_image(result)
+    assert result.source.kind == "image"
+    assert result.source_width == result.source_height == 8
+
+
 def test_render_worker_preserves_callbacks_and_result(monkeypatch, tmp_path: Path) -> None:
     output = tmp_path / "output.mp4"
     job = SimpleNamespace(output_path=output, width=1920, height=1080, fps=60)

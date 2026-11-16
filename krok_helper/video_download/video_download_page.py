@@ -1369,7 +1369,7 @@ class VideoDownloadPage(QWidget):
 
         self.account_segment_row = QWidget(account_card)
         self.account_segment_row.setObjectName("AccountSegmentRow")
-        from krok_helper.theme_workbench import palette as _wb_pal, schedule_theme_refresh, theme as _wb_theme, themed as _wb_th
+        from krok_helper.theme_workbench import palette as _wb_pal, theme as _wb_theme, themed as _wb_th
 
         _wb_th(self.account_segment_row, lambda: self._account_segment_row_qss(_wb_pal()))
         segment_layout = QHBoxLayout(self.account_segment_row)
@@ -1389,13 +1389,7 @@ class VideoDownloadPage(QWidget):
         self.account_stack.addWidget(self._build_youtube_account_panel(account_card))
         account_layout.addWidget(self.account_stack)
         self._switch_account_platform(SOURCE_BILIBILI)
-        _wb_theme.changed.connect(
-            lambda: schedule_theme_refresh(
-                self,
-                self._refresh_account_theme,
-                timer_attr="_video_account_theme_refresh_timer",
-            )
-        )
+        _wb_theme.changed.connect(self._schedule_account_theme_refresh)
 
         return account_card
 
@@ -1426,6 +1420,13 @@ class VideoDownloadPage(QWidget):
         color = p.panel_title if selected else p.text_secondary
         weight = 600 if selected else 400
         return f"background: transparent; border: 0; color: {color}; font-weight: {weight};"
+
+    def _schedule_account_theme_refresh(self) -> None:
+        from krok_helper.theme_workbench import schedule_theme_refresh
+
+        schedule_theme_refresh(
+            self, self._refresh_account_theme, timer_attr="_video_account_theme_refresh_timer",
+        )
 
     def _refresh_account_theme(self) -> None:
         if not hasattr(self, "account_stack"):
@@ -2226,6 +2227,9 @@ class VideoDownloadPage(QWidget):
         self.parse_status_label.setText("，".join(parts) if parts else "没有可用的解析结果。")
         if batch.errors:
             self.parse_status_label.setToolTip("\n".join(batch.errors))
+            from krok_helper.media_tools_ui import offer_media_tools
+
+            offer_media_tools(self, "\n".join(batch.errors))
         else:
             self.parse_status_label.setToolTip("")
         self._refresh_preview()
@@ -3220,6 +3224,9 @@ class VideoDownloadPage(QWidget):
         task.error_message = message
         self.parse_status_label.setText(f"下载失败：{task.title}，{message}")
         self._refresh_download_table()
+        from krok_helper.media_tools_ui import offer_media_tools
+
+        offer_media_tools(self, message)
         self._start_pending_downloads()
 
     def _handle_download_cancelled(self, task_id: str) -> None:

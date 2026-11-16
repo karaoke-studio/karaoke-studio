@@ -309,6 +309,10 @@ def show_fluent_info(parent, text: str, *, title: str = "", yes_text: str = "确
     """以 Fluent 风格弹一个只有确认按钮的提示框（替代 ``QMessageBox.information``）。"""
 
     from krok_helper.config import APP_TITLE
+    from krok_helper.media_tools_ui import offer_media_tools
+
+    if offer_media_tools(parent, text):
+        return
 
     box = HostFluentMessageDialog(title or APP_TITLE, text, parent)
     box.yesButton.setText(yes_text)
@@ -326,6 +330,10 @@ def show_fluent_error(parent, text: str, *, title: str = "", yes_text: str = "�
     """
 
     from krok_helper.config import APP_TITLE
+    from krok_helper.media_tools_ui import offer_media_tools
+
+    if offer_media_tools(parent, text):
+        return
 
     box = HostFluentMessageDialog(title or APP_TITLE, text, parent)
     box.yesButton.setText(yes_text)
