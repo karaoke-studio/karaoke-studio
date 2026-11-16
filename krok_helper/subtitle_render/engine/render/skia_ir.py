@@ -13,6 +13,7 @@ from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_lower_ir import lower_sources
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
+from krok_helper.subtitle_render.engine.ruby.skia_overlap import reverse_main_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 
 
@@ -33,7 +34,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
-        validate_reverse_source(source, [style_for_line(source_style, line) for line in source.lines])
+        validate_reverse_source(source)
         if any(c.vector_glyph for l in source.lines for c in l.chars):
             raise ValueError('Skia 当前规范布局尚不支持导唱符')
         with layout_pass():
@@ -52,7 +53,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     lines = []
     for index, item in enumerate(plan.lines):
         position = geometry.position(item, kwargs['width'], kwargs['height'])
-        lines.append({'cells': positioned_cells(geometry.locals[index], position)})
+        cells = positioned_cells(geometry.locals[index], position)
+        if item.line.wipe_reverse:
+            ends = reverse_main_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
+                                          dpr=kwargs.get('dpr', 1))
+            for cell, end in zip(cells, ends, strict=True):
+                cell['wipe_end_position'] = end
+        lines.append({'cells': cells})
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles',
                                'p05_fixed_row_grid', 'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'metrics_identity': measured.identity,

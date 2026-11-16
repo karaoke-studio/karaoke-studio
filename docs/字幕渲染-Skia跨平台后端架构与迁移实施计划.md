@@ -520,8 +520,8 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
-- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28，空读音/短语标记兼容见 §14.29，part 局部字形与单元级 NFC 子集见 §14.30，单个独立非间距附加符见 §14.34；完整注音组合尚未验收。
-- [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。正文正向文本的横排反向走字子集见 §14.36；RTL、竖排及反向注音仍待完成。
+- [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28，空读音/短语标记兼容见 §14.29，part 局部字形与单元级 NFC 子集见 §14.30，单个独立非间距附加符见 §14.34，含注音轨道中的反向行见 §14.38；完整注音组合尚未验收。
+- [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。正文正向文本的横排反向走字子集见 §14.36，含源注音/下方读音轨道的反向行及其 GPU 镜像终点见 §14.38；RTL 与竖排仍待完成。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
 
@@ -1716,7 +1716,7 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 
 ### 14.36 P05.7 / P07.3 正文横排反向走字（2026-11-16）
 
-**本批只接通 LTR 文字的横排正文反向演唱，不代表 RTL/竖排或完整 P05/P07 已验收。** 支持基础 wipe 与 no_wipe；整轨含源注音或启用下方注音时暂不开放反向组合，最终 overlap 终点也拒绝。原源加载器的倒序时间归一化、共享区间分配、分页、字体塑形和 D2D 实现均保持原行为。
+**本批只接通 LTR 文字的横排正文反向演唱，不代表 RTL/竖排或完整 P05/P07 已验收。** 支持基础 wipe 与 no_wipe；整轨含源注音或启用下方注音时暂不开放反向组合，最终 overlap 终点也拒绝（两项已由 §14.38 按现有 GPU 实际语义扩展）。原源加载器的倒序时间归一化、共享区间分配、分页、字体塑形和 D2D 实现均保持原行为。
 
 - `render/skia_direction_ir.py` 仅在最终 IR 边界按既有 GPU 的镜像窗口规则投影：物理字形、字体 run 和逐字配色仍按原来源顺序，逐单元 `clock_index=n-1-source_index` 明确原 `resolved_intervals` 中的所有者，分段曲线随时钟移动；不重新按反向单元的字宽分时。禁止重复投影，以免二次翻转曲线。
 - 新增 `p05_reverse_wipe` / `reverse_wipe_schema=1`。Python 准备前检查布尔标记和未支持注音组合；native 在 Skia 边界检查布尔类型、能力/版本、严格镜像整数索引，并拒绝正向行伪造该索引。缺能力、错类型/版本、分数/重复时钟映射或未支持组合失败后保留旧场景；旧 sidecar 在选择执行后端前拒绝。
@@ -1740,6 +1740,19 @@ Claude 字体/fallback/混排/字体槽组合 **133 通过**；扩展回归首�
 Codex Linux 首轮发现测试恢复 mtime 的纳秒精度不适用于 WSL/NTFS，须先记录文件系统实际保存的时间后再做等值恢复，不能将该测试夹具错误计作生产失败或跳过。Codex 已按实际文件系统的 utime 往返精度修正夹具，仍严格检查写入后大小/mtime 与基线完全一致；X11/Wayland 的专项各 **4 通过**。最终 X11/Wayland 完整组合各 **742 通过、279 项平台专用跳过**；上一批 25 份规范样例与本批 X11 比较误差全部为 **0**。Codex 独立产品入口补测 **191 通过、7 项 POSIX 专用跳过**，补齐 3 项规范样例用例均通过；25 份本批 Windows/X11/Wayland 样例的身份、字形、区间及几何误差全部为 **0**。独立 CPU-only sidecar 的生命周期专项 Windows/Linux 各 **3 通过**。
 
 实现提交 `54849ab7` 的 Mac CI [43828963591](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43828963591)：arm64/x64 产品组合各 **720 通过、301 项平台专用跳过**，字体资源契约各 **3 通过**、预览/原生能力各 **21 通过、1 跳过**；25 份跨架构样例误差也全部为 **0**；25 份 Windows/X11/Wayland/Mac arm64 样例已直接比较，误差全部为 **0**。Mac 两架构 Metal/Raster 四份 native 的 `renderer_sources_sha256` 与本地四份均一致。该轮 CI **5 项全部成功**；两份干净 Mac 验收包均退出 **0**，含新生命周期回归的 `font_fallback=0`（步骤退出码）、`functional_passed=true`。虚拟 Metal 的 `hardware_gate_passed=false` 正确保留；§14.6 朋友复测入口已指向本轮提交和包。native 源码身份仍为 `de49a0490f56f1d59138fcc80691f126a312dfa239b0ef745d3be607bb3b5540`；未触及 C++/头文件，无需重建该产物。Linux 真硬件、本轮 Mac 真机、其他字体注册/移除和完整 P05 门槛继续保留；未做 4K。日志前缀 `build/p05-font-lifecycle-*`。
+
+### 14.38 P05.6 / P05.7 含源注音轨道中的反向行与 GPU 镜像终点（2026-11-16）
+
+**本批把 §14.36 扩展到真实源注音/下方读音轨道，不代表 RTL、竖排、完整 P05.6/P05.7 或完整 P05 已验收。** 用户授权本机 Claude Code `claude-opus-5-5` 实现与本地验证，Codex 负责最终审查。生产 D2D、共享时间/布局语义、默认后端、发布包与版本均未修改。
+
+- **以实际语义为准，而非猜测反向注音。** 只读核对：共享 `active_rubies_for_line` 与 `lower_rubies_for_line` 对 `wipe_reverse` 行返回空，Painter 同源，`gpu_scene_projection.cpp` 对反向行在 ruby 投影前 `continue`（`89e572ba` 注明注音有独立时钟、尚无已验证的反向归一契约）。因此 `d2d_backend_configure.cpp` 的反向 ruby 索引重映射在生产中不可达。新增实际 D2D 预言测试：上注音/短语标记来源存在与否，D2D 像素逐字节相同；启用下方注音时整行按 **下方注音开关决定的源行框**上移 22px，但只移除来源仍逐字节相同。Skia 据此保留源注音（provenance），反向行最终 `ruby_groups` 必须为空；不翻转字符串、不倒序向量、不逐字裁剪发明反向注音。
+- `ruby/skia_geometry`、`ruby/skia_lower` 不再因反向行拒绝整轨，直接复用共享省略规则；下方注音开关仍参与源行框。`render/skia_ruby_ir` 与 `skia_overlap` 对携带注音组或注音分段时钟的反向行明确拒绝；`skia_direction_ir` 二次检查最终组为空。同轨正向行的注音、parts/空 pause、checkpoint 模式、角色字体/实色、上下层、页内位置和 no_wipe 不受反向同行影响（逐字段断言）。no_wipe＋零时长注音门禁保留：反向行不绘制注音故不触发，正向行相同来源仍拒绝。
+- **GPU 镜像终点。** 首轮 D2D 原始路径对照 46 组中 44 通过；仅 upper-only、DPR 1.5、单元结束前 1ms 两组唱色前沿 **1.05px** 超出预算。探针证实根因是该场景未携带 GPU 的 overlap 终点；同一 1.051px 缺口在正向无注音（P05.4）、正向上注音（§14.24）、反向无注音（§14.36）的历史路径同样存在，与方向无关，带终点的 lower/marker/mixed 全部通过。D2D 对反向行**总是**在反转为时间序后以 `rtl=true` 调整终点：`(right-following.right)/(width+1)`。新增 `skia_overlap.reverse_main_endpoints`：源单元顺序不变，与左邻（演唱后继）比较，最左单元保留基本终点；数学上是 x 取负的正向规则，float32 取负精确，测试另以 numpy float32 独立复刻 D2D 公式逐值相等。终点属于源单元几何，留在原单元；只有时钟/曲线移向镜像所有者。所有非空反向行（有无注音来源）均携带终点，因为 D2D 对二者像素一致；历史正向路径与已验收样例不改。
+- 公共 C++ 核心只把既有 overlap 委托/延续裁剪参数化为方向：反向时前沿 `right-(w)*p`、覆盖量 `right-edge`；正向算式逐字未变。新增 `p05_reverse_overlap` / `reverse_overlap_schema=1`（并要求 `p05_reverse_wipe` 与 `p05_overlap_wipe`）。native 在 Skia Qt/IR 边界拒绝：反向行携带任意上/下注音组、缺能力/错版本/错类型、反向终点缺 overlap 能力或非法值、伪造时钟；失败保留旧场景。客户端在选择后端前拒绝 §14.36 旧 sidecar。无注音的空反向行不需要新能力。
+
+验证进度：先写回归，旧实现在含注音轨道的反向行直接 `反向走字暂不支持注音组合`。新增 `tests/test_subtitle_skia_reverse_ruby.py`，Windows 最终 **114 通过、1 项严格 xfail**：4 类来源（上注音 parts/空 pause、上下层、`^` 标记、正向注音行＋反向注音行两行页）× wipe/no_wipe 的 IR 保真与同行不变量；镜像终点 15 组纯计算；GPU/Raster seek、source/style/roll 偏移、DPR 1.5 与半透明 alpha；角色字体 run/逐角色实色；10 类非法 IR × GPU/Raster 保留旧场景；真实 G5 预览、短 MP4、GPU 关闭和 Vulkan loader 失败后 Skia Raster；**40 组实际 D2D GPU 原始路径对照**（上述 4 类 reading_units＋mixed checkpoint_segments × wipe/no_wipe × legacy/N3 × DPR 1/1.5，各 19 个时刻含单元端点前后 1ms）保持 alpha 墨迹包络与归一唱色前沿 **≤1 物理像素**，另 6 组 D2D 省略预言。严格 xfail 仅记录上述**既有正向**缺口（Windows 专用，修复后会 XPASS 失败提醒），未放宽任何阈值。§14.36 的 48 组 D2D 对照在新增终点后仍全部通过。默认 realization 路径另作观察（非验收）：upper/lower/mixed × legacy/N3 × DPR 1/1.5 共 12 组，墨迹包络 ≤1px、前沿 ≤0.434px。
+
+四份 Windows/Linux Vulkan 与 CPU-only 均按源码变化 `--clean-first` 重建，CTest 各 **3/3**，native 源码身份 `7e0a3f913afef25676b101723c3061c0e72c0c1a1bb63e06466d29de1a994859`。独立 CPU-only sidecar 的 Raster 专项 Windows/Linux 各 **26 通过**。Windows 完整 Skia 组合按文件分组、双 worker **1138 通过、1 项严格 xfail、27 跳过**（7 项 POSIX 专用；20 项因未设 `KROK_SKIA_NATIVE_TEST_ROOT`，随后在关联组合中实际运行）。关联 native/预览/生命周期/架构/协议/字体/构建工具组合 **445 通过、3 项环境专用跳过**；其中 9 项首轮因 `--basetemp` 位于非 ASCII 仓库路径触发 GBK/路径解析失败，改用 ASCII 临时目录后原样通过，与本批代码无关。Linux X11/Wayland 完整组合各 **820/822 通过、346 项平台专用跳过**（Wayland 含晚于 X11 收集的 2 项角色用例；X11 单独复跑新文件 **68 通过、47 项 D2D 专用跳过**）。Linux native/预览/生命周期 X11/Wayland 各 **26 通过**，各 2 项 GPU smoke 因 WSL 仅有软件 Vulkan（llvmpipe）被硬件门槛正确拒绝，不是回归、也不代表 Linux 真硬件验收。26 份 Windows/X11/Wayland 规范样例最大误差 **0**；上一批 24 份不变样例与本批比较为 **0**，`reverse-wipe-layout.json` 仅新增终点字段（该夹具单元不接触，值均为 1.0）及两项能力。本批未出现 §14.37 记录的 `ruby_markers` 完成前 1ms 约 1.13px 观察。Mac 工作流加入新文件，验收包声明 `reverse_ruby=1`，新增第 **26** 份规范样例 `reverse-ruby-layout.json`；Mac CI 待提交后运行。保留：历史正向无终点场景的约 1.05px 端点缺口（待单独批次统一终点策略并重验已验收样例）、Linux 真硬件、本轮 Mac 真机、RTL/竖排、在反向行上**绘制**注音（现有 GPU 同样不绘制，须先有共享的反向注音时钟归一契约）和完整 P05 画质门槛；未做 4K。日志/样例前缀 `build/p05-reverse-ruby-*`。
 
 ## 15. 前期探针清理范围
 

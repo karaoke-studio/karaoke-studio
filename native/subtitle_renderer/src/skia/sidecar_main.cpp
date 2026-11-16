@@ -26,6 +26,7 @@ int main(int argc, char** argv) {
     ready.insert("standalone_mark_schema", 1);
     ready.insert("no_wipe_schema", 1);
     ready.insert("reverse_wipe_schema", 1);
+    ready.insert("reverse_overlap_schema", 1);
     ready.insert("resolved_layout_schema", 2);
     ready.insert("resolved_wipe_schema", 1);
     ready.insert("resolved_ruby_schema", 1);
@@ -41,6 +42,7 @@ int main(int argc, char** argv) {
     profiles.append("p05_standalone_marks");
     profiles.append("p07_no_wipe");
     profiles.append("p05_reverse_wipe");
+    profiles.append("p05_reverse_overlap");
     ready.insert("ruby_unit_schema", 1);
     ready.insert("ruby_marker_schema", 1);
     ready.insert("lower_ruby_schema", 1);

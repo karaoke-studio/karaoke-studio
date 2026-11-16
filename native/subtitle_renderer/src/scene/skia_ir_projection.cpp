@@ -31,7 +31,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_ruby_markers" && feature.toString() != "p05_ruby_units"
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
-            && feature.toString() != "p05_reverse_wipe")
+            && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
     }
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
@@ -57,6 +57,10 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p05_reverse_wipe")
         && ir.value("skia_layout").toObject().value("reverse_wipe_schema").toDouble(-1) != 1)
         throw BackendError("Skia 反向走字布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_reverse_overlap")
+        && (ir.value("skia_layout").toObject().value("reverse_overlap_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p05_reverse_wipe")))
+        throw BackendError("Skia 反向走字重叠终点布局版本无效");
     if (!ir.value("screen").isObject() || !ir.value("style").isObject() || !ir.value("track").isObject())
         throw BackendError("Skia IR: screen/style/track objects are required");
     const auto screen = ir.value("screen").toObject();
@@ -180,9 +184,26 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || ir.value("skia_layout").toObject().value("no_wipe_schema").toDouble(-1) != 1))
             throw BackendError("Skia 整字变色缺少版本化能力声明");
         if (source.wipeReverse && (!features.contains("p05_reverse_wipe")
-            || ir.value("skia_layout").toObject().value("reverse_wipe_schema").toDouble(-1) != 1
-            || !cfg.rubies.empty()))
-            throw BackendError("Skia 反向走字缺少能力声明或含未支持的注音组合");
+            || ir.value("skia_layout").toObject().value("reverse_wipe_schema").toDouble(-1) != 1))
+            throw BackendError("Skia 反向走字缺少能力声明");
+        // The existing GPU omits every upper/lower reading on a reverse line;
+        // sources stay provenance, so a final group there is a forged layout.
+        // A missing final line is rejected by the resolved-layout line count.
+        const auto finalLines = ir.value("skia_layout").toObject().value("lines").toArray();
+        const auto finalIndex = qsizetype(out.lines.size());
+        if (source.wipeReverse && finalIndex < finalLines.size()) {
+            const auto resolvedLine = finalLines.at(finalIndex).toObject();
+            if (!resolvedLine.value("ruby_groups").toArray().isEmpty())
+                throw BackendError("Skia 反向走字行不能携带注音组");
+            const auto cells = resolvedLine.value("cells").toArray();
+            const bool endpoints = std::any_of(cells.begin(), cells.end(), [](const QJsonValue& cell) {
+                return cell.toObject().contains("wipe_end_position");
+            });
+            if ((features.contains("p05_resolved_ruby") || !cfg.rubies.empty() || endpoints)
+                && (!features.contains("p05_reverse_overlap")
+                    || ir.value("skia_layout").toObject().value("reverse_overlap_schema").toDouble(-1) != 1))
+                throw BackendError("Skia 反向走字的重叠终点或注音轨道缺少能力声明");
+        }
         TextLine line;
         line.wipeReverse = source.wipeReverse;
         line.karaokeAnimation = source.karaokeAnimation.toStdString();

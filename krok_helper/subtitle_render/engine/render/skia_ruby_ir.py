@@ -35,8 +35,12 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     lines = []
     for item, local, timing in zip(prepared.plan.lines, ruby.lines, timings, strict=True):
         position = geometry.position(item, width, height)
-        overlap = (prepare_overlap_wipes(local, measured.lines[item.track_index], timing, dpr=dpr)
-                   if adjusted_wipes else None)
+        reverse = item.line.wipe_reverse
+        if reverse and (local.rubies or any(curve is not None for curve in timing.main)):
+            raise ValueError('Skia 反向走字行不能携带注音组或注音分段时钟（现有 GPU 省略该行注音）')
+        # Reverse lines always carry the GPU endpoint (see skia_direction_ir).
+        overlap = (prepare_overlap_wipes(local, measured.lines[item.track_index], timing, dpr=dpr, reverse=reverse)
+                   if adjusted_wipes or reverse else None)
         cells = positioned_cells(local.main, position)
         for index, (cell, curve) in enumerate(zip(cells, timing.main, strict=True)):
             if overlap is not None:

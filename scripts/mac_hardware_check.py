@@ -230,6 +230,9 @@ def main(argv=None) -> int:
     if manifest.get("reverse_wipe", 0) >= 1:
         steps["reverse_wipe"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                  "tests/test_subtitle_skia_reverse.py", "--basetemp", logs / "reverse-wipe-tests"]
+    if manifest.get("reverse_ruby", 0) >= 1:
+        steps["reverse_ruby"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                 "tests/test_subtitle_skia_reverse_ruby.py", "--basetemp", logs / "reverse-ruby-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

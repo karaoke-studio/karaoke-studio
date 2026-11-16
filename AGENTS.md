@@ -444,8 +444,14 @@ git submodule status
    正文反向横排子集见 §14.36：`p05_reverse_wipe` / `reverse_wipe_schema=1`，仅改变演唱方向。
    最终 `clock_index` 严格等于 n-1-source_index，原字形/run/实色不换位，原区间不重新分时；
    `render/skia_direction_ir` 只投影一次。native 验证后按时间序准备，公共 `reverseWipe` 只改裁剪。
-   不得翻转 HarfBuzz 文本方向来实现反向演唱。整轨注音/下方读音及 overlap 终点组合暂时拒绝；
-   §14.35 的正向限制由本子集扩展，RTL/竖排、反向注音和其他特效仍拒绝。
+   不得翻转 HarfBuzz 文本方向来实现反向演唱。§14.35 的正向限制由本子集扩展，RTL/竖排和其他特效仍拒绝。
+
+   含注音轨道的反向行见 §14.38：共享选择、下方派生、Painter 与 Qt→GPU 投影对反向行一律省略
+   上/下注音（D2D 中的 ruby 索引重映射不可达），实际 D2D 有/无注音来源像素一致。因此 Skia 保留源注音，
+   反向行最终 `ruby_groups` 必须为空，不能自行发明反向注音时钟或逐字裁剪；下方注音开关仍决定源行框。
+   GPU 对反向行总是应用右至左 overlap 终点：`skia_overlap.reverse_main_endpoints` 按源单元几何准备，
+   终点随几何不随时钟移动。`p05_reverse_overlap` / `reverse_overlap_schema=1` 门控，旧 sidecar 选择前拒绝。
+   未带重叠终点的历史正向场景在 DPR 1.5 结束前 1ms 有约 1.05px 前沿缺口，已记录为残留，未改历史路径。
 
    字体内容快照生命周期见 §14.37：`SkiaFontResolver.snapshot()` 只缓存本次准备的首次内容摘要，
    `text/skia_batch.font_snapshot` 是可选端口，IR/plan 的嵌套边界共用同一线程快照，退出即释放。

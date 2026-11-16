@@ -23,8 +23,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         Line line{{}, source.startMs, source.endMs};
         line.noWipe = source.noWipe;
         line.reverseWipe = source.reverseWipe;
+        // Matches the existing GPU, which never draws annotations on reverse lines.
         if (source.reverseWipe && !source.rubyGroups.empty())
-            throw std::runtime_error("Skia 反向走字暂不支持注音组合");
+            throw std::runtime_error("Skia 反向走字行不能携带注音组");
         if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
         for (const auto& translation : source.translations) {
             if (!std::isfinite(translation.x) || !std::isfinite(translation.y)
@@ -38,8 +39,6 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
-            if (source.reverseWipe && cell.adjustedWipeEnd)
-                throw std::runtime_error("Skia 反向走字暂不支持重叠终点");
             if (cell.adjustedWipeEnd && cell.wipePoints.empty())
                 throw std::runtime_error("Skia 重叠走字缺少基本时钟");
             if (!cell.wipePoints.empty()) {
@@ -146,11 +145,15 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 : (cell.endMs == cell.startMs ? (tMs >= cell.startMs ? 1.f : 0.f)
                    : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f));
         };
+        // Reverse lines hold cells in singing order; the front runs leftwards.
+        const auto front = [&](const Cell& cell, float progress) {
+            return line.reverseWipe ? cell.right-(cell.right-cell.left)*progress
+                                    : cell.left+(cell.right-cell.left)*progress;
+        };
         for (std::size_t index = 0; index < line.cells.size(); ++index) {
             const auto& cell = line.cells[index];
             float progress = rawProgress(cell);
-            float edge = line.reverseWipe ? cell.right-(cell.right-cell.left)*progress
-                                          : cell.left+(cell.right-cell.left)*progress;
+            float edge = front(cell, progress);
             if (cell.adjustedWipeEnd) {
                 const int start = cell.wipePoints.front().timeMs, end = cell.wipePoints.back().timeMs;
                 const Cell* next = index+1 < line.cells.size() ? &line.cells[index+1] : nullptr;
@@ -159,12 +162,13 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                     || (next && start < tMs && tMs < followingEnd && start != followingEnd);
                 if (!wiping) {
                     progress = tMs <= start ? 0.f : 1.f;
-                    edge = cell.left+(cell.right-cell.left)*progress;
+                    edge = front(cell, progress);
                 } else if (tMs > end && next) {
                     // N3 delegates the finishing cell's clip to its following
-                    // cell until that cell completes. Times remain authored.
-                    edge = next->left+(next->right-next->left)*rawProgress(*next);
-                    progress = std::clamp((edge-cell.left)/std::max(cell.right-cell.left, 1.f), 0.f, 1.f);
+                    // cell (next in singing order) until that cell completes.
+                    edge = front(*next, rawProgress(*next));
+                    const float covered = line.reverseWipe ? cell.right-edge : edge-cell.left;
+                    progress = std::clamp(covered/std::max(cell.right-cell.left, 1.f), 0.f, 1.f);
                 }
             }
             // Two disjoint clips avoid painting translucent after color over before color.

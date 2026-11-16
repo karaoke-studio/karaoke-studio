@@ -89,6 +89,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError("Skia sidecar 不支持整字变色，请重新构建")
             if ready.get("reverse_wipe_schema") != 1 or "p05_reverse_wipe" not in ready.get("profiles", []):
                 raise NativeRendererError("Skia sidecar 不支持正文反向走字，请重新构建")
+            if ready.get("reverse_overlap_schema") != 1 or "p05_reverse_overlap" not in ready.get("profiles", []):
+                raise NativeRendererError("Skia sidecar 不支持反向走字重叠终点与注音轨道，请重新构建")
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

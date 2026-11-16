@@ -250,8 +250,10 @@ def test_invalid_main_outline_and_reversed_clock_are_gated(binary,annotated):
     track,style=annotated
     with pytest.raises(ValueError,match='带描边'):
         prepare(binary,track,replace(style,stroke_width_px=5))
-    with pytest.raises(ValueError,match='正向横排上注音'):
-        prepare(binary,replace(track,lines=[replace(track.lines[0],wipe_reverse=True)]),style)
+    # Reverse singing is not a text direction: the shared selection omits its
+    # annotations exactly like the GPU, so no target, gap or anchor remains.
+    _,reverse=prepare(binary,replace(track,lines=[replace(track.lines[0],wipe_reverse=True)]),style)
+    assert reverse.lines[0].rubies==() and not any(reverse.lines[0].gaps)
 
 
 @pytest.mark.parametrize('semantics',['legacy','n3_1074'])

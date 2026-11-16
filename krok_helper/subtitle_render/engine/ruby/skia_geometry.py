@@ -88,7 +88,9 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
     lower = select_lower_targets(track, style, line_styles, measured)
     targets, intervals, readings, reference_pairs = [], [], [], []
     for index, (line, appearance) in enumerate(zip(track.lines, line_styles, strict=True)):
-        if appearance.vertical or appearance.right_to_left or line.wipe_reverse:
+        # Reverse singing is not text direction. The shared selection below
+        # returns no annotation for a reverse line, exactly as the GPU does.
+        if appearance.vertical or appearance.right_to_left:
             raise ValueError('Skia 当前注音几何准备仅支持正向横排上注音')
         if any(style_for_role_in_layout(appearance, c.role_label).stroke_width_px > 0 for c in line.chars):
             raise ValueError('Skia 当前注音几何准备尚不支持带描边的主字')

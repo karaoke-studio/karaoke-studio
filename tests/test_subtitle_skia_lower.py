@@ -57,12 +57,23 @@ def test_worker_requires_frozen_boolean_options(options):
         prepare_lower_readings(track, style, [style], unmeasured(track), resolve_font=fail, measure=fail)
 
 
-@pytest.mark.parametrize('mutation', ['vertical', 'right_to_left', 'wipe_reverse'])
+@pytest.mark.parametrize('mutation', ['vertical', 'right_to_left'])
 def test_unsupported_direction_is_explicit(mutation):
-    track = TimingTrack(lines=[line('かな', wipe_reverse=mutation == 'wipe_reverse')])
-    style = appearance(**({mutation: True} if mutation != 'wipe_reverse' else {}))
+    track = TimingTrack(lines=[line('かな')])
+    style = appearance(**{mutation: True})
     with pytest.raises(ValueError, match='正向横排'):
         prepare_lower_readings(track, style, [style], unmeasured(track), resolve_font=fail, measure=fail)
+
+
+def test_reverse_singing_line_derives_no_lower_reading_like_the_gpu():
+    track = TimingTrack(lines=[line('かな', wipe_reverse=True)], rubies=[
+        RubyAnnotation('か', 'か', pos_start_ms=200, pos_end_ms=700, target_line_index=0,
+                       target_char_start=0, target_char_end=1)])
+    style = appearance()
+    measured = SimpleNamespace(lines=[None], identity='main',
+                               snapshot=SimpleNamespace(resolve_intervals=lambda *_: [(200, 700), (700, 1200)]))
+    result = prepare_lower_readings(track, style, [style], measured, resolve_font=fail, measure=fail)
+    assert result.lines == ((),)
 
 
 def test_preparation_requires_matching_source_style_and_metrics_counts():

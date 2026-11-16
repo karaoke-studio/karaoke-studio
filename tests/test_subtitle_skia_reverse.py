@@ -14,7 +14,7 @@ from test_subtitle_skia_protocol import collect, selection
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
 from test_subtitle_skia_ruby_groups import configure
-from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, RubyAnnotation
+from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine
 from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 from krok_helper.subtitle_render.engine.render.skia_direction_ir import project_reverse_wipe
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, NativeRendererError
@@ -52,7 +52,12 @@ def test_final_clock_map_keeps_geometry_and_authored_intervals(binary, project, 
     assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
     cells = ir['skia_layout']['lines'][0]['cells']
     assert [c['clock_index'] for c in cells] == list(range(len(cells)-1, -1, -1))
-    assert [{k: v for k, v in c.items() if k != 'clock_index'} for c in cells] == plain['skia_layout']['lines'][0]['cells']
+    assert [{k: v for k, v in c.items() if k not in {'clock_index', 'wipe_end_position'}} for c in cells] == plain['skia_layout']['lines'][0]['cells']
+    # Every reverse cell carries the GPU's right-to-left endpoint; the
+    # leftmost cell is sung last and keeps the basic endpoint.
+    assert all(0 <= c['wipe_end_position'] <= 1 for c in cells) and cells[0]['wipe_end_position'] == 1
+    assert 'p05_reverse_overlap' in ir['required_features'] and ir['skia_layout']['reverse_overlap_schema'] == 1
+    assert 'p05_overlap_wipe' in ir['required_features'] and ir['skia_layout']['overlap_schema'] == 1
     assert ir['skia_layout']['reverse_wipe_schema'] == 1 and 'p05_reverse_wipe' in ir['required_features']
     assert all(not run.get('rtl', False) for run in ir['skia_layout']['runs'])
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -68,13 +73,20 @@ def test_final_clock_map_keeps_geometry_and_authored_intervals(binary, project, 
 
 def test_final_clock_projection_moves_curves_without_moving_source_cells():
     points = [[{'time_ms': 100*i, 'position': 0}, {'time_ms': 100*i+50, 'position': 1}] for i in range(3)]
+    ends = [1, .9, .8]
     ir = {'track': {'lines': [{'wipe_reverse': True}]}, 'required_features': [],
-          'skia_layout': {'lines': [{'cells': [{'source': i, 'wipe_points': p} for i, p in enumerate(points)]}]}}
+          'skia_layout': {'lines': [{'cells': [{'source': i, 'wipe_points': p, 'wipe_end_position': e}
+                                               for i, (p, e) in enumerate(zip(points, ends))]}]}}
+    unadjusted = copy.deepcopy(ir)
     project_reverse_wipe(ir)
     cells = ir['skia_layout']['lines'][0]['cells']
     assert [c['source'] for c in cells] == [0, 1, 2]
     assert [c['wipe_points'] for c in cells] == points[::-1]
+    # Endpoints are geometry of the source cell, never moved with the clock.
+    assert [c['wipe_end_position'] for c in cells] == ends
     with pytest.raises(ValueError, match='重复投影'): project_reverse_wipe(ir)
+    del unadjusted['skia_layout']['lines'][0]['cells'][1]['wipe_end_position']
+    with pytest.raises(ValueError, match='重叠终点'): project_reverse_wipe(unadjusted)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -136,7 +148,7 @@ def test_mixed_forward_reverse_pages_keep_the_existing_schedule(binary, grid):
     assert np.array_equal(frames[0], frames[-1])
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 2, 'missing_clock', 'duplicate', 'fraction', 'bool_clock', 'flag', 'forward', 'overlap'])
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 2, 'missing_clock', 'duplicate', 'fraction', 'bool_clock', 'flag', 'forward', 'overlap', 'reverse_overlap', 'reverse_overlap_schema'])
 def test_invalid_direction_contract_keeps_old_scene(binary, project, mutation):
     ir = ir_for(binary, source(project)); bad = copy.deepcopy(ir)
     cell = bad['skia_layout']['lines'][0]['cells'][0]
@@ -148,9 +160,9 @@ def test_invalid_direction_contract_keeps_old_scene(binary, project, mutation):
     elif mutation == 'bool_clock': cell['clock_index'] = True
     elif mutation == 'flag': bad['track']['lines'][0]['wipe_reverse'] = 'true'
     elif mutation == 'forward': bad['track']['lines'][0]['wipe_reverse'] = False
-    elif mutation == 'overlap':
-        bad['required_features'].append('p05_overlap_wipe'); bad['skia_layout']['overlap_schema'] = 1
-        cell['wipe_end_position'] = .5
+    elif mutation == 'overlap': bad['required_features'].remove('p05_overlap_wipe')
+    elif mutation == 'reverse_overlap': bad['required_features'].remove('p05_reverse_overlap')
+    elif mutation == 'reverse_overlap_schema': bad['skia_layout']['reverse_overlap_schema'] = 2
     else: bad['skia_layout']['reverse_wipe_schema'] = mutation
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir); before, _ = collect(process, [750])
@@ -182,12 +194,11 @@ def test_empty_reverse_line_is_transparent(binary, project, blank, target):
     assert all(not p.any() for p in frames)
 
 
-@pytest.mark.parametrize('kind', ['ruby', 'lower', 'flag'])
-def test_unverified_reverse_sources_fail_before_font_discovery(project, kind):
+# Annotation tracks are covered by test_subtitle_skia_reverse_ruby.py.
+@pytest.mark.parametrize('flag', [1, 'true', None])
+def test_unverified_reverse_sources_fail_before_font_discovery(project, flag):
     track, style = source(project)
-    if kind == 'ruby': track = replace(track, rubies=[RubyAnnotation('A', 'A')])
-    elif kind == 'lower': style = replace(style, lower_ruby_enabled=True)
-    else: track = replace(track, lines=[replace(track.lines[0], wipe_reverse=1)])
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=flag)])
     fail = lambda *a, **k: pytest.fail('unsupported source reached font discovery')
     with pytest.raises(ValueError, match='反向走字'):
         build_skia_render_ir(track, style, measure=fail, resolve_font=fail, width=640, height=360, fps=60)
