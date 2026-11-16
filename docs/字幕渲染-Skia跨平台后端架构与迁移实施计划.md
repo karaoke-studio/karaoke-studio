@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 6ddfba84
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43789386030 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 0725a505
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43797476161 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1661,7 +1661,7 @@ Windows/Linux Vulkan 与 CPU-only 四种构建通过，CTest 各 **3/3**；nativ
 - 新增 `shared_memory_lifecycle_schema=1` 握手。Python 小模块 `native/skia_ipc.py` 仅跟踪服务端发放的受限私有名称，在所有协议读取路径统一确认释放，不只在 UI 的 `read_event` 路径处理。释放确认从普通事件流中过滤；正常退出、abort 和外部杀进程由本会话跟踪信息兜底回收，不扫描删除其他进程的共享对象。
 - Windows 继续使用现有内核对象 key，普通 D2D 传输行为不变。Skia 的 GPU/Raster 四份本地目标均完整重建，CTest 各 **3/3**；按 §8.11/§8.14 也使用匹配的 BuildTools 14.50 对生产 D2D 执行 `--clean-first`，**88/88** 完整编译通过。
 
-新增 `tests/test_subtitle_skia_ipc.py` **7 项通过**：至少 **12 秒**持续请求并逐批断言名称已释放、延迟附加与已映射读者、正常退出/abort/外部强杀的未确认批次回收、非本会话对象保护和旧 sidecar 拒绝。最终本地 Windows 完整 Skia 组合 **669 通过、7 项 POSIX 专用跳过**，关联组合 **339 通过**；Linux X11 完整组合 **533 通过、143 项平台专用跳过**，Wayland 与本批 Mac CI 待结束后补录。最终 native 源码摘要为 `b8bbe81999f2985174ff4b5a4ba6ae1f79a1dffc77434964f116386165a12f0d`；§14.30 的 `54b1...` 是修复前的阶段产物，不可混作本节最终产物。Mac 验收包新增 `owned_posix_rings=1`。字体/几何规范样例仍为 **20 份**，传输生命周期不进入字幕布局身份。日志/样例前缀 `build/p05-ruby-units-owned-*`。
+新增 `tests/test_subtitle_skia_ipc.py` **7 项通过**：至少 **12 秒**持续请求并逐批断言名称已释放、延迟附加与已映射读者、正常退出/abort/外部强杀的未确认批次回收、非本会话对象保护和旧 sidecar 拒绝。最终本地 Windows 完整 Skia 组合 **669 通过、7 项 POSIX 专用跳过**，关联组合 **339 通过**；Linux X11/Wayland 完整组合各 **533 通过、143 项平台专用跳过**，最终 20 份 Windows/X11/Wayland 规范样例最大误差均为 **0**。实现提交 `0725a505` 的 Mac CI [43797476161](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43797476161) **5 项全部成功**：arm64/x64 完整产品组合各 **521 通过、155 项平台专用跳过**，含新资源回收专项；字体资源契约各 **3 通过**，预览/原生能力各 **21 通过、1 跳过**。20 份跨架构规范样例误差均为 **0**，下载 arm64 的同一 20 份 JSON 与 Windows/X11/Wayland 再比较也全部为 **0**。两架构 Metal/Raster 四份指纹与本地四份统一核对为本节最终源码身份。两份干净 Mac 验收包均退出 **0**，`ruby_units` 与 `owned_posix_rings` 步骤均为 **0**、`functional_passed=true`；虚拟 Metal 的 `hardware_gate_passed=false` 正确保留，不能作为本轮真机门槛通过。§14.6 复测入口已指向本批代码和 CI 包。最终 native 源码摘要为 `b8bbe81999f2985174ff4b5a4ba6ae1f79a1dffc77434964f116386165a12f0d`；§14.30 的 `54b1...` 是修复前的阶段产物，不可混作本节最终产物。Mac 验收包新增 `owned_posix_rings=1`。字体/几何规范样例仍为 **20 份**，传输生命周期不进入字幕布局身份。日志/样例前缀 `build/p05-ruby-units-owned-*`。
 
 ## 15. 前期探针清理范围
 
