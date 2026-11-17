@@ -100,6 +100,65 @@ def _make_window(qapp, monkeypatch):
     return mw.SubtitleRenderWindow(embedded=False)
 
 
+def test_long_subtitle_source_name_does_not_expand_workspace(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.editor import lyrics_list
+
+    painted_texts = []
+
+    class RecordingPainter(lyrics_list.QStylePainter):
+        def drawText(self, *args):
+            painted_texts.append(args[-1])
+            return super().drawText(*args)
+
+    monkeypatch.setattr(lyrics_list, "QStylePainter", RecordingPainter)
+    win = _make_window(qapp, monkeypatch)
+    panel = win._lyrics_panel
+    combo = panel._source_combo
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("歌", 1000)], end_ms=2000)])
+    panel.set_track(track)
+    panel.set_sources(["主字幕", "和声"], 0)
+    win.resize(1440, 900)
+    win.show()
+    QTest.qWait(30)
+    try:
+        splitter = win._preview_splitter
+        widths = splitter.sizes()
+        window_size = win.size()
+        minimum_width = panel.minimumSizeHint().width()
+        long_name = "ヒミツ" + "非常长的字幕源名称" * 100
+        panel.set_sources(["主字幕", long_name], 1)
+        QTest.qWait(30)
+        assert splitter.sizes() == widths
+        assert win.size() == window_size
+        assert panel.minimumSizeHint().width() == minimum_width
+        assert combo.currentText() == long_name
+        assert combo.itemText(1) == long_name
+        assert combo.toolTip() == long_name
+        assert combo.fontMetrics().horizontalAdvance(long_name) > combo.width()
+        assert painted_texts[-1].endswith("…")
+        assert painted_texts[-1] != long_name
+        assert panel._settings_source_btn.geometry().right() <= panel._source_bar.width()
+        # Resize and switch sources: the full name remains in the model/signals.
+        win.resize(1250, 850)
+        QTest.qWait(30)
+        resized_widths = splitter.sizes()
+        changed = []
+        combo.currentTextChanged.connect(changed.append)
+        combo.setCurrentIndex(0)
+        combo.setCurrentIndex(1)
+        QTest.qWait(30)
+        assert changed == ["主字幕", long_name]
+        assert splitter.sizes() == resized_widths
+        assert not combo.grab().isNull()
+        combo.setCurrentIndex(0)
+        combo.grab()
+        assert painted_texts[-1] == "主字幕"
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 def test_track_row_badges_refresh_with_layout(qapp, monkeypatch, asynchronous):
     """同步加载与后台样式刷新都安装最终行位，不保留上一套布局的标签。"""

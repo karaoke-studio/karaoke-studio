@@ -44,8 +44,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStyle,
+    QStyleOptionButton,
+    QStylePainter,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidgetItem,
@@ -580,6 +584,53 @@ class _StableComboBoxMenu(ComboBoxMenu):
 class _StableFluentComboBox(FluentComboBox):
     def _createComboMenu(self):
         return _StableComboBoxMenu(self)
+
+
+class _SourceComboBox(_StableFluentComboBox):
+    """Source names consume the allocated width, never determine panel width."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+
+    def sizeHint(self):  # noqa: N802
+        return QSize(120, super().sizeHint().height())
+
+    def minimumSizeHint(self):  # noqa: N802
+        return QSize(0, self.sizeHint().height())
+
+    def setText(self, text):  # noqa: N802
+        # Fluent's implementation calls adjustSize(), expanding to the full name.
+        QPushButton.setText(self, text)
+        self.setToolTip(text or "切换列表显示的字幕源（预览与导出始终同时渲染全部源）")
+
+    def paintEvent(self, event):  # noqa: N802
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        contents = self.style().subElementRect(
+            QStyle.SubElement.SE_PushButtonContents, option, self,
+        )
+        text = self.fontMetrics().elidedText(
+            option.text, Qt.TextElideMode.ElideRight, max(0, contents.width()),
+        )
+        option.text = ""
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+        p = palette()
+        painter.setFont(self.font())
+        painter.setPen(QColor(p.text_primary if self.isEnabled() else p.text_disabled))
+        painter.drawText(contents, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isHover:
+            painter.setOpacity(0.8)
+        elif self.isPressed:
+            painter.setOpacity(0.7)
+        FIF.ARROW_DOWN.render(
+            painter,
+            QRectF(self.width() - 22, self.height() / 2 - 5 + self.arrowAni.y, 10, 10),
+            fill=p.text_secondary,
+        )
 
 
 class _StableRoundMenu(RoundMenu):
@@ -1538,7 +1589,7 @@ class LyricsPanel(DropPanel):
         source_layout = QHBoxLayout(self._source_bar)
         source_layout.setContentsMargins(8, 6, 8, 0)
         source_layout.setSpacing(6)
-        self._source_combo = _StableFluentComboBox(self._source_bar)
+        self._source_combo = _SourceComboBox(self._source_bar)
         self._source_combo.setToolTip("切换列表显示的字幕源（预览与导出始终同时渲染全部源）")
         self._source_combo.currentIndexChanged.connect(self._on_source_combo_changed)
         self._add_source_btn = TransparentToolButton(FIF.ADD, self._source_bar)
