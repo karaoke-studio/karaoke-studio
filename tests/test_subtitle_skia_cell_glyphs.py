@@ -208,16 +208,30 @@ def test_multicodepoint_row_anchors_match_actual_gpu(binary, project, alignment,
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('dpr', [1, 1.5])
 def test_opentype_feature_fonts_match_actual_gpu(binary, project, tmp_path, kind, semantics, dpr):
+    assert_feature_font_parity(binary, project, tmp_path, kind, semantics, dpr)
+
+
+# horizontal_rtl_cell_schema=1: the same cells as whole RTL cells, singing either way.
+@GPU
+@pytest.mark.parametrize('kind', ['featured', 'unmapped'])
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_rtl_opentype_feature_fonts_match_actual_gpu(binary, project, tmp_path, kind, semantics, reverse):
+    assert_feature_font_parity(binary, project, tmp_path, kind, semantics, 1.5, rtl=True, reverse=reverse)
+
+
+def assert_feature_font_parity(binary, project, tmp_path, kind, semantics, dpr, *, rtl=False, reverse=False):
     handle = QFontDatabase.addApplicationFont(str(variant_font(tmp_path / f'{kind}.ttf', kind)))
     assert handle >= 0
     clear_font_weight_cache()
     try:
-        track, style = cell_source(project, 'multi')
+        track, style = cell_source(project, 'multi', reverse=reverse)
         line = track.lines[0]
         track = replace(track, lines=[replace(line, chars=[replace(c, text=t)
                                                           for c, t in zip(line.chars, TEXTS['features'])])])
-        style = replace(style, font_family=QFontDatabase.applicationFontFamilies(handle)[0], layout_semantics=semantics)
-        assert_gpu_parity(binary, track, style, dpr, (kind, semantics, dpr))
+        style = replace(style, font_family=QFontDatabase.applicationFontFamilies(handle)[0], layout_semantics=semantics,
+                        right_to_left=rtl)
+        assert_gpu_parity(binary, track, style, dpr, (kind, semantics, dpr, rtl, reverse))
     finally:
         QFontDatabase.removeApplicationFont(handle)
         clear_font_weight_cache()

@@ -100,6 +100,10 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                     or ready['horizontal_rtl_schema'] != 1
                     or 'p05_horizontal_rtl' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持右至左单元排列，请重新构建')
+            if (type(ready.get('horizontal_rtl_cell_schema')) is not int
+                    or ready['horizontal_rtl_cell_schema'] != 1
+                    or 'p05_horizontal_rtl_cells' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持右至左多码点单元，请重新构建')
             if not has_cell_glyph_schema(ready):
                 raise NativeRendererError(CELL_GLYPH_ERROR)
             if "raster" not in ready.get("execution_targets", []):

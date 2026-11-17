@@ -17,6 +17,18 @@ from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 
 
+# horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
+# placement is GPU-validated under cell_glyph_schema=1. Mirrors native
+# skia_ir_projection exactly. Kana, other scripts, ZWJ/variation selectors,
+# supplementary scalars and default ignorables stay rejected.
+_RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0xac), (0xae, 0xff), (0x300, 0x34e), (0x350, 0x35b), (0x363, 0x36f),
+                    (0x4e00, 0x9fff), (0xac00, 0xd7a3))
+
+
+def _validated_rtl_cell(text):
+    return all(any(low <= ord(c) <= high for low, high in _RTL_CELL_RANGES) for c in text)
+
+
 def _validate_style(style):
     if style.vertical or style.layout_semantics not in {'legacy', 'n3_1074'}:
         raise ValueError('Skia 当前规范布局仅支持横排')
@@ -39,15 +51,22 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if source_style.right_to_left and (source.rubies or source_style.lower_ruby_enabled):
             raise ValueError('Skia 右至左单元排列暂不支持注音组合')
         if source_style.right_to_left:
-            if any(len(char.text) > 1 for line in source.lines for char in line.chars):
-                raise ValueError('Skia 右至左排列当前仅支持单码点计时单元，多码点单元尚未完成 GPU 校准')
+            if any(len(char.text) > 1 and not _validated_rtl_cell(char.text) for line in source.lines for char in line.chars):
+                raise ValueError('Skia 右至左排列的多码点单元包含尚未验证的字符')
         validate_reverse_source(source)
         if any(c.vector_glyph for l in source.lines for c in l.chars):
             raise ValueError('Skia 当前规范布局尚不支持导唱符')
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
-                _validate_style(style_for_line(source_style, line))
+                line_style = style_for_line(source_style, line)
+                _validate_style(line_style)
+                # Overlapping cells expose the core's per-cell wipe clip versus the
+                # GPU's one line-level edge; not validated for RTL multi-codepoint cells.
+                # Layout spacing is the line's (roles keep layout spacing fields).
+                if (source_style.right_to_left and line_style.letter_spacing_px < 0
+                        and any(len(c.text) > 1 for c in line.chars)):
+                    raise ValueError('Skia 右至左多码点单元暂不支持负字距')
             result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font, **plan_kwargs)
         prepared.append(result)
         return result.plan
@@ -79,6 +98,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['horizontal_rtl_schema'] = 1
         for final in lines:
             final['text_flow'] = 'rtl'
+        if any(len(char.text) > 1 for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_cells')
+            ir['skia_layout']['horizontal_rtl_cell_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         sources, indices = lower_sources(prepared[0])

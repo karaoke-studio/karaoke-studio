@@ -113,8 +113,10 @@ def assert_gpu_parity(binary,track,style,dpr,case,*,alignment=None):
 
 @pytest.mark.parametrize('reverse',[False,True])
 @pytest.mark.parametrize('effect',['none','no_wipe'])
-def test_rtl_gpu_raster_seek_and_offsets(binary,project,reverse,effect):
-    track,style=rtl_source(project,'roles',reverse=reverse,effect=effect)
+@pytest.mark.parametrize('cells',[False,True])
+def test_rtl_gpu_raster_seek_and_offsets(binary,project,reverse,effect,cells):
+    track,style=(rtl_cell_source(project,'roles',reverse=reverse,effect=effect) if cells
+                 else rtl_source(project,'roles',reverse=reverse,effect=effect))
     results=[]
     for target in ('gpu','raster'):
         original=None
@@ -194,23 +196,153 @@ def test_unvalidated_rtl_combinations_stay_explicitly_gated(binary,project,kind)
     with pytest.raises(ValueError):ir_for(binary,(track,style))
 
 
-@pytest.mark.parametrize('text',['fi','AA','字字','  ','a\u0301'])
-def test_rtl_multicodepoint_cells_remain_gated_until_geometry_calibration(binary,project,text):
+# horizontal_rtl_cell_schema=1: GPU-validated multi-codepoint authored cells
+# (Latin/Latin-1, combining diacritics, CJK ideographs, Hangul syllables).
+CELL_TEXTS={'cells':['fi','a\u0301','字字','AA'],'spaces':['A ','  ',' \u00e1','字 ']}
+
+
+def rtl_cell_source(project,kind='cells',*,reverse=False,effect='none'):
+    base={'roles':'roles','negative':'negative_gap'}.get(kind,'plain')
+    track,style=rtl_source(project,base,reverse=reverse,effect=effect)
+    line=track.lines[0]
+    texts=CELL_TEXTS['spaces' if kind=='spaces' else 'cells']
+    return replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])]),style
+
+
+@pytest.mark.parametrize('text',['きゃ','שׁל','سل','A\u200dA','A\u200cA','A\ufe0f','\U0001F469\U0001F4BB',
+                                 'a\u034f','a\u035cb','a\u00adb','\u0103a'])
+def test_unvalidated_rtl_multicodepoint_cells_stay_gated(binary,project,text):
     track,style=rtl_source(project)
     line=track.lines[0]
     track=replace(track,lines=[replace(line,chars=[replace(line.chars[0],text=text),*line.chars[1:]])])
-    with pytest.raises(ValueError,match='单码点'):ir_for(binary,(track,style))
+    with pytest.raises(ValueError,match='未验证'):ir_for(binary,(track,style))
+
+
+@pytest.mark.parametrize('reverse',[False,True])
+def test_rtl_multicodepoint_cells_are_versioned_whole_cells(binary,project,reverse,tmp_path):
+    track,style=rtl_cell_source(project,reverse=reverse)
+    ir=ir_for(binary,(track,style))
+    ltr=ir_for(binary,(track,replace(style,right_to_left=False)))
+    cells,plain=ir['skia_layout']['lines'][0]['cells'],ltr['skia_layout']['lines'][0]['cells']
+    assert 'p05_horizontal_rtl_cells' in ir['required_features'] and ir['skia_layout']['horizontal_rtl_cell_schema']==1
+    assert 'p05_horizontal_rtl_cells' not in ltr['required_features']
+    assert all(a['origin_x']>b['origin_x'] for a,b in zip(cells,cells[1:]))
+    # Whole authored cells move: glyphs, clusters, shaping policy and clocks are the LTR ones.
+    assert [c['metrics'] for c in cells]==[c['metrics'] for c in plain]
+    assert [len(c['metrics']['glyphs']) for c in cells]==[2,1,2,2]
+    assert ir['track']['lines'][0]['resolved_intervals']==ltr['track']['lines'][0]['resolved_intervals']
+    single=ir_for(binary,rtl_source(project,reverse=reverse))
+    assert 'p05_horizontal_rtl_cells' not in single['required_features']
+    assert 'horizontal_rtl_cell_schema' not in single['skia_layout']
+    if reverse:assert [c['clock_index'] for c in cells]==[3,2,1,0]
+    else:
+        (tmp_path/'rtl-cell-layout.json').write_text(json.dumps({
+            'features':ir['required_features'],'schema':ir['skia_layout']['horizontal_rtl_cell_schema'],
+            'lines':ir['skia_layout']['lines'],'intervals':ir['track']['lines'][0]['resolved_intervals']},
+            sort_keys=True),encoding='utf-8')
+
+
+@pytest.mark.parametrize('mutation',['feature','base_feature','schema','schema_bool','schema_string','schema_version',
+                                     'unvalidated_text','negative_spacing'])
+@pytest.mark.parametrize('target',['gpu','raster'])
+def test_native_rtl_cell_contract_rejects_forgeries_and_keeps_scene(binary,project,mutation,target):
+    ir=ir_for(binary,rtl_cell_source(project))
+    bad=copy.deepcopy(ir)
+    if mutation=='feature':bad['required_features'].remove('p05_horizontal_rtl_cells')
+    elif mutation=='base_feature':bad['required_features'].remove('p05_horizontal_rtl')
+    elif mutation=='schema':del bad['skia_layout']['horizontal_rtl_cell_schema']
+    elif mutation.startswith('schema_'):
+        bad['skia_layout']['horizontal_rtl_cell_schema']={'schema_bool':True,'schema_string':'1','schema_version':2}[mutation]
+    elif mutation=='unvalidated_text':bad['track']['lines'][0]['chars'][2]['text']='きゃ'
+    else:bad['style']['letter_spacing_px']=-18
+    with SkiaRendererProcess(binary,selection=selection(target)) as process:
+        configure(process,ir);before,_=collect(process,[750])
+        with pytest.raises(NativeRendererError):configure(process,bad)
+        after,_=collect(process,[750],generation=2)
+    assert np.array_equal(before[0],after[0])
+
+
+def test_rtl_multicodepoint_negative_spacing_stays_gated(binary,project):
+    with pytest.raises(ValueError,match='负字距'):ir_for(binary,rtl_cell_source(project,'negative'))
+    # Single-codepoint RTL keeps its validated negative-gap behavior.
+    assert 'p05_horizontal_rtl' in ir_for(binary,rtl_source(project,'negative_gap'))['required_features']
 
 
 @pytest.mark.parametrize('target',['gpu','raster'])
-def test_native_rejects_multicodepoint_rtl_before_accepting_forged_geometry(binary,project,target):
-    ir=ir_for(binary,rtl_source(project))
-    bad=copy.deepcopy(ir);bad['track']['lines'][0]['chars'][0]['text']='AA'
-    with SkiaRendererProcess(binary,selection=selection(target)) as process:
-        configure(process,ir);before,_=collect(process,[750])
-        with pytest.raises(NativeRendererError,match='单码点'):configure(process,bad)
-        after,_=collect(process,[750],generation=2)
-    assert np.array_equal(before[0],after[0])
+def test_role_spacing_never_changes_the_rtl_layout_gate(binary,project,target):
+    # Roles keep layout spacing fields: a negative role scheme spacing changes
+    # neither geometry nor the gate, in Python or native.
+    track,style=rtl_cell_source(project,'roles')
+    lead=replace(style.custom_style_schemes['lead'],letter_spacing_px=-18)
+    ir=ir_for(binary,(track,replace(style,custom_style_schemes={'lead':lead})))
+    plain=ir_for(binary,(track,style))
+    assert ir['skia_layout']['lines']==plain['skia_layout']['lines']
+    with SkiaRendererProcess(binary,selection=selection(target)) as process:configure(process,ir)
+
+
+# Existing direction-independent gap, not waived: D2D paints one line-level
+# wipe edge, the Skia core clips each cell by its own front. They differ when a
+# finishing cell's front lies inside an overlapping neighbor's ink (here a lone
+# combining-mark cell whose box has no inset). Reproduces in accepted LTR and
+# single-codepoint RTL; the core paint model is outside this batch.
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('text_flow',[False,True])
+@pytest.mark.xfail(strict=True,raises=AssertionError,
+    reason='Overlapping-cell front: GPU line-level wipe edge vs Skia per-cell clip; core paint model still open.')
+def test_recorded_existing_overlapping_cell_front_gap(binary,project,text_flow):
+    track,style=rtl_source(project,'negative_gap')
+    line=track.lines[0]
+    texts=['A' if text_flow else 'fi','\u0301','字','W']
+    track=replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])])
+    assert_gpu_parity(binary,track,replace(style,right_to_left=text_flow),1.5,('overlap',text_flow))
+
+
+@pytest.mark.parametrize('mutation',['schema','feature','bool','version'])
+def test_old_rtl_cell_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
+    process=SkiaRendererProcess(binary,selection=selection('raster'))
+    try:ready=NativeRendererProcess.start(process)
+    finally:process.abort(reason='RTL cell handshake fixture')
+    if mutation=='schema':del ready['horizontal_rtl_cell_schema']
+    elif mutation=='feature':ready['profiles'].remove('p05_horizontal_rtl_cells')
+    else:ready['horizontal_rtl_cell_schema']=True if mutation=='bool' else 2
+    sent=[]
+    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
+    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
+    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
+    with pytest.raises(NativeRendererError,match='多码点'):SkiaRendererProcess(binary).start()
+    assert not sent
+
+
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind',['cells','spaces','roles'])
+@pytest.mark.parametrize('semantics',['legacy','n3_1074'])
+@pytest.mark.parametrize('dpr',[1,1.5])
+def test_rtl_multicodepoint_cells_match_actual_gpu(binary,project,kind,semantics,dpr):
+    track,style=rtl_cell_source(project,kind)
+    assert_gpu_parity(binary,track,replace(style,layout_semantics=semantics),dpr,(kind,semantics,dpr))
+
+
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('reverse,effect',[(True,'none'),(False,'no_wipe'),(True,'no_wipe')])
+@pytest.mark.parametrize('semantics',['legacy','n3_1074'])
+def test_rtl_multicodepoint_singing_variants_match_actual_gpu(binary,project,reverse,effect,semantics):
+    track,style=rtl_cell_source(project,reverse=reverse,effect=effect)
+    assert_gpu_parity(binary,track,replace(style,layout_semantics=semantics),1.5,(reverse,effect,semantics))
+
+
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('alignment',['left','center','right'])
+@pytest.mark.parametrize('semantics',['legacy','n3_1074'])
+@pytest.mark.parametrize('reverse',[False,True])
+def test_rtl_multicodepoint_row_anchors_match_actual_gpu(binary,project,alignment,semantics,reverse):
+    track,style=rtl_cell_source(project,reverse=reverse)
+    assert_gpu_parity(binary,track,replace(style,layout_semantics=semantics),1.5,
+                      (alignment,semantics,reverse),alignment=alignment)
+
+
+@pytest.mark.parametrize('gpu,missing_loader',[(True,False),(False,False),(True,True)])
+def test_real_rtl_multicodepoint_preview(binary,project,monkeypatch,tmp_path,gpu,missing_loader):
+    run_preview(binary,monkeypatch,tmp_path,rtl_cell_source(project,'roles',reverse=True),gpu,missing_loader)
 
 
 @pytest.mark.parametrize('reverse',[False,True])

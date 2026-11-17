@@ -19,6 +19,17 @@ int integer(const QJsonObject& o, const char* key, int minimum, int maximum) {
         throw BackendError(std::string("Skia IR: invalid ") + key);
     return int(number);
 }
+// horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
+// placement is GPU-validated. Mirrors engine/render/skia_ir.py exactly.
+bool validatedRightToLeftCell(const QString& text) {
+    for (const auto c : text.toUcs4()) {
+        const bool valid = (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff && c != 0xad)
+            || (c >= 0x300 && c <= 0x36f && c != 0x34f && (c < 0x35c || c > 0x362))
+            || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3);
+        if (!valid) return false;
+    }
+    return true;
+}
 void validateEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     for (const auto& feature : ir.value("required_features").toArray()) {
@@ -32,7 +43,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
             && feature.toString() != "p07_zero_ruby_no_wipe"
-            && feature.toString() != "p05_horizontal_rtl"
+            && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
     }
@@ -63,6 +74,10 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p05_horizontal_rtl")
         && ir.value("skia_layout").toObject().value("horizontal_rtl_schema").toDouble(-1) != 1)
         throw BackendError("Skia 右至左单元排列布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_horizontal_rtl_cells")
+        && (ir.value("skia_layout").toObject().value("horizontal_rtl_cell_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p05_horizontal_rtl")))
+        throw BackendError("Skia 右至左多码点单元布局版本无效");
     if (ir.value("style").toObject().contains("right_to_left")
         && !ir.value("style").toObject().value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");
@@ -233,11 +248,16 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         for (const auto& window : source.placementWindows)
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
+        // Overlapping cells expose the core's per-cell wipe clip versus the
+        // GPU's one line-level edge; not validated for RTL multi-codepoint cells.
+        // Layout spacing is the line's (roles keep layout spacing fields).
+        if (cfg.rightToLeft && resolved.letterSpacingPx < 0
+            && std::any_of(source.chars.begin(), source.chars.end(), [](const auto& c) { return c.text.toUcs4().size() > 1; }))
+            throw BackendError("Skia 右至左多码点单元暂不支持负字距");
         for (const auto& cell : source.chars) {
-            if (cfg.rightToLeft && !cell.text.isEmpty()) {
-                if (cell.text.toUcs4().size() != 1)
-                    throw BackendError("Skia 右至左排列当前仅支持单码点计时单元");
-            }
+            if (cfg.rightToLeft && cell.text.toUcs4().size() > 1
+                && (!features.contains("p05_horizontal_rtl_cells") || !validatedRightToLeftCell(cell.text)))
+                throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (cell.vectorGlyph || cell.bitmapGuide
                 || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
