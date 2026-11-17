@@ -8,10 +8,11 @@ contracts without importing the CPU renderer.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from PyQt6.QtGui import QFontMetrics
 
-from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine, compute_char_intervals
 from krok_helper.subtitle_render.engine.text import (
     build_font,
     build_latin_font,
@@ -25,14 +26,92 @@ from krok_helper.subtitle_render.engine.ruby import (
     utopia_wipe_window_for_index,
 )
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+from krok_helper.subtitle_render.engine.layout.page.plan import resolve_page_plan
+from krok_helper.subtitle_render.engine.layout.display.schedule import (
+    DisplayLinesResolver,
+    display_windows_from_items,
+    single_line_display_windows,
+)
 from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingLine,
+    TimingTrack,
 )
 from krok_helper.subtitle_render.domain.models import (
     Style,
     effective_karaoke_animation,
+    layout_display_name,
+    layout_capacity,
+    layout_id_for_index,
+    style_for_track,
 )
+
+
+@dataclass(frozen=True)
+class TimelineRow:
+    """Final display row, not the lyric's source index or source track."""
+
+    row: int  # zero-based, as in DisplayLine.lane
+    count: int
+    layout_id: str
+    layout_name: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.row + 1}/{self.count}"
+
+
+@dataclass(frozen=True)
+class TimelineDisplay:
+    windows: dict[int, tuple[int, int]]
+    rows: dict[int, TimelineRow]
+
+
+def timeline_display_for_style(
+    track: TimingTrack,
+    style: Style,
+    *,
+    display_lines: DisplayLinesResolver,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> TimelineDisplay:
+    """Resolve windows and row badges from the same render schedule once.
+
+    Keep untruncated authored windows for editing; use the final lane (including
+    ForceBottom) for colors. No pagination or row assignment happens in the UI.
+    """
+    style = style_for_track(style, track)
+    if not style.dual_line_layout:
+        windows = single_line_display_windows(track, style)
+        return TimelineDisplay(
+            windows,
+            {index: TimelineRow(0, 1, "default", "单行布局") for index in windows},
+        )
+    items = display_lines(track, style, logical_w=logical_w, logical_h=logical_h)
+    index_of = {id(line): index for index, line in enumerate(track.lines)}
+    authored_layouts = (
+        {
+            line.track_line_index: line.layout_id
+            for line in resolve_page_plan(track, style).lines
+        }
+        if track.page_plan is not None else {}
+    )
+    # Page-head layout governs the page, including legacy mixed-layout inputs.
+    heads: dict[tuple[int, int], DisplayLine] = {}
+    rows: dict[int, TimelineRow] = {}
+    for item in items:
+        index = index_of.get(id(item.line))
+        if index is None:
+            continue
+        head = heads.setdefault((item.section_index, item.page_index), item)
+        layout_id = authored_layouts.get(
+            index, layout_id_for_index(style, head.line.layout_index)
+        )
+        rows[index] = TimelineRow(
+            item.lane, max(layout_capacity(style, layout_id), item.lane + 1),
+            layout_id, layout_display_name(style, layout_id),
+        )
+    return TimelineDisplay(display_windows_from_items(track, items), rows)
 
 
 def source_char_intervals(
@@ -125,4 +204,7 @@ def resolve_utopia_visual_intervals(
     return tuple(visual_intervals) if changed else None
 
 
-__all__ = ["resolve_utopia_visual_intervals", "source_char_intervals"]
+__all__ = [
+    "TimelineDisplay", "TimelineRow", "timeline_display_for_style",
+    "resolve_utopia_visual_intervals", "source_char_intervals",
+]

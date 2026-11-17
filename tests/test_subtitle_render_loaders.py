@@ -100,6 +100,38 @@ def _make_window(qapp, monkeypatch):
     return mw.SubtitleRenderWindow(embedded=False)
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_track_row_badges_refresh_with_layout(qapp, monkeypatch, asynchronous):
+    """同步加载与后台样式刷新都安装最终行位，不保留上一套布局的标签。"""
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(lines=[
+        TimingLine(chars=[TimingChar(str(i), 1000 + i * 3000)], end_ms=2000 + i * 3000)
+        for i in range(3)
+    ])
+    try:
+        win._timing_track = track
+        win._tracks_view.set_tracks([("主字幕", track)])
+        for count in (2, 3):
+            win._style = Style(dual_line_layout=True, line_alignments=["center"] * count)
+            if asynchronous:
+                win._refresh_tracks_view_windows_async()
+                deadline = time.monotonic() + 10
+                while win._tracks_window_worker_busy and time.monotonic() < deadline:
+                    QTest.qWait(10)
+                assert not win._tracks_window_worker_busy
+            else:
+                win._refresh_tracks_view_windows()
+            blocks = win._tracks_view._lanes[0].blocks
+            assert all(block.display_row is not None for block in blocks)
+            assert all(block.display_row.count == count for block in blocks)
+            assert blocks[1].display_row.label == f"2/{count}"
+            assert len(win._tracks_view._windows[0]) == 3
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def _settle_watch_digest(runtime: SubtitleSourceWatchRuntime) -> None:
     """Commit pending digests the way the window's worker callback does."""
     plan = SubtitleSourceWatchRuntime.prepare_watch_sync(runtime.watch_entries())

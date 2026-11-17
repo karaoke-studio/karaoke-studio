@@ -2,7 +2,7 @@
 
 对标 Sayatoo 轨道区：顶部时间刻度尺 + 多行轨道 T1 / T2 / T3…（T1 = 主字幕，
 其余为副字幕源）+ 底部缩放滚动条。每行按歌词行渲染演唱区间色块，块内按
-字符细分并**显示歌词字符**；按演唱者上色；点击块定位到对应字符起始时间，
+字符细分并**显示歌词字符**；按显示行上色并标注行位，可切换按演唱者上色；点击块定位到对应字符起始时间，
 拖动刻度尺连续定位；竖线播放头与 ``TransportBar`` 对齐，播放越界时自动翻页。
 
 比例尺：默认视口 15 秒。Ctrl+滚轮以光标为中心缩放；滚轮水平平移；底部
@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Sequence
 
 from PyQt6.QtCore import (
@@ -55,6 +55,8 @@ from qfluentwidgets import (
 
 from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
 from krok_helper.subtitle_render.engine.render.adapters.timeline_projection import (
+    TimelineDisplay,
+    TimelineRow,
     resolve_utopia_visual_intervals,
     source_char_intervals,
 )
@@ -92,6 +94,12 @@ _MARGIN_INPUT_PATTERN = r"^\d{0,7}(:\d{0,2}(\.\d{0,3})?|\.\d{0,3})?$"
 
 _LANE_MIN_H = 20
 _LANE_MAX_H = 44
+_ROW_BADGE_H = 17
+# Fixed row identities across every layout; singer colors remain independent.
+_ROW_HUES = (
+    210 / 360, 150 / 360, 32 / 360, 275 / 360,
+    185 / 360, 345 / 360, 65 / 360, 240 / 360,
+)
 _LANE_GAP = 4
 _PAD_X = 12
 _FALLBACK_CHAR_MS = 1000
@@ -186,6 +194,7 @@ class LineBlock:
     """音量柱特效挂载行覆盖（None/True/False）；块右下画方点标记。"""
     lit_head: object = None
     """指示灯特效挂载行覆盖（None/True/False）；块右下画圆点标记。"""
+    display_row: TimelineRow | None = None
 
 
 @dataclass(frozen=True)
@@ -340,6 +349,8 @@ class TrackTimelineView(QWidget):
         """与 ``_lanes`` 对齐的 TimingTrack 引用，把手拖动直接写覆盖字段。"""
         self._windows: list[dict[int, tuple[int, int]]] = []
         """宿主推送的显示窗口：每轨 ``行索引 → (上屏, 消失)``（含全局提前/延迟）。"""
+        self._display_rows: list[dict[int, TimelineRow]] = []
+        self._color_mode = "row"
         self._style = Style()
         self._selected: Optional[tuple[int, int]] = None
         """当前选中句：(轨道序号, ``track.lines`` 行索引)。"""
@@ -387,6 +398,7 @@ class TrackTimelineView(QWidget):
         self._track_names = [name for name, _track in tracks]
         self._track_refs = [track for _name, track in tracks]
         self._windows = []
+        self._display_rows = []
         self._selected = None
         self._hide_margin_editor()
         self._view_start_ms = 0.0
@@ -396,18 +408,53 @@ class TrackTimelineView(QWidget):
         self.update()
 
     def set_display_windows(
-        self, windows: Sequence[dict[int, tuple[int, int]]]
+        self, windows: Sequence[dict[int, tuple[int, int]] | TimelineDisplay]
     ) -> None:
-        """宿主推送各轨道的行显示窗口（源坐标）；视图按展示偏移平移后缓存。"""
+        """安装源坐标窗口及可选行位；兼容只推送显示窗口的调用者。"""
+        if any(isinstance(item, TimelineDisplay) for item in windows):
+            self._display_rows = [
+                item.rows if isinstance(item, TimelineDisplay) else {} for item in windows
+            ]
+            self._apply_display_rows()
         offset = self._timing_display_offset_ms
         self._windows = [
             {
                 index: (show + offset, hide + offset)
-                for index, (show, hide) in item.items()
+                for index, (show, hide) in (
+                    item.windows if isinstance(item, TimelineDisplay) else item
+                ).items()
             }
             for item in windows
         ]
         self.update()
+
+    def _apply_display_rows(self) -> None:
+        lanes = []
+        for index, lane in enumerate(self._lanes):
+            rows = self._display_rows[index] if index < len(self._display_rows) else {}
+            blocks = tuple(replace(block, display_row=rows.get(block.line_index))
+                           for block in lane.blocks)
+            lanes.append(replace(lane, blocks=blocks))
+        self._lanes = tuple(lanes)
+        self._lanes_pixmap = None
+
+    def set_color_mode(self, mode: str) -> None:
+        """Change visualization only; row labels remain visible in both modes."""
+        if mode not in ("row", "singer"):
+            raise ValueError(mode)
+        if self._color_mode != mode:
+            self._color_mode = mode
+            self._lanes_pixmap = None
+            self.update()
+
+    def _block_hue(self, block: LineBlock) -> float:
+        if self._color_mode == "row" and block.display_row is not None:
+            return _ROW_HUES[block.display_row.row % len(_ROW_HUES)]
+        if self._color_mode == "singer":
+            hue = _singer_hue(block.singer_id)
+            if hue is not None:
+                return hue
+        return max(QColor(palette().accent_primary).hueF(), 0.0)
 
     def snapshot_lane_inputs(self):
         """导出轨道块重建的纯输入 ``((源名, track)..., 样式)``。
@@ -442,6 +489,7 @@ class TrackTimelineView(QWidget):
         ]
         if lanes is not None and len(tuple(lanes)) == len(self._track_refs):
             self._lanes = tuple(lanes)
+            self._apply_display_rows()
         else:
             self._rebuild_lanes()
         self._lanes_pixmap = None
@@ -474,6 +522,7 @@ class TrackTimelineView(QWidget):
             self._style,
             self._timing_display_offset_ms,
         )
+        self._apply_display_rows()
         self._lanes_pixmap = None
 
     def set_duration(self, ms: int) -> None:
@@ -623,24 +672,30 @@ class TrackTimelineView(QWidget):
         count = len(self._lanes)
         area_top = _RULER_H + 2
         area_bottom = self.height() - _ZOOMBAR_H - _HANDLE_STRIP_H - 2
-        avail = area_bottom - area_top - (count - 1) * _LANE_GAP
+        avail = area_bottom - area_top - (count - 1) * _LANE_GAP - count * _ROW_BADGE_H
         lane_h = max(_LANE_MIN_H, min(_LANE_MAX_H, avail // count))
-        total_h = count * lane_h + (count - 1) * _LANE_GAP
+        total_h = count * (lane_h + _ROW_BADGE_H) + (count - 1) * _LANE_GAP
         result = []
         # 轨道组在刻度尺与缩放条之间垂直居中
         y = max(float(area_top), area_top + (area_bottom - area_top - total_h) / 2)
+        y += _ROW_BADGE_H
         for lane in self._lanes:
             rect = QRectF(
                 float(self._plot_left()), y, float(self._plot_width()), float(lane_h)
             )
             result.append((lane, rect))
-            y += lane_h + _LANE_GAP
+            y += lane_h + _ROW_BADGE_H + _LANE_GAP
         return result
 
     def _hit_test(
         self, x: float, y: float
     ) -> tuple[Optional[int], Optional[LineBlock], Optional[CharCell]]:
         for lane_index, (lane, rect) in enumerate(self._lane_geometry()):
+            if rect.top() - _ROW_BADGE_H <= y < rect.top():
+                for block in reversed(lane.blocks):
+                    badge = self._row_badge_rect(block, rect)
+                    if badge is not None and badge.contains(QPointF(x, y)):
+                        return lane_index, block, None
             if not rect.top() <= y <= rect.bottom():
                 continue
             if x < rect.left():
@@ -1068,7 +1123,7 @@ class TrackTimelineView(QWidget):
             painter.setBrush(QColor(p.progress_bg))
             painter.drawRoundedRect(rect, 4.0, 4.0)
             painter.save()
-            painter.setClipRect(rect)
+            painter.setClipRect(rect.adjusted(0, -_ROW_BADGE_H, 0, 0))
             self._paint_lane_blocks(painter, lane, rect, dark)
             painter.restore()
 
@@ -1097,10 +1152,7 @@ class TrackTimelineView(QWidget):
         char_metrics = QFontMetrics(char_font)
         text_color = QColor("#1F2937")  # 淡色块上固定深色文字（对标 Sayatoo）
 
-        hue = _singer_hue(block.singer_id)
-        if hue is None:
-            accent = QColor(palette().accent_primary)
-            hue = max(accent.hueF(), 0.0)
+        hue = self._block_hue(block)
         # Sayatoo 式外观：淡色底 + 饱和描边 + 字符分隔线
         fill = QColor.fromHsvF(hue, 0.20, 0.97)
         border = QColor.fromHsvF(hue, 0.55, 0.72 if not dark else 0.80)
@@ -1139,6 +1191,41 @@ class TrackTimelineView(QWidget):
                     cell.text,
                 )
 
+        badge = self._row_badge_rect(block, rect)
+        if badge is not None:
+            # A small tab sits above the block, leaving the lyric cells intact.
+            painter.save()
+            badge_font = self._row_badge_font()
+            painter.setFont(badge_font)
+            painter.setPen(border)
+            painter.setBrush(QColor(palette().panel_bg))
+            painter.drawRoundedRect(badge, 2.0, 2.0)
+            if badge.width() >= QFontMetrics(badge_font).horizontalAdvance(block.display_row.label) + 4:
+                painter.setPen(QColor(palette().text_primary))
+                painter.drawText(
+                    badge,
+                    Qt.AlignmentFlag.AlignCenter, block.display_row.label,
+                )
+            painter.restore()
+
+    @staticmethod
+    def _row_badge_font() -> QFont:
+        font = QFont("Microsoft YaHei UI")
+        font.setPixelSize(10)
+        font.setWeight(QFont.Weight.DemiBold)
+        return font
+
+    def _row_badge_rect(self, block: LineBlock, rect: QRectF) -> QRectF | None:
+        if block.display_row is None:
+            return None
+        x0 = max(self._x_for_ms(block.start_ms), rect.left())
+        x1 = min(self._x_for_ms(block.end_ms), rect.right())
+        if x1 <= x0:
+            return None
+        width = QFontMetrics(self._row_badge_font()).horizontalAdvance(block.display_row.label) + 8
+        return QRectF(x0, rect.top() + 3 - _ROW_BADGE_H,
+                      min(float(width), x1 - x0), float(_ROW_BADGE_H))
+
     def _paint_zoombar(self, painter: QPainter) -> None:
         p = palette()
         rect = self._zoombar_rect()
@@ -1175,7 +1262,7 @@ class TrackTimelineView(QWidget):
             x0 = self._x_for_ms(block.start_ms)
             x1 = max(self._x_for_ms(block.end_ms), x0 + 2)
             painter.save()
-            painter.setClipRect(lane_rect.adjusted(-1, -2, 1, 2))
+            painter.setClipRect(lane_rect.adjusted(-1, -_ROW_BADGE_H, 1, 2))
             self._paint_lane_block(
                 painter,
                 block,
@@ -1350,7 +1437,22 @@ class TrackTimelineView(QWidget):
                 self._show_wipe_reverse_menu(lane_index, block, event.globalPos())
                 event.accept()
                 return
-        super().contextMenuEvent(event)
+        menu = RoundMenu(parent=self)
+        self._add_color_menu(menu)
+        menu.exec(event.globalPos())
+        event.accept()
+
+    def _add_color_menu(self, menu: RoundMenu) -> None:
+        submenu = RoundMenu("着色方式", menu)
+        for mode, label in (("row", "按显示行"), ("singer", "按演唱者")):
+            action = Action(label, submenu)
+            action.setCheckable(True)
+            action.setChecked(self._color_mode == mode)
+            action.triggered.connect(
+                lambda _checked=False, mode=mode: self.set_color_mode(mode)
+            )
+            submenu.addAction(action)
+        menu.addMenu(submenu)
 
     def _show_wipe_reverse_menu(
         self, lane_index: int, block: LineBlock, global_pos: QPoint
@@ -1392,6 +1494,8 @@ class TrackTimelineView(QWidget):
                 )
                 fx_menu.addAction(fx_action)
             menu.addMenu(fx_menu)
+        menu.addSeparator()
+        self._add_color_menu(menu)
         menu.exec(global_pos)
 
     def _set_head_override(
@@ -1743,8 +1847,13 @@ def _line_block_tooltip(block: LineBlock) -> str:
         else "\n指示灯特效：强制关" if block.lit_head is False
         else ""
     )
+    row = block.display_row
+    position = (
+        f"\n{row.layout_name} · 第 {row.row + 1}/{row.count} 行"
+        if row is not None else ""
+    )
     return (
         f"开始：{_format_precise_ms(block.start_ms)}\n"
         f"结束：{_format_precise_ms(block.end_ms)}\n"
-        f"{singer}{block.text}{reverse}{volume}{lit}"
+        f"{singer}{block.text}{position}{reverse}{volume}{lit}"
     )

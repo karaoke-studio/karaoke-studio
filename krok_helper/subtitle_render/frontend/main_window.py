@@ -136,6 +136,7 @@ from krok_helper.subtitle_render.engine.layout.line_locator import line_locators
 from krok_helper.subtitle_render.engine.render.adapters.layout_diagnostics import (
     check_layout_margins,
     display_windows_for_style,
+    timeline_display_for_style,
     layout_timing_diagnostics_for_style,
 )
 from krok_helper.subtitle_render.engine.render_progress import (
@@ -7688,7 +7689,7 @@ class SubtitleRenderWindow(QWidget):
         self._tracks_view.set_style(self._style)
         with layout_pass():
             windows = [
-                display_windows_for_style(
+                timeline_display_for_style(
                     track,
                     self._style,
                     logical_w=self._screen_settings.width,
@@ -7738,7 +7739,7 @@ class SubtitleRenderWindow(QWidget):
                     for track in tracks:
                         yield_to_gui()
                         windows.append(
-                            display_windows_for_style(
+                            timeline_display_for_style(
                                 track,
                                 style,
                                 logical_w=logical_w,

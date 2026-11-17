@@ -32,9 +32,30 @@ from krok_helper.subtitle_render.engine.layout.display.signal import (
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.models import Style, style_for_track
 from krok_helper.subtitle_render.domain.timing import TimingTrack
+from .timeline_projection import (
+    TimelineDisplay,
+    timeline_display_for_style as resolve_timeline_display,
+)
 
 
 display_windows_for_style = painter_impl.display_windows_for_style
+
+
+def timeline_display_for_style(
+    track: TimingTrack,
+    style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> TimelineDisplay:
+    """Bind the editor projection to the same resolver as preview/export."""
+    return resolve_timeline_display(
+        track,
+        style,
+        display_lines=painter_impl.display_lines_for_style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
 
 
 def check_layout_margins(
@@ -230,5 +251,6 @@ def layout_timing_diagnostics_for_style(
 __all__ = [
     "check_layout_margins",
     "display_windows_for_style",
+    "timeline_display_for_style",
     "layout_timing_diagnostics_for_style",
 ]

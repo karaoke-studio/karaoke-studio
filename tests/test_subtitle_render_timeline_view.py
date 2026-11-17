@@ -107,6 +107,107 @@ def test_build_lanes_multiple_sources() -> None:
     assert [lane.name for lane in lanes] == ["主字幕", "コーラス"]
 
 
+@pytest.mark.parametrize("row_count", [1, 2, 3, 8])
+def test_row_badges_follow_resolved_render_schedule(qapp, row_count) -> None:
+    from krok_helper.subtitle_render.engine.painter import display_lines_for_style
+    from krok_helper.subtitle_render.engine.render.adapters.timeline_projection import (
+        timeline_display_for_style,
+    )
+
+    track = TimingTrack(lines=[
+        TimingLine(chars=[TimingChar(str(i), 1000 + i * 2000)], end_ms=2000 + i * 2000)
+        for i in range(row_count + 1)
+    ])
+    track.lines.insert(1, TimingLine(is_blank=True))
+    style = Style(dual_line_layout=True, line_alignments=["center"] * row_count)
+    items = display_lines_for_style(track, style)
+    data = timeline_display_for_style(track, style, display_lines=display_lines_for_style)
+    index_of = {id(line): i for i, line in enumerate(track.lines)}
+    assert 1 not in data.rows
+    assert {i: row.row for i, row in data.rows.items()} == {
+        index_of[id(item.line)]: item.lane for item in items
+    }
+    assert all(row.count == row_count for row in data.rows.values())
+    assert data.rows[0].label == f"{items[0].lane + 1}/{row_count}"
+
+
+def test_mixed_layout_badges_keep_authored_layout_and_final_lane() -> None:
+    from krok_helper.subtitle_render.domain.models import LyricsLayout
+    from krok_helper.subtitle_render.domain.timing import TrackPage, TrackPagePlan, TrackSection
+    from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+    from krok_helper.subtitle_render.engine.render.adapters.timeline_projection import (
+        timeline_display_for_style,
+    )
+
+    track = TimingTrack(lines=[
+        TimingLine(chars=[TimingChar(str(i), i * 1000)], end_ms=(i + 1) * 1000)
+        for i in range(4)
+    ])
+    track.page_plan = TrackPagePlan([TrackSection([
+        TrackPage(2, "default"), TrackPage(2, "three"),
+    ])])
+    style = Style(dual_line_layout=True, layouts=[
+        LyricsLayout(name="三行布局", layout_id="three", line_alignments=["center"] * 3),
+    ])
+    # Deliberately stale legacy layout fields; the persisted page owns its name
+    # and capacity, while rendering owns the lane (e.g. an incomplete bottom page).
+    items = [DisplayLine(line, row, 0, 5000, page_index=i // 2)
+             for i, (line, row) in enumerate(zip(track.lines, [0, 1, 1, 2]))]
+    data = timeline_display_for_style(track, style, display_lines=lambda *_a, **_k: items)
+    assert [row.label for row in data.rows.values()] == ["1/2", "2/2", "2/3", "3/3"]
+    assert data.rows[2].layout_name == "三行布局"
+
+
+def test_row_colors_labels_survive_mode_refresh_and_display_offset(qapp) -> None:
+    from krok_helper.subtitle_render.engine.render.adapters.timeline_projection import (
+        TimelineDisplay, TimelineRow,
+    )
+
+    widget = TrackTimelineView()
+    track = _make_track()
+    widget.resize(900, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+    rows = {0: TimelineRow(0, 2, "default", "二行布局"),
+            2: TimelineRow(1, 2, "default", "二行布局")}
+    data = TimelineDisplay({0: (0, 3200), 2: (3500, 6000)}, rows)
+    widget.grab()  # Populate the static cache before the async result arrives.
+    widget.set_display_windows([data])
+    a, b = widget._lanes[0].blocks
+    assert widget._lanes_pixmap is None
+    assert a.display_row.label == "1/2"
+    assert b.display_row.label == "2/2"
+    assert widget._block_hue(a) != widget._block_hue(b)
+    assert "二行布局 · 第 1/2 行" in _line_block_tooltip(a)
+    before = widget.grab().toImage()
+    widget.set_color_mode("singer")
+    assert widget._lanes_pixmap is None
+    assert widget.grab().toImage() != before
+    assert widget._lanes[0].blocks[0].display_row == rows[0]
+    widget.set_color_mode("row")
+    widget.refresh_tracks()
+    prebuilt = build_lanes([("主字幕", track)], time_offset_ms=2000)
+    widget.set_timing_display_offset(2000, lanes=prebuilt)
+    assert widget._lanes[0].blocks[0].display_row == rows[0]
+    assert widget._lanes[0].blocks[0].start_ms == a.start_ms + 2000
+    assert widget._windows[0][0] == (2000, 5200)
+    assert track.lines[0].chars[0].start_ms == 1000
+    assert not widget.grab().isNull()
+
+
+def test_single_line_mode_badge_is_one_of_one() -> None:
+    from krok_helper.subtitle_render.engine.render.adapters.timeline_projection import (
+        timeline_display_for_style,
+    )
+
+    def unexpected(*_a, **_k):
+        raise AssertionError("Single-line mode must not invoke multi-row layout")
+
+    data = timeline_display_for_style(_make_track(), Style(dual_line_layout=False),
+                                      display_lines=unexpected)
+    assert [row.label for row in data.rows.values()] == ["1/1", "1/1"]
+
+
 def test_timeline_accepts_focus_for_host_shortcuts(qapp) -> None:
     widget = TrackTimelineView()
     assert widget.focusPolicy() == Qt.FocusPolicy.StrongFocus
@@ -1019,14 +1120,15 @@ def test_context_menu_on_block_toggles_wipe_reverse(qapp, monkeypatch) -> None:
     assert track.lines[0].wipe_reverse_override is True
     assert edits == [(0, 0, (None, False), (True, True))]
 
-    # 右键空白轨道区不弹菜单
+    # 空白区域仍可切换着色方式，但没有句子的编辑菜单。
     captured.clear()
     empty = QContextMenuEvent(
         QContextMenuEvent.Reason.Mouse,
         QPoint(round(widget._x_for_ms(8000)), round(lane_rect.center().y())),
     )
     widget.contextMenuEvent(empty)
-    assert "menu" not in captured
+    assert "menu" in captured
+    assert not any(item.text() == "反向走字" for item in captured["menu"].actions())
 
 
 def test_set_head_override_writes_and_emits(qapp) -> None:
