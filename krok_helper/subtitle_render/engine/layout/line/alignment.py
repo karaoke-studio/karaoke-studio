@@ -12,10 +12,17 @@ def lane_slot(
     alignments = style.line_alignments or ["left"]
     count = len(alignments)
     index = 0 if lane is None else max(int(lane), 0)
+    # An unforced single-line page keeps its natural T1 row. Its horizontal
+    # alignment and offset must use that same row rather than the bottom slot.
+    natural_single = (
+        page_line_count == 1 and style.dual_line_layout
+        and not style.vertical and not style.force_top_bottom_n3
+    )
     if (
         page_line_count is not None
         and style.line_y_position == "bottom"
         and 0 < int(page_line_count) < count
+        and not natural_single
     ):
         index = max(count - int(page_line_count) + index, 0)
     return min(index, count - 1)

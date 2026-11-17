@@ -1588,6 +1588,7 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     cfg.lowerLineRightMarginPx = intValue(style, QStringLiteral("lower_line_right_margin_px"), cfg.lowerLineRightMarginPx);
     cfg.horizontalMarginPx = intValue(style, QStringLiteral("horizontal_margin_px"), cfg.horizontalMarginPx);
     cfg.smartHorizontal = stringValue(style, QStringLiteral("smart_horizontal"), cfg.smartHorizontal);
+    cfg.forceTopBottomN3 = style.value(QStringLiteral("force_top_bottom_n3")).toBool(cfg.forceTopBottomN3);
     const QJsonArray lineAlignments = style.value(QStringLiteral("line_alignments")).toArray();
     if (!lineAlignments.isEmpty()) {
         cfg.lineAlignments.clear();
@@ -2158,6 +2159,9 @@ static void applyLineLayoutSection(
             layoutObject, QStringLiteral("horizontal_margin_px"),
             line.layout.horizontalMarginPx
         );
+        line.layout.forceTopBottomN3 = layoutObject.value(
+            QStringLiteral("force_top_bottom_n3")
+        ).toBool(line.layout.forceTopBottomN3);
         const QJsonArray layoutAlignments = layoutObject.value(
             QStringLiteral("line_alignments")
         ).toArray();

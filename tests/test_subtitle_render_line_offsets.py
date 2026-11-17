@@ -49,16 +49,31 @@ def test_offsets_roundtrip_old_projects_and_scaling():
     assert scaled.layouts[0].line_offsets_x == [-140, 180]
 
 
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("force_bottom", [False, True])
+def test_single_page_alignment_and_offset_share_the_row(rows, force_bottom):
+    from krok_helper.subtitle_render.engine.layout.line.alignment import lane_alignment, lane_offset_x
+
+    style = replace(base_style(), line_y_position="bottom", smart_horizontal="none",
+                    line_alignments=["left"] + ["right"] * (rows - 1),
+                    line_offsets_x=list(range(10, 10 + rows)),
+                    force_top_bottom_n3=force_bottom)
+    assert lane_alignment(style, 0, 1) == ("right" if force_bottom else "left")
+    assert lane_offset_x(style, 0, 1) == (9 + rows if force_bottom else 10)
+
+
 @pytest.mark.parametrize("mode", ["none", "center_position", "equal_margins"])
 @pytest.mark.parametrize("align", ["left", "center", "right"])
-def test_offset_is_added_after_smart_and_bottom_short_page(qapp, mode, align):
+@pytest.mark.parametrize("force_bottom", [False, True])
+def test_offset_is_added_after_smart_and_bottom_short_page(qapp, mode, align, force_bottom):
     track = track_one()
     style = replace(base_style(), smart_horizontal=mode, line_y_position="bottom",
-                    line_alignments=["left", align], line_offsets_x=[111, -37])
+                    line_alignments=["left", align], line_offsets_x=[111, -37],
+                    force_top_bottom_n3=force_bottom)
     baseline = replace(style, line_offsets_x=[])
     x = resolve_line_x_smart(640, 80, track, track.lines[0], style, 0)
     expected = resolve_line_x_smart(640, 80, track, track.lines[0], baseline, 0)
-    assert x == expected - 37
+    assert x == expected + (-37 if force_bottom else 111)
 
 
 @pytest.mark.parametrize("align,offset,level", [("left", -20, "margin"), ("left", -100, "overflow"),
@@ -117,7 +132,7 @@ def test_cpu_and_gpu_frames_translate_without_relayout(qapp, case, offset):
     shifted = replace(style, line_offsets_x=[offset])
     if case == "bottom_short":
         style = replace(style, line_y_position="bottom", line_alignments=["left", "right"])
-        shifted = replace(style, line_offsets_x=[999, offset])
+        shifted = replace(style, line_offsets_x=[offset, 999])
     elif case in {"smart_center", "smart_equal"}:
         track.lines.append(TimingLine(chars=[TimingChar("CD", 0)], end_ms=3000))
         style = replace(style, line_alignments=["left", "right"], line_gap_px=20,

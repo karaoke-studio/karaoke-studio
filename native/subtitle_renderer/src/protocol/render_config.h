@@ -35,6 +35,7 @@ struct TimingChar {
 
 struct ResolvedLineLayout {
     bool present = false;
+    bool forceTopBottomN3 = false;
     QString lineYPosition = QStringLiteral("bottom");
     int lineYMarginPx = 80;
     int lineGapPx = 90;
@@ -654,6 +655,7 @@ struct LineBandConfig {
 };
 
 struct RenderConfig {
+    bool forceTopBottomN3 = false;
     int width = 1920;
     int height = 1080;
     int fps = 60;

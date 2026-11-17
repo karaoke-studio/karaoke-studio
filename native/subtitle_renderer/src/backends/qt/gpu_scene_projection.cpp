@@ -236,7 +236,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sourceLine.lane, static_cast<int>(config.lineAlignments.size()),
                 config.dualLineLayout && config.lineHorizontalLayout == QStringLiteral("asymmetric")
                     ? sourceLine.pageLineCount : 0,
-                config.lineYPosition
+                config.lineYPosition,
+                config.forceTopBottomN3 || config.vertical || !config.dualLineLayout
             );
             lineStyle.laneOffsetX = offsetIndex < static_cast<int>(config.lineOffsetsX.size())
                 ? static_cast<float>(config.lineOffsetsX[offsetIndex] * scale) : 0.0f;
@@ -251,7 +252,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     sourceLine.lane,
                     static_cast<int>(config.lineAlignments.size()),
                     sourceLine.pageLineCount,
-                    config.lineYPosition
+                    config.lineYPosition,
+                    config.forceTopBottomN3 || config.vertical || !config.dualLineLayout
                 );
                 lineStyle.alignment = config.lineAlignments[
                     static_cast<std::size_t>(alignmentIndex)

@@ -12,11 +12,13 @@ using protocol::PaintFillSpec;
 // line, Bottom counts backward from its last one.  The two agree on a full
 // page and diverge on a short one, where Bottom takes the tail of the list --
 // a 2-line page under [left, center, right] is "center + right".
+// Unforced single-line pages stay at their natural row, including its X slot.
 int alignmentIndexForLane(
     int lane,
     int alignmentCount,
     int pageLineCount,
-    const QString &verticalPosition
+    const QString &verticalPosition,
+    bool forceTopBottom
 ) {
     if (alignmentCount <= 0) {
         return 0;
@@ -24,7 +26,8 @@ int alignmentIndexForLane(
     int index = std::max(lane, 0);
     if (verticalPosition == QStringLiteral("bottom")
         && pageLineCount > 0
-        && pageLineCount < alignmentCount) {
+        && pageLineCount < alignmentCount
+        && (pageLineCount != 1 || forceTopBottom)) {
         index = std::max(alignmentCount - pageLineCount + index, 0);
     }
     return std::clamp(index, 0, alignmentCount - 1);
@@ -61,7 +64,8 @@ void applyLineLayout(
         lane, static_cast<int>(layout.lineAlignments.size()),
         layout.dualLineLayout && layout.lineHorizontalLayout == QStringLiteral("asymmetric")
             ? pageLineCount : 0,
-        layout.lineYPosition
+        layout.lineYPosition,
+        layout.forceTopBottomN3 || target.vertical || !layout.dualLineLayout
     );
     target.laneOffsetX = offsetIndex < static_cast<int>(layout.lineOffsetsX.size())
         ? static_cast<float>(layout.lineOffsetsX[offsetIndex] * scale) : 0.0f;
@@ -84,7 +88,8 @@ void applyLineLayout(
             lane,
             static_cast<int>(layout.lineAlignments.size()),
             pageLineCount,
-            layout.lineYPosition
+            layout.lineYPosition,
+            layout.forceTopBottomN3 || target.vertical || !layout.dualLineLayout
         );
         target.alignment = layout.lineAlignments[
             static_cast<std::size_t>(alignmentIndex)

@@ -12851,21 +12851,18 @@ def test_bottom_short_page_takes_alignments_from_the_tail(qapp):
     )
 
 
-def test_bottom_single_line_page_uses_the_last_alignment(qapp):
-    """单行页在 Bottom 锚定下占最下行，对齐取列表末项（N3 的 while 一次都不走）。
-
-    SmartHorizon 开着时单行页本来就整行居中，所以这条只在「不调整」时可见。
-    """
+@pytest.mark.parametrize("force_bottom", [False, True])
+def test_bottom_single_line_page_alignment_follows_force_bottom(qapp, force_bottom):
+    """未强制的孤行用天然 T1；显式强制顶底仍保留 N3 的末项对齐。"""
 
     track = _continuous_track(["あい"])
-    style = Style(smart_horizontal="none")  # 默认 ["left", "right"] + bottom
+    style = Style(smart_horizontal="none", force_top_bottom_n3=force_bottom)
     img_w = 1920
     line = track.lines[0]
     width = _line_total_width(line, style)
 
-    assert _resolve_line_x_smart(img_w, width, track, line, style, 0) == (
-        img_w - 50 - width
-    )
+    expected = img_w - 50 - width if force_bottom else 50
+    assert _resolve_line_x_smart(img_w, width, track, line, style, 0) == expected
 
 
 def test_smart_none_keeps_margin_anchor_and_single_page_centering_off(qapp):

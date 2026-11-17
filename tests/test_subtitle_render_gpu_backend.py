@@ -8662,6 +8662,55 @@ def test_gpu_smart_horizontal_applies_without_n3_semantics(monkeypatch, smart) -
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("force_bottom", [False, True])
+@pytest.mark.parametrize("custom_layout", [False, True])
+def test_gpu_single_line_page_uses_natural_alignment_unless_forced(qapp, force_bottom, custom_layout):
+    from krok_helper.subtitle_render.domain.models import LyricsLayout
+    from krok_helper.subtitle_render.domain.timing import TrackPage, TrackPagePlan, TrackSection
+    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+
+    lines = [TimingLine(chars=[TimingChar("AB", 1000 + i * 4000)], end_ms=2000 + i * 4000)
+             for i in range(3)]
+    track = TimingTrack(lines=lines)
+    style = _g1_style(
+        font_family="Arial", font_family_latin="Arial", font_size_px=40,
+        stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
+        dual_line_layout=True, line_horizontal_layout="asymmetric",
+        line_alignments=["left", "right"], line_offsets_x=[17, -29],
+        line_y_position="bottom", smart_horizontal="none", horizontal_margin_px=30,
+        force_top_bottom_n3=force_bottom, line_lead_in_ms=0, line_tail_ms=0,
+    )
+    layout_id = "default"
+    if custom_layout:
+        layout_id = "two-rows"
+        style = replace(style, force_top_bottom_n3=not force_bottom, layouts=[LyricsLayout(
+            layout_id=layout_id, line_alignments=["left", "right"],
+            line_offsets_x=[17, -29], line_y_position="bottom", smart_horizontal="none",
+            horizontal_margin_px=30, force_top_bottom_n3=force_bottom,
+        )])
+        for line in lines:
+            line.layout_index = 1
+    track.page_plan = TrackPagePlan([TrackSection([
+        TrackPage(2, layout_id), TrackPage(1, layout_id),
+    ])])
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=20) as renderer:
+        _, frames = _render_g1_frames(renderer, style, (9500,), force_warp=True,
+                                      track=track, realization_enabled=False)
+    actual = _payload_alpha_bounds(frames[0])
+    painter = _render_painter_oracle(style, t_ms=9500, track=track)
+    expected = _payload_alpha_bounds(painter)
+    if force_bottom:
+        assert actual[0] > 320
+    else:
+        assert actual[2] < 320
+    assert all(abs(a - b) <= 12 for a, b in zip(actual, expected)), (actual, expected)
+    ir = build_render_ir(track, style, width=640, height=360, fps=60)
+    last = ir["track"]["lines"][-1]
+    assert last["lane"] == (1 if force_bottom else 0)
+    assert ir["line_layout_table"][last["layout_id"]]["force_top_bottom_n3"] == force_bottom
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_bottom_short_page_takes_alignments_from_the_tail(monkeypatch) -> None:
     """Bottom 锚定的短页取对齐列表末尾几项（N3 ``CalcHorizontalAlignment``）。
 
