@@ -254,6 +254,7 @@ class GuideRoleSchemeDialog(ModelessDialog):
         *,
         prompt: str,
         cancel_text: str = "取消",
+        show_do_not_prompt: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
@@ -285,6 +286,11 @@ class GuideRoleSchemeDialog(ModelessDialog):
             empty_hint.setWordWrap(True)
             layout.addWidget(empty_hint)
 
+        self.do_not_prompt_check = CheckBox("本次项目不再提示", self)
+        self.do_not_prompt_check.setChecked(True)
+        self.do_not_prompt_check.setVisible(show_do_not_prompt)
+        layout.addWidget(self.do_not_prompt_check)
+
         button_row, self.ok_button, self.cancel_button = fluent_button_row(
             self,
             ok_text="应用角色方案",
@@ -305,6 +311,7 @@ def choose_guide_role_scheme(
     *,
     prompt: str,
     cancel_text: str = "取消",
+    on_do_not_prompt: Optional[Callable[[bool], None]] = None,
     parent: Optional[QWidget] = None,
 ) -> Optional[str]:
     """Return a selected existing role scheme, or ``None`` when skipped."""
@@ -320,9 +327,13 @@ def choose_guide_role_scheme(
         unique_names,
         prompt=prompt,
         cancel_text=cancel_text,
+        show_do_not_prompt=on_do_not_prompt is not None,
         parent=parent,
     )
-    if dialog.exec() != QDialog.DialogCode.Accepted:
+    result = dialog.exec()
+    if on_do_not_prompt is not None:
+        on_do_not_prompt(dialog.do_not_prompt_check.isChecked())
+    if result != QDialog.DialogCode.Accepted:
         return None
     return dialog.role_name()
 
@@ -368,7 +379,7 @@ def bitmap_options_kwargs(options: dict) -> dict:
 
 
 class GuideBitmapOptionsRow(QWidget):
-    """@Emoji 式选项行：缩放（Zoom% / Fix）· NoDecor · 左右下余白。
+    """缩放、装饰与 X/Y 偏移；高级选项保留 @Emoji 左右下余白。
 
     与 SUG「分色标签设置助手」的选项行同构；``NoDecor`` 控制是否给图片套用
     样式方案中的文字装饰（shadow / glow，飾り色随走字前后切换），
@@ -386,7 +397,11 @@ class GuideBitmapOptionsRow(QWidget):
         defaults: Optional[dict] = None,
     ) -> None:
         super().__init__(parent)
-        row = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
+        row = QHBoxLayout()
+        outer.addLayout(row)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
 
@@ -415,7 +430,32 @@ class GuideBitmapOptionsRow(QWidget):
         row.addWidget(self.no_decor_check)
 
         row.addSpacing(8)
-        row.addWidget(BodyLabel("余白", self))
+        row.addWidget(BodyLabel("偏移", self))
+        self._syncing_offsets = False
+        self._horizontal_margin_total = 0
+        self.offset_x_edit = LineEdit(self)
+        self.offset_y_edit = LineEdit(self)
+        for label, edit, tooltip in (
+            ("X", self.offset_x_edit, "横向偏移（像素）：正值向右，负值向左；保持原有占位宽度。"),
+            ("Y", self.offset_y_edit, "纵向偏移（像素）：正值向下，负值向上。"),
+        ):
+            row.addWidget(BodyLabel(label, self))
+            edit.setMinimumWidth(60)
+            edit.setToolTip(tooltip)
+            row.addWidget(edit)
+        self.advanced_button = PushButton("高级余白", self)
+        self.advanced_button.setCheckable(True)
+        self.advanced_button.setToolTip("独立调整原始左右余白与占位宽度，兼容已有图片设置。")
+        row.addWidget(self.advanced_button)
+        row.addStretch(1)
+        self.advanced_margins = QWidget(self)
+        advanced = QHBoxLayout(self.advanced_margins)
+        advanced.setContentsMargins(0, 0, 0, 0)
+        advanced.setSpacing(4)
+        advanced.addWidget(BodyLabel("原始余白", self))
+        outer.addWidget(self.advanced_margins)
+        self.advanced_margins.hide()
+        self.advanced_button.toggled.connect(self.advanced_margins.setVisible)
         offset_warning = "偏移量过度超出第一个字符可能导致显示异常。"
         for key, label, tooltip in (
             (
@@ -434,16 +474,46 @@ class GuideBitmapOptionsRow(QWidget):
                 "MarginBottom：图片下方留白（像素，允许负值）。",
             ),
         ):
-            row.addWidget(BodyLabel(label, self))
+            advanced.addWidget(BodyLabel(label, self))
             edit = LineEdit(self)
             edit.setMinimumWidth(60)
             edit.setPlaceholderText("0")
             edit.setToolTip(f"{tooltip}\n{offset_warning}")
             setattr(self, f"{key}_edit", edit)
-            row.addWidget(edit)
-        row.addStretch(1)
+            advanced.addWidget(edit)
+            edit.textChanged.connect(self._margins_changed)
+        advanced.addStretch(1)
+        self.offset_x_edit.textChanged.connect(self._offsets_changed)
+        self.offset_y_edit.textChanged.connect(self._offsets_changed)
 
         self.set_options(defaults or {})
+
+    def _margins_changed(self) -> None:
+        if self._syncing_offsets:
+            return
+        left = self._edit_int(self.margin_left_px_edit, 0)
+        self._horizontal_margin_total = left + self._edit_int(self.margin_right_px_edit, 0)
+        self._syncing_offsets = True
+        try:
+            self.offset_x_edit.setText(str(left))
+            self.offset_y_edit.setText(str(-self._edit_int(self.margin_bottom_px_edit, 0)))
+        finally:
+            self._syncing_offsets = False
+
+    def _offsets_changed(self) -> None:
+        if self._syncing_offsets:
+            return
+        try:
+            x, y = int(self.offset_x_edit.text().strip()), int(self.offset_y_edit.text().strip())
+        except ValueError:
+            return  # Keep the previous valid geometry while typing a minus sign.
+        self._syncing_offsets = True
+        try:
+            self.margin_left_px_edit.setText(str(x))
+            self.margin_right_px_edit.setText(str(self._horizontal_margin_total - x))
+            self.margin_bottom_px_edit.setText(str(-y))
+        finally:
+            self._syncing_offsets = False
 
     def options(self) -> dict:
         return {
@@ -466,6 +536,7 @@ class GuideBitmapOptionsRow(QWidget):
         self.no_decor_check.setChecked(bool(options.get("no_decor")))
         for key in ("margin_left_px", "margin_right_px", "margin_bottom_px"):
             getattr(self, f"{key}_edit").setText(str(options.get(key, 0)))
+        self._margins_changed()
 
     @staticmethod
     def _edit_int(edit: LineEdit, default: int) -> int:
@@ -635,6 +706,7 @@ class GuidePrefixReplaceDialog(ModelessDialog):
     """Fluent batch-review dialog for guide replacement and marker role batching."""
 
     roleSchemeApplyRequested = Signal(object, str)
+    applyRequested = Signal()
 
     def __init__(
         self,
@@ -653,6 +725,7 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         self._role_options_provider = role_options_provider
         self._matches: list[GuidePrefixMatch] = []
         self._row_checks: list[QTableWidgetItem] = []
+        self._applying = False
         self.setWindowTitle("批量识别导唱标记")
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumSize(820, 560)
@@ -740,7 +813,7 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         selection_row.addStretch(1)
         layout.addLayout(selection_row)
         button_row, self.ok_button, _cancel_button = fluent_button_row(
-            self, ok_text="应用替换"
+            self, ok_text="应用替换", cancel_text="关闭"
         )
         self.batch_role_button = PushButton("批量应用角色方案", self)
         button_row.insertWidget(1, self.batch_role_button)
@@ -867,7 +940,26 @@ class GuidePrefixReplaceDialog(ModelessDialog):
             remember_bitmap_settings(self.batch_settings())
         super().done(result)
 
-    def refresh_matches(self) -> None:
+    def accept(self) -> None:
+        if self._applying:
+            return
+        self.refresh_matches(preserve_selection=True)
+        if not self.ok_button.isEnabled():
+            return
+        remember_bitmap_settings(self.batch_settings())
+        self._applying = True
+        self._sync_ok_button()
+        try:
+            self.applyRequested.emit()
+        finally:
+            self._applying = False
+            self._sync_ok_button()
+
+    def refresh_matches(self, *, preserve_selection: bool = False) -> None:
+        selected = {
+            (match.row, match.start_index, match.marker, match.prefix)
+            for match in self.selected_matches()
+        } if preserve_selection else set()
         self._matches = detect_guide_prefix_matches(
             self._track,
             self.marker_edit.text(),
@@ -881,9 +973,10 @@ class GuidePrefixReplaceDialog(ModelessDialog):
                 Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
             )
             check_item.setCheckState(
-                Qt.CheckState.Unchecked
-                if match.has_guide_symbol
-                else Qt.CheckState.Checked
+                Qt.CheckState.Checked if (
+                    (match.row, match.start_index, match.marker, match.prefix) in selected
+                    if preserve_selection else not match.has_guide_symbol
+                ) else Qt.CheckState.Unchecked
             )
             check_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             check_item.setData(Qt.ItemDataRole.UserRole, True)
@@ -932,8 +1025,9 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         self.ok_button.setEnabled(
             (self.before_path() is not None or self.after_path() is not None)
             and has_selection
+            and not self._applying
         )
-        self.batch_role_button.setEnabled(has_selection)
+        self.batch_role_button.setEnabled(has_selection and not self._applying)
 
     def _available_role_options(self) -> list[str]:
         if self._role_options_provider is not None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QObject, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QAbstractItemView, QApplication, QDialog
@@ -63,6 +63,23 @@ from krok_helper.subtitle_render.domain.models import (
 )
 from krok_helper.subtitle_render.project.store import project_payload
 from krok_helper.subtitle_render.project.load import apply_track_project_data
+
+
+class _ApplyingDialogStub(QObject):
+    """Apply during the open dialog, then close with no acceptance rollback."""
+
+    applyRequested = pyqtSignal()
+    roleSchemeApplyRequested = pyqtSignal(object, str)
+
+    def __init__(self, *_args, **_kwargs):
+        super().__init__()
+
+    def exec(self):
+        self.applyRequested.emit()
+        return QDialog.DialogCode.Rejected
+
+    def refresh_matches(self, *, preserve_selection=False):
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -335,6 +352,34 @@ def test_guide_bitmap_options_row_round_trips_settings():
         "fix_size"
     ] is False
     assert row.zoom_value_edit.isEnabled()
+
+
+@pytest.mark.parametrize("left,right,bottom", [(0, 0, 100), (15, 30, -20), (3, -170, 4)])
+def test_xy_offsets_preserve_legacy_geometry_and_horizontal_advance(left, right, bottom):
+    row = guide_replacement_module.GuideBitmapOptionsRow(defaults={
+        "margin_left_px": left, "margin_right_px": right, "margin_bottom_px": bottom,
+    })
+    assert row.offset_x_edit.text() == str(left)
+    assert row.offset_y_edit.text() == str(-bottom)
+    assert row.options()["margin_right_px"] == right
+    assert row.advanced_margins.isHidden()
+    row.offset_x_edit.setText("25")
+    row.offset_y_edit.setText("-40")
+    options = row.options()
+    assert options["margin_left_px"] == 25
+    assert options["margin_left_px"] + options["margin_right_px"] == left + right
+    assert options["margin_bottom_px"] == 40
+    row.advanced_button.click()
+    assert not row.advanced_margins.isHidden()
+    row.margin_right_px_edit.setText("50")
+    row.margin_bottom_px_edit.setText("-10")
+    assert row.offset_y_edit.text() == "10"
+    row.offset_x_edit.setText("30")
+    assert row.options()["margin_right_px"] == 45  # Preserve the advanced 25+50 total.
+    before = row.options()
+    row.offset_x_edit.setText("-")
+    assert row.options() == before
+    row.close()
 
 
 def test_guide_bitmap_settings_dialog_prefills_from_session_memory(tmp_path):
@@ -2145,6 +2190,30 @@ def test_guide_role_scheme_dialog_uses_existing_project_roles():
     dialog.close()
 
 
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("checked", [False, True])
+def test_automatic_role_prompt_defaults_checked_and_remembers_both_choices(monkeypatch, accepted, checked):
+    choices = []
+    def choose(dialog):
+        assert dialog.do_not_prompt_check.text() == "本次项目不再提示"
+        assert not dialog.do_not_prompt_check.isHidden()
+        assert dialog.do_not_prompt_check.isChecked()
+        dialog.do_not_prompt_check.setChecked(checked)
+        return QDialog.DialogCode.Accepted if accepted else QDialog.DialogCode.Rejected
+    monkeypatch.setattr(GuideRoleSchemeDialog, "exec", choose)
+    role = guide_replacement_module.choose_guide_role_scheme(
+        ["角色A"], prompt="是否应用角色方案？", on_do_not_prompt=choices.append,
+    )
+    assert role == ("角色A" if accepted else None)
+    assert choices == [checked]
+
+
+def test_manual_role_dialog_does_not_offer_prompt_suppression():
+    dialog = GuideRoleSchemeDialog(["角色A"], prompt="请选择角色方案。")
+    assert dialog.do_not_prompt_check.isHidden()
+    dialog.close()
+
+
 def test_batch_role_button_emits_checked_matches_from_shared_role_dialog(
     monkeypatch,
 ):
@@ -2478,12 +2547,7 @@ def test_batch_prefix_replacement_is_one_undoable_command(tmp_path, monkeypatch)
     )
     matches = detect_guide_prefix_matches(track, "h")
 
-    class AcceptedDialog:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
+    class AcceptedDialog(_ApplyingDialogStub):
 
         def before_path(self):
             return tmp_path / "lead.svg"
@@ -2549,12 +2613,7 @@ def test_batch_non_prefix_replacement_uses_inline_svg_and_is_undoable(
         track, "h", include_non_prefix=True
     )
 
-    class AcceptedDialog:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
+    class AcceptedDialog(_ApplyingDialogStub):
 
         def before_path(self):
             return tmp_path / "lead.svg"
@@ -2622,12 +2681,7 @@ def test_batch_replacement_overwrites_existing_prefix_and_inline_guides(
     )
     matches = detect_guide_prefix_matches(track, "h", include_non_prefix=True)
 
-    class AcceptedDialog:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
+    class AcceptedDialog(_ApplyingDialogStub):
 
         def before_path(self):
             return tmp_path / "lead.svg"
@@ -2750,12 +2804,7 @@ def test_batch_replacement_prompts_to_apply_existing_role_scheme(
     )
     matches = detect_guide_prefix_matches(track, "h")
 
-    class AcceptedDialog:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
+    class AcceptedDialog(_ApplyingDialogStub):
 
         def before_path(self):
             return tmp_path / "lead.svg"
@@ -2920,12 +2969,7 @@ def test_batch_prefix_replacement_keeps_bitmap_avatar_guide(tmp_path, monkeypatc
     )
     matches = detect_guide_prefix_matches(track, "h")
 
-    class AcceptedDialog:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
+    class AcceptedDialog(_ApplyingDialogStub):
 
         def before_path(self):
             return tmp_path / "lead.svg"
@@ -3157,3 +3201,161 @@ def test_scaled_guide_symbol_path_matches_composed_transform(tmp_path):
         want = expected.elementAt(index)
         assert got.x == pytest.approx(want.x, abs=1e-9)
         assert got.y == pytest.approx(want.y, abs=1e-9)
+
+
+def test_batch_replace_stays_open_reapplies_and_preserves_undo(tmp_path, monkeypatch):
+    path = _write_png(tmp_path / "guide.png", "#FF0000")
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])])
+    monkeypatch.setattr(main_window_module.SubtitleRenderWindow, "_resolve_ffprobe_path", lambda self: "ffprobe")
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    parents = []
+    preview_tracks = []
+    original_set_track = window._preview_panel.set_track
+    def preview(updated):
+        preview_tracks.append(updated)
+        original_set_track(updated)
+    monkeypatch.setattr(window._preview_panel, "set_track", preview)
+    def choose(_roles, **kwargs):
+        dialog = kwargs["parent"]
+        assert dialog.isVisible()
+        assert not dialog.ok_button.isEnabled()  # No reentrant Apply while choosing a role.
+        parents.append(dialog)
+        return None
+    monkeypatch.setattr(main_window_module, "choose_guide_role_scheme", choose)
+    def drive(dialog):
+        dialog.show()
+        dialog.set_before_path(path)
+        dialog.ok_button.click()
+        assert dialog.isVisible()
+        assert track.lines[0].guide_symbol.bitmap_margin_left_px == 0
+        assert len(dialog.selected_matches()) == 1
+        dialog.options_row.offset_x_edit.setText("25")
+        dialog.options_row.offset_y_edit.setText("-100")
+        dialog.ok_button.click()
+        assert dialog.isVisible()
+        symbol = track.lines[0].guide_symbol
+        assert (symbol.bitmap_margin_left_px, symbol.bitmap_margin_right_px, symbol.bitmap_margin_bottom_px) == (25, -25, 100)
+        assert len(window._undo_stack) == 2
+        dialog.ok_button.click()
+        assert len(window._undo_stack) == 2  # Identical Apply is not another edit.
+        window._undo_edit()
+        assert track.lines[0].guide_symbol.bitmap_margin_left_px == 0
+        window._redo_edit()
+        assert track.lines[0].guide_symbol.bitmap_margin_left_px == 25
+        dialog.reject()
+        return QDialog.DialogCode.Rejected
+    monkeypatch.setattr(GuidePrefixReplaceDialog, "exec", drive)
+    try:
+        window._on_guide_prefix_replace_requested()
+        assert len(parents) == 3
+        assert all(updated is track for updated in preview_tracks)
+        assert len(preview_tracks) >= 2
+        assert track.lines[0].guide_symbol.bitmap_margin_left_px == 25
+    finally:
+        window.close()
+
+
+def test_batch_replace_error_keeps_window_and_original_track(tmp_path, monkeypatch):
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])])
+    monkeypatch.setattr(main_window_module.SubtitleRenderWindow, "_resolve_ffprobe_path", lambda self: "ffprobe")
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    errors = []
+    monkeypatch.setattr(main_window_module, "fluent_error", lambda parent, *message: errors.append((parent, message)))
+    def drive(dialog):
+        dialog.show()
+        dialog.set_before_path(tmp_path / "missing.png")
+        dialog.ok_button.click()
+        assert dialog.isVisible() and dialog.ok_button.isEnabled()
+        assert errors and errors[0][0] is dialog
+        assert track.lines[0].guide_symbol is None
+        assert not window._undo_stack
+        dialog.reject()
+        return QDialog.DialogCode.Rejected
+    monkeypatch.setattr(GuidePrefixReplaceDialog, "exec", drive)
+    try:
+        window._on_guide_prefix_replace_requested()
+    finally:
+        window.close()
+
+
+def test_open_batch_dialog_refuses_other_sources_and_late_role_apply(tmp_path, monkeypatch):
+    path = _write_png(tmp_path / "guide.png", "#FF0000")
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])])
+    other = TimingTrack(lines=[TimingLine(chars=[TimingChar("h", 3000), TimingChar("詞", 4000)])])
+    active = [track]
+    monkeypatch.setattr(main_window_module.SubtitleRenderWindow, "_resolve_ffprobe_path", lambda self: "ffprobe")
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    monkeypatch.setattr(window, "_active_track", lambda: active[0])
+    warnings, roles = [], []
+    monkeypatch.setattr(main_window_module, "fluent_warning", lambda *_args: warnings.append(True))
+    monkeypatch.setattr(window, "_apply_guide_match_role_scheme", lambda *args: roles.append(args))
+    def choose(_roles, **kwargs):
+        assert kwargs["parent"].isVisible()
+        active[0] = other  # A modeless role popup must recheck its source on return.
+        return "角色A"
+    monkeypatch.setattr(main_window_module, "choose_guide_role_scheme", choose)
+    def drive(dialog):
+        dialog.show()
+        dialog.set_before_path(path)
+        active[0] = other
+        dialog.ok_button.click()
+        dialog.roleSchemeApplyRequested.emit(dialog.selected_matches(), "角色A")
+        assert track.lines[0].guide_symbol is other.lines[0].guide_symbol is None
+        assert not roles and not window._undo_stack
+        active[0] = track
+        dialog.ok_button.click()
+        assert track.lines[0].guide_symbol is not None
+        assert other.lines[0].guide_symbol is None
+        assert not roles and len(warnings) == 3
+        dialog.reject()
+        return QDialog.DialogCode.Rejected
+    monkeypatch.setattr(GuidePrefixReplaceDialog, "exec", drive)
+    try:
+        window._on_guide_prefix_replace_requested()
+    finally:
+        active[0] = track
+        window.close()
+
+
+def test_project_suppression_skips_only_automatic_role_prompt(tmp_path, monkeypatch):
+    path = _write_png(tmp_path / "guide.png", "#FF0000")
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])])
+    monkeypatch.setattr(main_window_module.SubtitleRenderWindow, "_resolve_ffprobe_path", lambda self: "ffprobe")
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._style = replace(window._style, custom_style_schemes={"角色A": SubtitleStyleScheme()})
+    automatic, manual = [], []
+    def automatic_choice(_roles, **kwargs):
+        automatic.append(True)
+        kwargs["on_do_not_prompt"](True)
+        return None
+    def manual_choice(_roles, **kwargs):
+        manual.append(True)
+        return "角色A"
+    monkeypatch.setattr(main_window_module, "choose_guide_role_scheme", automatic_choice)
+    monkeypatch.setattr(guide_replacement_module, "choose_guide_role_scheme", manual_choice)
+    def drive(dialog):
+        dialog.show()
+        dialog.set_before_path(path)
+        dialog.ok_button.click()
+        assert window._project_session.suppress_guide_role_prompt
+        dialog.options_row.offset_x_edit.setText("25")
+        dialog.ok_button.click()
+        assert automatic == [True]
+        assert track.lines[0].guide_symbol.bitmap_margin_left_px == 25
+        dialog.batch_role_button.click()
+        assert manual == [True]
+        assert track.lines[0].chars[0].role_label == "角色A"
+        window._project_session.begin_generation()
+        dialog.ok_button.click()
+        assert automatic == [True, True]
+        dialog.reject()
+        return QDialog.DialogCode.Rejected
+    monkeypatch.setattr(GuidePrefixReplaceDialog, "exec", drive)
+    try:
+        window._on_guide_prefix_replace_requested()
+    finally:
+        window.close()

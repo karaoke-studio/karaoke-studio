@@ -10235,13 +10235,39 @@ class SubtitleRenderWindow(QWidget):
             role_options_provider=self._guide_role_scheme_options,
             parent=self,
         )
-        role_signal = getattr(dialog, "roleSchemeApplyRequested", None)
-        if role_signal is not None:
-            role_signal.connect(self._on_guide_matches_role_scheme_requested)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        # 对话框在 done(Accepted) 里已把整套设置（图片 / 选项 / 标记字符 /
-        # 非行首开关）写入记忆，这里调度一次应用偏好落盘让它跨重启生效。
+
+        def source_is_current() -> bool:
+            if self._title_source_active or self._active_track() is not track:
+                fluent_warning(
+                    dialog, "字幕源已切换",
+                    "请切回打开此窗口时的字幕源后再应用；如果原字幕源已移除，请关闭窗口并重新打开。",
+                )
+                return False
+            return True
+
+        def apply_replacements() -> None:
+            if source_is_current():
+                self._apply_guide_prefix_replacements(dialog, track)
+
+        def apply_role(matches: object, role_name: str) -> None:
+            if source_is_current():
+                self._on_guide_matches_role_scheme_requested(matches, role_name)
+
+        dialog.applyRequested.connect(apply_replacements)
+        dialog.roleSchemeApplyRequested.connect(apply_role)
+        try:
+            dialog.exec()
+        finally:
+            try:
+                dialog.deleteLater()
+            except RuntimeError:
+                pass  # Parent destruction may already have ended the nested loop.
+
+    def _apply_guide_prefix_replacements(
+        self, dialog: GuidePrefixReplaceDialog, track: TimingTrack,
+    ) -> None:
+        # Apply is independent of dialog acceptance, so preview and undo update
+        # immediately while the user keeps editing the same selection.
         self._schedule_persisted_state_save()
         before_path = dialog.before_path()
         after_path = dialog.after_path()
@@ -10259,7 +10285,7 @@ class SubtitleRenderWindow(QWidget):
                     **bitmap_options_kwargs(options),
                 )
         except GuideSymbolImportError as exc:
-            fluent_error(self, "无法导入导唱符", str(exc))
+            fluent_error(dialog, "无法导入导唱符", str(exc))
             return
 
         candidate_rows = tuple(
@@ -10307,7 +10333,7 @@ class SubtitleRenderWindow(QWidget):
 
         if not applied_rows:
             fluent_warning(
-                self,
+                dialog,
                 "没有可替换项",
                 "候选歌词在窗口打开后已发生变化，无法确认原标记位置。请重新检测后再试。",
             )
@@ -10321,26 +10347,46 @@ class SubtitleRenderWindow(QWidget):
             )
             for row in row_tuple
         )
-        self._undo_stack.append(
-            (
-                "guide_replacements",
-                self._active_source_index,
-                row_tuple,
-                old_tuple,
-                new_tuple,
+        if new_tuple != old_tuple:
+            self._undo_stack.append(
+                (
+                    "guide_replacements",
+                    self._active_source_index,
+                    row_tuple,
+                    old_tuple,
+                    new_tuple,
+                )
             )
-        )
-        del self._undo_stack[:-_UNDO_STACK_LIMIT]
-        self._redo_stack.clear()
-        self._refresh_after_guide_symbols_changed(row_tuple)
+            del self._undo_stack[:-_UNDO_STACK_LIMIT]
+            self._redo_stack.clear()
+            self._refresh_after_guide_symbols_changed(row_tuple)
+        dialog.refresh_matches(preserve_selection=True)
+        session = self._project_session
+        if session.suppress_guide_role_prompt:
+            return
+        generation = session.generation
+
+        def remember_prompt_choice(checked: bool) -> None:
+            if self._project_session is session and session.generation == generation:
+                session.suppress_guide_role_prompt = checked
+
         role_name = choose_guide_role_scheme(
             self._guide_role_scheme_options(),
             prompt="是否将刚刚批量替换的导唱符统一应用为以下角色方案？",
             cancel_text="暂不应用",
-            parent=self,
+            on_do_not_prompt=remember_prompt_choice,
+            parent=dialog,
         )
         if role_name:
-            self._apply_guide_match_role_scheme(applied_matches, role_name)
+            # The role picker is modeless too: the user may switch sources
+            # while it is open. Never apply to whichever track became active.
+            if (
+                self._project_session is session and session.generation == generation
+                and not self._title_source_active and self._active_track() is track
+            ):
+                self._apply_guide_match_role_scheme(applied_matches, role_name)
+            else:
+                fluent_warning(dialog, "字幕源已切换", "角色方案尚未应用，请切回原字幕源后重试。")
 
     def _guide_role_scheme_options(self) -> list[str]:
         """Return project role schemes in navigation order, excluding title."""

@@ -540,6 +540,7 @@ class SubtitleProjectSession:
     missing_resources: tuple[tuple[str, Path], ...] = ()
     unresolved_resource_labels: set[str] = field(default_factory=set)
     missing_resource_source_data: Optional[dict] = None
+    suppress_guide_role_prompt: bool = False
 
     def set_dirty(self, dirty: bool) -> bool:
         """Set dirty state and return its previous value."""
@@ -595,6 +596,7 @@ class SubtitleProjectSession:
     def begin_generation(self) -> None:
         """Invalidate state tied to the previously loaded project."""
         self.generation += 1
+        self.suppress_guide_role_prompt = False
         self.revision = 0
         self.saved_revision = 0
         self.disk_revision = None

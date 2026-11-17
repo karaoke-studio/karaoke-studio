@@ -7,6 +7,19 @@ from pathlib import Path
 from krok_helper.subtitle_render.project.session import SubtitleProjectSession
 
 
+def test_guide_role_prompt_suppression_lasts_only_for_the_open_project(tmp_path):
+    session = SubtitleProjectSession()
+    assert not session.suppress_guide_role_prompt
+    session.suppress_guide_role_prompt = True
+    session.mark_dirty()
+    revision = session.begin_save()
+    session.complete_save(path=tmp_path / "project.yurika", disk_revision=None, saved_revision=revision)
+    assert session.suppress_guide_role_prompt
+    assert not SubtitleProjectSession().suppress_guide_role_prompt
+    session.begin_generation()
+    assert not session.suppress_guide_role_prompt
+
+
 def test_save_does_not_resurrect_removed_inline_guide_indices() -> None:
     from krok_helper.subtitle_render.project.session import _merge_preserved_project_data
 
