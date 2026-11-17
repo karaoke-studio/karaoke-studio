@@ -9,7 +9,9 @@ from PyQt6.QtCore import QDateTime
 from PyQt6.QtNetwork import QNetworkCookie
 
 from krok_helper.video_download.download_task import SOURCE_YOUTUBE
-from krok_helper.video_download.youtube_web_login import cookie_jar_from_webview, verify_and_import, youtube_domain
+from krok_helper.video_download.youtube_web_login import (
+    WebViewCookieSnapshot, cookie_jar_from_webview, verify_and_import, youtube_domain,
+)
 
 
 def qt_cookie(name=b"SAPISID", domain=".youtube.com", *, expires=None):
@@ -39,6 +41,41 @@ def test_cookie_snapshot_preserves_http_only_and_ignores_unrelated_expired():
     assert len(cookies) == 1
     assert cookies[0].has_nonstandard_attr("HttpOnly")
     assert cookies[0].secure and cookies[0].expires is None
+
+
+def test_snapshot_survives_destroyed_native_signal_argument():
+    from PyQt6 import sip
+    snapshot = WebViewCookieSnapshot()
+    cookie = qt_cookie()
+    snapshot.added(cookie)
+    # Model the native reference expiring after a WebEngine signal callback.
+    sip.delete(cookie)
+    jar = snapshot.to_jar()
+    saved = next(iter(jar))
+    assert saved.name == "SAPISID" and saved.value == "test-only"
+    assert saved.has_nonstandard_attr("HttpOnly")
+
+
+def test_cookie_updates_removal_and_worker_snapshot_are_independent():
+    snapshot = WebViewCookieSnapshot()
+    cookie = qt_cookie()
+    snapshot.added(cookie)
+    worker_jar = snapshot.to_jar()
+    cookie.setValue(b"rotated")
+    snapshot.added(cookie)
+    assert next(iter(worker_jar)).value == "test-only"
+    assert next(iter(snapshot.to_jar())).value == "rotated"
+    snapshot.removed(cookie)
+    assert not list(snapshot.to_jar())
+    assert next(iter(worker_jar)).value == "test-only"
+
+
+def test_snapshot_drops_expired_updates_and_unrelated_domains():
+    snapshot = WebViewCookieSnapshot()
+    snapshot.added(qt_cookie())
+    snapshot.added(qt_cookie(expires=1))
+    snapshot.added(qt_cookie(domain=".example.com"))
+    assert not list(snapshot.to_jar())
 
 
 def fake_ytdlp(*, fail=False, result=None, captured=None):

@@ -24,7 +24,7 @@ def main() -> int:
     from PyQt6.QtNetwork import QNetworkProxy, QNetworkCookie
     from krok_helper.network import load_current_app_settings, proxy_url_for_app_settings
     from krok_helper.video_download.cookie_manager import CookieManager
-    from krok_helper.video_download.youtube_web_login import cookie_jar_from_webview, verify_and_import
+    from krok_helper.video_download.youtube_web_login import WebViewCookieSnapshot, verify_and_import
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv[:1])
@@ -64,7 +64,7 @@ def main() -> int:
             super().__init__()
             self.setWindowTitle(f"YouTube 登录原型 · {'Firefox 兼容' if args.mode == 'firefox' else '默认'}模式")
             self.resize(1050, 800)
-            self.cookies = {}
+            self.cookies = WebViewCookieSnapshot()
             self.worker = None
             layout = QVBoxLayout(self)
             hint = QLabel("请在网页中手动登录并完成验证，再点击「验证并导入」。每次启动使用全新会话。")
@@ -86,7 +86,7 @@ def main() -> int:
             self.view.loadFinished.connect(self.loaded)
             store = self.profile.cookieStore()
             store.cookieAdded.connect(self.cookie_added)
-            store.cookieRemoved.connect(lambda c: self.cookies.pop(self.key(c), None))
+            store.cookieRemoved.connect(self.cookies.removed)
             layout.addWidget(self.view, 1)
             self.status = QLabel("等待网页登录。")
             self.status.setWordWrap(True)
@@ -110,21 +110,41 @@ def main() -> int:
                 cookie.setDomain(".youtube.com")
                 cookie.setPath("/")
                 store.setCookie(cookie)
-                QTimer.singleShot(10000, lambda: app.exit(2))
+                # Exercise delayed reads after native signal arguments expire,
+                # including repeated cookie updates while the window is idle.
+                self.smoke_updates = 0
+                self.smoke_timer = QTimer(self)
+                self.smoke_timer.timeout.connect(self.smoke_update)
+                self.smoke_timer.start(100)
+                QTimer.singleShot(15000, self.smoke_verify)
+                QTimer.singleShot(25000, lambda: app.exit(2))
             else:
                 self.view.load(QUrl("https://www.youtube.com/"))
 
-        @staticmethod
-        def key(cookie):
-            return cookie.domain(), cookie.path(), bytes(cookie.name())
-
         def cookie_added(self, cookie):
-            self.cookies[self.key(cookie)] = cookie
-            if args.smoke and bytes(cookie.name()) == b"probe":
-                jar = cookie_jar_from_webview(self.cookies.values())
-                assert any(c.name == "probe" for c in jar)
-                print("PASS: WebEngine 窗口、独立会话和 Cookie 管道")
-                QTimer.singleShot(300, self.close)
+            self.cookies.added(cookie)
+
+        def smoke_update(self):
+            self.smoke_updates += 1
+            cookie = QNetworkCookie(b"rotating", str(self.smoke_updates).encode("ascii"))
+            cookie.setDomain(".youtube.com")
+            cookie.setPath("/")
+            self.profile.cookieStore().setCookie(cookie)
+
+        def smoke_verify(self):
+            self.smoke_timer.stop()
+            jar = self.cookies.to_jar()
+            assert {c.name for c in jar} == {"probe", "rotating"}
+            assert self.smoke_updates >= 50
+            # Actually click the production callback, including its QThread.
+            # Synthetic guest cookies must be rejected without network access.
+            self.verify_button.click()
+            self.worker.result.connect(self.smoke_result)
+            self.worker.finished.connect(self.close)
+
+        def smoke_result(self, ok, message):
+            assert not ok
+            print("PASS: 15 秒 Cookie 更新、延迟点击验证、工作线程失败处理（未联网）")
 
         def loaded(self, ok):
             if not ok:
@@ -133,7 +153,7 @@ def main() -> int:
         def verify(self):
             if self.worker is not None and self.worker.isRunning():
                 return
-            jar = cookie_jar_from_webview(self.cookies.values())
+            jar = self.cookies.to_jar()
             self.verify_button.setEnabled(False)
             self.status.setText("正在验证账号，仅请求稍后观看列表信息，不下载视频…")
             self.worker = VerifyWorker(jar, self)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.cookiejar
+import copy
 import os
 import tempfile
 import time
@@ -35,6 +36,38 @@ def cookie_jar_from_webview(cookies) -> http.cookiejar.MozillaCookieJar:
             rest={"HttpOnly": None} if cookie.isHttpOnly() else {}, rfc2109=False,
         ))
     return jar
+
+
+class WebViewCookieSnapshot:
+    """Own Python values, never borrowed QNetworkCookie signal arguments.
+
+    WebEngine emits a const QNetworkCookie reference. Its Python wrapper can
+    outlive the native value after the signal returns, so conversion must happen
+    inside the callback, before any timer, user action or worker can read it.
+    """
+
+    def __init__(self):
+        self._cookies = {}
+
+    @staticmethod
+    def _key(cookie):
+        return cookie.domain(), cookie.path() or "/", bytes(cookie.name()).decode("utf-8")
+
+    def added(self, cookie):
+        key = self._key(cookie)
+        self._cookies.pop(key, None)
+        for value in cookie_jar_from_webview([cookie]):
+            self._cookies[key] = value
+
+    def removed(self, cookie):
+        self._cookies.pop(self._key(cookie), None)
+
+    def to_jar(self):
+        jar = http.cookiejar.MozillaCookieJar()
+        for cookie in self._cookies.values():
+            if not cookie.is_expired():
+                jar.set_cookie(copy.deepcopy(cookie))
+        return jar
 
 
 class _SilentLogger:
