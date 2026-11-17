@@ -1037,6 +1037,16 @@
         "feature": "F23",
         "render_metadata": true
       },
+      "lit_bpm_enabled": {
+        "feature": "F23",
+        "render_metadata": false,
+        "note": "BPM 计时编辑开关；渲染消费物化后的 signals_duration_ms，metadata render=False"
+      },
+      "lit_bpm": {
+        "feature": "F23",
+        "render_metadata": false,
+        "note": "每盏灯一拍的 BPM 编辑值；渲染消费物化后的 signals_duration_ms，metadata render=False"
+      },
       "volume_duration_ms": {
         "feature": "F23",
         "render_metadata": true

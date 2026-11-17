@@ -51,6 +51,8 @@ FIELD_NOTES = {
     "Style.exit_fx": "兼容持久字段；现有 burst 规划不消费，UI 已合入动画档",
     "Style._lower_romaji_options": "派生的假名转写快照；不是新的用户样式字段",
     "Style.hidden_builtin_layout_ids": "布局编辑器显示状态，不直接改变字幕像素",
+    "Style.lit_bpm_enabled": "BPM 计时编辑开关；渲染消费物化后的 signals_duration_ms，metadata render=False",
+    "Style.lit_bpm": "每盏灯一拍的 BPM 编辑值；渲染消费物化后的 signals_duration_ms，metadata render=False",
     "PaintFill.gradient_path": "编辑器 HSV 路径；渲染消费已烘焙 stops，metadata render=False",
 }
 

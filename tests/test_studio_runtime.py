@@ -22,6 +22,21 @@ def bundle(tmp_path):
     return app, python, state
 
 
+def require_directory_symlinks(tmp_path):
+    """The macOS overlay requires symlinks; Windows may lack that privilege."""
+    target = tmp_path / 'symlink-probe-target'
+    target.mkdir()
+    link = tmp_path / 'symlink-probe'
+    try:
+        link.symlink_to(target.name, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, 'winerror', None) == 1314:
+            pytest.skip('macOS Studio overlay requires directory symlink privilege')
+        raise
+    else:
+        link.unlink()
+
+
 def test_bundle_resolves_active_runtime_and_moved_application(tmp_path):
     app, python, state = bundle(tmp_path)
     assert runtime.resolve_external_python(app) == python
@@ -75,6 +90,7 @@ def test_console_script_uses_sibling_python(tmp_path):
 
 
 def test_overlay_invalidated_when_studio_changes(tmp_path):
+    require_directory_symlinks(tmp_path)
     _, python, state = bundle(tmp_path)
     work = tmp_path / 'lin-k'
     target = runtime.ai_python_path(python, work)
@@ -152,6 +168,7 @@ def test_prepare_checks_isolation_before_exposing_python(monkeypatch, tmp_path, 
             runtime.prepare_ai_python(python, work)
         assert runtime.prepared_ai_python(python, work) is None
     else:
+        require_directory_symlinks(tmp_path)
         result = runtime.prepare_ai_python(python, work)
         assert Path(result).is_relative_to(work)
         assert Path(result).resolve() != python.resolve()

@@ -21,7 +21,10 @@ def cases(qapp, tmp_path_factory):
 def test_model_and_enum_inventory_requires_explicit_review_for_new_fields():
     frozen = json.loads((ROOT / "tests/data/subtitle_gpu_baseline_contract.json").read_text(encoding="utf8"))
     assert contract() == frozen
-    assert len(frozen["models"]["Style"]) == 280
+    assert len(frozen["models"]["Style"]) == 282
+    for name in ("lit_bpm_enabled", "lit_bpm"):
+        assert frozen["models"]["Style"][name]["feature"] == "F23"
+        assert frozen["models"]["Style"][name]["render_metadata"] is False
 
 
 def test_cases_cover_every_declared_animation_and_paint_variant(cases):

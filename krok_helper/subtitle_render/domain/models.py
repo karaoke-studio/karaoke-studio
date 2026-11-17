@@ -1671,9 +1671,9 @@ class Style:
     lit_transition_angle_deg: int = 0
     lit_transition_distance: int = 0
     signals_duration_ms: int = 4000
-    lit_bpm_enabled: bool = False
+    lit_bpm_enabled: bool = field(default=False, metadata={"render": False})
     """Materialize one quarter-note per lamp into signals_duration_ms on edits/load."""
-    lit_bpm: float = 120.0
+    lit_bpm: float = field(default=120.0, metadata={"render": False})
     volume_duration_ms: int = 4000
     volume_waiting_time_ms: int = 0
     volume_time_offset_ms: int = 0
