@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout e4ae8603
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43920641750 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 1af399f6
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44008579833 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1837,7 +1837,7 @@ Windows/Linux Vulkan 与 CPU-only 四份均干净重建，CTest 各 **3/3**，�
 
 Windows 完整 Skia 组合首轮 **1547 通过、7 跳过、4 失败**：3 项旧 ligature/kerning 假设已按真实新契约修正并复验（相关 Windows **19 通过**）；另 1 项 `ruby_markers` 默认 realization 在双 worker 下 t=1699 前沿差 1.13px，串行同组 **3×32 全部通过**，不修改生产 D2D 或放宽阈值，保留并行负载差异记录。X11 首轮 **1029 通过、638 跳过、同样 3 项旧断言失败**，修正后相关文件 **55 通过、7 跳过**；Wayland 最终完整组合 **1032 通过、638 跳过**。独立 CPU-only Windows **37 通过**、Linux **35 通过、2 跳过**；关联架构/协议/字体/构建/验收工具 **532 通过、10 跳过**。
 
-29 份规范样例 Windows/X11/Wayland 同版本直接比较误差均为 **0**；与前批相比，22 份除 v3→v4 身份外几何相同，另 7 份含 `fi` 或分解重音的样例发生预期修正，不宣称旧样例全部不变。Mac 双架构、同源码指纹与干净验收包尚待 CI；manifest 新增 `cell_glyphs=1`。§14.6 朋友入口先保留已验收的上一轮提交，待本轮验收后更新。Linux 真硬件、Mac 真机、默认 realization 完整画质和完整 P05 门槛仍保留。日志前缀 `build/p05-mc*`。
+29 份规范样例 Windows/X11/Wayland 同版本直接比较误差均为 **0**；与前批相比，22 份除 v3→v4 身份外几何相同，另 7 份含 `fi` 或分解重音的样例发生预期修正，不宣称旧样例全部不变。实现提交 `1af399f6` 的 Mac CI [44008579833](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44008579833) **5 项全部成功**：arm64/x64 产品组合各 **1002 通过、668 项平台专用跳过**，新文件各 **16 通过、36 跳过**（Windows D2D 对照），字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `9331a66d…`，与本地四份一致。29 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例用严格比较器五方直接比较误差全部为 **0**，前述 22 份身份变化/7 份几何修正分类不变。两份干净验收包（manifest 新增 `cell_glyphs=1`）`cell_glyphs` 退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机、默认 realization 完整画质和完整 P05 门槛仍保留。日志前缀 `build/p05-mc*`。
 
 ## 15. 前期探针清理范围
 
