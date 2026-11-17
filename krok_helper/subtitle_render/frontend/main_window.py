@@ -1614,6 +1614,8 @@ class SubtitleRenderWindow(QWidget):
             return
         self._host_exit_shutdown = True
         self._closing_window = True
+        if hasattr(self, "_property_panel"):
+            self._property_panel.cancel_lit_bpm_detection()
         runtime = self._current_export_runtime()
         if runtime is not None and runtime.preparing:
             self._export_runtime_controller.cancel(runtime)
@@ -4053,6 +4055,7 @@ class SubtitleRenderWindow(QWidget):
                 self._transport_bar.attach_playback_controller(controller)
 
         self._property_panel.styleChanged.connect(self._apply_style)
+        self._property_panel.set_lit_bpm_source_provider(self._lit_bpm_source)
         self._property_panel.trackTimingChanged.connect(self._on_track_timing_changed)
         self._property_panel.set_title_window_provider(self._derive_title_windows)
         self._property_panel.set_title_window_fade_provider(
@@ -4936,6 +4939,20 @@ class SubtitleRenderWindow(QWidget):
             self._background_source or BackgroundSource()
         )
         self._property_panel.set_audio_state(self._audio_path)
+        self._property_panel.refresh_lit_bpm_source()
+
+    def _lit_bpm_source(self):
+        source = self._background_source
+        if source is not None and source.kind == "video":
+            path = Path(source.path) if source.path else None
+        else:
+            path = self._audio_path
+        if path is None:
+            return None
+        return (
+            path, find_tool("ffmpeg", self._resolve_ffmpeg_dir()),
+            id(self._project_document),
+        )
 
     def _browse_background_image(self) -> None:
         start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""

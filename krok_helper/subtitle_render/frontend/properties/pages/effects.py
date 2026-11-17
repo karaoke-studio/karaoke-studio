@@ -34,6 +34,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_section,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
+from krok_helper.subtitle_render.frontend.properties.controls.lit_bpm import LitBpmControls
 from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
     LineBandCapPreview,
     SubGroup,
@@ -488,6 +489,11 @@ class EffectsPropertyPageBuilder:
         self._add_spin(add, "_lit_duration_spin", "持续时间", 0, 60_000, "signals_duration_ms", suffix=" ms")
         self._add_spin(add, "_lit_waiting_time_spin", "结束等待", 0, 60_000, "lit_waiting_time_ms", suffix=" ms")
         self._add_spin(add, "_lit_time_offset_spin", "时间偏移", -60_000, 60_000, "lit_time_offset_ms", suffix=" ms")
+        host._lit_bpm_controls = LitBpmControls(section)
+        host._lit_bpm_controls.edited.connect(
+            lambda enabled, bpm: host._update_style(lit_bpm_enabled=enabled, lit_bpm=bpm)
+        )
+        layout.addWidget(host._lit_bpm_controls)
         add = group("外观", max_columns=4)
         self._add_color(add, "_lit_fill_btn", "填充颜色", "lit_fill_color")
         self._add_color(add, "_lit_stroke_btn", "描边颜色", "lit_stroke_color")

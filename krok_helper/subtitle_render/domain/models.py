@@ -1671,6 +1671,9 @@ class Style:
     lit_transition_angle_deg: int = 0
     lit_transition_distance: int = 0
     signals_duration_ms: int = 4000
+    lit_bpm_enabled: bool = False
+    """Materialize one quarter-note per lamp into signals_duration_ms on edits/load."""
+    lit_bpm: float = 120.0
     volume_duration_ms: int = 4000
     volume_waiting_time_ms: int = 0
     volume_time_offset_ms: int = 0
@@ -2319,6 +2322,22 @@ def resolve_lit_appearance(
     return replace(style, **lit_auto_values(style, basis=auto_basis))
 
 
+def resolve_lit_bpm_timing(style: Style) -> Style:
+    """Keep the existing renderer duration authoritative for BPM-driven lamps."""
+    try:
+        bpm = float(style.lit_bpm)
+    except (TypeError, ValueError):
+        bpm = 120.0
+    if not math.isfinite(bpm) or not 10 <= bpm <= 600:
+        bpm = 120.0
+    if not style.lit_bpm_enabled:
+        return style if bpm == style.lit_bpm else replace(style, lit_bpm=bpm)
+    countdown = round(max(1, int(style.lit_number)) * 60_000 / bpm)
+    # The existing renderer subtracts waiting from total to obtain countdown.
+    duration = countdown + max(0, int(style.lit_waiting_time_ms))
+    return replace(style, lit_bpm=bpm, signals_duration_ms=duration)
+
+
 def style_to_dict(style: Style) -> dict:
     """Serialize ``Style`` into JSON-friendly primitives."""
     data: dict = {}
@@ -2763,6 +2782,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         elif key in {
             "volume_ratio",
             "volume_flash_duration_ratio",
+            "lit_bpm",
         }:
             changes[key] = _float_value(value, getattr(defaults, key))
         elif key in {
@@ -2787,6 +2807,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "section_edge_anim_enabled",
             "section_edge_both_animations",
             "lit_enabled",
+            "lit_bpm_enabled",
             "volume_enabled",
             "lit_shadow",
             "line_band_enabled",
@@ -3263,7 +3284,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
     _migrate_signal_offset_px_base(changes, payload)
     style = ensure_page_layout_defaults(Style(**changes))
     style = _migrate_line_band_edge_effects(style, payload)
-    return _migrate_ruby_follow_independence(style)
+    return resolve_lit_bpm_timing(_migrate_ruby_follow_independence(style))
 
 
 def _migrate_scanline_toggle(changes: dict, payload: dict) -> None:

@@ -32,6 +32,7 @@ from krok_helper.subtitle_render.domain.models import (
     normalize_glow_concentration_level,
     normalize_scanline_image_layers,
     rescale_scheme_font_sizes,
+    resolve_lit_bpm_timing,
 )
 from krok_helper.subtitle_render.domain.timing import (
     EntryAnimation,
@@ -312,8 +313,11 @@ class PropertyStyleController:
                 if key not in SCHEME_ONLY_FIELDS
             }
         normalized = normalize_style_changes(normalized)
+        updated = resolve_lit_bpm_timing(replace(style, **normalized))
+        if updated.signals_duration_ms != style.signals_duration_ms:
+            normalized["signals_duration_ms"] = updated.signals_duration_ms
         return StyleUpdateResult(
-            style=replace(style, **normalized),
+            style=updated,
             changed_fields=frozenset(normalized),
         )
 

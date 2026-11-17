@@ -242,6 +242,7 @@ from krok_helper.subtitle_render.domain.models import (
     materialize_ruby_decoration_changes,
     rescale_scheme_font_sizes,
     resolve_lit_appearance,
+    resolve_lit_bpm_timing,
     resolve_volume_appearance,
 )
 from krok_helper.subtitle_render.settings.property_controllers import (
@@ -518,6 +519,8 @@ _LIT_FIELDS = {
     "lit_transition_angle_deg",
     "lit_transition_distance",
     "signals_duration_ms",
+    "lit_bpm_enabled",
+    "lit_bpm",
     "volume_duration_ms",
     "volume_waiting_time_ms",
     "volume_time_offset_ms",
@@ -944,7 +947,10 @@ class PropertyPanel(QWidget):
     ) -> None:
         super().__init__(parent)
         self._appearance_only = appearance_only
-        self._style = replace(initial_style) if initial_style is not None else Style()
+        self._style = (
+            resolve_lit_bpm_timing(replace(initial_style))
+            if initial_style is not None else Style()
+        )
         self._syncing = False
         # 粒子设置对象（药丸切换）：anim / sing / scanline。三类粒子的
         # 颜色/尺寸/数量独立保存，这里只是当前编辑目标，不写进样式。
@@ -1483,6 +1489,7 @@ class PropertyPanel(QWidget):
         self._n3_template_lyrics_dir = Path(path) if path is not None else None
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
+        style = resolve_lit_bpm_timing(style)
         if self._appearance_only:
             self._style = replace(style)
             self._sync_subtitle_scheme_controls()
@@ -3452,6 +3459,15 @@ class PropertyPanel(QWidget):
         text = str(path) if path is not None else ""
         for audio_edit in self._audio_path_edits:
             audio_edit.setText(text)
+
+    def set_lit_bpm_source_provider(self, provider) -> None:
+        self._lit_bpm_controls.set_source_provider(provider)
+
+    def refresh_lit_bpm_source(self) -> None:
+        self._lit_bpm_controls.source_changed()
+
+    def cancel_lit_bpm_detection(self) -> None:
+        self._lit_bpm_controls.cancel()
 
     # ---------------------------------------------------- 标题（多条目卡片列表）
 
@@ -6767,7 +6783,10 @@ class PropertyPanel(QWidget):
         self._lit_x_spin.setValue(self._offset_display_px(self._style.lit_offset_x))
         self._lit_y_spin.setValue(self._offset_display_px(self._style.lit_offset_y))
         self._lit_tracking_spin.setValue(self._style.lit_tracking)
+        self._lit_duration_spin.setMaximum(max(60_000, self._style.signals_duration_ms))
         self._lit_duration_spin.setValue(self._style.signals_duration_ms)
+        self._lit_duration_spin.setEnabled(not self._style.lit_bpm_enabled)
+        self._lit_bpm_controls.sync(self._style)
         self._lit_stroke_width_spin.setValue(lit_display_style.lit_stroke_width)
         self._lit_fill_btn.set_color(lit_display_style.lit_fill_color)
         self._lit_stroke_btn.set_color(lit_display_style.lit_stroke_color)
