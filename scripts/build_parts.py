@@ -94,7 +94,8 @@ LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 #     可能由旧构建环境意外收集了 torch 的 runtime zip。
 # v5: Bundle Deno and yt-dlp EJS scripts for YouTube JavaScript challenges.
 # v6: Retain Qt GIF support and Pillow for animated line-band alpha effects.
-RUNTIME_PROFILE = "animated-band-imageformats-v6"
+# v7: Bundle Qt WebEngine and its dependencies for YouTube login.
+RUNTIME_PROFILE = "youtube-webengine-v7"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {

@@ -1,4 +1,4 @@
-"""Cookie transport for the experimental, user-operated YouTube login window."""
+"""Cookie transport for the user-operated YouTube login window."""
 from __future__ import annotations
 
 import http.cookiejar
@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 
 from .download_task import SOURCE_YOUTUBE
+
+YOUTUBE_AUTH_COOKIES = {"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}
 
 
 def youtube_domain(domain: str) -> bool:
@@ -80,7 +82,7 @@ class _SilentLogger:
 
 def verify_and_import(jar, manager, *, proxy: str, youtube_dl=None) -> Path:
     """Check an authenticated endpoint before atomically replacing saved cookies."""
-    if not any(c.name in {"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"} for c in jar):
+    if not any(c.name in YOUTUBE_AUTH_COOKIES and c.value and not c.is_expired() for c in jar):
         raise ValueError("尚未取得 YouTube 登录 Cookie，请在网页中完成登录。")
     if youtube_dl is None:
         from yt_dlp import YoutubeDL
@@ -107,7 +109,7 @@ def verify_and_import(jar, manager, *, proxy: str, youtube_dl=None) -> Path:
             for cookie in ydl.cookiejar:
                 if youtube_domain(cookie.domain) and not cookie.is_expired():
                     refreshed.set_cookie(cookie)
-        if not any(c.name in {"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"} for c in refreshed):
+        if not any(c.name in YOUTUBE_AUTH_COOKIES and c.value for c in refreshed):
             raise ValueError("验证后登录 Cookie 已失效。")
         refreshed.save(str(candidate), ignore_discard=True, ignore_expires=False)
         os.replace(candidate, target)

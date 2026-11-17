@@ -675,6 +675,11 @@ class VideoDownloadPage(QWidget):
         self.settings = settings
         self._save_settings = save_settings
         self.cookie_manager = CookieManager(getattr(settings, "video_download_cookie_path", ""), app_settings=settings)
+        from .youtube_login_controller import YouTubeLoginController
+        self._youtube_login = YouTubeLoginController(self.cookie_manager, self)
+        self._youtube_login.succeeded.connect(self._handle_youtube_cookie_import_succeeded)
+        self._youtube_login.failed.connect(self._handle_youtube_cookie_import_failed)
+        self._youtube_login.busyChanged.connect(self._youtube_login_busy_changed)
         self._parse_worker: ParseLinksWorker | None = None
         self._cookie_import_worker: CookieImportWorker | None = None
         self._ytdlp_update_worker: YtDlpUpdateWorker | None = None
@@ -1545,7 +1550,7 @@ class VideoDownloadPage(QWidget):
         layout.setContentsMargins(0, 8, 0, 0)
         layout.setSpacing(10)
 
-        title = BodyLabel("通过 Firefox 浏览器导入")
+        title = BodyLabel("登录 YouTube")
         from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
         _wb_th(title, lambda: f"color: {_wb_pal().text_primary}; font-weight: 700;")
         layout.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
@@ -1555,7 +1560,7 @@ class VideoDownloadPage(QWidget):
         steps_layout = QVBoxLayout(steps)
         steps_layout.setContentsMargins(0, 0, 0, 0)
         steps_layout.setSpacing(5)
-        for text in ("1. 在 Firefox 中登录 youtube.com", "2. 点击下方按钮导入 Cookie"):
+        for text in ("点击登录，在弹出的网页中完成账号验证。", "也可导入任意浏览器导出的 cookies.txt 文件。"):
             step_label = CaptionLabel(text)
             step_label.setStyleSheet("color: #64748b;")
             steps_layout.addWidget(step_label)
@@ -1577,10 +1582,15 @@ class VideoDownloadPage(QWidget):
         inline_status_layout.addStretch(1)
         layout.addWidget(inline_status_row)
 
-        self.import_youtube_cookie_button = PushButton(FIF.DOWNLOAD, "从 Firefox 导入 Cookie")
-        self.import_youtube_cookie_button.setToolTip(
-            "Chrome / Edge 等 Chromium 内核浏览器无法导出可用的 YouTube Cookie，目前仅支持 Firefox。"
-        )
+        self.youtube_login_mode = StyledComboBox()
+        self.youtube_login_mode.addItems(["默认登录模式", "Firefox 兼容模式"])
+        self.youtube_login_mode.setToolTip("默认模式无法登录时，可切换 Firefox 兼容模式；无需安装 Firefox。")
+        layout.addWidget(self.youtube_login_mode)
+        self.youtube_login_button = PrimaryPushButton("登录 YouTube")
+        self.youtube_login_button.clicked.connect(self._handle_youtube_login_clicked)
+        layout.addWidget(self.youtube_login_button)
+        self.import_youtube_cookie_button = PushButton(FIF.DOWNLOAD, "导入 Cookie 文件")
+        self.import_youtube_cookie_button.setToolTip("支持任何浏览器导出的 Netscape 格式 cookies.txt 文件。")
         self.import_youtube_cookie_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.import_youtube_cookie_button.clicked.connect(self._handle_import_youtube_cookie_clicked)
         layout.addWidget(self.import_youtube_cookie_button)
@@ -1752,11 +1762,11 @@ class VideoDownloadPage(QWidget):
 
         if hasattr(self, "youtube_segment"):
             yt_logged_in = self._youtube_profile is not None
-            yt_color = PLATFORM_STATUS_LOGGED_IN if yt_logged_in else PLATFORM_STATUS_LOGGED_OUT
+            yt_color = (PLATFORM_STATUS_LOGGED_IN if self._youtube_profile.nickname == "已验证" else PLATFORM_STATUS_PENDING) if yt_logged_in else PLATFORM_STATUS_LOGGED_OUT
             self._set_platform_dot(self.youtube_segment.status_dot, yt_color)  # type: ignore[attr-defined]
             self._set_platform_dot(self.youtube_status_row.status_dot, yt_color)  # type: ignore[attr-defined]
             self.youtube_status_row.status_label.setText(  # type: ignore[attr-defined]
-                "已登录" if self._youtube_profile else "未登录"
+                self._youtube_profile.nickname if self._youtube_profile else "未登录"
             )
             self.youtube_status_row.status_label.setStyleSheet(  # type: ignore[attr-defined]
                 f"color: {yt_color}; font-weight: 400;"
@@ -1814,32 +1824,48 @@ class VideoDownloadPage(QWidget):
     def _refresh_youtube_cookie_status(self) -> None:
         self._youtube_profile = self.cookie_manager.get_profile(SOURCE_YOUTUBE)
         logged_in = self._youtube_profile is not None
-        color = PLATFORM_STATUS_LOGGED_IN if logged_in else PLATFORM_STATUS_LOGGED_OUT
+        color = (PLATFORM_STATUS_LOGGED_IN if self._youtube_profile.nickname == "已验证" else PLATFORM_STATUS_PENDING) if logged_in else PLATFORM_STATUS_LOGGED_OUT
         text = self._youtube_profile.nickname if self._youtube_profile else "未登录"
         if hasattr(self, "youtube_status_text_label"):
             self.youtube_status_text_label.setText(text)
             self.youtube_status_text_label.setStyleSheet(f"color: {color}; font-weight: 400;")
             self.youtube_status_dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
-            self.logout_youtube_cookie_button.setEnabled(logged_in)
+            busy = self._youtube_login.is_running()
+            self.logout_youtube_cookie_button.setEnabled(self.cookie_manager.has_cookie(SOURCE_YOUTUBE) or busy)
+            self.logout_youtube_cookie_button.setText("退出登录")
+            self.logout_youtube_cookie_button.setToolTip("关闭登录窗口并清除本地 YouTube 登录状态。")
         self._refresh_account_status_rows()
 
+    def _handle_youtube_login_clicked(self) -> None:
+        mode = "firefox" if self.youtube_login_mode.currentIndex() == 1 else "default"
+        try:
+            self._youtube_login.start(mode)
+        except (OSError, ValueError):
+            self.parse_status_label.setText("无法打开登录窗口，请检查设置或改用 Cookie 文件导入。")
+
+    def _youtube_login_busy_changed(self, busy: bool) -> None:
+        self.youtube_login_button.setEnabled(not busy)
+        self.youtube_login_mode.setEnabled(not busy)
+        self.import_youtube_cookie_button.setEnabled(not busy)
+        self._refresh_youtube_cookie_status()
+        self.parse_status_label.setText("请在登录窗口中完成登录。" if busy else "登录窗口已关闭。")
+
     def _handle_import_youtube_cookie_clicked(self) -> None:
-        if self._cookie_import_worker is not None and self._cookie_import_worker.isRunning():
-            self.parse_status_label.setText("正在导入 YouTube Cookie，请稍候。")
+        if self._youtube_login.is_running():
             return
-        browser = "Firefox"
-        self.import_youtube_cookie_button.setEnabled(False)
-        self.youtube_status_text_label.setText("正在导入…")
-        self.youtube_status_text_label.setStyleSheet(f"color: {PLATFORM_STATUS_PENDING}; font-weight: 400;")
-        self.youtube_status_dot.setStyleSheet(f"background: {PLATFORM_STATUS_PENDING}; border-radius: 5px;")
-        self._cookie_import_worker = CookieImportWorker(self.cookie_manager, SOURCE_YOUTUBE, browser, self)
-        self._cookie_import_worker.importSucceeded.connect(self._handle_youtube_cookie_import_succeeded)
-        self._cookie_import_worker.importFailed.connect(self._handle_youtube_cookie_import_failed)
-        self._cookie_import_worker.finished.connect(self._handle_cookie_import_worker_finished)
-        self._cookie_import_worker.start()
+        filename, _ = QFileDialog.getOpenFileName(self, "导入 YouTube Cookie", "", "Cookie 文件 (*.txt);;所有文件 (*)")
+        if not filename:
+            return
+        try:
+            path = self.cookie_manager.import_youtube_cookie_file(Path(filename))
+        except (OSError, ValueError):
+            self.parse_status_label.setText("导入失败：请选择含有效 YouTube 登录 Cookie 的 Netscape 文件，原有状态已保留。")
+            return
+        self._handle_youtube_cookie_import_succeeded(str(path))
 
     def _handle_youtube_cookie_import_succeeded(self, cookie_path: str) -> None:
-        self.parse_status_label.setText(f"YouTube Cookie 已导入到 {cookie_path}。")
+        status = self.cookie_manager.youtube_cookie_status()
+        self.parse_status_label.setText(f"YouTube Cookie {status}，请重新解析视频后下载。")
         self._refresh_youtube_cookie_status()
 
     def _handle_youtube_cookie_import_failed(self, message: str) -> None:
@@ -1851,9 +1877,17 @@ class VideoDownloadPage(QWidget):
         self._cookie_import_worker = None
 
     def _handle_logout_youtube_cookie_clicked(self) -> None:
+        self._youtube_login.cancel()
         self.cookie_manager.clear(SOURCE_YOUTUBE)
         self.parse_status_label.setText("已退出 YouTube 登录，并清空本地 Cookie。")
         self._refresh_youtube_cookie_status()
+
+    def shutdown_youtube_login(self) -> None:
+        self._youtube_login.cancel()
+
+    def closeEvent(self, event) -> None:
+        self.shutdown_youtube_login()
+        super().closeEvent(event)
 
     def _ensure_qr_login(self, force_restart: bool = False) -> None:
         profile = self.cookie_manager.get_account_profile()

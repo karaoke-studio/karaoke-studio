@@ -44,3 +44,30 @@ def test_webp_image_plugin_stays_in_the_package() -> None:
 )
 def test_essential_plugins_are_never_trimmed(plugin: str) -> None:
     assert plugin not in _removed_plugins()
+
+
+@pytest.mark.parametrize("script", ["build_windows.bat", "build_macos.command"])
+def test_webengine_runtime_is_bundled_without_trimming_dependencies(script):
+    text = (SCRIPT.parent / script).read_text(encoding="utf-8")
+    assert "PyQt6-WebEngine==6.11.0" in text
+    assert "PyQt6-WebEngine-Qt6==6.11.0" in text
+    for module in ("QtWebEngineCore", "QtWebEngineWidgets"):
+        assert f"--hidden-import PyQt6.{module}" in text
+        assert f"--exclude-module PyQt6.{module} " not in text
+    if script.endswith(".command"):
+        excluded = text.split("EXCLUDED_MODULES=(", 1)[1].split(")", 1)[0]
+        for module in ("QtWebEngineCore", "QtWebEngineWidgets", "QtQuick", "QtQuickWidgets", "QtQml", "QtWebChannel"):
+            assert f"PyQt6.{module}\n" not in excluded
+        removed = text.split("REMOVE_QT_LIBS=(", 1)[1].split(")", 1)[0]
+        assert "QtQuick.framework" not in removed
+        assert "QtQml.framework" not in removed
+        assert "*/qtwebengine_locales/*.pak) continue" in text
+    else:
+        removed = re.search(r"\$dlls = @\(([^)]*)\)", text).group(1)
+        assert "Qt6Quick.dll" not in removed
+        assert "Qt6Qml.dll" not in removed
+
+
+def test_webengine_runtime_invalidates_old_incremental_package():
+    from scripts.build_parts import RUNTIME_PROFILE
+    assert RUNTIME_PROFILE != "animated-band-imageformats-v6"

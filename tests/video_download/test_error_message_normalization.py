@@ -32,8 +32,9 @@ def test_downloaded_file_empty_maps_to_youtube_hint() -> None:
 def test_not_a_bot_maps_to_youtube_hint() -> None:
     result = normalize("Sign in to confirm you are not a bot")
     assert "机器人校验" in result
-    assert "从 Firefox 导入 Cookie" in result
-    assert "刷新登录 Cookie" in result
+    assert "登录 YouTube" in result
+    assert "Cookie 文件" in result
+    assert "重新解析下载" in result
 
 
 def test_login_required_maps_to_bilibili_hint() -> None:

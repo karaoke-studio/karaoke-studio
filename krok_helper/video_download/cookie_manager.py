@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.cookiejar
+import hashlib
 import json
 import os
 import shutil
@@ -100,6 +101,8 @@ class CookieManager:
         path = self.resolved_cookie_path(platform)
         if path.exists():
             path.unlink()
+        if platform == SOURCE_YOUTUBE:
+            path.with_suffix(".verified").unlink(missing_ok=True)
 
     def clear_cookie(self) -> None:
         self.clear(SOURCE_BILIBILI)
@@ -155,7 +158,7 @@ class CookieManager:
 
     def check_login_status(self, platform: str = SOURCE_BILIBILI) -> bool:
         if platform == SOURCE_YOUTUBE:
-            return self.has_cookie(SOURCE_YOUTUBE)
+            return self.youtube_cookie_status() == "已验证"
         if not self.has_cookie(SOURCE_BILIBILI):
             return False
 
@@ -167,9 +170,10 @@ class CookieManager:
 
     def get_profile(self, platform: str = SOURCE_BILIBILI) -> BilibiliAccountProfile | None:
         if platform == SOURCE_YOUTUBE:
-            if not self.has_cookie(SOURCE_YOUTUBE):
+            status = self.youtube_cookie_status()
+            if status == "未登录":
                 return None
-            return BilibiliAccountProfile(nickname="已登录")
+            return BilibiliAccountProfile(nickname=status)
 
         try:
             payload = self._fetch_nav_payload()
@@ -190,13 +194,75 @@ class CookieManager:
     def get_account_profile(self) -> BilibiliAccountProfile | None:
         return self.get_profile(SOURCE_BILIBILI)
 
+    @staticmethod
+    def _youtube_auth_digest(jar) -> str:
+        from .youtube_web_login import YOUTUBE_AUTH_COOKIES, youtube_domain
+        entries = sorted((c.domain, c.path, c.name, c.value) for c in jar
+                         if youtube_domain(c.domain) and c.name in YOUTUBE_AUTH_COOKIES
+                         and c.value and (c.expires == 0 or not c.is_expired()))
+        return hashlib.sha256(json.dumps(entries).encode()).hexdigest() if entries else ""
+
+    def youtube_cookie_status(self) -> str:
+        try:
+            jar = self.load_cookie_jar(SOURCE_YOUTUBE)
+            digest = self._youtube_auth_digest(jar)
+            if not digest:
+                return "未登录"
+            marker = self.resolved_cookie_path(SOURCE_YOUTUBE).with_suffix(".verified")
+            if marker.is_file() and marker.read_text(encoding="ascii").strip() == digest:
+                return "已验证"
+            return "已导入，待验证"
+        except (OSError, ValueError, http.cookiejar.LoadError):
+            return "未登录"
+
+    def import_youtube_cookie_file(self, source: Path, *, verified: bool = False) -> Path:
+        """Import any browser's Netscape export; never replace a working jar on failure."""
+        from .youtube_web_login import youtube_domain
+        incoming = http.cookiejar.MozillaCookieJar(str(source))
+        try:
+            incoming.load(ignore_discard=True, ignore_expires=True)
+        except (OSError, ValueError, http.cookiejar.LoadError) as exc:
+            raise ValueError("无法读取 Cookie 文件，请选择 Netscape 格式的 cookies.txt。") from exc
+        jar = http.cookiejar.MozillaCookieJar()
+        for cookie in incoming:
+            # Browser exports/yt-dlp use 0 for session cookies; stdlib's
+            # MozillaCookieJar otherwise interprets it as expired in 1970.
+            if cookie.expires == 0:
+                cookie.expires = None
+            if youtube_domain(cookie.domain) and not cookie.is_expired():
+                cookie.discard = False
+                jar.set_cookie(cookie)
+        digest = self._youtube_auth_digest(jar)
+        if not digest:
+            raise ValueError("文件中没有有效的 YouTube 登录 Cookie，请登录后重新导出。")
+        target = self.resolved_cookie_path(SOURCE_YOUTUBE)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="youtube-import-", suffix=".tmp", dir=target.parent)
+        os.close(fd)
+        candidate = Path(name)
+        try:
+            jar.save(str(candidate), ignore_discard=True, ignore_expires=False)
+            os.replace(candidate, target)
+        finally:
+            candidate.unlink(missing_ok=True)
+        marker = target.with_suffix(".verified")
+        # A marker failure only downgrades the UI to pending; imported cookies
+        # remain usable. The marker contains a digest, never cookie values.
+        try:
+            marker.unlink(missing_ok=True)
+            if verified:
+                marker.write_text(digest, encoding="ascii")
+        except OSError:
+            pass
+        return target
+
     def import_from_browser(self, platform: str, browser: str) -> Path:
         if platform != SOURCE_YOUTUBE:
             raise ValueError("当前仅支持导入 YouTube 浏览器 Cookie。")
         browser_name = browser.strip().lower()
         if browser_name != "firefox":
             raise ValueError(
-                "目前仅支持从 Firefox 导入 YouTube Cookie；Chrome / Edge 等内核浏览器无法导出可用的 YouTube Cookie。"
+                "此浏览器直接读取接口仅支持 Firefox；其他浏览器请使用网页登录或导入 Cookie 文件。"
             )
 
         path = self.resolved_cookie_path(SOURCE_YOUTUBE)
