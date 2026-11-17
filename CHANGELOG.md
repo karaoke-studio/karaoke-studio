@@ -15,6 +15,45 @@
 ---
 
 
+## [4.4.7] — 2026-11-17
+
+<span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>
+
+新增 BPM 自动导唱与指示灯倒计时、FFmpeg 安装引导和归一化调色，完善字幕时间轴、下层罗马音及 macOS 音频处理与预览体验。
+
+### 新增功能
+- **指示灯支持按 BPM 倒计时**：视频渲染的指示灯新增自动检测与手动 BPM 输入，检测值自动填入，并提供半速、原值、倍速选择；每盏灯占一个四分音符，修改 BPM、灯数量或结束等待时自动更新持续时间，设置随工程保存。例如 120 BPM、4 盏灯对应 2 秒倒计时。[@凛夜](https://github.com/Myosotis11037)
+- **新增 FFmpeg 安装与配置引导**：全局设置可检查、安装和配置 FFmpeg 工具包；下载、音视频处理及字幕渲染发现缺少工具时提供统一入口，减少手动查找和配置。[@凛夜](https://github.com/Myosotis11037)
+- **专业调色支持 0–1 归一化输入**：RGBA、HSV 通道可切换常规数值与归一化浮点数，单击数值框即可全选，方便直接输入和精细调色。[@凛夜](https://github.com/Myosotis11037)
+- **macOS 接入 PyMSS Studio 运行环境**：音频分离与 AI 打轴可识别已有 Studio 环境，完善运行路径、依赖检查、安装引导及错误提示。[@longlin10086](https://github.com/longlin10086)
+
+### 特性改变
+- **字幕时间轴按显示行着色**：歌词块默认按实际显示行使用固定颜色，并以角标标注行位；仍可切换为按演唱者着色，便于核对分页与多行布局。[@凛夜](https://github.com/Myosotis11037)
+- **导唱图片偏移更直观**：直接调整 X/Y 偏移，原始余白保留在高级选项中；批量替换窗口应用后保持打开，可继续比较和调整，本次工程也可记住不再重复询问角色方案。[@凛夜](https://github.com/Myosotis11037)
+- **改善 CPU 字幕预览性能**：减少重复计算并限制排队帧数，降低连续播放与拖动时的额外开销。[@longlin10086](https://github.com/longlin10086)
+- **调整 TermuxVA 导出质量控制**：质量滑条映射为平均码率，改善 H.264 / HEVC 编码参数兼容性。[@clannadFurukawanagisa](https://github.com/clannadFurukawanagisa)
+
+### 修复项目
+- **修复下层罗马音居中与样式读取**：罗马音槽位按对应正文居中，正确读取 SUG 的罗马音样式，完善长音、连词、走字和多组注音的对齐。[@Xuan-cc](https://github.com/Xuan-cc)
+- **修复单行页被错误推到另一行**：未开启强制上下交错时，单行页保持原本的行位，预览与导出一致。[@凛夜](https://github.com/Myosotis11037)
+- **修复长字幕源名称撑宽界面**：源名称过长时自动省略显示，避免挤压布局控件。[@凛夜](https://github.com/Myosotis11037)
+- **修复混合缩放显示器上的屏幕取色偏移**：在不同 DPI 的屏幕之间取色时正确定位像素。[@凛夜](https://github.com/Myosotis11037)
+- **更新提示窗口跟随工作台主题**：修复明暗主题切换后更新弹窗配色不一致的问题。[@凛夜](https://github.com/Myosotis11037)
+- **改善 macOS 波形对齐触控板操作**：支持双指平移和捏合缩放。[@longlin10086](https://github.com/longlin10086)
+- **修复 macOS 音频分离后端状态显示**：正确报告 MPS 可用性与实际使用的分离后端；字幕预览不再提供当前平台不支持的 GPU 重试操作。[@longlin10086](https://github.com/longlin10086)
+- **修复 macOS 图形启动时的工具路径识别**：改善 FFmpeg 等命令行工具的查找。[@StarFreedomX](https://github.com/StarFreedomX)
+- **修复 macOS 全屏切换后无法调整窗口大小**。[@StarFreedomX](https://github.com/StarFreedomX)
+
+### 更新 StrangeUtaGame 子模块
+- 更新 StrangeUtaGame 子模块到 `96e9b4aa`。[@凛夜](https://github.com/Myosotis11037)
+- **导唱符支持按 BPM 自动计算时间**：后台检测音频 BPM，自动填入结果并提供半速、原值、倍速选择；按导唱符数量向歌词起唱点倒推，每个符号占一拍，间隔与预览即时更新。支持单次插入、填充待办与自动导唱；与前句重叠时提醒并允许插入，早于零秒时跳过并保留待办。[@凛夜](https://github.com/Myosotis11037)
+- **自动导唱批量设置仅作用于选中候选**：使用首个选中项的参数更新所选项，未选中项保持原设置。[@凛夜](https://github.com/Myosotis11037)
+- **句尾时间标记改用绿色菱形**，便于与普通打轴点区分。[@凛夜](https://github.com/Myosotis11037)
+
+本版贡献者：凛夜（@Myosotis11037）、@Xuan-cc、@longlin10086、@StarFreedomX、@clannadFurukawanagisa
+
+---
+
 ## [4.4.6.2] — 2026-11-15
 
 <span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>
