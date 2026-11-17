@@ -2056,14 +2056,13 @@ class YtDlpService:
         return {}
 
     def _youtube_download_extractor_args_hint(self, url: str, extractor_args_hint: str) -> str:
-        """Keep a successful reload client; otherwise use a GVS-compatible client."""
-        if self.detect_source(url) != SOURCE_YOUTUBE:
-            return extractor_args_hint
-        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
-            return extractor_args_hint
-        if not self._ensure_youtube_visionos_client():
-            return extractor_args_hint
-        return YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+        """Preserve the client that supplied the selected format IDs.
+
+        Empty means yt-dlp's default profile, not an unknown client. Switching
+        to VisionOS here can discard authenticated formats before downloading.
+        Existing error-driven retries still handle GVS failures when necessary.
+        """
+        return extractor_args_hint
 
     def _ensure_youtube_visionos_client(self) -> bool:
         """Backport yt-dlp's VisionOS client to stable builds that predate it.
@@ -2139,6 +2138,7 @@ class YtDlpService:
             or "please reload this page" in lower
             or "http error 403" in lower
             or "requested format is not available" in lower
+            or "当前清晰度不可用" in message
             or "video is not available" in lower
             or "video is unavailable" in lower
             or "downloaded file is empty" in lower

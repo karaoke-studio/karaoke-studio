@@ -1303,9 +1303,10 @@ class VideoDownloadPage(QWidget):
         settings_grid.setColumnStretch(1, 1)
         settings_grid.setColumnStretch(2, 1)
 
-        settings_grid.addWidget(CaptionLabel("清晰度 / 格式"), 0, 0, Qt.AlignmentFlag.AlignVCenter)
+        settings_grid.addWidget(CaptionLabel("下载清晰度（可选择）"), 0, 0, Qt.AlignmentFlag.AlignVCenter)
         self.format_combo = ComboBox()
         self.format_combo.setMinimumHeight(34)
+        self.format_combo.setToolTip("解析后点击选择此视频实际提供的清晰度；默认选择最高画质。")
         self.format_combo.currentIndexChanged.connect(self._handle_format_combo_changed)
         self._install_single_click_combo_behavior(self.format_combo)
         settings_grid.addWidget(self.format_combo, 0, 1, 1, 4)
@@ -1359,7 +1360,8 @@ class VideoDownloadPage(QWidget):
         self.format_table.itemChanged.connect(self._handle_format_item_changed)
         self.format_table.cellClicked.connect(self._handle_format_cell_clicked)
         self.format_hint_label = CaptionLabel("请先解析视频链接。")
-        self.format_hint_label.hide()
+        self.format_hint_label.setWordWrap(True)
+        layout.addWidget(self.format_hint_label)
         return details
 
     def _build_account_card(self, parent: QWidget) -> QWidget:
@@ -2632,6 +2634,7 @@ class VideoDownloadPage(QWidget):
         self._format_table_updating = True
         self.format_table.setRowCount(0)
         self.format_combo.clear()
+        self.format_combo.setEnabled(False)
 
         task = self._current_task()
         if task is None or not self._format_options:
@@ -2660,8 +2663,12 @@ class VideoDownloadPage(QWidget):
                 selected_index = row
 
         self.format_combo.setCurrentIndex(selected_index)
+        self.format_combo.setEnabled(task.status != TASK_STATUS_DOWNLOADING)
         self._set_format_summary(self._format_options[selected_index])
-        self.format_hint_label.setText("解析完成后可在这里切换当前任务的下载格式。")
+        self.format_hint_label.setText(
+            "下载中，清晰度已锁定。" if task.status == TASK_STATUS_DOWNLOADING else
+            f"已解析 {len(self._format_options)} 种可选格式，点击上方下拉框切换清晰度。"
+        )
         self._format_table_updating = False
 
     def _handle_format_cell_clicked(self, row: int, column: int) -> None:
@@ -2679,7 +2686,7 @@ class VideoDownloadPage(QWidget):
             return
 
         task = self._current_task()
-        if task is None:
+        if task is None or task.status == TASK_STATUS_DOWNLOADING:
             return
 
         option = self._format_options[index]
@@ -2710,14 +2717,17 @@ class VideoDownloadPage(QWidget):
 
     def _format_option_text(self, option: FormatOption) -> str:
         codecs = " / ".join(part for part in (option.video_codec, option.audio_codec) if part and part != "-")
-        parts = [option.format_label or "默认格式", option.resolution or "-"]
+        resolution = option.resolution or "未知清晰度"
+        if option.is_recommended:
+            resolution += "（推荐）"
+        parts = [resolution, option.format_label or "默认格式"]
         if codecs:
             parts.append(codecs)
         size_text = format_bytes(option.filesize, estimated=option.filesize_is_estimate)
         if size_text != "-":
             parts.append(size_text)
         text = " | ".join(parts)
-        return f"推荐 | {text}" if option.is_recommended else text
+        return text
 
     def _set_format_summary(self, option: FormatOption | None) -> None:
         if option is None:
