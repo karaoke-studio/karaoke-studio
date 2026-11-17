@@ -13,6 +13,7 @@ from typing import Any
 from .backend import NativeRendererError, heartbeat_lease_s, skia_requested
 from .skia_process import SkiaSidecarProcess, resolve_skia_renderer_path
 from .skia_ipc import OwnedPosixRings
+from .skia_text import CELL_GLYPH_ERROR, has_cell_glyph_schema
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                     or ready['horizontal_rtl_schema'] != 1
                     or 'p05_horizontal_rtl' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持右至左单元排列，请重新构建')
+            if not has_cell_glyph_schema(ready):
+                raise NativeRendererError(CELL_GLYPH_ERROR)
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

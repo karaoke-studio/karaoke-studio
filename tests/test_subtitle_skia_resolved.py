@@ -65,7 +65,9 @@ def test_canonical_ir_draws_shaped_cells_and_keeps_seek_stable(binary, project, 
         assert frames[1][..., 3].max() == 255
     ir = ir_for(binary, project)
     cells = ir['skia_layout']['lines'][0]['cells']
-    assert len(cells[4]['metrics']['glyphs']) == 1  # fi remains one authored timing unit.
+    # fi remains one authored timing unit, drawn from nominal f/i glyphs (cell_glyph_schema=1).
+    assert len(cells) == len(project[0].lines[0].chars)
+    assert [(g['cluster_start'], g['cluster_end']) for g in cells[4]['metrics']['glyphs']] == [(0, 1), (1, 2)]
     assert cells[3]['metrics']['glyphs'][0]['cluster_end'] == 3
     if target == 'gpu':
         (tmp_path / 'resolved-layout.json').write_text(json.dumps({'cells': cells,

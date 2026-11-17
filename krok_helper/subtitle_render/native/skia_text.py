@@ -4,6 +4,17 @@ from __future__ import annotations
 from .backend import NativeRendererError, heartbeat_lease_s
 from .skia_process import SkiaSidecarProcess
 
+# Authored-cell glyph policy (existing GPU rule): OpenType shaping only for a
+# supplementary scalar, or a multi-scalar cell holding a mark or ZWJ; nominal
+# glyphs otherwise, and cell design metrics always from nominal glyphs.
+CELL_GLYPH_SCHEMA = 1
+CELL_GLYPH_ERROR = 'Skia sidecar 不支持单元字形策略，请重新构建'
+
+
+def has_cell_glyph_schema(payload: dict) -> bool:
+    value = payload.get('cell_glyph_schema')
+    return type(value) is int and value == CELL_GLYPH_SCHEMA
+
 
 class SkiaTextMetricsProcess(SkiaSidecarProcess):
     def start(self):
@@ -19,12 +30,18 @@ class SkiaTextMetricsProcess(SkiaSidecarProcess):
         if ready.get('mixed_font_schema') != 1:
             self.abort(reason='Skia mixed font handshake failed')
             raise NativeRendererError('Skia sidecar 不支持单元内混合字体，请重新构建')
+        if not has_cell_glyph_schema(ready):
+            self.abort(reason='Skia cell glyph policy handshake failed')
+            raise NativeRendererError(CELL_GLYPH_ERROR)
         return ready
 
     def measure(self, fonts: dict, runs: list[dict]) -> list[dict]:
-        self._send({"cmd": "measure_text", "metrics_schema": 1, "fonts": fonts, "runs": runs})
+        self._send({"cmd": "measure_text", "metrics_schema": 1, "cell_glyph_schema": CELL_GLYPH_SCHEMA,
+                    "fonts": fonts, "runs": runs})
         out = self._expect_ok(self._read_until_event("text_measured", timeout_s=self.configure_timeout_s,
                                                     heartbeat_lease_s=heartbeat_lease_s()))
         if out.get("gpu_initialized") is not False or out.get("execution_target") != "cpu_metrics":
             raise NativeRendererError("Skia 规范度量意外创建了 GPU session")
+        if not has_cell_glyph_schema(out):
+            raise NativeRendererError(CELL_GLYPH_ERROR)
         return out["runs"]

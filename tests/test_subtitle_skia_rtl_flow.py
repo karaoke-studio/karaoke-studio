@@ -80,9 +80,14 @@ def test_rtl_flow_matches_actual_gpu(binary, project, kind, reverse, effect, sem
 
 
 def assert_actual_gpu_parity(binary,project,kind,reverse,effect,semantics,dpr,*,alignment=None,text_flow=True):
-    from test_subtitle_render_gpu_backend import _render_g1_frames
     track,style=rtl_source(project,kind,reverse=reverse,effect=effect)
     style=replace(style,layout_semantics=semantics,right_to_left=text_flow)
+    assert_gpu_parity(binary,track,style,dpr,(kind,reverse,effect,semantics,dpr,alignment),alignment=alignment)
+
+
+def assert_gpu_parity(binary,track,style,dpr,case,*,alignment=None):
+    """Original 1px ink and normalized sung-front budgets against actual D2D GPU."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
     if alignment:
         style=replace(style,dual_line_layout=True,line_horizontal_layout='per_row',
                       line_alignments=[alignment],row1_align=alignment,row1_offset_x=13,row1_offset_y=7)
@@ -93,7 +98,6 @@ def assert_actual_gpu_parity(binary,project,kind,reverse,effect,semantics,dpr,*,
     with SkiaRendererProcess(binary,selection=selection('gpu')) as process:
         configure(process,ir_for(binary,(track,style),dpr=dpr))
         frames,_=collect(process,TIMES)
-    case=kind,reverse,effect,semantics,dpr,alignment
     for time,a,b in zip(TIMES,refs,frames):
         def bounds(frame):
             ys,xs=np.where(frame[...,3]>127)
@@ -275,17 +279,15 @@ def test_spaces_precomposed_letters_and_row_anchors_match_gpu(binary,project,ali
     assert_actual_gpu_parity(binary,project,'units',reverse,'none',semantics,1.5,alignment=alignment)
 
 
+# Formerly strict xfails: fixed by cell_glyph_schema=1 (nominal mark-free
+# cells; nominal-glyph cell boxes), see test_subtitle_skia_cell_glyphs.py.
 @pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
-@pytest.mark.xfail(strict=True,raises=AssertionError,
-    reason='Existing fi-ligature ink mismatch also reproduces with RTL disabled: about 2px at DPR1.5; P05.2 remains open.')
-def test_recorded_existing_ltr_ligature_gap(binary,project):
+def test_ltr_ligature_source_cell_matches_gpu(binary,project):
     assert_actual_gpu_parity(binary,project,'ligature_only',False,'none','legacy',1.5,text_flow=False)
 
 
 @pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
-@pytest.mark.xfail(strict=True,raises=AssertionError,
-    reason='Existing LTR decomposed-accent cell width differs from GPU by about 3px at DPR1.5; P05.2 remains open.')
-def test_recorded_existing_ltr_decomposed_width_gap(binary,project):
+def test_ltr_decomposed_accent_cell_width_matches_gpu(binary,project):
     assert_actual_gpu_parity(binary,project,'decomposed_unit',False,'none','n3_1074',1.5,
                               alignment='left',text_flow=False)
 

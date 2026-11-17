@@ -245,6 +245,9 @@ def main(argv=None) -> int:
     if manifest.get("horizontal_rtl", 0) >= 1:
         steps["horizontal_rtl"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                     "tests/test_subtitle_skia_rtl_flow.py", "--basetemp", logs / "rtl-flow-tests"]
+    if manifest.get("cell_glyphs", 0) >= 1:
+        steps["cell_glyphs"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                 "tests/test_subtitle_skia_cell_glyphs.py", "--basetemp", logs / "cell-glyph-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

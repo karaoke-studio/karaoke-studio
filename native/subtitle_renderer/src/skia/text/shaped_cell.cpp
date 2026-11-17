@@ -35,12 +35,15 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
                      const std::string& language, bool rightToLeft, bool allowMixed) {
     if (utf8.empty() || utf8.size() > 65536 || fonts.empty()) throw std::runtime_error("Skia 度量单元或字体链无效");
     decode(utf8);
+    // One decision per authored cell, from its source text only (never per font).
+    const bool opentype = rightToLeft || cellUsesOpenTypeShaping(utf8);
     ShapedRange handler;
     std::size_t selected = 0;
     std::vector<std::vector<ShapedGlyph>> candidates;
     for (; selected < fonts.size(); ++selected) {
         if (!fonts[selected]) throw std::runtime_error("Skia 字体链包含空实例");
-        auto candidate = shapeFontRange(utf8, *fonts[selected], 0, std::uint32_t(utf8.size()), language, rightToLeft);
+        auto candidate = shapeFontRange(utf8, *fonts[selected], 0, std::uint32_t(utf8.size()), language, rightToLeft,
+                                        opentype);
         // Coverage is the SHAPED result: cmap-only checks wrongly reject a +
         // combining mark when the face supplies its precomposed glyph instead.
         if (!candidate.glyphs.empty() && std::all_of(candidate.glyphs.begin(), candidate.glyphs.end(),
@@ -52,7 +55,7 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     }
     if (selected == fonts.size()) {
         if (allowMixed && !rightToLeft && fonts.size() > 1)
-            return shapeMixedCell(utf8, fonts, language, candidates);
+            return shapeMixedCell(utf8, fonts, language, candidates, opentype);
         throw std::runtime_error("Skia 显式字体链缺少该歌词单元的完整字形");
     }
     const auto& instance = *fonts[selected];
@@ -66,10 +69,16 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     for (const auto& glyph : result.glyphs) {
         geometries.push_back(instance.glyphGeometry(glyph.id));
         if (geometries.back().requiresColorPaint) result.outlineAvailable = false;
-        result.designAdvance += geometries.back().advance;
     }
-    result.designLeftBearing = geometries.front().leftBearing;
-    result.designRightBearing = geometries.back().rightBearing;
+    // The cell box uses the authored scalars' nominal glyphs (first bearing,
+    // summed advances, last bearing), not a composed or ligated shaped glyph.
+    const auto nominal = nominalGlyphs(utf8, instance, 0, std::uint32_t(utf8.size()));
+    for (std::size_t i = 0; i < nominal.size(); ++i) {
+        const auto metric = instance.glyphGeometry(nominal[i]);
+        result.designAdvance += metric.advance;
+        if (i == 0) result.designLeftBearing = metric.leftBearing;
+        if (i + 1 == nominal.size()) result.designRightBearing = metric.rightBearing;
+    }
     std::vector<std::uint32_t> boundaries{std::uint32_t(utf8.size())};
     for (const auto& glyph : result.glyphs) {
         if (glyph.clusterStart >= utf8.size() || (std::uint8_t(utf8[glyph.clusterStart]) & 0xc0) == 0x80)

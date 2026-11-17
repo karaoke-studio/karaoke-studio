@@ -1824,6 +1824,21 @@ Claude Opus 5.5 恢复额度后完成只读审查，未发现阻断问题、未�
 
 Linux 真硬件、Mac 真机、默认 realization 完整画质及完整 P05 继续保留。
 
+### 14.43 P05.2 / P05.5 多码点计时单元的字形与单元框校准（2026-11-17）
+
+**本批修复 §14.42 记录的两处旧 LTR 几何差异，仍不开放 RTL 多码点、不关闭完整 P05。** Claude Opus 5.5 负责复现、实现与本地验证，Codex 审查最终改动及关键证据。生产默认、D2D 实现、GPU 偏好、发布打包与版本不变；保留同期其他人的前端/时间轴改动。
+
+- 根因有实际 D2D GPU 与源码证据：D2D 普通单元按 nominal cmap 字形和设计 advance 排列，不合成 `fi` 连字、不应用无 mark 单元的 kerning；仅 UTF-16 多单元且含 mark、surrogate 或 ZWJ 时塑形。Skia 过去一律运行 HarfBuzz GSUB/GPOS，导致 `fi` 墨迹约差 2px。D2D 的单元框始终使用源 nominal 字形总 advance 与首/尾 bearing，`a+U+0301` 的尾 bearing 来自 combining mark，Skia 过去取合成 `á` 的 bearing，导致后续字位在 DPR 1.5 偏移约 3px。不是 epsilon 或抗锯齿问题。
+- `skia/text/font_shaping` 实现显式公共单元策略：含补充平面 scalar，或多 scalar 且含 Mn/Mc/Me/ZWJ，才运行 OpenType；其余按锁定字体 cmap/hmtx 生成 nominal 字形与 UTF-8 cluster。单元框从源 nominal glyph 获取，混排按对应 face、实际字号/拉伸归一到主字体逻辑 em。度量、configure 快照重校验、GPU/Raster 共用同一实现，不按平台选择算法，不改变原文、字体槽、单元、时钟或共享布局策略。
+- `cell_glyph_schema=1` 在 sidecar ready、度量请求/响应协商，客户端在度量/选择后端前拒绝旧能力；字体身份 `skia-m150-hb-ft-v3` 升为 **v4**，旧快照无法混用。生成字体精确约束 nominal 连字/kerning 行为、分解与预组合单元宽度（22/24）及缺 combining cmap 时的 `.notdef` 度量；伪造旧身份、连字快照或合成单元框必须失败并保留旧场景。原两项 strict xfail 已成为普通 GPU 回归，没有放宽 1px 墨迹/唱色前沿预算。
+- 修复前/后探针为 `build/p05-mc/probe-before.json` / `probe-after.json`：`fi` 原 Skia 单一连字变为与 GPU 相同的 f/i 路径；分解重音后的字位从 GPU/Skia 128/131 变为 128/128。默认 ignorables（例如无 mark 单元内未映射 ZWNJ）现在可能明确缺字失败，不能把原 HB 隐藏行为冒充完整兼容。真实 Arabic/Indic 等无 mark 连接文字的 nominal 规则虽匹配 GPU 分支，尚未完成实际字体校准；RTL 多码点、上下注音 RTL、竖排与完整 Unicode 仍有门禁。
+
+Windows/Linux Vulkan 与 CPU-only 四份均干净重建，CTest 各 **3/3**，源码身份统一为 `9331a66dcff8b57d0c3cb6e5bc80d84648e88e5e138c314402eef64cf17cf2b6`。新非 GPU 专项 **16 通过**；新增/提升的实际 GPU 专项 **38 通过**。串行实际 D2D GPU（realization 关闭）合计 **142 通过**：RTL 96+极端负字距4、新多码点36、原预期失败2及混排 oracle4；另有 RTL 行锚点 **12 通过**。新用例覆盖 legacy/N3、DPR1/1.5、反向演唱、no_wipe、行锚点、空格、角色、负字距、受控 kern/mark 与缺 mark cmap 字体。
+
+Windows 完整 Skia 组合首轮 **1547 通过、7 跳过、4 失败**：3 项旧 ligature/kerning 假设已按真实新契约修正并复验（相关 Windows **19 通过**）；另 1 项 `ruby_markers` 默认 realization 在双 worker 下 t=1699 前沿差 1.13px，串行同组 **3×32 全部通过**，不修改生产 D2D 或放宽阈值，保留并行负载差异记录。X11 首轮 **1029 通过、638 跳过、同样 3 项旧断言失败**，修正后相关文件 **55 通过、7 跳过**；Wayland 最终完整组合 **1032 通过、638 跳过**。独立 CPU-only Windows **37 通过**、Linux **35 通过、2 跳过**；关联架构/协议/字体/构建/验收工具 **532 通过、10 跳过**。
+
+29 份规范样例 Windows/X11/Wayland 同版本直接比较误差均为 **0**；与前批相比，22 份除 v3→v4 身份外几何相同，另 7 份含 `fi` 或分解重音的样例发生预期修正，不宣称旧样例全部不变。Mac 双架构、同源码指纹与干净验收包尚待 CI；manifest 新增 `cell_glyphs=1`。§14.6 朋友入口先保留已验收的上一轮提交，待本轮验收后更新。Linux 真硬件、Mac 真机、默认 realization 完整画质和完整 P05 门槛仍保留。日志前缀 `build/p05-mc*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

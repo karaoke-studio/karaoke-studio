@@ -8,17 +8,81 @@
 #include <stdexcept>
 
 namespace subtitle::skia::text {
-ShapedRange shapeFontRange(const std::string& utf8, const FontInstance& font,
-    std::uint32_t begin, std::uint32_t end, const std::string& language, bool rtl) {
-    if (begin >= end || end > utf8.size()) throw std::runtime_error("Skia 字体塑形范围无效");
-    auto scripts = SkShapers::HB::ScriptRunIterator(utf8.data(), utf8.size());
-    if (!scripts) throw std::runtime_error("Skia script iterator 初始化失败");
-    ShapedRange out;
-    std::uint32_t scriptStart = 0;
+namespace {
+struct Scalar { std::uint32_t value, byteStart; };
+std::vector<Scalar> scalars(const std::string& utf8, std::uint32_t begin, std::uint32_t end) {
+    if (begin > end || end > utf8.size()) throw std::runtime_error("Skia 字体塑形范围无效");
+    std::vector<Scalar> out;
+    for (std::uint32_t i = begin; i < end;) {
+        const auto first = std::uint8_t(utf8[i]);
+        const unsigned count = first < 0x80 ? 0 : (first & 0xe0) == 0xc0 ? 1 : (first & 0xf0) == 0xe0 ? 2
+            : (first & 0xf8) == 0xf0 ? 3 : 99;
+        if (count == 99 || i + 1 + count > end) throw std::runtime_error("Skia 文本不是有效 UTF-8");
+        std::uint32_t value = count ? first & ((1u << (6 - count)) - 1) : first;
+        for (unsigned j = 1; j <= count; ++j) {
+            const auto next = std::uint8_t(utf8[i + j]);
+            if ((next & 0xc0) != 0x80) throw std::runtime_error("Skia 文本不是有效 UTF-8");
+            value = (value << 6) | (next & 0x3f);
+        }
+        out.push_back({value, i});
+        i += 1 + count;
+    }
+    return out;
+}
+double pixelScale(const FontInstance& font) {
     int scale = 0; hb_font_get_scale(font.shapingFace(), &scale, nullptr);
     if (scale <= 0) throw std::runtime_error("Skia HarfBuzz 塑形尺度无效");
-    const double pixels = double(font.shapingFont().getSize())/scale;
+    return double(font.shapingFont().getSize())/scale;
+}
+}
+
+bool cellUsesOpenTypeShaping(const std::string& utf8) {
+    const auto values = scalars(utf8, 0, std::uint32_t(utf8.size()));
+    const auto unicode = hb_unicode_funcs_get_default();
+    bool joined = false;
+    for (const auto& scalar : values) {
+        if (scalar.value > 0xffff) return true;
+        const auto category = hb_unicode_general_category(unicode, scalar.value);
+        joined = joined || scalar.value == 0x200d || category == HB_UNICODE_GENERAL_CATEGORY_NON_SPACING_MARK
+            || category == HB_UNICODE_GENERAL_CATEGORY_SPACING_MARK || category == HB_UNICODE_GENERAL_CATEGORY_ENCLOSING_MARK;
+    }
+    return values.size() > 1 && joined;
+}
+
+std::vector<SkGlyphID> nominalGlyphs(const std::string& utf8, const FontInstance& font,
+    std::uint32_t begin, std::uint32_t end) {
+    std::vector<SkGlyphID> out;
+    for (const auto& scalar : scalars(utf8, begin, end)) {
+        hb_codepoint_t glyph = 0;
+        if (!hb_font_get_nominal_glyph(font.shapingFace(), scalar.value, &glyph)) glyph = 0;
+        if (glyph > 65535) throw std::runtime_error("Skia 字体返回无效 nominal glyph");
+        out.push_back(SkGlyphID(glyph));
+    }
+    return out;
+}
+
+ShapedRange shapeFontRange(const std::string& utf8, const FontInstance& font,
+    std::uint32_t begin, std::uint32_t end, const std::string& language, bool rtl, bool opentype) {
+    if (begin >= end || end > utf8.size()) throw std::runtime_error("Skia 字体塑形范围无效");
+    ShapedRange out;
+    const double pixels = pixelScale(font);
     double cursor = 0;
+    if (!opentype) {
+        if (rtl) throw std::runtime_error("Skia nominal 字形策略不接受 RTL 塑形方向");
+        const auto values = scalars(utf8, begin, end);
+        const auto glyphs = nominalGlyphs(utf8, font, begin, end);
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            // Same pinned hmtx/HVAR advance HB would use, without any GPOS.
+            out.glyphs.push_back({glyphs[i], {float(cursor), 0.f}, values[i].byteStart, 0});
+            cursor += hb_font_get_glyph_h_advance(font.shapingFace(), glyphs[i])*pixels;
+        }
+        if (!std::isfinite(cursor)) throw std::runtime_error("Skia nominal 字形返回非有限坐标");
+        out.advance = float(cursor);
+        return out;
+    }
+    auto scripts = SkShapers::HB::ScriptRunIterator(utf8.data(), utf8.size());
+    if (!scripts) throw std::runtime_error("Skia script iterator 初始化失败");
+    std::uint32_t scriptStart = 0;
     while (!scripts->atEnd()) {
         scripts->consume();
         const auto scriptEnd = std::uint32_t(scripts->endOfCurrentRun());

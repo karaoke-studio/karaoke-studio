@@ -178,7 +178,10 @@ def test_portable_font_has_exact_metrics_and_cell_cluster_boundaries(binary, tmp
         # Design-em extraction must not retain SkFont's 64px path rounding.
         assert cells[0]['ink'] == pytest.approx([2.5, -35, 27.5, 0], abs=1e-4)
         assert [cells[1]['advance'], cells[2]['advance']] == pytest.approx([50, 50], abs=1e-4)
-        assert len(cells[4]['glyphs']) == 1 and cells[4]['glyphs'][0]['cluster_end'] == 2
+        # cell_glyph_schema=1: a mark-free cell keeps nominal glyphs (no liga),
+        # exactly as two separate f/i cells would draw them.
+        assert [(g['id'], g['x'], g['cluster_start'], g['cluster_end']) for g in cells[4]['glyphs']] == [
+            (cells[5]['glyphs'][0]['id'], 0, 0, 1), (cells[6]['glyphs'][0]['id'], 15, 1, 2)]
         assert len(cells[5]['glyphs']) + len(cells[6]['glyphs']) == 2
     (tmp_path / 'canonical-metrics.json').write_text(json.dumps({'font_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                                                               'cells': cells}, sort_keys=True), encoding='utf-8')
@@ -214,7 +217,7 @@ def test_shaping_checks_composed_glyph_coverage_before_choosing_fallback(binary,
     assert composed[1]['glyphs'][0]['cluster_end'] == len('a\u0301'.encode())
 
 
-def test_opentype_positioning_preserves_kerning_and_mark_anchors(binary, tmp_path):
+def test_opentype_positioning_applies_only_to_shaped_cells(binary, tmp_path):
     from skia_text_fixture import make_font
     from fontTools.ttLib import TTFont
     from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
@@ -229,8 +232,10 @@ def test_opentype_positioning_preserves_kerning_and_mark_anchors(binary, tmp_pat
         font.save(path)
     with SkiaTextMetricsProcess(binary) as process:
         pair, marked = run(process, path, ['AW', 'a\u0301'], size=50)
-    assert pair['advance'] == 66.25
-    assert pair['glyphs'][1]['x'] == 26.25
+    # A mark-free cell is nominal (existing GPU rule): GPOS kerning is not applied.
+    assert pair['advance'] == 70
+    assert pair['glyphs'][1]['x'] == 30
+    # A base+mark cell is shaped: the GPOS mark anchor is kept.
     assert len(marked['glyphs']) == 2
     assert marked['advance'] == 25
     assert (marked['glyphs'][1]['x'], marked['glyphs'][1]['y']) == (12.5, 2.5)

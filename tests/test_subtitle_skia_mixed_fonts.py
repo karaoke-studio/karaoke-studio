@@ -73,7 +73,7 @@ def ir_for(binary,source,**kwargs):
 
 @pytest.mark.parametrize('semantics',['legacy','n3_1074'])
 @pytest.mark.parametrize('dpr',[1,1.5])
-def test_mixed_cell_keeps_one_clock_and_contextual_ligature(binary,source,semantics,dpr,tmp_path):
+def test_mixed_cell_keeps_one_clock_and_authored_cell_glyphs(binary,source,semantics,dpr,tmp_path):
     track,style,resolve,union=source
     ir=ir_for(binary,(track,replace(style,layout_semantics=semantics),resolve),dpr=dpr)
     layout=ir['skia_layout'];cells=layout['lines'][0]['cells']
@@ -83,8 +83,9 @@ def test_mixed_cell_keeps_one_clock_and_contextual_ligature(binary,source,semant
     assert mixed['selected_font']==-1
     assert [(r['byte_start'],r['byte_end'],r['font_index']) for r in mixed['font_runs']]==[
         (0,1,0),(1,4,1),(4,7,2),(7,9,0)]
+    # cell_glyph_schema=1: this mark-free cell keeps nominal f and i glyphs.
     assert [(g['cluster_start'],g['cluster_end'],g['font_index']) for g in mixed['glyphs']]==[
-        (0,1,0),(1,4,1),(4,7,2),(7,9,0)]  # fi stays one ligature.
+        (0,1,0),(1,4,1),(4,7,2),(7,8,0),(8,9,0)]
     assert cells[1]['metrics']['selected_font']==0 and 'font_runs' not in cells[1]['metrics']
     assert ir['track']['lines'][0]['resolved_intervals']==[[200,800],[800,1100],[1100,1600]]
     output=[]
@@ -132,10 +133,11 @@ def test_mixed_face_geometry_normalizes_size_scale_and_different_em_units(binary
     ir=ir_for(binary,(track,style,resolve))
     cell=ir['skia_layout']['lines'][0]['cells'][0]['metrics']
     assert cell['selected_font']==-1
-    assert cell['advance']==pytest.approx(30+112.5+30+22.5,abs=.001)
+    # The trailing mark-free fi keeps nominal f+i advances (cell_glyph_schema=1).
+    assert cell['advance']==pytest.approx(30+112.5+30+15+10,abs=.001)
     # All design terms use the primary face's logical em; raw 2000 and 1000
     # design units must never be added directly.
-    assert cell['design_advance']==pytest.approx(600+2250+600+450,abs=.001)
+    assert cell['design_advance']==pytest.approx(600+2250+600+300+200,abs=.001)
     assert cell['glyphs'][2]['x']==pytest.approx(142.5,abs=.001)
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:configure(process,ir)
 

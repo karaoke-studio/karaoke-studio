@@ -15,13 +15,13 @@ using Fonts = std::vector<std::shared_ptr<const FontInstance>>;
 
 }
 ShapedCell shapeMixedCell(const std::string& utf8, const Fonts& fonts,
-    const std::string& language, const std::vector<std::vector<ShapedGlyph>>& candidates) {
+    const std::string& language, const std::vector<std::vector<ShapedGlyph>>& candidates, bool opentype) {
     ShapedCell out;
     out.fontRuns = mixedFontRanges(utf8, fonts, candidates);
     out.selectedFont = -1;
     double cursor = 0;
     for (const auto& run : out.fontRuns) {
-        auto shaped = shapeFontRange(utf8, *fonts[run.fontIndex], run.byteStart, run.byteEnd, language);
+        auto shaped = shapeFontRange(utf8, *fonts[run.fontIndex], run.byteStart, run.byteEnd, language, false, opentype);
         const double scale = fonts[run.fontIndex]->horizontalScale();
         for (auto glyph : shaped.glyphs) {
             if (!glyph.id) throw std::runtime_error("Skia 混合字体最终字形无效");
@@ -57,10 +57,6 @@ ShapedCell shapeMixedCell(const std::string& utf8, const Fonts& fonts,
         glyph.clusterEnd = *std::upper_bound(boundaries.begin(), boundaries.end(), glyph.clusterStart);
         const auto geometry = instance.glyphGeometry(glyph.id);
         const float scale = instance.horizontalScale();
-        const float common = font.getSize()/font.getTypeface()->getUnitsPerEm()*scale*unit;
-        out.designAdvance += geometry.advance*common;
-        if (i == 0) out.designLeftBearing = geometry.leftBearing*common;
-        if (i+1 == out.glyphs.size()) out.designRightBearing = geometry.rightBearing*common;
         auto path = geometry.path;
         SkRect bounds = path ? path->computeTightBounds() : font.getBounds(glyph.id, nullptr);
         bounds.fLeft *= scale; bounds.fRight *= scale;
@@ -70,6 +66,21 @@ ShapedCell shapeMixedCell(const std::string& utf8, const Fonts& fonts,
         if (geometry.requiresColorPaint || (!path && !bounds.isEmpty())) out.outlineAvailable = false;
     }
     out.outline = outlines.detach();
+    // Same cell-box rule as one face: each authored scalar's nominal glyph in
+    // the face owning its range, normalized to the primary face's logical em.
+    for (std::size_t r = 0; r < out.fontRuns.size(); ++r) {
+        const auto& run = out.fontRuns[r];
+        const auto& instance = *fonts[run.fontIndex];
+        const auto& font = instance.shapingFont();
+        const float common = font.getSize()/font.getTypeface()->getUnitsPerEm()*instance.horizontalScale()*unit;
+        const auto nominal = nominalGlyphs(utf8, instance, run.byteStart, run.byteEnd);
+        for (std::size_t i = 0; i < nominal.size(); ++i) {
+            const auto metric = instance.glyphGeometry(nominal[i]);
+            out.designAdvance += metric.advance*common;
+            if (r == 0 && i == 0) out.designLeftBearing = metric.leftBearing*common;
+            if (r+1 == out.fontRuns.size() && i+1 == nominal.size()) out.designRightBearing = metric.rightBearing*common;
+        }
+    }
     for (auto value : {out.advance, out.designAdvance, out.designLeftBearing, out.designRightBearing,
                        out.ascent, out.descent, out.leading})
         if (!std::isfinite(value)) throw std::runtime_error("Skia 混合字体返回非有限度量");

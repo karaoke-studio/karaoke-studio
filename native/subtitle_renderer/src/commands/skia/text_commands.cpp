@@ -8,6 +8,9 @@ namespace krok::subtitle::native::commands {
 QJsonObject measureSkiaText(const QJsonObject& request) {
     if (request.value("metrics_schema").toInt() != 1 || !request.value("fonts").isObject() || !request.value("runs").isArray())
         throw std::runtime_error("Skia 批量度量 schema 或必需字段无效");
+    // The caller must ask for the authored-cell glyph policy this sidecar implements.
+    if (!request.value("cell_glyph_schema").isDouble() || request.value("cell_glyph_schema").toDouble() != 1)
+        throw std::runtime_error("Skia 批量度量缺少单元字形策略版本");
     const auto table = request.value("fonts").toObject();
     const auto runs = request.value("runs").toArray();
     if (table.isEmpty() || table.size() > 32 || runs.size() > 4096) throw std::runtime_error("Skia 度量批次大小超限");
@@ -44,7 +47,7 @@ QJsonObject measureSkiaText(const QJsonObject& request) {
             {"cap_height", primary.capHeight()}}}});
     }
     auto out = protocol::response(true, "text_measured");
-    out.insert("metrics_schema", 1); out.insert("backend", "skia"); out.insert("execution_target", "cpu_metrics");
+    out.insert("metrics_schema", 1); out.insert("cell_glyph_schema", 1); out.insert("backend", "skia"); out.insert("execution_target", "cpu_metrics");
     out.insert("gpu_initialized", false); out.insert("runs", output);
     return out;
 }

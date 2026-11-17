@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
     ready.insert("execution_targets", targets);
     ready.insert("pixel_formats", QJsonArray{"rgba8888", "bgra8888_premultiplied"});
     ready.insert("text_metrics_schema", 1);
+    ready.insert("cell_glyph_schema", 1);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);
     ready.insert("standalone_mark_schema", 1);
