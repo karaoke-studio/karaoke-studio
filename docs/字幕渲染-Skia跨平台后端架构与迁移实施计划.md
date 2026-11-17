@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 58dfb9bb
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43905588991 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout e4ae8603
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/43920641750 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1818,7 +1818,7 @@ Windows 首轮完整 Skia 组合 **1490 通过、7 跳过**（96 组新 D2D 主�
 
 实现提交 `e4ae8603` 已推送，Mac CI [43920641750](https://github.com/karaoke-studio/karaoke-studio/actions/runs/43920641750) 的 arm64/x64 产品组合各 **986 通过、632 项平台专用跳过**，新文件各 **65 通过、116 跳过**（112 项 Windows D2D 对照、2 项上述 Windows 严格预期失败记录、2 项 Vulkan loader 注入）；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**。两架构 Metal/Raster 四份 native 指纹与本地四份一致；29 份 Windows/X11/Wayland/Mac arm64/Mac x64 样例五方直接比较误差全部为 **0**，原有 28 份不变。
 
-x64 干净验收包退出 **0**、`horizontal_rtl=0`、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。arm64 验收包首轮及单独重跑（job `133498407598` / `133509012306`）均排队约 15 分钟后被 GitHub 取消：annotations 明确记录 arm64 容量不足、未取得 hosted runner；两次均无执行机、无步骤，不是测试失败。该干净包门槛仍未通过，整轮 CI 最终为 failure，不能写作“五项全绿”。§14.6 的朋友入口因此仍保留上一轮已完成干净包验收的提交与产物；恢复容量后只需重跑本轮 arm64 bundle-check，无需改代码、重建或重跑已通过项。
+两份干净验收包最终均退出 **0**、`horizontal_rtl=0`、`functional_passed=true`，虚拟 Metal 的 `hardware_gate_passed=false` 正确保留。arm64 首轮及第一次重跑（job `133498407598` / `133509012306`）均因 GitHub arm64 容量不足、未取得 hosted runner 而取消，两次均无执行机/测试步骤；保留这两次基础设施失败记录。2026-11-17 再定向重跑同一提交的 arm64 bundle-check（job `133758630479`）通过，整轮 CI 最终 **5 项成功**，没有为重试修改代码或重跑已通过项。§14.6 朋友入口现更新为本轮提交与验收包；托管虚拟设备不作为本轮真机验收。
 
 Claude Opus 5.5 恢复额度后完成只读审查，未发现阻断问题、未修改代码；其核对了实际 D2D 单元反射、四种方向的 overlap 终点、时钟归属、塑形与源/最终门禁。
 
