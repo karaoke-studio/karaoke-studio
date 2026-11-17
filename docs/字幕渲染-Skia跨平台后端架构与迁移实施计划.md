@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 1af399f6
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44008579833 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 1002aecc
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44025881382 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1847,7 +1847,7 @@ Windows 完整 Skia 组合首轮 **1547 通过、7 跳过、4 失败**：3 项�
 - `p05_horizontal_rtl_cells` / `horizontal_rtl_cell_schema=1` 仅在 RTL 轨道确有多码点单元时加入并要求 `p05_horizontal_rtl`；单码点 RTL 快照不变。Python 与 native 使用同一已验证码位表：ASCII 可见字符、Latin-1（排除 U+00AD）、U+0300–U+036F 组合附加符（排除 CGJ 与双基字连结符）、CJK 统一表意文字和谚文音节。假名多码点、其他文字/连接文字、ZWJ/ZWNJ、变体选择符、补充平面/彩色字形继续明确拒绝；上下注音、竖排与 RTL 塑形方向不变。客户端在选择后端前拒绝缺失或错误的 ready 能力；native 拒绝缺能力、缺基础 RTL 能力、错误 schema 与伪造未验证文本，失败保留旧场景。
 - 首轮实际 GPU 对照 **194/196**：负字距下的多码点 RTL 在 DPR1.5、t=599 唱色前沿差 1.26px。逐列探针显示 Skia 首单元前沿冻结在 overlap 终点，D2D 继续着色。根因是公共核心与 GPU 的绘制模型不同：D2D 正文只使用一条行级 `wipeEdge`，边缘已唱侧的所有字形都画唱后色；Skia 核心按单元各自裁剪。仅当结束单元的前沿落入重叠邻格墨迹内时可见（分解重音单元因 mark 右 bearing 被钳为 0 而无右内缩）。已接受的 LTR 与单码点 RTL 用独立组合标记单元同样复现（4 项失败），`allow_biting` 多码点双向通过。这不是 RTL 多码点的新缺陷，但该组合未获证明：Python/native 对含多码点单元且行布局字距为负的 RTL 行明确拒绝；角色方案字距不进入布局（行布局字段保留），两端也一致按行字距判定。通用前沿差异以 LTR/单码点 RTL 两项 `strict=True`、仅接受断言失败的预期失败记录，不放宽 1px 预算，核心绘制模型留待后续。空文本单元在 LTR 同样无法度量，属既有明确失败，未在本批更改。
 
-Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 **3/3**，源码身份统一为 `5bef7ee659165bfab84241ca4f3adefe5538982022e7481507b9b3e2145773fb`。最终二进制上新增实际 D2D GPU（realization 关闭）**38 通过**（基础12、行锚点12、kern/mark/缺 mark cmap 字体8、反向/no_wipe 6），合同/门禁/预览 **39 通过**，两项通用前沿记录为严格预期失败；加入负字距门禁前、绘制实现相同的上一版二进制（`9e46c8ca…`）串行 D2D 全组合 **192 通过**、同两项严格预期失败（含原 RTL 96+12+4、多码点 LTR 36 等；最终版仅改 native 门禁）。Windows 完整 Skia 组合 **1545 通过、7 跳过**；X11/Wayland 完整组合各 **1068 通过、678 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **63 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **30** 份规范样例 `rtl-cell-layout.json`，30 份 Windows/X11/Wayland 直接比较误差均为 **0**，原 29 份与 §14.43 完全相同。Mac 双架构与 CI 尚待；Linux 真硬件、Mac 真机、核心行级前沿模型、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-rtl-multi*`。
+Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 **3/3**，源码身份统一为 `5bef7ee659165bfab84241ca4f3adefe5538982022e7481507b9b3e2145773fb`。最终二进制上新增实际 D2D GPU（realization 关闭）**38 通过**（基础12、行锚点12、kern/mark/缺 mark cmap 字体8、反向/no_wipe 6），合同/门禁/预览 **39 通过**，两项通用前沿记录为严格预期失败；加入负字距门禁前、绘制实现相同的上一版二进制（`9e46c8ca…`）串行 D2D 全组合 **192 通过**、同两项严格预期失败（含原 RTL 96+12+4、多码点 LTR 36 等；最终版仅改 native 门禁）。Windows 完整 Skia 组合 **1545 通过、7 跳过**；X11/Wayland 完整组合各 **1068 通过、678 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **63 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **30** 份规范样例 `rtl-cell-layout.json`，30 份 Windows/X11/Wayland 直接比较误差均为 **0**，原 29 份与 §14.43 完全相同。实现提交 `1002aecc` 的 Mac CI [44025881382](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44025881382) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1037 通过、709 项平台专用跳过**，其中 RTL 文件各 **249 项（100 通过、149 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `5bef7ee6…`，与本地四份一致。30 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，原 29 份不变。两份干净验收包 `horizontal_rtl`（含新多码点 RTL 用例）与 `cell_glyphs` 退出码均为 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机、核心行级前沿模型、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-rtl-multi*`。
 
 ## 15. 前期探针清理范围
 
