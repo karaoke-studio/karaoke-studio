@@ -93,6 +93,148 @@ def test_pro_rgb_channels_change_only_requested_byte_and_sync_other_controls(dia
         assert dialog._pro_channels.spins[c].value() == byte
 
 
+def use_normalized_channels(dialog):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    QTest.mouseClick(dialog._pro_channels._numeric_mode_switch._items["normalized"], Qt.MouseButton.LeftButton)
+    assert dialog._pro_channels._numeric_mode_switch.currentRouteKey() == "normalized"
+    return dialog._pro_channels
+
+
+@pytest.mark.parametrize("value", ["#00123456", "#804093E9", "#FFFFFFFF", "#00000000"])
+def test_numeric_range_switch_preserves_color_hsv_and_pending_hex(dialog, value):
+    dialog.setCurrentColor(QColor(value))
+    if dialog._value == 0:
+        dialog._set_pro_channel("hue", 213.4)
+    before = dialog.currentColor().getRgbF()
+    state = dialog._hue, dialog._saturation, dialog._value
+    dialog._hex_edit.setText("#12ZZ")
+    dialog._edit_hex("#12ZZ")
+    changes = []
+    dialog.currentColorChanged.connect(changes.append)
+    controls = use_normalized_channels(dialog)
+    for mode in ("standard", "normalized", "standard", "normalized"):
+        controls._numeric_mode_switch.setCurrentItem(mode)
+        assert dialog.currentColor().getRgbF() == before
+        assert (dialog._hue, dialog._saturation, dialog._value) == state
+        assert dialog._hex_edit.text() == "#12ZZ"
+        assert not dialog._ok_button.isEnabled()
+    assert changes == []
+    for spin in controls.spins.values():
+        assert (spin.minimum(), spin.maximum(), spin.decimals(), spin.suffix()) == (0, 1, 3, "")
+        assert spin.singleStep() == .001
+    for channel, byte in zip(("red", "green", "blue", "pro_alpha"), dialog.currentColor().getRgb()):
+        assert controls.spins[channel].value() == round(byte / 255, 3)
+
+
+@pytest.mark.parametrize("channel,index", [("red", 0), ("green", 1), ("blue", 2), ("pro_alpha", 3)])
+@pytest.mark.parametrize("value,byte", [(0, 0), (.123, 31), (0.5, 128), (1, 255)])
+def test_normalized_rgba_input_changes_only_requested_component(dialog, channel, index, value, byte):
+    controls = use_normalized_channels(dialog)
+    expected = list(dialog.currentColor().getRgb())
+    expected[index] = byte
+    controls.spins[channel].setValue(value)
+    assert dialog.currentColor().getRgb() == tuple(expected)
+    actual = dialog.currentColor().getRgbF()[index]
+    assert actual == pytest.approx(value, abs=1 / 65535)
+    assert controls.sliders[channel].value == (round(actual * 1000) if index == 3 else byte)
+    controls._numeric_mode_switch.setCurrentItem("standard")
+    assert controls.spins[channel].value() == (round(actual * 100, 1) if index == 3 else byte)
+
+
+@pytest.mark.parametrize("channel,index", [("red", 0), ("green", 1), ("blue", 2), ("pro_alpha", 3)])
+def test_normalized_input_retains_float_after_blur_sync_and_range_switch(dialog, qapp, channel, index):
+    controls = use_normalized_channels(dialog)
+    spin = controls.spins[channel]
+    before = dialog.currentColor().getRgbF()
+    QTest.mouseClick(spin.lineEdit(), Qt.MouseButton.LeftButton)
+    qapp.processEvents()
+    QTest.keyClicks(spin, "0.3")
+    QTest.keyClick(spin, Qt.Key.Key_Tab)
+    qapp.processEvents()
+    assert spin.value() == .3
+    assert dialog.currentColor().getRgbF()[index] == pytest.approx(.3, abs=1 / 65535)
+    for other_index in range(4):
+        if other_index != index:
+            assert dialog.currentColor().getRgbF()[other_index] == before[other_index]
+    for mode in ("standard", "normalized"):
+        controls._numeric_mode_switch.setCurrentItem(mode)
+    dialog._sync_controls()
+    assert spin.value() == .3
+    # The hex view is quantized, but accepting must return the editing color.
+    dialog.accept()
+    assert dialog.selectedColor().getRgbF()[index] == pytest.approx(.3, abs=1 / 65535)
+
+
+def test_normalized_float_edits_emit_changes_within_same_byte_and_preserve_other_channels(dialog):
+    controls = use_normalized_channels(dialog)
+    controls.spins["red"].setValue(.3)
+    before = dialog.currentColor()
+    changes = []
+    dialog.currentColorChanged.connect(changes.append)
+    controls.spins["red"].setValue(.301)
+    assert dialog.currentColor().red() == before.red()
+    assert len(changes) == 1
+    assert changes[0].redF() == pytest.approx(.301, abs=1 / 65535)
+    controls.spins["green"].setValue(.3)
+    controls.spins["pro_alpha"].setValue(.3)
+    dialog._sync_controls()
+    assert controls.spins["red"].value() == .301
+    assert controls.spins["green"].value() == .3
+    assert controls.spins["pro_alpha"].value() == .3
+
+
+def test_normalized_hsv_retains_black_state_and_sliders_keep_conventional_scale(dialog):
+    dialog.setCurrentColor(QColor("#80FF0000"))
+    controls = use_normalized_channels(dialog)
+    controls.spins["hue"].setValue(.6)
+    controls.spins["saturation"].setValue(.7)
+    controls.spins["pro_value"].setValue(0)
+    controls._numeric_mode_switch.setCurrentItem("standard")
+    assert controls.spins["hue"].value() == 216
+    assert controls.spins["saturation"].value() == 70
+    controls._numeric_mode_switch.setCurrentItem("normalized")
+    controls.sliders["pro_value"]._set_value(1000)
+    assert dialog._hue == pytest.approx(216)
+    assert dialog._saturation == pytest.approx(.7)
+    assert controls.spins["pro_value"].value() == 1
+    assert dialog.currentColor() == QColor.fromHsvF(.6, .7, 1, 128 / 255)
+    controls.spins["hue"].setValue(1)
+    assert dialog._hue == 0
+    assert controls.spins["hue"].value() == 0
+    controls.sliders["hue"]._set_value(3599)
+    assert dialog._hue == pytest.approx(359.9)
+    assert controls.spins["hue"].value() == 1
+
+
+def test_numeric_range_remembered_independently_without_overwriting_settings(dialog):
+    store = SubtitleRenderSettingsStore()
+    initial = {"color_picker_mode": "palette", "recent_colors": ["#80112233"], "future": {"k": 3}}
+    store.save(initial)
+    controls = use_normalized_channels(dialog)
+    saved = store.load()
+    assert saved.pop("color_picker_numeric_mode") == "normalized"
+    assert saved.pop("color_picker_detail_mode") == "pro"
+    assert saved == initial
+    dialog._detail_mode_switch.setCurrentItem("simple")
+    assert controls.isHidden()
+    reopened = colors._ColorDialog(QColor("#804093E9"))
+    assert reopened._detail_mode_switch.currentRouteKey() == "simple"
+    assert reopened._pro_channels._numeric_mode_switch.currentRouteKey() == "normalized"
+    reopened._detail_mode_switch.setCurrentItem("pro")
+    assert reopened._pro_channels.spins["red"].value() == .251
+    reopened.close()
+
+
+@pytest.mark.parametrize("saved", [None, [], "invalid"])
+def test_invalid_numeric_range_defaults_to_standard(dialog, saved):
+    SubtitleRenderSettingsStore().save({"color_picker_numeric_mode": saved})
+    dialog.set_initial_color(QColor("#123456"))
+    controls = dialog._pro_channels
+    assert controls._numeric_mode_switch.currentRouteKey() == "standard"
+    assert controls.spins["red"].maximum() == 255
+    assert controls.spins["hue"].suffix() == "°"
+
+
 def test_pro_hsv_sliders_and_numbers_share_latent_black_state(dialog):
     dialog._detail_mode_switch.setCurrentItem("pro")
     controls = dialog._pro_channels
@@ -161,22 +303,56 @@ def test_invalid_detail_mode_defaults_to_simple(dialog, saved):
 
 
 @pytest.mark.parametrize("mode", ["wheel", "palette"])
-def test_pro_controls_fit_small_window_and_rgb_can_be_typed(dialog, qapp, mode):
+@pytest.mark.parametrize("numeric_mode", ["standard", "normalized"])
+def test_pro_controls_fit_small_window_and_rgb_can_be_typed(dialog, qapp, mode, numeric_mode):
     dialog._detail_mode_switch.setCurrentItem("pro")
+    dialog._pro_channels._numeric_mode_switch.setCurrentItem(numeric_mode)
     switch_picker(dialog, mode)
     dialog.resize(700, 480)
     qapp.processEvents()
     for control in (dialog._picker_stack, dialog._hex_edit, dialog._screen_button,
-                    dialog._ok_button, *dialog._pro_channels.spins.values()):
+                    dialog._ok_button, dialog._pro_channels._numeric_mode_switch,
+                    *dialog._pro_channels.spins.values()):
         assert control.visibleRegion().boundingRect().height() == control.height()
     spin = dialog._pro_channels.spins["red"]
     assert spin.lineEdit().width() > 50
     spin.setFocus()
     spin.selectAll()
-    QTest.keyClicks(spin, "128")
-    assert spin.value() == 128
+    QTest.keyClicks(spin, "0.502" if numeric_mode == "normalized" else "128")
+    assert spin.value() == (0.502 if numeric_mode == "normalized" else 128)
     assert dialog.currentColor().red() == 128
     assert dialog.currentColor().alpha() == 128
+
+
+@pytest.mark.parametrize("numeric_mode", ["standard", "normalized"])
+@pytest.mark.parametrize("channel", ["red", "green", "blue", "pro_alpha", "hue", "saturation", "pro_value"])
+def test_channel_single_click_selects_value_even_when_already_focused(dialog, qapp, numeric_mode, channel):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    dialog._pro_channels._numeric_mode_switch.setCurrentItem(numeric_mode)
+    spin = dialog._pro_channels.spins[channel]
+    editor = spin.lineEdit()
+    before = dialog.currentColor().getRgbF()
+    for _ in range(2):
+        QTest.mouseClick(editor, Qt.MouseButton.LeftButton, pos=editor.rect().center())
+        qapp.processEvents()
+        assert editor.selectedText() == spin.cleanText()
+        assert dialog.currentColor().getRgbF() == before
+        QTest.keyClick(editor, Qt.Key.Key_Right)
+        assert not editor.hasSelectedText()
+
+
+@pytest.mark.parametrize("numeric_mode,text,value", [("standard", "128", 128), ("normalized", "0.502", .502)])
+def test_channel_click_allows_replacement_and_keyboard_step(dialog, qapp, numeric_mode, text, value):
+    dialog._detail_mode_switch.setCurrentItem("pro")
+    dialog._pro_channels._numeric_mode_switch.setCurrentItem(numeric_mode)
+    spin = dialog._pro_channels.spins["red"]
+    QTest.mouseClick(spin.lineEdit(), Qt.MouseButton.LeftButton)
+    qapp.processEvents()
+    QTest.keyClicks(spin, text)
+    assert spin.value() == value
+    assert dialog.currentColor().red() == 128
+    QTest.keyClick(spin, Qt.Key.Key_Up)
+    assert spin.value() == pytest.approx(value + spin.singleStep())
 
 
 def test_pro_rgba_and_hsv_span_full_width_below_picker_and_history(dialog, qapp):

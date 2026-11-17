@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 
 from PyQt6 import sip
-from PyQt6.QtCore import QPoint, QPointF, QRect, QSignalBlocker, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSignalBlocker, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import (
     QColor,
     QCursor,
@@ -804,6 +804,25 @@ class _RecentColorList(FluentScrollArea):
 
 
 class _ChannelSpinBox(DoubleSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._click_position = None
+        self.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched is self.lineEdit():
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._click_position = event.position().toPoint()
+            elif event.type() == QEvent.Type.MouseMove and self._click_position is not None:
+                if (event.position().toPoint() - self._click_position).manhattanLength() > QApplication.startDragDistance():
+                    self._click_position = None
+            elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                if self._click_position is not None:
+                    # Select after QLineEdit has finished positioning its cursor.
+                    QTimer.singleShot(0, self.selectAll)
+                self._click_position = None
+        return super().eventFilter(watched, event)
+
     def wheelEvent(self, event):  # noqa: N802
         if self.hasFocus():
             super().wheelEvent(event)
@@ -816,6 +835,12 @@ class _ProColorChannels(QWidget):
 
     channelChanged = Signal(str, float)
     editFinished = Signal()
+    numericModeChanged = Signal(str)
+
+    # Signals retain conventional units, independent of the displayed range.
+    _SPECS = (("red", "R", 255, 0), ("green", "G", 255, 0), ("blue", "B", 255, 0),
+              ("pro_alpha", "A", 100, 1), ("hue", "H", 359.9, 1),
+              ("saturation", "S", 100, 1), ("pro_value", "V", 100, 1))
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -825,10 +850,21 @@ class _ProColorChannels(QWidget):
         layout.setVerticalSpacing(2)
         self.sliders, self.spins = {}, {}
         self._active_channel = None
-        specs = (("red", "R", 255, 0), ("green", "G", 255, 0), ("blue", "B", 255, 0),
-                 ("pro_alpha", "A", 100, 1), ("hue", "H", 359.9, 1),
-                 ("saturation", "S", 100, 1), ("pro_value", "V", 100, 1))
-        for index, (channel, label, maximum, decimals) in enumerate(specs):
+        self._numeric_mode = "standard"
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(CaptionLabel("数值范围", self))
+        self._numeric_mode_switch = WorkspaceSwitcher(self)
+        self._numeric_mode_switch.setAccessibleName("调色器数值范围")
+        self._numeric_mode_switch.setToolTip("归一化模式下所有通道使用 0–1；色相 1 表示一整圈")
+        for mode, label in (("standard", "常规"), ("normalized", "归一化")):
+            self._numeric_mode_switch.addItem(mode, label).setAccessibleName(label)
+        self._numeric_mode_switch.currentItemChanged.connect(self.numericModeChanged.emit)
+        mode_row.addWidget(self._numeric_mode_switch)
+        mode_row.addStretch(1)
+        # Use the spare fourth HSV row so the range choice does not reduce
+        # the color surface's height on smaller screens.
+        layout.addLayout(mode_row, 3, 1)
+        for index, (channel, label, maximum, decimals) in enumerate(self._SPECS):
             row = QHBoxLayout()
             row.setSpacing(4)
             row.addWidget(CaptionLabel(label, self))
@@ -853,9 +889,28 @@ class _ProColorChannels(QWidget):
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
 
+    def set_numeric_mode(self, mode: str) -> None:
+        self._numeric_mode = mode
+        with QSignalBlocker(self._numeric_mode_switch):
+            self._numeric_mode_switch.setCurrentItem(mode)
+        normalized = mode == "normalized"
+        for channel, _label, maximum, decimals in self._SPECS:
+            spin = self.spins[channel]
+            with QSignalBlocker(spin):
+                spin.setDecimals(3 if normalized else decimals)
+                spin.setRange(0, 1 if normalized else maximum)
+                spin.setSingleStep(0.001 if normalized else 1)
+                spin.setSuffix("" if normalized else "°" if channel == "hue" else " %" if maximum == 100 else "")
+
+    @staticmethod
+    def _normalization_scale(channel: str) -> float:
+        return 255 if channel in ("red", "green", "blue") else 360 if channel == "hue" else 100
+
     def _edit_channel(self, channel: str, value: float) -> None:
         self._active_channel = channel
         try:
+            if self._numeric_mode == "normalized":
+                value *= self._normalization_scale(channel)
             self.channelChanged.emit(channel, value)
         finally:
             self._active_channel = None
@@ -864,15 +919,21 @@ class _ProColorChannels(QWidget):
         values = {"red": color.red(), "green": color.green(), "blue": color.blue(),
                   "hue": hue, "saturation": saturation * 100, "pro_value": value * 100,
                   "pro_alpha": color.alphaF() * 100}
+        if self._numeric_mode == "normalized":
+            # Read the editing color's precision, not the quantized hex bytes.
+            values.update(red=color.redF() * 255, green=color.greenF() * 255, blue=color.blueF() * 255)
         full_value = QColor.fromHsvF(hue / 360, saturation, 1)
         for channel, actual in values.items():
             spin, slider = self.spins[channel], self.sliders[channel]
+            displayed = actual / self._normalization_scale(channel) if self._numeric_mode == "normalized" else actual
             with QSignalBlocker(spin):
-                rounded = round(actual, spin.decimals())
+                rounded = round(displayed, spin.decimals())
                 if spin.value() != rounded and not (self._active_channel == channel and spin.hasFocus()):
                     spin.setValue(rounded)
             slider.set_color(full_value if channel == "pro_value" else color,
-                             round(actual * (10 if spin.decimals() else 1)))
+                             round(actual * (1 if channel in ("red", "green", "blue") else 10)))
+            if self._numeric_mode == "normalized":
+                slider.setToolTip(f"{slider.accessibleName()}：{displayed:.3f}")
 
 
 class _ColorDialog(FramelessDialog):
@@ -947,6 +1008,7 @@ class _ColorDialog(FramelessDialog):
         self._alpha_slider.valueChanged.connect(self._set_current_alpha)
         self._pro_channels = _ProColorChannels(self)
         self._pro_channels.channelChanged.connect(self._set_pro_channel)
+        self._pro_channels.numericModeChanged.connect(self._switch_numeric_mode)
         self._pro_channels.editFinished.connect(lambda: self._pro_channels.sync(
             self._current, self._hue, self._saturation, self._value))
         self._pro_channels.hide()
@@ -1046,6 +1108,7 @@ class _ColorDialog(FramelessDialog):
     def set_initial_color(self, color: QColor) -> None:
         self._restore_picker_mode()
         self._restore_detail_mode()
+        self._restore_numeric_mode()
         color = QColor(color) if color.isValid() else QColor("#FFFFFF")
         self._selected = QColor()
         self._deleted_recent_rgba: set[int] = set()
@@ -1065,7 +1128,7 @@ class _ColorDialog(FramelessDialog):
         self._apply_color(color)
 
     def _apply_color(self, color: QColor) -> None:
-        changed = color.rgba() != self._current.rgba()
+        changed = color.getRgbF() != self._current.getRgbF()
         self._current = QColor(color)
         self._sync_controls()
         if changed:
@@ -1130,12 +1193,21 @@ class _ColorDialog(FramelessDialog):
         self._show_detail_mode(mode)
 
     def _set_pro_channel(self, channel: str, value: float) -> None:
+        normalized = self._pro_channels._numeric_mode == "normalized"
         if channel in ("red", "green", "blue"):
             color = self.currentColor()
-            getattr(color, {"red": "setRed", "green": "setGreen", "blue": "setBlue"}[channel])(round(value))
+            if normalized:
+                getattr(color, {"red": "setRedF", "green": "setGreenF", "blue": "setBlueF"}[channel])(value / 255)
+            else:
+                getattr(color, {"red": "setRed", "green": "setGreen", "blue": "setBlue"}[channel])(round(value))
             self.setCurrentColor(color)
         elif channel == "pro_alpha":
-            self._set_current_alpha(round(value / 100 * 255))
+            if normalized:
+                color = self.currentColor()
+                color.setAlphaF(value / 100)
+                self._apply_color(color)
+            else:
+                self._set_current_alpha(round(value / 100 * 255))
         else:
             if channel == "hue":
                 self._hue = value % 360
@@ -1144,6 +1216,28 @@ class _ColorDialog(FramelessDialog):
             elif channel == "pro_value":
                 self._value = value / 100
             self._apply_hsv()
+
+    def _switch_numeric_mode(self, mode: str) -> None:
+        self._pro_channels.set_numeric_mode(mode)
+        # Only update channel presentation: preserve unfinished hex input and
+        # latent HSV state, and never emit a color change for a range switch.
+        self._pro_channels.sync(self._current, self._hue, self._saturation, self._value)
+        try:
+            data = self._picker_settings.load()
+            data["color_picker_numeric_mode"] = mode
+            self._picker_settings.save(data)
+        except Exception:
+            logging.getLogger(__name__).warning("保存调色器数值范围失败", exc_info=True)
+
+    def _restore_numeric_mode(self) -> None:
+        try:
+            mode = self._picker_settings.load().get("color_picker_numeric_mode", "standard")
+        except Exception:
+            logging.getLogger(__name__).warning("读取调色器数值范围失败", exc_info=True)
+            mode = "standard"
+        if mode not in ("standard", "normalized"):
+            mode = "standard"
+        self._pro_channels.set_numeric_mode(mode)
 
     def _restore_picker_mode(self) -> None:
         try:
