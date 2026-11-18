@@ -201,22 +201,27 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         const auto drawCell = [&](std::size_t index) {
             const auto& cell = line.cells[index];
             const auto [progress, edge, phase] = states[index];
+            // Vertical glyphs can extend beyond the fixed cell. At a timed
+            // hand-off the original front still cuts this ink during Wiping.
+            const bool clipVertical = line.vertical && phase == Phase::Wiping;
+            const bool before = !clipVertical && progress == 0;
+            const bool after = !clipVertical && progress == 1;
             // Two disjoint clips avoid painting translucent after color over before color.
-            if (progress < 1) {
+            if (!after) {
                 canvas.save();
                 canvas.clipRect(line.wipeRightToLeft
-                    ? band(-1e6f, progress == 0 ? 1e6f : edge)
-                    : band(progress == 0 ? -1e6f : edge, 1e6f),
+                    ? band(-1e6f, before ? 1e6f : edge)
+                    : band(before ? -1e6f : edge, 1e6f),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.before);
                 canvas.drawPath(cell.path, paint);
                 canvas.restore();
             }
-            if (progress > 0) {
+            if (!before) {
                 canvas.save();
                 canvas.clipRect(line.wipeRightToLeft
-                    ? band(progress == 1 ? -1e6f : edge, 1e6f)
-                    : band(-1e6f, progress == 1 ? 1e6f : edge),
+                    ? band(after ? -1e6f : edge, 1e6f)
+                    : band(-1e6f, after ? 1e6f : edge),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.after);
                 canvas.drawPath(cell.path, paint);

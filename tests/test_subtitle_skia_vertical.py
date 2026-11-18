@@ -1,4 +1,4 @@
-"""Simple vertical solid main text (vertical_solid_schema=1) against the existing GPU."""
+"""Vertical solid main text against the existing GPU."""
 from dataclasses import replace
 import copy
 import json
@@ -11,6 +11,7 @@ from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_sourc
                                          collect, configure, ir_for, selection, kana)
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
+from test_subtitle_skia_font_slots import mixed
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -58,10 +59,10 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'latin', 'multi', 'role', 'ruby', 'rtl',
+@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'ruby', 'rtl',
                                     'dual', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
-    texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'latin': 'A', 'multi': '字字'}
+    texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
     line = track.lines[0]
     if change in texts:
@@ -109,7 +110,7 @@ def test_old_vertical_sidecar_rejected_before_selection(binary, monkeypatch, mut
     finally: process.abort(reason='vertical handshake fixture')
     if mutation == 'schema': del ready['vertical_solid_schema']
     elif mutation == 'feature': ready['profiles'].remove('p05_vertical_solid')
-    else: ready['vertical_solid_schema'] = True if mutation == 'bool' else 2
+    else: ready['vertical_solid_schema'] = True if mutation == 'bool' else 1
     sent = []
     monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
     monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
@@ -231,3 +232,54 @@ def test_vertical_japanese_glyphs_match_actual_gpu(binary, project, kana, texts,
     semantics, dpr = ('legacy', 1) if reverse else ('n3_1074', 1.5)
     assert_gpu_parity(binary, track, replace(style, font_family=kana, layout_semantics=semantics),
                       dpr, (texts, reverse))
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_spaces_and_empty_cells_keep_their_box_and_clock(binary, project, reverse, tmp_path):
+    texts = ['A', '', ' ', '字']
+    track, style = vertical_source(project, reverse=reverse, texts=texts)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    horizontal = ir_for(binary, (track, replace(style, vertical=False)), dpr=1.5)
+    line = ir['skia_layout']['lines'][0]
+    cells = line['cells']
+    intervals = ir['track']['lines'][0]['resolved_intervals']
+    assert ir['skia_layout']['vertical_solid_schema'] == 2
+    assert [c['text'] for c in ir['track']['lines'][0]['chars']] == texts
+    assert intervals == horizontal['track']['lines'][0]['resolved_intervals']
+    assert all(c['wipe_bottom'] - c['wipe_top'] == pytest.approx(50) for c in cells)
+    assert cells[1]['metrics']['glyphs'] == []
+    assert all(c['metrics']['ink'] == [0, 0, 0, 0] for c in cells[1:3])
+    bad = copy.deepcopy(ir)
+    bad['skia_layout']['vertical_solid_schema'] = 1
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [1000])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [1000], generation=2)
+    assert np.array_equal(before[0], after[0])
+    if not reverse:
+        (tmp_path / 'vertical-inkless-layout.json').write_text(json.dumps({
+            'schema': ir['skia_layout']['vertical_solid_schema'],
+            'line': line,
+            'intervals': intervals,
+        }, sort_keys=True), encoding='utf-8')
+
+
+@GPU
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('kind', ['blank_between', 'blank_at_edges', 'latin_slots', 'latin_blank', 'japanese_space'])
+def test_vertical_spaces_and_latin_match_actual_gpu(binary, project, mixed, kana, reverse, kind):
+    texts = {
+        'blank_between': ['A', '', ' ', '字'],
+        'blank_at_edges': ['', 'á', '한', ' '],
+        'latin_slots': ['A', '字', 'W', '한'],
+        'latin_blank': ['A', '', 'W', ' '],
+        'japanese_space': ['あ', '　', '', 'ー'],
+    }
+    track, style = vertical_source(mixed if kind in {'latin_slots', 'latin_blank'} else project,
+                                   reverse=reverse, texts=texts[kind])
+    if kind == 'japanese_space':
+        style = replace(style, font_family=kana)
+    assert_gpu_parity(binary, track, replace(style, layout_semantics='legacy' if reverse else 'n3_1074'),
+                      1 if reverse else 1.5, (kind, reverse))

@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     ready.insert("kana_mark_schema", 1);
     ready.insert("vertical_metrics_schema", 1);
     ready.insert("empty_cell_schema", 1);
-    ready.insert("vertical_solid_schema", 1);
+    ready.insert("vertical_solid_schema", 2);
     ready.insert("vertical_japanese_glyph_schema", 1);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);

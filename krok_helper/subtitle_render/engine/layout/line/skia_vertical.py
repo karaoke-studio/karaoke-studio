@@ -1,20 +1,28 @@
 """Simple vertical solid main text: the existing GPU's fixed-cell column.
 
-vertical_solid_schema=1. Each authored cell is one fixed box ``font_size``
+Each authored cell is one fixed box ``font_size``
 wide and ``ascent + descent`` tall, stacked from the column top; the glyph keeps
 its horizontal cell-box offset around the column centre and sits on
 ``cell top + ascent``. The column centre and block top follow the GPU's
 margin-only placement. Japanese punctuation and small kana may have a separate
 glyph transform. The vertical wipe always follows the original cell box.
 """
+from krok_helper.subtitle_render.engine.text.font_slots import is_n3_latin_text
 
 _SMALL_KANA = frozenset('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ')
 _CORNER_PUNCTUATION = frozenset('、。')
 _ROTATED_PUNCTUATION = frozenset('「」『』ー〜')
 _TRANSFORMED_GLYPHS = _SMALL_KANA | _CORNER_PUNCTUATION | _ROTATED_PUNCTUATION
+_BLANK_CELLS = frozenset(('', ' ', '\u3000'))
+
+
+def _extended_text(text):
+    return text in _BLANK_CELLS or (len(text) == 1 and is_n3_latin_text(text))
 
 
 def _supported_text(text):
+    if _extended_text(text):
+        return True
     if len(text) != 1:
         return False
     code = ord(text)
@@ -25,6 +33,10 @@ def _supported_text(text):
 
 def vertical_japanese_glyphs(track):
     return any(char.text in _TRANSFORMED_GLYPHS for line in track.lines for char in line.chars)
+
+
+def vertical_solid_schema(track):
+    return 2 if any(_extended_text(char.text) for line in track.lines for char in line.chars) else 1
 
 
 def validate_vertical_style(style):

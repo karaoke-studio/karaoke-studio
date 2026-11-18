@@ -1916,6 +1916,12 @@ Windows 相关回归 **303 通过**，含 **17 项实际 D2D GPU 对照**（real
 
 Windows 竖排专项 **70 通过**，含新增 **6 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算），覆盖正反向、legacy/N3、DPR 1/1.5。X11/Wayland 各 **47 通过、23 项 Windows 专用跳过**（llvmpipe）；Windows/Linux 独立 Raster 各 **31 通过**。四份 native 均干净重建，CTest 各 **3/3**，源码指纹 `8e0c8c79561cd69cf47361b5ea9c2a93f7f0a2d81c788060006f2add17277ccc`。两份竖排规范样例在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**。新样例 `vertical-japanese-layout.json` 随专项纳入下一次阶段 Mac CI。证据前缀 `build/p05-vertical-japanese*`。
 
+### 14.52 P05.7 竖排英数与无墨迹单元（2026-11-18）
+
+单列正文继续保留主字/英数槽，加入单码点英数、空文本和半角/全角空格。无墨迹单元保留计时与固定高度，字号较大的英数字形可以超出单元。实测反向走字在交接帧仍会裁剪越界墨迹，Skia 在走字阶段据同一实际前沿裁剪并沿用原有绘制层序。含新增字符的 IR 使用 `vertical_solid_schema=2`，新 sidecar 同时接收原直立字形和日文标点的 v1 布局。
+
+Windows 专项 **80 通过**，另两项大号英数与空单元混排对照通过，新增实测 GPU 对照合计 **10 项**（realization 关闭，既有 1px 预算）。Linux X11/Wayland 专项各 **49 通过、31 项 Windows 专用跳过**；独立 Raster 各 **33 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `b9b39732f2e3199b48114b7a642e0f032697d113ce287a0293605c20e17fe178`。新增 `vertical-inkless-layout.json` 与前两份竖排样例在 Windows、X11、Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**，既有竖排样例内容相同。证据前缀 `build/p05-vertical-spaces*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -93,9 +93,11 @@ void validateEnvelope(const QJsonObject& ir) {
         && (ir.value("skia_layout").toObject().value("kana_mark_schema").toDouble(-1) != 1
             || !ir.value("required_features").toArray().contains("p05_horizontal_rtl_kana_cells")))
         throw BackendError("Skia 右至左假名浊音布局版本无效");
-    if (ir.value("required_features").toArray().contains("p05_vertical_solid")
-        && ir.value("skia_layout").toObject().value("vertical_solid_schema").toDouble(-1) != 1)
-        throw BackendError("Skia 竖排实色正文布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_vertical_solid")) {
+        const auto version = ir.value("skia_layout").toObject().value("vertical_solid_schema").toDouble(-1);
+        if (version != 1 && version != 2)
+            throw BackendError("Skia 竖排实色正文布局版本无效");
+    }
     if (ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs")
         && (ir.value("skia_layout").toObject().value("vertical_japanese_glyph_schema").toDouble(-1) != 1
             || !ir.value("required_features").toArray().contains("p05_vertical_solid")

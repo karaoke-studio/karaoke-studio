@@ -19,9 +19,9 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 
 void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObject& cell,
-                           const std::wstring& text, bool japaneseGlyphs, double dpr) {
-    if (text.size() != 1) throw BackendError("Skia 竖排只支持单码点单元");
-    const auto code = text.front();
+                           const std::wstring& text, double version, bool japaneseGlyphs, double dpr) {
+    if (text.size() > 1) throw BackendError("Skia 竖排只支持单码点或空文本单元");
+    const auto code = text.empty() ? L'\0' : text.front();
     // Mirror the host's supported Japanese punctuation and small kana. The
     // fixed cell's clock and bounds are independent of the glyph transform.
     constexpr std::wstring_view rotate = L"\u300c\u300d\u300e\u300f\u30fc\u301c";
@@ -31,7 +31,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool shifted = offset.find(code) != offset.npos;
     const bool upright = (code >= 0x4e00 && code <= 0x9fff) || (code >= 0xac00 && code <= 0xd7a3)
         || (code >= 0x3041 && code <= 0x3094) || (code >= 0x30a1 && code <= 0x30fa);
-    if ((rotated || shifted) ? !japaneseGlyphs : !upright)
+    const bool extended = text.empty() || code == L' ' || code == 0x3000
+        || (code >= L'0' && code <= L'9') || (code >= L'A' && code <= L'Z') || (code >= L'a' && code <= L'z')
+        || (code >= 0x00c0 && code <= 0x00d6) || (code >= 0x00d8 && code <= 0x00f6) || (code >= 0x00f8 && code <= 0x00ff);
+    if ((rotated || shifted) ? !japaneseGlyphs : !(upright || (version == 2 && extended)))
         throw BackendError("Skia 竖排单元包含未验证字符或缺少日文字形能力");
     if (rotated != cell.contains("rotation_pivot_x"))
         throw BackendError("Skia 竖排单元的字形旋转与源字符不符");
@@ -55,6 +58,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     auto projected = scene::skiaSceneFromIr(ir);
     validateSkiaScene(projected, true);
     const auto layout = ir.value("skia_layout").toObject();
+    const auto verticalVersion = layout.value("vertical_solid_schema").toDouble(-1);
     const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
     if (layout.value("version").toInt() != 2 || layout.value("metrics_identity").toString().size() != 64
         || !layout.value("fonts").isObject() || !layout.value("lines").isArray()
@@ -105,7 +109,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;
         if (style.vertical) {
             if (!ir.value("required_features").toArray().contains("p05_vertical_solid")
-                || layout.value("vertical_solid_schema").toDouble(-1) != 1
                 || !source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical"
                 || !source.value("ruby_groups").toArray().isEmpty())
                 throw BackendError("Skia 竖排缺少能力声明或最终方向无效");
@@ -146,7 +149,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 glyph.adjustedWipeEnd = true;
             }
             if (style.vertical) {
-                applyVerticalGeometry(glyph, cell, line.chars[j].text, japaneseGlyphs, glyphs.dpr);
+                applyVerticalGeometry(glyph, cell, line.chars[j].text, verticalVersion, japaneseGlyphs, glyphs.dpr);
             } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("rotation_pivot_x")) {
                 throw BackendError("Skia 横排单元不能携带竖排单元框");
             }
