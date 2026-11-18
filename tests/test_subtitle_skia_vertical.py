@@ -283,3 +283,138 @@ def test_vertical_spaces_and_latin_match_actual_gpu(binary, project, mixed, kana
         style = replace(style, font_family=kana)
     assert_gpu_parity(binary, track, replace(style, layout_semantics='legacy' if reverse else 'n3_1074'),
                       1 if reverse else 1.5, (kind, reverse))
+
+
+# vertical_ruby_schema=1: one single-scalar upright upper reading per forward
+# vertical line. The main column moves left by the rounded ruby line height plus
+# the gap; the reading wipes along y over its final ink bounds.
+def vertical_ruby_source(project, *, span=(0, 1), reading='字', position='bottom', family=None, extra=None):
+    from test_subtitle_skia_roles import colors
+    track, style = vertical_source(project, position=position)
+    chars = track.lines[0].chars
+    ruby = RubyAnnotation(''.join(c.text for c in chars[slice(*span)]), reading,
+                          pos_start_ms=chars[span[0]].start_ms, pos_end_ms=chars[span[1]].start_ms,
+                          target_line_index=0, target_char_start=span[0], target_char_end=span[1])
+    style = replace(style, ruby_font_family=family or style.font_family, ruby_font_size_px=24, ruby_gap_px=6,
+                    ruby_stroke_width_px=0, ruby_stroke2_enabled=False, ruby_colors_follow_main=False,
+                    ruby_karaoke_colors=colors('#0000FF', '#FF00FF'))
+    return replace(track, rubies=[ruby, *(extra or [])]), style
+
+
+def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_path):
+    track, style = vertical_ruby_source(project)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    plain = ir_for(binary, (replace(track, rubies=[]), style), dpr=1.5)
+    assert {'p05_vertical_ruby', 'p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_solid'} <= set(ir['required_features'])
+    assert ir['skia_layout']['vertical_ruby_schema'] == 1 and ir['skia_layout']['ruby_schema'] == 1
+    line = ir['skia_layout']['lines'][0]
+    (group,) = line['ruby_groups']
+    (unit,) = group['units']
+    assert group['style_cell'] == 0 and unit['text'] == '字' and unit['interval_ms'] == [200, 600]
+    assert unit['wipe_bottom'] > unit['wipe_top'] and unit['wipe_end_position'] == 1
+    # Same cells and clocks; the column only moves left by the ruby allowance.
+    shift = {round(a['origin_x'] - b['origin_x'], 6) for a, b in zip(line['cells'], plain['skia_layout']['lines'][0]['cells'])}
+    assert len(shift) == 1 and next(iter(shift)) < 0
+    assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
+    (tmp_path / 'vertical-ruby-layout.json').write_text(json.dumps({
+        'schema': ir['skia_layout']['vertical_ruby_schema'],
+        'line': ir['skia_layout']['lines'][0],
+        'intervals': ir['track']['lines'][0]['resolved_intervals'],
+    }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('change', ['multi_reading', 'small_kana', 'latin', 'two_groups', 'reverse', 'lower', 'role'])
+def test_unproven_vertical_ruby_stays_gated(binary, project, change):
+    reading = {'multi_reading': 'じじ', 'small_kana': 'ゃ', 'latin': 'A'}.get(change, '字')
+    extra = None
+    if change == 'two_groups':
+        extra = [RubyAnnotation('字', '字', pos_start_ms=900, pos_end_ms=1400, target_line_index=0,
+                                target_char_start=2, target_char_end=3)]
+    track, style = vertical_ruby_source(project, reading=reading, extra=extra)
+    if change == 'reverse':
+        track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
+    elif change == 'lower':
+        style = replace(style, lower_ruby_enabled=True)
+    elif change == 'role':
+        track, style = vertical_ruby_source(project)
+        track = replace(track, lines=[replace(track.lines[0], chars=[track.lines[0].chars[0],
+                        replace(track.lines[0].chars[1], role_label='lead'), *track.lines[0].chars[2:]])])
+    with pytest.raises(ValueError):
+        ir_for(binary, (track, style))
+
+
+@pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'unit_top', 'unit_box', 'unit_ink', 'two_units',
+                                      'unit_text', 'groups_missing', 'two_groups'])
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_native_vertical_ruby_rejects_forgeries_and_keeps_scene(binary, project, mutation, target):
+    ir = ir_for(binary, vertical_ruby_source(project))
+    bad = copy.deepcopy(ir)
+    line = bad['skia_layout']['lines'][0]
+    unit = line['ruby_groups'][0]['units'][0]
+    if mutation == 'feature': bad['required_features'].remove('p05_vertical_ruby')
+    elif mutation == 'schema': del bad['skia_layout']['vertical_ruby_schema']
+    elif mutation == 'schema_bool': bad['skia_layout']['vertical_ruby_schema'] = True
+    elif mutation == 'unit_top': del unit['wipe_top']
+    elif mutation == 'unit_box': unit['wipe_top'], unit['wipe_bottom'] = unit['wipe_bottom'], unit['wipe_top']
+    elif mutation == 'unit_ink': unit['wipe_top'] += .25
+    elif mutation == 'two_units': line['ruby_groups'][0]['units'].append(copy.deepcopy(unit))
+    elif mutation == 'unit_text': unit['text'] = 'じじ'
+    elif mutation == 'groups_missing': del line['ruby_groups']
+    else: line['ruby_groups'].append(copy.deepcopy(line['ruby_groups'][0]))
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir); before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [750], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('mutation', ['schema', 'feature', 'bool', 'version'])
+def test_old_vertical_ruby_sidecar_rejected_before_selection(binary, monkeypatch, mutation):
+    process = SkiaRendererProcess(binary, selection=selection('raster'))
+    try: ready = NativeRendererProcess.start(process)
+    finally: process.abort(reason='vertical ruby handshake fixture')
+    if mutation == 'schema': del ready['vertical_ruby_schema']
+    elif mutation == 'feature': ready['profiles'].remove('p05_vertical_ruby')
+    else: ready['vertical_ruby_schema'] = True if mutation == 'bool' else 2
+    sent = []
+    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
+    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
+    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
+    with pytest.raises(NativeRendererError, match='竖排注音'):
+        SkiaRendererProcess(binary).start()
+    assert not sent
+
+
+def test_vertical_ruby_gpu_raster_and_out_of_order_seek(binary, project):
+    ir = ir_for(binary, vertical_ruby_source(project, span=(1, 3)), dpr=1.5)
+    order = [2200, 601, 199, 900, 599, 1401, 600, 750, 1399, 200]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            ordered, _ = collect(process, sorted(order))
+            shuffled, _ = collect(process, order, generation=2)
+        by_time = dict(zip(sorted(order), ordered))
+        assert all(np.array_equal(by_time[t], f) for t, f in zip(order, shuffled))
+        assert not np.array_equal(by_time[750], by_time[2200])
+        results.append(ordered)
+    for a, b in zip(*results):
+        def premult(p):
+            p = p.astype(float); p[..., :3] *= p[..., 3:] / 255
+            return p
+        delta = abs(premult(a) - premult(b))
+        assert delta.mean() < .15 and np.mean(delta.max(axis=-1) > 16) < .003
+
+
+@GPU
+@pytest.mark.parametrize('span,position,dpr,semantics', [((0, 1), 'bottom', 1, 'legacy'), ((0, 1), 'top', 1.5, 'n3_1074'),
+                                                         ((1, 3), 'center', 1, 'legacy'), ((1, 3), 'bottom', 1.5, 'n3_1074')])
+def test_vertical_ruby_matches_actual_gpu(binary, project, span, position, dpr, semantics):
+    from PyQt6.QtGui import QFontDatabase
+    # The GPU's ruby allowance reads system face metrics; an app-only font
+    # would fall back to another face there, so the reading uses Meiryo.
+    if 'Meiryo' not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
+    track, style = vertical_ruby_source(project, span=span, position=position, family='Meiryo')
+    assert_gpu_parity(binary, track, replace(style, layout_semantics=semantics), dpr, (span, position, semantics))

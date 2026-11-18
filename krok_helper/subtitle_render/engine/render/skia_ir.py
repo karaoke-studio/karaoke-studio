@@ -13,6 +13,7 @@ from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_ski
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
+from .skia_vertical_ruby_ir import vertical_ruby_layout
 from .skia_lower_ir import lower_sources
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -96,23 +97,30 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     with font_snapshot(resolve_font):  # Every plan of this IR shares one content snapshot.
         ir = build_render_ir(track, style, layout_plan_builder=build_plan,
                              serialize_source_baselines=False, **kwargs)
+        vertical_ruby = None
+        if style.vertical and track.rubies:
+            vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
+                                                dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     lines = []
-    for index, item in enumerate(plan.lines):
-        if item.layout_style.vertical:
-            lines.append({'cells': vertical_cells(geometry.locals[index], measured.lines[item.track_index], item,
-                                                  width=kwargs['width'], height=kwargs['height']),
-                          'text_flow': 'vertical'})
-            continue
-        position = geometry.position(item, kwargs['width'], kwargs['height'])
-        cells = positioned_cells(geometry.locals[index], position)
-        ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
-                                 dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,
-                                 right_to_left=item.layout_style.right_to_left)
-        for cell, end in zip(cells, ends, strict=True):
-            cell['wipe_end_position'] = end
-        lines.append({'cells': cells})
+    if vertical_ruby is None:
+        for index, item in enumerate(plan.lines):
+            if item.layout_style.vertical:
+                lines.append({'cells': vertical_cells(geometry.locals[item.track_index], measured.lines[item.track_index], item,
+                                                      width=kwargs['width'], height=kwargs['height']),
+                              'text_flow': 'vertical'})
+                continue
+            position = geometry.position(item, kwargs['width'], kwargs['height'])
+            cells = positioned_cells(geometry.locals[index], position)
+            ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
+                                     dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,
+                                     right_to_left=item.layout_style.right_to_left)
+            for cell, end in zip(cells, ends, strict=True):
+                cell['wipe_end_position'] = end
+            lines.append({'cells': cells})
+    else:
+        lines = vertical_ruby['lines']
     # Every canonical line carries the GPU's final wipe endpoint, so the
     # overlap contract is part of the base canonical feature set.
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles',
@@ -120,6 +128,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_overlap_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
+    if vertical_ruby is not None:
+        ir['skia_layout'].update(vertical_ruby)
+        ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_ruby']
     secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
                             for item in plan.lines)
     if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):

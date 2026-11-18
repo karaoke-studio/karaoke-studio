@@ -1936,6 +1936,14 @@ Windows **14 项描边专项通过**，含 **7 项实际 D2D GPU 对照**（real
 
 Windows 相关组合 **99 通过**，包含两道描边共 **13 项实际 D2D GPU 对照**（realization 关闭，原 1px 几何预算）。新增 6 项覆盖不透明、正文半透明、内描边半透明、仅外描边与 `UseEdge2` 关闭。外环颜色对照按纯色区域分类，边缘混色仍由整体轮廓几何检测。X11/Wayland 专项各 **7 通过、6 跳过**，Windows/Linux 独立 Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `30f140ea46b81711014e42d400171d3a9a2a392df592cdec73ad49739dd56746`。新增 `secondary-solid-outline-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**，第一道描边样例保持相同。证据前缀 `build/p06-outline2*`。
 
+### 14.55 P05.6 / P05.7 单字直立竖排注音（2026-11-19）
+
+单列正向实色正文每行可带一组单码点直立上注音，竖排时读音放在正文右侧。继续复用上注音目标归属、规范度量和计时。正文让位由注音槽字体的行框计算，按实际像素比例取整再加间距。读音的纵向锚点取正文跨度首单元，走字边界取读音的墨迹上下缘。GPU/Raster 的注音组复用同一裁剪核心。协议 `vertical_ruby_schema=1` 校验能力、字形和墨迹边界。
+
+D2D 对照使用 Windows 已安装的 Meiryo。D2D 为应用内私有字体计算整列让位时可能采用系统 face，本机探针观察到与显式字体度量相差约 8 逻辑像素。Skia 继续用当前显式字体快照。多字、多组、旋转或小假名读音、下方读音、行内角色与反向组合仍需专项验收。
+
+Claude 实现后的相关组合 Windows **950 通过**，X11/Wayland 各 **621 通过、329 项平台专用跳过**。Codex 补齐墨迹边界校验后，最终 Windows 竖排专项 **119 通过**，含新增 **4 项实际 D2D GPU 对照**（realization 关闭，原 1px 预算）。X11/Wayland 各 **82 通过、37 跳过**，Windows/Linux 独立 Raster 各 **55 通过**。四份 native 干净重建，CTest 各 **3/3**，统一指纹 `44259df8219c9690684b7199f3b36a088c74d722fdf8ef5042d4d6b44064fcb9`。新增 `vertical-ruby-layout.json` 在 Windows、X11、Wayland 和 Linux 独立 Raster 严格比较误差均为 **0**。证据前缀 `build/p05-vertical-ruby*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

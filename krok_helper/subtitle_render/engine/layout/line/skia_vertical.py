@@ -23,12 +23,15 @@ def _extended_text(text):
 def _supported_text(text):
     if _extended_text(text):
         return True
+    return upright_vertical_text(text) or text in _TRANSFORMED_GLYPHS
+
+
+def upright_vertical_text(text):
     if len(text) != 1:
         return False
     code = ord(text)
     return (0x4e00 <= code <= 0x9fff or 0xac00 <= code <= 0xd7a3
-            or 0x3041 <= code <= 0x3094 or 0x30a1 <= code <= 0x30fa
-            or text in _CORNER_PUNCTUATION or text in _ROTATED_PUNCTUATION)
+            or ((0x3041 <= code <= 0x3094 or 0x30a1 <= code <= 0x30fa) and text not in _SMALL_KANA))
 
 
 def vertical_japanese_glyphs(track):
@@ -46,16 +49,15 @@ def validate_vertical_style(style):
 
 
 def validate_vertical_source(track):
-    if track.rubies:
-        raise ValueError('Skia 竖排暂不支持注音')
     for line in track.lines:
+        if track.rubies and line.wipe_reverse:
+            raise ValueError('Skia 竖排注音当前仅支持正向走字')
         for char in line.chars:
             if not _supported_text(char.text) or char.role_label is not None:
                 raise ValueError('Skia 竖排单元包含未验证字符、多码点或行内角色')
 
 
-def vertical_cells(local, measured, item, *, width, height):
-    """Final cells of one vertical column in logical canvas pixels."""
+def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
     style = item.layout_style
     if item.lane:
         raise ValueError('Skia 竖排仅支持单列')
@@ -63,11 +65,19 @@ def vertical_cells(local, measured, item, *, width, height):
     ascent = float(measured.baseline_metrics['ascent'])
     descent = float(measured.baseline_metrics['descent'])
     cell_height = max(ascent + descent, 1.0)
-    block = cell_height * len(local.cells)
+    block = cell_height * count
     margin = float(style.line_y_margin_px)
-    column = width - margin - size / 2
+    column = width - margin - ruby_allowance - size / 2
     top = {'top': margin, 'center': max((height - block) / 2, 0.0),
            'bottom': height - margin - block}[style.line_y_position]
+    return column, top, cell_height, ascent
+
+
+def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0):
+    """Final cells of one vertical column in logical canvas pixels."""
+    size = float(item.layout_style.font_size_px)
+    column, top, cell_height, ascent = vertical_line_box(
+        item, measured, len(local.cells), width, height, ruby_allowance)
     cells = []
     for index, cell in enumerate(local.cells):
         # The glyph keeps its offset from its own horizontal cell-box centre.

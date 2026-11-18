@@ -49,7 +49,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p07_zero_ruby_no_wipe"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
-            && feature.toString() != "p05_vertical_japanese_glyphs"
+            && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vertical_ruby"
             && feature.toString() != "p06_primary_solid_outline" && feature.toString() != "p06_secondary_solid_outline"
             && feature.toString() != "p05_horizontal_rtl_kana_marks"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
@@ -104,6 +104,14 @@ void validateEnvelope(const QJsonObject& ir) {
             || !ir.value("required_features").toArray().contains("p05_vertical_solid")
             || !ir.value("style").toObject().value("vertical").toBool()))
         throw BackendError("Skia 竖排日文字形布局版本无效");
+    // vertical_ruby_schema=1: one single-scalar upright upper reading per vertical line.
+    if (ir.value("required_features").toArray().contains("p05_vertical_ruby")
+        && (ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p05_vertical_solid")
+            || !ir.value("required_features").toArray().contains("p05_resolved_ruby")
+            || !ir.value("required_features").toArray().contains("p05_upper_ruby")
+            || !ir.value("style").toObject().value("vertical").toBool()))
+        throw BackendError("Skia 竖排注音布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -207,8 +215,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     if (cfg.rightToLeft && (!features.contains("p05_horizontal_rtl")
         || !cfg.rubies.empty()))
         throw BackendError("Skia 右至左单元排列缺少能力声明或携带未支持注音");
-    // vertical_solid_schema=1: fixed-cell columns without annotations or role geometry.
-    if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft || !cfg.rubies.empty()
+    // Fixed-cell columns. Readings require a separately versioned feature.
+    if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft
+        || (!cfg.rubies.empty() && !features.contains("p05_vertical_ruby"))
         || cfg.dualLineLayout || std::any_of(cfg.lineOffsetsX.begin(), cfg.lineOffsetsX.end(), [](int v) { return v != 0; })))
         throw BackendError("Skia 竖排仅支持已验证的单列实色正文");
     if (features.contains("p06_primary_solid_outline")

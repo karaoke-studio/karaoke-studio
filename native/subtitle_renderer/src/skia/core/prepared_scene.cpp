@@ -24,9 +24,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.noWipe = source.noWipe;
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
-        if (source.vertical && !source.rubyGroups.empty())
-            throw std::runtime_error("Skia 竖排行不能携带注音组");
-        // Annotation groups currently support only a left-to-right front.
+        // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
         if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
@@ -73,7 +71,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
-            line.rubyGroups.emplace_back(group, source.noWipe);
+            line.rubyGroups.emplace_back(group, source.noWipe, source.vertical);
         }
         lines_.push_back(std::move(line));
     }

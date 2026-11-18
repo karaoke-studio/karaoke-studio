@@ -1,5 +1,6 @@
 #include "resolved_ruby.h"
 #include "resolved_wipe.h"
+#include "vertical_text.h"
 #include "../render_backend.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
@@ -44,6 +45,12 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
         || metrics.value("selected_font").toDouble(-1) < 0)
         throw BackendError("Skia 独立组合标记必须是单字体原位字形");
 }
+}
+// vertical_ruby_schema=1: the only proven reading is one upright CJK/Hangul/full-size kana scalar.
+static bool verticalRubyScalar(const QString& text) {
+    const auto scalars = text.toUcs4();
+    if (scalars.size() != 1) return false;
+    return verticalUprightScalar(scalars.front());
 }
 std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
@@ -106,6 +113,25 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
                 before, after);
+            if (scene.lineStyles[lineIndex].vertical) {
+                const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");
+                const auto ink = cell.value("metrics").toObject().value("ink").toArray();
+                const auto baseline = cell.value("baseline_y").toDouble();
+                if (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
+                    || ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1) != 1
+                    || lower || units.toArray().size() != 1 || !verticalRubyScalar(drawingText)
+                    || cell.contains("rotation_pivot_x")
+                    || !top.isDouble() || !bottom.isDouble() || !std::isfinite(top.toDouble())
+                    || !std::isfinite(bottom.toDouble()) || bottom.toDouble() <= top.toDouble()
+                    || std::abs(top.toDouble()) > 1e6 || std::abs(bottom.toDouble()) > 1e6
+                    || ink.size() != 4 || std::abs(top.toDouble() - baseline - ink[1].toDouble()) > 1e-4
+                    || std::abs(bottom.toDouble() - baseline - ink[3].toDouble()) > 1e-4)
+                    throw BackendError("Skia 竖排注音仅支持单个直立读音单元及有效纵向范围");
+                glyph.top = float(top.toDouble() * glyphs.dpr);
+                glyph.bottom = float(bottom.toDouble() * glyphs.dpr);
+            } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom")) {
+                throw BackendError("Skia 横排注音单元不能携带竖排范围");
+            }
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
                 glyph.wipePoints = {{int(shiftedStart), 0.f}, {int(shiftedEnd), *end}};
                 glyph.adjustedWipeEnd = true;

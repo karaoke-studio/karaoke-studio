@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
     ready.insert("empty_cell_schema", 1);
     ready.insert("vertical_solid_schema", 2);
     ready.insert("vertical_japanese_glyph_schema", 1);
+    ready.insert("vertical_ruby_schema", 1);
     ready.insert("primary_solid_outline_schema", 1);
     ready.insert("secondary_solid_outline_schema", 1);
     ready.insert("font_chain_schema", 1);
@@ -59,6 +60,7 @@ int main(int argc, char** argv) {
     profiles.append("p05_horizontal_rtl_cells");
     profiles.append("p05_vertical_solid");
     profiles.append("p05_vertical_japanese_glyphs");
+    profiles.append("p05_vertical_ruby");
     profiles.append("p06_primary_solid_outline");
     profiles.append("p06_secondary_solid_outline");
     profiles.append("p05_horizontal_rtl_kana_cells");

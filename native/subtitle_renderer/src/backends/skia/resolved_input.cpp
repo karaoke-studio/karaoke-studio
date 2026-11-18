@@ -3,6 +3,7 @@
 #include "resolved_glyph.h"
 #include "resolved_ruby.h"
 #include "scene_input.h"
+#include "vertical_text.h"
 #include "../render_backend.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../scene/skia_text_projection.h"
@@ -25,12 +26,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     // Mirror the host's supported Japanese punctuation and small kana. The
     // fixed cell's clock and bounds are independent of the glyph transform.
     constexpr std::wstring_view rotate = L"\u300c\u300d\u300e\u300f\u30fc\u301c";
-    constexpr std::wstring_view offset = L"\u3001\u3002\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308e"
-        L"\u30a1\u30a3\u30a5\u30a7\u30a9\u30c3\u30e3\u30e5\u30e7\u30ee\u30f5\u30f6";
     const bool rotated = rotate.find(code) != rotate.npos;
-    const bool shifted = offset.find(code) != offset.npos;
-    const bool upright = (code >= 0x4e00 && code <= 0x9fff) || (code >= 0xac00 && code <= 0xd7a3)
-        || (code >= 0x3041 && code <= 0x3094) || (code >= 0x30a1 && code <= 0x30fa);
+    const bool shifted = code == 0x3001 || code == 0x3002 || verticalSmallKana.find(code) != verticalSmallKana.npos;
+    const bool upright = verticalUprightScalar(code);
     const bool extended = text.empty() || code == L' ' || code == 0x3000
         || (code >= L'0' && code <= L'9') || (code >= L'A' && code <= L'Z') || (code >= L'a' && code <= L'z')
         || (code >= 0x00c0 && code <= 0x00d6) || (code >= 0x00d8 && code <= 0x00f6) || (code >= 0x00f8 && code <= 0x00ff);
@@ -113,7 +111,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (style.vertical) {
             if (!ir.value("required_features").toArray().contains("p05_vertical_solid")
                 || !source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical"
-                || !source.value("ruby_groups").toArray().isEmpty())
+                || (!source.value("ruby_groups").toArray().isEmpty()
+                    && (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
+                        || layout.value("vertical_ruby_schema").toDouble(-1) != 1
+                        || source.value("ruby_groups").toArray().size() != 1)))
                 throw BackendError("Skia 竖排缺少能力声明或最终方向无效");
         } else if (style.rightToLeft || source.contains("text_flow")) {
             if (!ir.value("required_features").toArray().contains("p05_horizontal_rtl")
