@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 1002aecc
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44025881382 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 069a55c7
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44247626643 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1857,7 +1857,7 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 - `skia/core/prepared_scene` 保持每格原有进度、委托前沿、两段互斥裁剪与颜色，只用 GPU 同口径的 `wipeStart/wipeEnd` 相位分类重排绘制顺序；GPU/Raster 共用同一实现，注音组仍在正文之后按原逻辑绘制。旧 sidecar 无 `body_phase_order_schema=1` 时在选择后端前拒绝。原负字距多码点 RTL 门禁（Python/native）在同一修复下证明后移除；布局快照没有新字段，30 份规范样例与上一批完全一致。
 - 新代表矩阵覆盖四种物理/演唱方向组合、正/负/坍缩字距、`allow_biting`、暂停、零时长、全零时长、角色半透明、no_wipe、legacy/N3、DPR1/1.5，另有 GPU/Raster 乱序重复 seek。曾选用的“独立组合标记 + allow_biting”用例在 D2D 与 Skia 中都因零 advance 负 bearing 使单元宽度极负而整行移出画面（两者一致为空帧），改用多码点单元覆盖 `allow_biting`，不将其视为通过证据。
 
-最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `b7bed443ab1b2b565a73e629285ec9b57a8a2c6b0223955b2dc22b9bebc57572`。串行实际 D2D GPU（realization 关闭）**217 通过、0 预期失败**：原两项已提升为普通回归，新重叠矩阵 19、负字距多码点 RTL 4，其余既有 RTL/多码点/字体/混排对照全部保持通过。Windows 完整 Skia 组合 **1549 通过、7 跳过**（上述串行 D2D 集合单独运行）；X11/Wayland 完整组合各 **1072 通过、701 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **65 通过**（首轮选择表达式误含需要 GPU 构建的 seek 用例，各 2 项因构建不含 GPU 而失败，修正选择后复验）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。30 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.44 完全相同。Mac 双架构与 CI 尚待；多层描边/装饰的分层顺序未在 Skia 正文实现（当前仅实色单层），Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-line-wipe*`。
+最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `b7bed443ab1b2b565a73e629285ec9b57a8a2c6b0223955b2dc22b9bebc57572`。串行实际 D2D GPU（realization 关闭）**217 通过、0 预期失败**：原两项已提升为普通回归，新重叠矩阵 19、负字距多码点 RTL 4，其余既有 RTL/多码点/字体/混排对照全部保持通过。Windows 完整 Skia 组合 **1549 通过、7 跳过**（上述串行 D2D 集合单独运行）；X11/Wayland 完整组合各 **1072 通过、701 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **65 通过**（首轮选择表达式误含需要 GPU 构建的 seek 用例，各 2 项因构建不含 GPU 而失败，修正选择后复验）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。30 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.44 完全相同。实现提交 `069a55c7` 的 Mac CI [44247626643](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44247626643) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1041 通过、732 项平台专用跳过**，其中 RTL/重叠文件各 **276 项（104 通过、172 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `b7bed443…`，与本地四份一致。30 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，与上一批 30 份完全相同。两份干净验收包 `horizontal_rtl`（含重叠层序用例）退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。多层描边/装饰的分层顺序未在 Skia 正文实现（当前仅实色单层），Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-line-wipe*`。
 
 ## 15. 前期探针清理范围
 
