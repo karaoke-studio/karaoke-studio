@@ -41,13 +41,9 @@ EXCLUDED_MODULES=(
   PyQt6.QtNetworkAuth
   PyQt6.QtPdf
   PyQt6.QtPdfWidgets
-  PyQt6.QtPositioning
-  PyQt6.QtQml
-  PyQt6.QtQuick
   PyQt6.QtQuick3D
   PyQt6.QtQuickControls2
   PyQt6.QtQuickTest
-  PyQt6.QtQuickWidgets
   PyQt6.QtRemoteObjects
   PyQt6.QtScxml
   PyQt6.QtSensors
@@ -56,10 +52,7 @@ EXCLUDED_MODULES=(
   PyQt6.QtStateMachine
   PyQt6.QtTest
   PyQt6.QtTextToSpeech
-  PyQt6.QtWebChannel
-  PyQt6.QtWebEngineCore
   PyQt6.QtWebEngineQuick
-  PyQt6.QtWebEngineWidgets
   PyQt6.QtWebSockets
   PyQt6.QtWebView
   winrt
@@ -109,8 +102,6 @@ REMOVE_PLUGIN_DIRS=(
 REMOVE_QT_LIBS=(
   "QtPdf.framework"
   "QtVirtualKeyboard.framework"
-  "QtQml.framework"
-  "QtQuick.framework"
 )
 
 ensure_pyqt6() {
@@ -157,6 +148,8 @@ ensure_pkg PIL pillow
 ensure_pyqt6
 ensure_pkg fontTools fonttools
 ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets"
+# Keep bindings and browser runtime aligned with the host Qt.
+"$PYTHON_BIN" -m pip install "PyQt6==$PYQT6_BINDING_VERSION" "PyQt6-Qt6==$PYQT6_QT_VERSION" "PyQt6-WebEngine==6.11.0" "PyQt6-WebEngine-Qt6==6.11.0"
 "$PYTHON_BIN" -m pip install "yt-dlp[default]"
 "$PYTHON_BIN" scripts/fetch_deno.py
 ensure_pkg requests requests
@@ -269,6 +262,8 @@ PYINSTALLER_ARGS=(
   --hidden-import PyQt6.sip
   --hidden-import PyQt6.QtMultimedia
   --hidden-import PyQt6.QtMultimediaWidgets
+  --hidden-import PyQt6.QtWebEngineCore
+  --hidden-import PyQt6.QtWebEngineWidgets
   --hidden-import encodings.idna
   --hidden-import objc
   --hidden-import Foundation
@@ -299,6 +294,8 @@ else
   if [ -n "$TRANSLATIONS_DIR" ] && [ -d "$TRANSLATIONS_DIR" ]; then
     while IFS= read -r -d '' file; do
       keep_file=0
+      # Chromium locale packs are required by the login helper.
+      case "$file" in */qtwebengine_locales/*.pak) continue ;; esac
       for keep in "${KEEP_TRANSLATIONS[@]}"; do
         if [ "$(basename "$file")" = "$keep" ]; then
           keep_file=1

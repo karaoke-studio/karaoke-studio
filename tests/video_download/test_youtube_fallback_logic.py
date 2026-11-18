@@ -58,12 +58,24 @@ def test_youtube_download_preserves_reload_client_hint(monkeypatch) -> None:
     service = YtDlpService()
     monkeypatch.setattr(service, "_ensure_youtube_visionos_client", lambda: True)
 
-    assert service._youtube_download_extractor_args_hint(YOUTUBE_URL, "") == YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+    assert service._youtube_download_extractor_args_hint(YOUTUBE_URL, "") == ""
     assert service._youtube_download_extractor_args_hint(
         YOUTUBE_URL,
         YOUTUBE_RELOAD_EXTRACTOR_ARGS,
     ) == YOUTUBE_RELOAD_EXTRACTOR_ARGS
     assert service._youtube_download_extractor_args_hint(BILIBILI_URL, "original") == "original"
+
+
+def test_normalized_format_error_can_trigger_fallback() -> None:
+    service = YtDlpService()
+    message = service._normalize_error_message(Exception("Requested format is not available"))
+    assert service._should_retry_youtube_with_fallback(YOUTUBE_URL, message)
+    assert not service._should_retry_youtube_with_fallback(YOUTUBE_URL, message, YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
+
+
+@pytest.mark.parametrize("hint", ["", YOUTUBE_RELOAD_EXTRACTOR_ARGS, YOUTUBE_FALLBACK_EXTRACTOR_ARGS, "youtube:player_client=web"])
+def test_download_preserves_all_successful_parse_clients(hint):
+    assert YtDlpService()._youtube_download_extractor_args_hint(YOUTUBE_URL, hint) == hint
 
 
 def test_registers_visionos_client_for_stable_ytdlp() -> None:

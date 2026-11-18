@@ -10,6 +10,41 @@ from krok_helper.ui_kit import StyledComboBox, WhiteComboBoxMenu, combo_box_view
 from krok_helper.video_download.video_download_page import VIDEO_INFO_COLLAPSED_HEIGHT, VideoDownloadPage
 
 
+def test_quality_choices_change_task_and_lock_during_download(monkeypatch, make_video_info):
+    from krok_helper.video_download.download_task import FormatOption, TASK_STATUS_DOWNLOADING
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(VideoDownloadPage, "_refresh_cookie_status", lambda _self: None)
+    monkeypatch.setattr(VideoDownloadPage, "_refresh_youtube_cookie_status", lambda _self: None)
+    monkeypatch.setattr(VideoDownloadPage, "_ensure_qr_login", lambda _self: None)
+    formats = [FormatOption(
+        option_id=str(height), download_format=selector, format_label="MP4 + 音频",
+        resolution=f"{height}p", video_codec="h264", audio_codec="aac", is_recommended=index == 0,
+    ) for index, (height, selector) in enumerate([(1080, "137+140"), (720, "136+140"), (360, "18")])]
+    page = VideoDownloadPage(AppSettings(), lambda: None)
+    try:
+        task = page._create_download_task(make_video_info(formats=formats))
+        page._tasks.append(task)
+        page._task_index[task.task_id] = task
+        page._current_task_id = task.task_id
+        page._refresh_preview()
+        assert page.format_combo.count() == 3
+        assert page.format_combo.currentText().startswith("1080p（推荐）")
+        assert not page.format_hint_label.isHidden()
+        assert "3 种" in page.format_hint_label.text()
+        page.format_combo.setCurrentIndex(1)
+        assert task.selected_format.download_format == "136+140"
+        assert page.format_combo.currentText().startswith("720p")
+        task.status = TASK_STATUS_DOWNLOADING
+        page._refresh_preview()
+        assert not page.format_combo.isEnabled()
+        page._handle_format_combo_changed(2)
+        assert task.selected_format.download_format == "136+140"
+    finally:
+        page.close()
+        page.deleteLater()
+        app.processEvents()
+
+
 def test_format_selector_uses_native_fluent_combo(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(VideoDownloadPage, "_refresh_cookie_status", lambda _self: None)
