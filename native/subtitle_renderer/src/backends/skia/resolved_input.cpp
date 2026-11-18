@@ -56,7 +56,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
     auto projected = scene::skiaSceneFromIr(ir);
-    validateSkiaScene(projected, true);
+    const bool primaryOutline = ir.value("required_features").toArray().contains("p06_primary_solid_outline");
+    validateSkiaScene(projected, true, primaryOutline);
     const auto layout = ir.value("skia_layout").toObject();
     const auto verticalVersion = layout.value("vertical_solid_schema").toDouble(-1);
     const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
@@ -140,8 +141,17 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || interval[1].toDouble() < interval[0].toDouble())
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
+            const auto beforeColor = argb(paint.beforeFillPaint.color);
+            const auto afterColor = argb(paint.afterFillPaint.color);
+            const double wipePad = std::floor(std::round(paint.strokeWidth / glyphs.dpr) / 2);
             auto glyph = glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs, line.chars[clock].endMs,
-                argb(paint.beforeFillPaint.color), argb(paint.afterFillPaint.color));
+                beforeColor, afterColor, wipePad);
+            if (paint.strokeWidth > 0 && !glyph.path.isEmpty()) {
+                const bool protectBody = (beforeColor >> 24) < 255 || (afterColor >> 24) < 255;
+                glyph.outline = ::subtitle::skia::SolidOutline{
+                    ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth),
+                    argb(paint.beforeStrokePaint.color), argb(paint.afterStrokePaint.color), protectBody};
+            }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
                 if (glyph.wipePoints.empty()) glyph.wipePoints = {{glyph.startMs, 0.f}, {glyph.endMs, 1.f}};

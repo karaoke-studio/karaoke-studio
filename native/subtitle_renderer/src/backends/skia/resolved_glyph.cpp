@@ -33,7 +33,8 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
     if (!valid) throw BackendError("Skia 最终 IR 的字体度量或 cluster 快照已失配");
 }
 }
-::subtitle::skia::ResolvedCell ResolvedGlyphContext::cell(const QJsonObject& cell, const QString& sourceText, int start, int end, std::uint32_t before, std::uint32_t after) const {
+::subtitle::skia::ResolvedCell ResolvedGlyphContext::cell(const QJsonObject& cell, const QString& sourceText,
+    int start, int end, std::uint32_t before, std::uint32_t after, double wipePad) const {
     const auto runValue = cell.value("run_index");
     const auto runIndex = runValue.toDouble(-1);
     if (!runValue.isDouble() || !std::isfinite(runIndex) || std::floor(runIndex) != runIndex
@@ -47,7 +48,8 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
     const auto x = finite(cell, "origin_x"), y = finite(cell, "baseline_y");
     const auto left = finite(cell, "wipe_left"), right = finite(cell, "wipe_right");
     if (right < left || (!shaped.ink.isEmpty()
-        && (std::abs(left - x - shaped.ink.left()) > 1e-4 || std::abs(right - x - shaped.ink.right()) > 1e-4)))
+        && (std::abs(left - x - shaped.ink.left() + wipePad) > 1e-4
+            || std::abs(right - x - shaped.ink.right() - wipePad) > 1e-4)))
         throw BackendError("Skia 最终走字边界与字形墨迹不一致");
     auto path = shaped.outline.makeTransform(SkMatrix::Translate(float(x), float(y)));
     path = path.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));

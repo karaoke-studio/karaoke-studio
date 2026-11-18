@@ -1922,6 +1922,14 @@ Windows 竖排专项 **70 通过**，含新增 **6 项实际 D2D GPU 对照**（
 
 Windows 专项 **80 通过**，另两项大号英数与空单元混排对照通过，新增实测 GPU 对照合计 **10 项**（realization 关闭，既有 1px 预算）。Linux X11/Wayland 专项各 **49 通过、31 项 Windows 专用跳过**；独立 Raster 各 **33 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `b9b39732f2e3199b48114b7a642e0f032697d113ce287a0293605c20e17fe178`。新增 `vertical-inkless-layout.json` 与前两份竖排样例在 Windows、X11、Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**，既有竖排样例内容相同。证据前缀 `build/p05-vertical-spaces*`。
 
+### 14.53 P06.1 横排正文第一道实色描边（2026-11-18）
+
+单列从左至右横排正文支持第一道实色描边，含前后态分别取色和整字切换。同一规范度量带入生效边宽，形成最终单元宽度、走字边界与行框。legacy 行框在上下各增加向上取整的半边宽，N3 则按整数半边宽拆分加高后的行框。描边使用圆连接，按走字阶段叠在正文下方。任一态正文半透明时，描边裁掉本字正文轮廓，正文中心仍保持原 alpha。轮廓在配置期展开，GPU 与 Raster 共用路径、画笔和裁剪逻辑。
+
+`primary_solid_outline_schema=1` 单独声明该范围。注音、独立英数描边宽度、行内角色、RTL、反向、竖排和多列的描边组合继续拒绝，二重描边尚待迁移。失败配置保留上一已配置场景。
+
+Windows **14 项描边专项通过**，含 **7 项实际 D2D GPU 对照**（realization 关闭，覆盖宽 6–9、DPR 1/1.5、不透明与半透明、三种纵向锚点及负字距），两项新增产品预览与短 MP4 亦通过。Windows 相关组合首轮 **182 通过、6 项旧度量夹具失败**，显式补足原先隐含的零描边后定向复验 **6/6 通过**。X11/Wayland 专项各 **9 通过、7 跳过**，Windows/Linux 独立 Raster 各 **6 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `d8f3fa14e5fecbf3bcfb10a3ca5280d8b3ef0db75e1a9b6d5e363648787505a5`。新增 `primary-solid-outline-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**，随专项纳入后续阶段 Mac CI。证据前缀 `build/p06-outline*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

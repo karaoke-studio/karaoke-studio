@@ -1,7 +1,9 @@
 #pragma once
 #include "include/core/SkPath.h"
+#include "solid_outline.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace subtitle::skia {
@@ -15,6 +17,7 @@ struct ResolvedCell {
     std::vector<krok::subtitle::native::WipePoint> wipePoints;
     bool adjustedWipeEnd = false; // Configuration-only validation marker; never changes time.
     float top = 0, bottom = 0; // Fixed vertical cell box; wipe axis on vertical lines only.
+    std::optional<SolidOutline> outline;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

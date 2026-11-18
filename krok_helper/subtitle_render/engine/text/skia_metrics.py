@@ -8,7 +8,7 @@ import hashlib
 import json
 
 from .skia_batch import TextMeasurementBatch
-from .font_slots import font_style_for_cell
+from .font_slots import font_style_for_cell, main_script_stroke_style
 from .metric_snapshot import CellMetric, LineMetric, TextMetricSnapshot
 from .skia_width import cell_geometry
 from ..layout.line.skia_rows import RowFrame, source_row_frames
@@ -21,6 +21,7 @@ class MeasuredLine:
     run_indices: tuple[int, ...]
     widths: tuple[int, ...]
     offsets: tuple[float, ...]
+    edge_sizes: tuple[int, ...]
     baseline_metrics: dict
     row_frame: RowFrame | None = None
     slot_metrics: tuple = ()
@@ -47,7 +48,8 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
         for char in line.chars:
             if char.role_label not in role_styles:
                 role_styles[char.role_label] = style_for_role_in_layout(appearance, char.role_label)
-            selected, stretch = font_style_for_cell(role_styles[char.role_label], char.text)
+            appearance_slot = main_script_stroke_style(role_styles[char.role_label], char.text)
+            selected, stretch = font_style_for_cell(appearance_slot, char.text)
             run = instance(selected, stretch, text=char.text)
             cells.append((run, batch.cell(run, char.text), selected))
         references.append((main, cells))
@@ -55,11 +57,12 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
     lines, snapshots = [], []
     for line, (main, references) in zip(track.lines, references, strict=True):
         cells = tuple(measured[r]['cells'][c] for r, c, _ in references)
-        geometry = [cell_geometry(char.text, cell, selected)
-                    for char, cell, (_, _, selected) in zip(line.chars, cells, references, strict=True)]
+        edge_sizes = tuple(max(int(selected.stroke_width_px), 0) for _, _, selected in references)
+        geometry = [cell_geometry(char.text, cell, selected, edge_size=edge)
+                    for char, cell, (_, _, selected), edge in zip(line.chars, cells, references, edge_sizes, strict=True)]
         widths = tuple(g[0] for g in geometry)
         lines.append(MeasuredLine(cells, tuple(r for r, _, _ in references), widths,
-                                  tuple(g[1] for g in geometry), measured[main]['font_metrics'],
+                                  tuple(g[1] for g in geometry), edge_sizes, measured[main]['font_metrics'],
                                   slot_metrics=tuple(measured[r]['font_metrics'] for r, _, _ in references)))
         snapshots.append(LineMetric.capture(line, style,
             [CellMetric.from_payload(c.text, m) for c, m in zip(line.chars, cells, strict=True)], layout_widths=widths))
