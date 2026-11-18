@@ -35,12 +35,13 @@ def within_one_pixel(first, second):
     return not np.any(first & ~dilate(second)) and not np.any(second & ~dilate(first))
 
 
-def assert_geometry(left, right, info):
+def assert_geometry(left, right, info, extra_masks=()):
     for name, mask in (
         ('body_and_outline', lambda f: f[..., 3] > 127),
         ('body_after', lambda f: f[..., 1] > 127),
         ('outline', lambda f: f[..., 2] > 127),
         ('outline_after', lambda f: (f[..., 2] > 127) & (f[..., 0] > 127)),
+        *extra_masks,
     ):
         a, b = mask(left), mask(right)
         if not within_one_pixel(a, b):
@@ -113,10 +114,14 @@ def test_unsupported_outline_changes_keep_configured_scene(binary, project, muta
     (6, True, 'n3_1074', 1, 'none', 'bottom', -10),
 ])
 def test_primary_outline_matches_actual_gpu(binary, project, width, translucent, semantics, dpr, effect, position, gap):
-    from test_subtitle_render_gpu_backend import _render_g1_frames
-
     track, style = outlined(project, width, translucent=translucent, semantics=semantics, effect=effect)
     style = replace(style, line_y_position=position, letter_spacing_px=gap)
+    assert_outline_matches_actual_gpu(binary, track, style, dpr)
+
+
+def assert_outline_matches_actual_gpu(binary, track, style, dpr, extra_masks=()):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
     times = [199, 200, 399, 599, 600, 750, 899, 900, 1200, 1799, 1800, 2200]
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
@@ -130,8 +135,8 @@ def test_primary_outline_matches_actual_gpu(binary, project, width, translucent,
         configure(process, ir)
         frames_cpu, _ = collect(process, times)
     for t, ref, gpu, cpu in zip(times, frames_d2d, frames_gpu, frames_cpu, strict=True):
-        assert_geometry(ref, gpu, ('D2D', t))
-        assert_geometry(gpu, cpu, ('Raster', t))
+        assert_geometry(ref, gpu, ('D2D', t), extra_masks)
+        assert_geometry(gpu, cpu, ('Raster', t), extra_masks)
 
 
 def test_primary_outline_product_preview(binary, project, monkeypatch, tmp_path):

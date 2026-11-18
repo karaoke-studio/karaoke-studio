@@ -18,6 +18,7 @@ struct ResolvedCell {
     bool adjustedWipeEnd = false; // Configuration-only validation marker; never changes time.
     float top = 0, bottom = 0; // Fixed vertical cell box; wipe axis on vertical lines only.
     std::optional<SolidOutline> outline;
+    std::optional<SolidOutline> outerOutline;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

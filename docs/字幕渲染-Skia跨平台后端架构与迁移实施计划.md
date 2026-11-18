@@ -1930,6 +1930,12 @@ Windows 专项 **80 通过**，另两项大号英数与空单元混排对照通�
 
 Windows **14 项描边专项通过**，含 **7 项实际 D2D GPU 对照**（realization 关闭，覆盖宽 6–9、DPR 1/1.5、不透明与半透明、三种纵向锚点及负字距），两项新增产品预览与短 MP4 亦通过。Windows 相关组合首轮 **182 通过、6 项旧度量夹具失败**，显式补足原先隐含的零描边后定向复验 **6/6 通过**。X11/Wayland 专项各 **9 通过、7 跳过**，Windows/Linux 独立 Raster 各 **6 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `d8f3fa14e5fecbf3bcfb10a3ca5280d8b3ef0db75e1a9b6d5e363648787505a5`。新增 `primary-solid-outline-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**，随专项纳入后续阶段 Mac CI。证据前缀 `build/p06-outline*`。
 
+### 14.54 P06.1 横排正文第二道实色描边（2026-11-18）
+
+在 §14.53 的单列横排范围内，`secondary_solid_outline_schema=1` 启用第二道描边，支持仅外描边。`UseEdge2` 关闭时，存量宽度仍随样式保留，画面等同于外描边宽度为零。总展开宽度为生效内外描边宽度之和。两层描边分别按走字阶段绘制，顺序为外描边、内描边、正文。任一态正文或内描边半透明时，外描边裁去内层轮廓，保留正文和内描边的 alpha；沿用第一道边宽确定单元宽度和走字边界。legacy 行框考虑两道描边总宽，N3 仍取第一道边宽。
+
+Windows 相关组合 **99 通过**，包含两道描边共 **13 项实际 D2D GPU 对照**（realization 关闭，原 1px 几何预算）。新增 6 项覆盖不透明、正文半透明、内描边半透明、仅外描边与 `UseEdge2` 关闭。外环颜色对照按纯色区域分类，边缘混色仍由整体轮廓几何检测。X11/Wayland 专项各 **7 通过、6 跳过**，Windows/Linux 独立 Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `30f140ea46b81711014e42d400171d3a9a2a392df592cdec73ad49739dd56746`。新增 `secondary-solid-outline-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**，第一道描边样例保持相同。证据前缀 `build/p06-outline2*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

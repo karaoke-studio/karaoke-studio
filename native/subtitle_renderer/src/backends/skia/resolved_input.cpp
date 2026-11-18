@@ -56,8 +56,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
     auto projected = scene::skiaSceneFromIr(ir);
-    const bool primaryOutline = ir.value("required_features").toArray().contains("p06_primary_solid_outline");
-    validateSkiaScene(projected, true, primaryOutline);
+    const auto features = ir.value("required_features").toArray();
+    const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
+        : features.contains("p06_primary_solid_outline") ? 1 : 0;
+    validateSkiaScene(projected, true, outlineLayers);
     const auto layout = ir.value("skia_layout").toObject();
     const auto verticalVersion = layout.value("vertical_solid_schema").toDouble(-1);
     const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
@@ -146,11 +148,19 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const double wipePad = std::floor(std::round(paint.strokeWidth / glyphs.dpr) / 2);
             auto glyph = glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs, line.chars[clock].endMs,
                 beforeColor, afterColor, wipePad);
-            if (paint.strokeWidth > 0 && !glyph.path.isEmpty()) {
-                const bool protectBody = (beforeColor >> 24) < 255 || (afterColor >> 24) < 255;
-                glyph.outline = ::subtitle::skia::SolidOutline{
-                    ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth),
-                    argb(paint.beforeStrokePaint.color), argb(paint.afterStrokePaint.color), protectBody};
+            if (outlineLayers > 0 && !glyph.path.isEmpty()) {
+                const bool bodyAlpha = (beforeColor >> 24) < 255 || (afterColor >> 24) < 255;
+                const auto beforeOutline = argb(paint.beforeStrokePaint.color);
+                const auto afterOutline = argb(paint.afterStrokePaint.color);
+                if (paint.strokeWidth > 0)
+                    glyph.outline = ::subtitle::skia::SolidOutline{
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth),
+                        beforeOutline, afterOutline, bodyAlpha};
+                if (paint.stroke2Width > 0)
+                    glyph.outerOutline = ::subtitle::skia::SolidOutline{
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth + paint.stroke2Width),
+                        argb(paint.beforeStroke2Paint.color), argb(paint.afterStroke2Paint.color),
+                        bodyAlpha || (beforeOutline >> 24) < 255 || (afterOutline >> 24) < 255};
             }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {

@@ -50,7 +50,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs"
-            && feature.toString() != "p06_primary_solid_outline"
+            && feature.toString() != "p06_primary_solid_outline" && feature.toString() != "p06_secondary_solid_outline"
             && feature.toString() != "p05_horizontal_rtl_kana_marks"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
@@ -107,6 +107,10 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
+    if (ir.value("required_features").toArray().contains("p06_secondary_solid_outline")
+        && (ir.value("skia_layout").toObject().value("secondary_solid_outline_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p06_primary_solid_outline")))
+        throw BackendError("Skia 二重实色描边布局版本无效");
     if (ir.value("style").toObject().contains("right_to_left")
         && !ir.value("style").toObject().value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");

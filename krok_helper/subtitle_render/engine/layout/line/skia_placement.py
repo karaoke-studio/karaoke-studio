@@ -28,7 +28,8 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
     if style.layout_semantics == 'legacy':
         left, right = ink_left, ink_right
         ascent, descent = float(metrics['ascent']), float(metrics['descent'])
-        visual_pad = math.ceil(edge / 2)
+        edge2 = max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
+        visual_pad = math.ceil((edge + edge2) / 2)
         ascent += visual_pad
         descent += visual_pad
         ruby_size = max(int(style.ruby_font_size_px), 1)

@@ -29,7 +29,7 @@ def test_baseline_box_semantics_are_content_independent(semantics, expected):
     for position, baseline in zip(('top','center','bottom'), expected):
         style=Style(layout_semantics=semantics,dual_line_layout=False,line_horizontal_layout='center',
                     font_size_px=50,line_y_position=position,line_y_margin_px=60,ruby_font_size_px=45,
-                    stroke_width_px=0,ruby_gap_px=0,ruby_stroke_width_px=10)
+                    stroke_width_px=0,stroke2_width_px=0,ruby_gap_px=0,ruby_stroke_width_px=10)
         result=place_single_line(item(style),{'ascent':80,'descent':20},width=640,height=360,
                                  ink_left=10,ink_right=110,layout_width=150)
         assert result.baseline_y==baseline

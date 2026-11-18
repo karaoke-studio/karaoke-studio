@@ -120,9 +120,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_overlap_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
-    if any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
+    secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
+                            for item in plan.lines)
+    if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
         ir['required_features'].append('p06_primary_solid_outline')
         ir['skia_layout']['primary_solid_outline_schema'] = 1
+    if secondary_outline:
+        ir['required_features'].append('p06_secondary_solid_outline')
+        ir['skia_layout']['secondary_solid_outline_schema'] = 1
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

@@ -65,9 +65,10 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 }
             }
             if (cell.outline) line.hasOutline = true;
+            if (cell.outerOutline) line.hasOuterOutline = true;
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
-                                  cell.top, cell.bottom, cell.outline});
+                                  cell.top, cell.bottom, cell.outline, cell.outerOutline});
         }
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
@@ -199,21 +200,27 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
             states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After)});
         }
-        const auto drawCell = [&](std::size_t index, bool outline) {
+        enum class Layer { OuterOutline, Outline, Body };
+        const auto drawCell = [&](std::size_t index, Layer layer) {
             const auto& cell = line.cells[index];
-            if (outline && !cell.outline) return;
-            const auto& path = outline ? cell.outline->path : cell.path;
+            const auto& stroke = layer == Layer::OuterOutline ? cell.outerOutline : cell.outline;
+            const bool drawOutline = layer != Layer::Body;
+            if (drawOutline && !stroke) return;
+            const auto& path = drawOutline ? stroke->path : cell.path;
             const auto [progress, edge, phase] = states[index];
             // The outline can reach beyond the integer wipe padding, just as
             // the vertical glyph can reach beyond its fixed cell.
-            const bool atFront = (line.vertical || outline) && phase == Phase::Wiping;
+            const bool atFront = (line.vertical || drawOutline) && phase == Phase::Wiping;
             const bool before = !atFront && progress == 0;
             const bool after = !atFront && progress == 1;
             const auto draw = [&](bool sung) {
-                if (outline && cell.outline->protectBody)
+                if (drawOutline && stroke->protectBody) {
                     canvas.clipPath(cell.path, SkClipOp::kDifference, true);
-                paint.setColor(outline ? (sung ? cell.outline->after : cell.outline->before)
-                                       : (sung ? cell.after : cell.before));
+                    if (layer == Layer::OuterOutline && cell.outline)
+                        canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+                }
+                paint.setColor(drawOutline ? (sung ? stroke->after : stroke->before)
+                                           : (sung ? cell.after : cell.before));
                 canvas.drawPath(path, paint);
             };
             // Two disjoint clips avoid painting translucent after color over before color.
@@ -239,16 +246,17 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         // Overlapping cells follow the existing GPU's per-character phase order:
         // unsung cells last-to-first, then sung cells, then wiping cells on top.
         // Each cell's own clip and colors are unchanged; only stacking differs.
-        const auto drawLayer = [&](bool outline) {
+        const auto drawLayer = [&](Layer layer) {
             for (std::size_t index = line.cells.size(); index > 0; --index)
-                if (states[index-1].phase == Phase::Before) drawCell(index-1, outline);
+                if (states[index-1].phase == Phase::Before) drawCell(index-1, layer);
             for (std::size_t index = 0; index < line.cells.size(); ++index)
-                if (states[index].phase == Phase::After) drawCell(index, outline);
+                if (states[index].phase == Phase::After) drawCell(index, layer);
             for (std::size_t index = 0; index < line.cells.size(); ++index)
-                if (states[index].phase == Phase::Wiping) drawCell(index, outline);
+                if (states[index].phase == Phase::Wiping) drawCell(index, layer);
         };
-        if (line.hasOutline) drawLayer(true);
-        drawLayer(false);
+        if (line.hasOuterOutline) drawLayer(Layer::OuterOutline);
+        if (line.hasOutline) drawLayer(Layer::Outline);
+        drawLayer(Layer::Body);
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
         canvas.restore();
     }

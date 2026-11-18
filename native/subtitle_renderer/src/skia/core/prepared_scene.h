@@ -49,6 +49,7 @@ private:
         bool adjustedWipeEnd = false;
         float top = 0, bottom = 0;
         std::optional<SolidOutline> outline;
+        std::optional<SolidOutline> outerOutline;
     };
     struct Line {
         std::vector<Cell> cells;
@@ -59,6 +60,7 @@ private:
         bool wipeRightToLeft = false;
         bool vertical = false;
         bool hasOutline = false;
+        bool hasOuterOutline = false;
     };
     int width_, height_;
     std::vector<Line> lines_;
