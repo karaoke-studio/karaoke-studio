@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 069a55c7
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44247626643 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 051731b6
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44259284809 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1867,7 +1867,7 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 - 改动前探针（探针副本移除 Python 门禁、清除 RTL 标记交给 Skia 绘制同一最终几何）与实际 D2D GPU 对照：小写假名、预组合浊音、括号/句读/长音/中点/波浪线/全角！？、全角空格及间隔浊点单元在 RTL 与 LTR 均 **≤1px**。含组合 U+3099/U+309A 的单元在 **LTR 同样失配**：D2D（DirectWrite）不合成假名浊点，`か+゛` 绘为基字+标记（有 GPOS 时按锚点，无 GPOS 时不定位）；HarfBuzz 在字体含 `が/ぱ/パ` 时规范合成，并在缺 GPOS 时做回退标记定位。原样 LTR 记录为两项 `strict=True` 仅接受断言失败的预期失败（合成 5px、回退定位 2px 墨迹框），不放宽预算；修正需改变公共塑形策略，留待后续，RTL 中继续拒绝。
 - `p05_horizontal_rtl_kana_cells` / `horizontal_rtl_kana_schema=1` 仅在 RTL 多码点单元确含新增码位时加入，并要求 `p05_horizontal_rtl_cells`；原 v1 码位表、单元快照与字体身份不变。新增码位：U+3000–3002、U+300C–300F、U+301C、U+3041–3096、U+309B–309C、U+30A1–30FC、U+FF01、U+FF1F；U+3099/U+309A、叠字符 U+309D/E 与其他全角形式、其他文字、ZWJ/变体选择符、补充平面/彩色、RTL 注音与竖排继续明确拒绝。旧 sidecar 在选择后端前拒绝；native 拒绝缺能力、缺多码点基础能力、错误 schema 与伪造组合浊点文本并保留旧场景。
 
-最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `07f4926195443f29655734df8d979145bd6adf991211dc3a040be03d7b7c542b`。串行实际 D2D GPU（realization 关闭）**240 通过、2 项上述严格预期失败**，其中假名 RTL 矩阵 20（假名/标点/间隔浊点 × 反向/legacy/N3/DPR1/1.5、no_wipe、负字距、角色、暂停、零时长）与行锚点 3 全部通过，原 RTL/重叠/多码点/字体对照保持通过。GPU/Raster 乱序重复 seek 与真实预览（GPU、GPU 关闭、loader 失败回退 Raster）均通过。Windows 完整 Skia 组合 **1576 通过、7 跳过**；X11/Wayland 完整组合各 **1099 通过、726 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **81 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **31** 份规范样例 `rtl-kana-layout.json`，31 份 Windows/X11/Wayland 误差均为 **0**，原 30 份与 §14.45 完全相同。Mac 双架构与 CI 尚待；组合浊点塑形、其他全角形式、Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-kana-cells*`。
+最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `07f4926195443f29655734df8d979145bd6adf991211dc3a040be03d7b7c542b`。串行实际 D2D GPU（realization 关闭）**240 通过、2 项上述严格预期失败**，其中假名 RTL 矩阵 20（假名/标点/间隔浊点 × 反向/legacy/N3/DPR1/1.5、no_wipe、负字距、角色、暂停、零时长）与行锚点 3 全部通过，原 RTL/重叠/多码点/字体对照保持通过。GPU/Raster 乱序重复 seek 与真实预览（GPU、GPU 关闭、loader 失败回退 Raster）均通过。Windows 完整 Skia 组合 **1576 通过、7 跳过**；X11/Wayland 完整组合各 **1099 通过、726 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **81 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **31** 份规范样例 `rtl-kana-layout.json`，31 份 Windows/X11/Wayland 误差均为 **0**，原 30 份与 §14.45 完全相同。实现提交 `051731b6` 的 Mac CI [44259284809](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44259284809) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1067 通过、758 项平台专用跳过**，其中 RTL/假名文件各 **328 项（130 通过、198 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `07f49261…`，与本地四份一致。31 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，原 30 份不变。两份干净验收包 `horizontal_rtl`（含假名 RTL 用例）退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。组合浊点塑形、其他全角形式、Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-kana-cells*`。
 
 ## 15. 前期探针清理范围
 
