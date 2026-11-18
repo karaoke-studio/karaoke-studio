@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 78461519
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44279799427 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 3015a0db
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44294159236 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1878,6 +1878,17 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 - 字体几何身份升为 `skia-m150-hb-ft-v5`。`kana_mark_schema=1` 在 ready 和度量请求/响应中校验。RTL 场景要求 `p05_horizontal_rtl_kana_marks` 与基础假名能力，标记必须直接跟随假名基字。重复标记、前置标记和其他文字附着仍不在该 RTL 范围。混排保留基字和标记为不可分字素。新测试覆盖伪造能力、版本、源文本及失败保留旧场景。旧两项预期失败提升为普通对照，保持 1px 预算。
 
 四份本地 Vulkan / CPU-only 目标干净重建，CTest 各 **3/3**，源码身份 `0e7cf7cbeedb39a1ec6cef3deb6ba36d8aaa3bbe88b61c176945d37fed97c70c`。Windows/Linux CPU-only 专项各 **98 通过**。首次因测试夹具重复读取 ready 导致四项假失败，修正后通过。新增第 32 份规范样例 `rtl-kana-mark-layout.json`，Mac 验收包增加 `kana_marks=1`。新增专项在 Windows/X11/Wayland 各 **21 项非 D2D 测试通过**，另有 10 组受控字体 D2D 对照及 2 项原失败对照通过。补测使用系统字体的实际 GPU 对照，Meiryo 与 MS Gothic 左右两向均通过（4 项）。Yu Gothic 两向墨迹纵向仍超预算约 2px，普通及预组合假名的对照也复现纵向偏差，保留为字体画质差异。本地完整回归：串行实际 D2D GPU（realization 关闭）**252 通过**；Windows 完整 Skia 组合 **1577 通过、7 跳过**；X11/Wayland 完整组合各 **1100 通过、726 项平台专用跳过**（初始运行清单未含新文件，新增 21 项非 D2D 用例在三平台另行运行均通过）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。实现提交 `78461519` 的 Mac CI [44279799427](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44279799427) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1089 通过、768 项平台专用跳过**，其中新假名浊音文件各 **31 项（21 通过、10 项 Windows D2D 跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `0e7cf7cb…`，与本地四份一致。32 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**；与 §14.46 的 31 份相比，按 v4→v5 身份归一后 28 份完全相同、3 份仅身份摘要变化，几何变化 **0** 份。两份干净验收包 `kana_marks` 与 `horizontal_rtl` 退出码均为 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。日志前缀 `build/p05-kana-marks*`。
+
+### 14.48 P05.5 行框纵向度量与 GPU 的字体表规则（2026-11-18）
+
+**本批修复 §14.47 记录的 Yu Gothic 约 2px 纵向差异；原因是行框度量取自不同字体表，不是画质、轮廓或字体特例。** Claude Opus 5.5 实现与本地验证，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建。
+
+- 复现：Yu Gothic 普通、预组合与分解式假名在左右两向的整行墨迹均比 GPU 下移 **2 物理像素**（DPR1.5，上下边同时偏移、水平不变，6 项失败），Meiryo/MS Gothic 通过。字体表对比：Yu Gothic `hhea` 1802/455 与 OS/2 win 2017/619 不同（USE_TYPO_METRICS 关闭），Meiryo/MS Gothic 的 hhea 与 win 相同。
+- 受控字体逐表区分（`build/p05-font-y/probe-C*.json`）：仅 win 不同、仅 hhea 不同、开启 USE_TYPO_METRICS 时 typo 不同或 win 不同。GPU 的行框/基线算式使用 DirectWrite 字体度量，即 **USE_TYPO_METRICS 时取 OS/2 typo，否则取 OS/2 win，从不使用 hhea**；Skia/FreeType 原为 USE_TYPO_METRICS 时 typo、否则 hhea。两边 legacy/N3 算式相同，只是度量来源不同。
+- `skia/text/font_instance` 的 ascent/descent 改为同一规则（锁定 HarfBuzz 度量接口，含可变字体 MVAR），无可用 OS/2 时保留原 Skia 值；度量、configure 快照重校验、混排、注音参考与 GPU/Raster 共用该唯一入口。字体几何身份升为 `skia-m150-hb-ft-v6`，`vertical_metrics_schema=1` 在 ready 与度量请求/响应中协商，旧 sidecar 在度量与选择后端前拒绝。不改源文本、单元、时钟或容差。
+- 确定性回归：FontTools 受控字体逐项断言 typo/win/hhea 选择及无 OS/2 回退；实际 D2D GPU（realization 关闭）对四类表组合覆盖 legacy/N3、DPR1/1.5、RTL/反向、角色与 no_wipe（11 项），原 1px 预算。
+
+修复后真实字体复验 **10 通过**：Yu Gothic 普通/预组合/分解式左右两向 6 项、Meiryo 与 MS Gothic 各 2 项。Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `0bf2b424d34658b62920ad35af599eb6242f8ded2a21cdd3939245f24e9f7568`。串行实际 D2D GPU **263 通过**；Windows 完整 Skia 组合 **1607 通过、7 跳过**；X11/Wayland 完整组合各 **1130 通过、747 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **107 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**；与 §14.47 相比按 v5→v6 身份归一后 29 份相同、3 份仅身份摘要变化、几何变化 0 份（受控字体 hhea/typo/win 一致）。期间合入的 PR #30 只涉及视频下载，不影响 native 源码身份。实现提交 `3015a0db` 的 Mac CI [44294159236](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44294159236) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1098 通过、779 项平台专用跳过**，其中单元字形/行框度量文件各 **80 项（25 通过、55 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `0bf2b424…`，与本地四份一致。32 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**；按 v5→v6 身份归一后与 §14.47 相比 29 份相同、3 份仅身份摘要变化、几何变化 0 份。两份干净验收包 `cell_glyphs` 退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-font-y*`。
 
 ## 15. 前期探针清理范围
 

@@ -15,7 +15,7 @@
 
 5. **生产默认后端不得自行切换**（2026-11-16 用户明令）：除非用户后续主动、明确要求更改生产默认后端，否则永久保持现有生产默认；Skia 开发、迁移、测试、全部验收通过或计划中的切换任务均不构成授权。不得自行修改默认后端选择、GPU 默认偏好、发布打包默认或通过回退策略间接切换。相关计划的自动切换条款也必须等待用户明确指令。
 
-6. **委派 Claude 时节省 Codex token**（2026-11-17 用户要求）：复用已有上下文，任务说明保持简短，以目标、必要边界和验收为主；实现、排查和大批测试优先交给 Claude。Codex 只读取简短进度、最终 diff 和关键验证结果，避免反复读取完整日志、重复长提示和无意义轮询。
+6. **委派 Claude 时节省 Codex token**（2026-11-17 用户要求）：复用已有上下文，任务说明保持简短，以目标、必要边界和验收为主；实现、排查和大批测试优先交给 Claude。等待 CLI 子进程退出或接收结构化完成事件，再读取最终 diff 和关键验证结果。避免定时反复检查 Claude 日志和 CI 状态。
 
 ---
 
@@ -326,7 +326,8 @@ git submodule status
    客户端还须检查 `p05_single_line_placement` 能力，不能让旧 sidecar 静默接受新布局。
    `src/skia/text/glyph_outline.*` 使用锁定 FreeType 的公开接口，在 em 尺度读取精细轮廓；
    不要改回 `SkFont::getPath` 的默认 64px 归一化再放大，它会使接近整数边界的单元宽度
-   被截断多丢 1px。字体几何身份已按 §14.47 升为 `skia-m150-hb-ft-v5`；COLR 字形即使有非空
+   被截断多丢 1px。字体几何身份已按 §14.48 升为 `skia-m150-hb-ft-v6`：行框 ascent/descent 与 GPU 相同，
+   USE_TYPO_METRICS 时取 OS/2 typo、否则取 OS/2 win（不用 hhea），`vertical_metrics_schema=1` 协商；COLR 字形即使有非空
    单色基底也仍属未支持的彩色绘制，不能把基底当成完整结果。
    P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯
    `engine/style/style_semantics.py`，旧 text/layout 入口保留导出；角色视觉覆盖必须保留
