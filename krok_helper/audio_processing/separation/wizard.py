@@ -204,7 +204,10 @@ class WelcomeView(QWidget):
         flows = (FLOW_FULL, FLOW_REUSE_MSST, FLOW_EXISTING, FLOW_MSST)
         self._cards: list[EntryCard] = []
         for card, flow in zip(entries, flows):
-            if sys.platform == "darwin" and flow in (FLOW_FULL, FLOW_REUSE_MSST):
+            # 托管安装只在 Windows 可用（managed_runtime_variant 非 Windows 会抛异常），
+            # darwin 与 Linux 都只显示外部环境入口。
+            hide_managed = sys.platform == "darwin" or sys.platform.startswith("linux")
+            if hide_managed and flow in (FLOW_FULL, FLOW_REUSE_MSST):
                 card.hide()
                 continue
             card.clicked.connect(lambda f=flow: self.flowSelected.emit(f))

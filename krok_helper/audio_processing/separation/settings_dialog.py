@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
@@ -621,6 +622,11 @@ class SeparationSettingsDialog(ModelessDialog):
         self._install_dir_label.setMaximumWidth(260)
         self._change_install_button = PushButton("更改…", self._install_dir_card)
         self._change_install_button.clicked.connect(self._change_install_dir)
+        if sys.platform.startswith("linux"):
+            # Linux 暂无托管安装：重指安装目录会走进 Windows 专属的安装流程，
+            # 只会报错，故禁用（外部环境接入不受影响）。
+            self._change_install_button.setEnabled(False)
+            self._change_install_button.setToolTip("Linux 暂不支持托管安装。")
         self._open_install_button = ToolButton(FIF.FOLDER, self._install_dir_card)
         self._open_install_button.setToolTip("打开安装目录")
         self._open_install_button.clicked.connect(self._open_install_dir)
@@ -854,6 +860,9 @@ class SeparationSettingsDialog(ModelessDialog):
             button.clicked.connect(handler)
             if handler in {self._on_repair, self._on_reinstall}:
                 self._managed_action_buttons.append(button)
+            if handler is self._on_relocate and sys.platform.startswith("linux"):
+                button.setEnabled(False)
+                button.setToolTip("Linux 暂不支持托管安装。")
             _add_card_actions(card, button)
             group.addSettingCard(card)
 
