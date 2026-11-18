@@ -1946,6 +1946,12 @@ D2D 对照使用 Windows 已安装的 Meiryo。D2D 为应用内私有字体计�
 
 Claude 实现后的相关组合 Windows **950 通过**，X11/Wayland 各 **621 通过、329 项平台专用跳过**。Codex 补齐墨迹边界校验后，最终 Windows 竖排专项 **119 通过**，含新增 **4 项实际 D2D GPU 对照**（realization 关闭，原 1px 预算）。X11/Wayland 各 **82 通过、37 跳过**，Windows/Linux 独立 Raster 各 **55 通过**。四份 native 干净重建，CTest 各 **3/3**，统一指纹 `44259df8219c9690684b7199f3b36a088c74d722fdf8ef5042d4d6b44064fcb9`。新增 `vertical-ruby-layout.json` 在 Windows、X11、Wayland 和 Linux 独立 Raster 严格比较误差均为 **0**。证据前缀 `build/p05-vertical-ruby*`。
 
+### 14.56 P05.7 横排实色矢量导唱符（2026-11-19）
+
+显式 Skia 路径接入原工程的矢量导唱符，覆盖前置、锚定、替换和行内形式，沿用同一个导唱符展开器和共享计时计划。正文与导唱符使用同一字形序列，保留原始索引和时钟。绘制沿用 D2D 的分数 advance，计时继续使用整数宽度。Qt-free 度量按归一化 M/L/C/Q/Z 路径计算墨迹，Skia 在配置期准备路径。内容 ID 复用原 dedup 表，引用和紧致边界在 native 复核。同文不同导唱符使用独立度量快照。协议 `vector_guide_schema=1`。位图、竖排、RTL、注音、导唱符角色和描边组合尚待验收。
+
+Windows 相关组合 **198 通过**，其中导唱符专项 **52 通过**，含 **14 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算），另有真实 G5 GPU/Raster 预览、乱序 seek、资源 ID 与非有限坐标回归。X11/Wayland 专项各 **38 通过、14 跳过**，Windows/Linux 独立 Raster 各 **19 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `cd092ddb67c933eb3e03a1ab7d90037302b922dff295140147128380800c9b5a`。新增 `vector-guide-layout.json` 在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**。证据前缀 `build/p05-vector-guide*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

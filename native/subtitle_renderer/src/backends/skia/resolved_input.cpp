@@ -100,7 +100,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto& style = projected.lineStyles[index];
         if (!source.value("cells").isArray()) throw BackendError("Skia 最终布局缺少单元");
         const auto cells = source.value("cells").toArray();
-        const auto intervals = originalLines[index].toObject().value("resolved_intervals").toArray();
+        const auto original = originalLines[index].toObject();
+        const auto intervals = original.value("resolved_intervals").toArray();
+        const auto sourceChars = original.value("chars").toArray();
         if (cells.size() != int(line.chars.size()) || intervals.size() != cells.size() || (totalCells += cells.size()) > 65536)
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
@@ -147,8 +149,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const auto beforeColor = argb(paint.beforeFillPaint.color);
             const auto afterColor = argb(paint.afterFillPaint.color);
             const double wipePad = std::floor(std::round(paint.strokeWidth / glyphs.dpr) / 2);
-            auto glyph = glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs, line.chars[clock].endMs,
-                beforeColor, afterColor, wipePad);
+            const auto& vector = line.chars[j].vectorGlyph;
+            const auto glyphId = sourceChars[j].toObject().value("vector_glyph_id");
+            if ((glyphId.isString() && !vector) || (vector && line.chars[j].text != L"\ufffc"))
+                throw BackendError("Skia 导唱符缺少有效的来源轮廓引用");
+            auto glyph = vector
+                ? glyphs.vectorCell(cell, *vector, glyphId.toString(), paint.fontSize / glyphs.dpr, line.chars[clock].startMs,
+                                    line.chars[clock].endMs, beforeColor, afterColor)
+                : glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs,
+                              line.chars[clock].endMs, beforeColor, afterColor, wipePad);
             if (outlineLayers > 0 && !glyph.path.isEmpty()) {
                 const bool bodyAlpha = (beforeColor >> 24) < 255 || (afterColor >> 24) < 255;
                 const auto beforeOutline = argb(paint.beforeStrokePaint.color);

@@ -49,7 +49,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p07_zero_ruby_no_wipe"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
-            && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vertical_ruby"
+            && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
             && feature.toString() != "p06_primary_solid_outline" && feature.toString() != "p06_secondary_solid_outline"
             && feature.toString() != "p05_horizontal_rtl_kana_marks"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
@@ -112,6 +112,9 @@ void validateEnvelope(const QJsonObject& ir) {
             || !ir.value("required_features").toArray().contains("p05_upper_ruby")
             || !ir.value("style").toObject().value("vertical").toBool()))
         throw BackendError("Skia 竖排注音布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_vector_guides")
+        && ir.value("skia_layout").toObject().value("vector_guide_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 导唱符布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -172,7 +175,12 @@ void validateEnvelope(const QJsonObject& ir) {
         for (const auto& cv : line.value("chars").toArray()) {
             if (!cv.isObject() || !cv.toObject().value("text").isString()) throw BackendError("Skia IR: invalid character");
             integer(cv.toObject(), "start_ms", -86400000, 86400000);
-            for (const auto* key : {"vector_glyph_id", "vector_glyph", "bitmap_guide", "wipe_points"})
+            // vector_guide_schema=1 admits table references only; inline outlines stay rejected.
+            if (cv.toObject().contains("vector_glyph_id")
+                && (!ir.value("required_features").toArray().contains("p05_vector_guides")
+                    || ir.value("skia_layout").toObject().value("vector_guide_schema").toDouble(-1) != 1))
+                throw BackendError("Skia 导唱符缺少版本化能力声明");
+            for (const auto* key : {"vector_glyph", "bitmap_guide", "wipe_points"})
                 if (cv.toObject().contains(QLatin1String(key)))
                     throw BackendError("Skia P04: guide symbols and custom wipe curves require later phases");
         }
@@ -318,7 +326,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (cell.vectorGlyph || cell.bitmapGuide
+            // vector_guide_schema=1: solid horizontal LTR main text, no roles, ruby or outlines.
+            if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
+                || !cfg.rubies.empty() || &cellStyle != &resolved || features.contains("p06_primary_solid_outline")))
+                throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
+            if (cell.bitmapGuide
                 || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
                 || !cell.resolvedEndMs)
                 throw BackendError("Skia 导唱符、未声明的缺字回退或未解析计时尚未支持");
@@ -333,6 +345,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 ch.styleIndex = entry->second;
             }
             ch.text = cell.text.toStdWString();
+            ch.vectorGlyph = cell.vectorGlyph;
             // Legacy family hints are provenance only. The resolved font
             // resource chain is verified by resolvedSkiaInput, never rematched.
             ch.startMs = cell.startMs + offset;

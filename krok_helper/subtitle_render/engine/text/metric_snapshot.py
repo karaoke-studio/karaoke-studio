@@ -11,7 +11,7 @@ import hashlib
 import math
 
 from krok_helper.subtitle_render.domain.models import Style
-from krok_helper.subtitle_render.domain.timing import TimingLine
+from krok_helper.subtitle_render.domain.timing import GuideSymbol, TimingLine
 from krok_helper.subtitle_render.engine.layout.line.geometry import resolve_char_intervals
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.value_signature import value_signature
@@ -36,7 +36,11 @@ class CellMetric:
         encoded = text.encode('utf-8')
         boundaries = {len(encoded)} | {i for i, b in enumerate(encoded) if b & 0xc0 != 0x80}
         clusters = tuple((int(g['cluster_start']), int(g['cluster_end'])) for g in payload['glyphs'])
-        if not text:
+        if payload.get('vector_glyph_id'):
+            # vector_guide_schema=1: an expanded guide cell is a glyphless outline reference.
+            if text != '\uFFFC' or clusters or not str(payload['font_identity']).startswith('vector:'):
+                raise ValueError("字体度量包含无效 cluster 映射")
+        elif not text:
             # empty_cell_schema=1: an authored empty cell is glyphless and inkless.
             if clusters or any(ink) or values[0]:
                 raise ValueError("字体度量包含无效 cluster 映射")
@@ -52,6 +56,7 @@ class LineMetric:
     layout_widths: tuple[int, ...]
     ink_widths: tuple[int, ...]
     roles: tuple[str | None, ...]
+    guides: tuple[GuideSymbol | None, ...] = field(default=(), repr=False)
 
     @classmethod
     def capture(cls, line: TimingLine, style: Style, metrics, *, layout_widths) -> LineMetric:
@@ -61,9 +66,11 @@ class LineMetric:
             raise ValueError("度量快照与歌词单元不一致")
         if any(type(w) is not int or w < 0 for w in widths):
             raise ValueError("布局宽度必须为非负整数")
-        return cls(cells, value_signature(style_for_line(style, line)), widths,
-                   tuple(max(math.ceil(c.ink[2] - c.ink[0]), 0) for c in cells),
-                   tuple(c.role_label or None for c in line.chars))
+        guides = tuple(c.vector_glyph for c in line.chars)
+        ink_widths = tuple(width if guide is not None else max(math.ceil(cell.ink[2] - cell.ink[0]), 0)
+                           for cell, width, guide in zip(cells, widths, guides, strict=True))
+        return cls(cells, value_signature(style_for_line(style, line)), widths, ink_widths,
+                   tuple(c.role_label or None for c in line.chars), guides if any(guides) else ())
 
 
 @dataclass(frozen=True)
@@ -75,7 +82,7 @@ class TextMetricSnapshot:
         object.__setattr__(self, 'lines', tuple(self.lines))
         lookup = {}
         for line in self.lines:
-            key = (tuple(c.text for c in line.metrics), line.roles, line.style_signature)
+            key = (tuple(c.text for c in line.metrics), line.roles, line.style_signature, line.guides)
             lookup.setdefault(key, []).append(line)
         object.__setattr__(self, '_lookup', MappingProxyType({k: tuple(v) for k, v in lookup.items()}))
 
@@ -89,7 +96,8 @@ class TextMetricSnapshot:
         texts = tuple(c.text for c in line.chars)
         roles = tuple(c.role_label or None for c in line.chars)
         signature = value_signature(style_for_line(style, line))
-        candidates = self._lookup.get((texts, roles, signature), ())
+        guides = tuple(c.vector_glyph for c in line.chars)
+        candidates = self._lookup.get((texts, roles, signature, guides if any(guides) else ()), ())
         if not candidates or any(m != candidates[0] for m in candidates):
             raise ValueError("规范度量快照缺失、过期或存在冲突")
         measured = candidates[0]

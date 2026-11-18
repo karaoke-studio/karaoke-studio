@@ -2,11 +2,15 @@
 #include "../render_backend.h"
 #include "../../scene/skia_text_projection.h"
 #include "include/core/SkMatrix.h"
+#include "include/core/SkPathBuilder.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
 
 namespace krok::subtitle::native {
 namespace {
+bool near(const QJsonValue& value, double expected) {
+    return value.isDouble() && std::isfinite(value.toDouble()) && std::abs(value.toDouble() - expected) <= 1e-3;
+}
 double finite(const QJsonObject& o, const char* key) {
     const auto v = o.value(QLatin1String(key));
     const double n = v.toDouble();
@@ -54,5 +58,46 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
     auto path = shaped.outline.makeTransform(SkMatrix::Translate(float(x), float(y)));
     path = path.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));
     return {path, float(left*dpr), float(right*dpr), start, end, before, after};
+}
+// The existing GPU builds the guide from M/L/C/Q/Z commands scaled by
+// max(size, 1) / unitsPerEm (y-down, baseline 0, winding fill, open figures
+// filled), translates it to the cell's left edge and advances by
+// max(size * advanceWidth / unitsPerEm, 1). Advance and ink are re-derived here.
+::subtitle::skia::ResolvedCell ResolvedGlyphContext::vectorCell(const QJsonObject& cell, const VectorGlyph& glyph,
+                                                              const QString& glyphId, double size,
+                                                              int start, int end, std::uint32_t before, std::uint32_t after) const {
+    if (!std::isfinite(size) || size <= 0 || size > 4096 || glyph.commands.empty() || glyph.commands.size() > 65536)
+        throw BackendError("Skia 导唱符尺寸或轮廓无效");
+    const float scale = std::max(float(size), 1.0f) / std::max(glyph.unitsPerEm, 1.0f);
+    SkPathBuilder builder(SkPathFillType::kWinding);
+    bool open = false;
+    for (const auto& command : glyph.commands) {
+        const auto point = [&](std::size_t i) { return SkPoint::Make(command.values[i] * scale, command.values[i + 1] * scale); };
+        if (command.kind == 'M' && command.values.size() == 2) { builder.moveTo(point(0)); open = true; }
+        else if (command.kind == 'L' && command.values.size() == 2 && open) builder.lineTo(point(0));
+        else if (command.kind == 'C' && command.values.size() == 6 && open) builder.cubicTo(point(0), point(2), point(4));
+        else if (command.kind == 'Q' && command.values.size() == 4 && open) builder.quadTo(point(0), point(2));
+        else if (command.kind == 'Z' && open) { builder.close(); open = false; }
+    }
+    const SkPath path = builder.detach();
+    if (!path.isFinite()) throw BackendError("Skia 导唱符轮廓包含非有限坐标");
+    const SkRect ink = path.isEmpty() ? SkRect::MakeEmpty() : path.computeTightBounds();
+    const double advance = std::max(size * std::max(glyph.advanceWidth, 0.0f) / std::max(glyph.unitsPerEm, 1.0f), 1.0);
+    const auto metrics = cell.value("metrics").toObject();
+    const auto inkValue = metrics.value("ink").toArray();
+    if (glyphId.isEmpty() || metrics.value("vector_glyph_id").toString() != glyphId
+        || metrics.value("font_identity").toString() != QStringLiteral("vector:") + glyphId
+        || !metrics.value("glyphs").isArray()
+        || !metrics.value("glyphs").toArray().isEmpty() || !near(metrics.value("advance"), advance) || inkValue.size() != 4
+        || !near(inkValue[0], ink.left()) || !near(inkValue[1], ink.top())
+        || !near(inkValue[2], ink.right()) || !near(inkValue[3], ink.bottom()))
+        throw BackendError("Skia 导唱符度量快照与轮廓不一致");
+    const auto x = finite(cell, "origin_x"), y = finite(cell, "baseline_y");
+    const auto left = finite(cell, "wipe_left"), right = finite(cell, "wipe_right");
+    if (right < left || (!ink.isEmpty() && (std::abs(left - x - ink.left()) > 1e-3 || std::abs(right - x - ink.right()) > 1e-3)))
+        throw BackendError("Skia 导唱符走字边界与轮廓墨迹不一致");
+    auto positioned = path.makeTransform(SkMatrix::Translate(float(x), float(y)));
+    positioned = positioned.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));
+    return {positioned, float(left * dpr), float(right * dpr), start, end, before, after};
 }
 }

@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
+from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -84,8 +85,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         validate_reverse_source(source)
         if source_style.vertical:
             validate_vertical_source(source)
-        if any(c.vector_glyph for l in source.lines for c in l.chars):
-            raise ValueError('Skia 当前规范布局尚不支持导唱符')
+        validate_vector_guides(source, source_style)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -139,6 +139,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if secondary_outline:
         ir['required_features'].append('p06_secondary_solid_outline')
         ir['skia_layout']['secondary_solid_outline_schema'] = 1
+    if any(char.vector_glyph is not None for item in plan.lines for char in item.render_line.chars):
+        ir['required_features'].append('p05_vector_guides')
+        ir['skia_layout']['vector_guide_schema'] = 1
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

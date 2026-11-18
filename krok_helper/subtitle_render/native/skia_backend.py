@@ -131,6 +131,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('vertical_ruby_schema')) is not int or ready['vertical_ruby_schema'] != 1
                     or 'p05_vertical_ruby' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持竖排注音，请重新构建')
+            if (type(ready.get('vector_guide_schema')) is not int or ready['vector_guide_schema'] != 1
+                    or 'p05_vector_guides' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持矢量导唱符，请重新构建')
             if (type(ready.get('primary_solid_outline_schema')) is not int or ready['primary_solid_outline_schema'] != 1
                     or 'p06_primary_solid_outline' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持实色描边，请重新构建')

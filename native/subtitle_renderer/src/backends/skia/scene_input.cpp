@@ -80,7 +80,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLaye
         if (line.displayWindows[0].fadeInMs > 0 || line.displayWindows[0].fadeOutMs > 0)
             throw BackendError("Skia P04: fading requires P07");
         for (const auto& ch : line.chars) {
-            if ((!canonical && (ch.text.size() != 1 || ch.styleIndex >= 0)) || ch.vectorGlyph || ch.bitmapGuide
+            if ((!canonical && (ch.text.size() != 1 || ch.styleIndex >= 0 || ch.vectorGlyph)) || ch.bitmapGuide
                 || !ch.wipePoints.empty() || !ch.fallbackFamily.empty())
                 throw BackendError("Skia P04: shaping, guide symbols, fallback fonts and custom wipe curves require later phases");
             if (ch.styleIndex < -1 || ch.styleIndex >= int(scene.charStyles.size()))
