@@ -33,7 +33,16 @@ std::vector<SkUnichar> decode(const std::string& text) {
 }
 ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<const FontInstance>>& fonts,
                      const std::string& language, bool rightToLeft, bool allowMixed) {
-    if (utf8.empty() || utf8.size() > 65536 || fonts.empty()) throw std::runtime_error("Skia 度量单元或字体链无效");
+    if (utf8.size() > 65536 || fonts.empty() || !fonts.front()) throw std::runtime_error("Skia 度量单元或字体链无效");
+    if (utf8.empty()) {
+        // empty_cell_schema=1: an authored empty cell keeps its clock and the
+        // existing GPU's inkless box, but has no glyph, ink or design advance.
+        ShapedCell empty;
+        const auto& primary = *fonts.front();
+        empty.fontIdentity = primary.identity();
+        empty.ascent = primary.ascent(); empty.descent = primary.descent(); empty.leading = primary.leading();
+        return empty;
+    }
     decode(utf8);
     // One decision per authored cell, from its source text only (never per font).
     const bool opentype = rightToLeft || cellUsesOpenTypeShaping(utf8);

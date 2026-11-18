@@ -1890,6 +1890,16 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 
 修复后真实字体复验 **10 通过**：Yu Gothic 普通/预组合/分解式左右两向 6 项、Meiryo 与 MS Gothic 各 2 项。Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `0bf2b424d34658b62920ad35af599eb6242f8ded2a21cdd3939245f24e9f7568`。串行实际 D2D GPU **263 通过**；Windows 完整 Skia 组合 **1607 通过、7 跳过**；X11/Wayland 完整组合各 **1130 通过、747 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **107 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**；与 §14.47 相比按 v5→v6 身份归一后 29 份相同、3 份仅身份摘要变化、几何变化 0 份（受控字体 hhea/typo/win 一致）。期间合入的 PR #30 只涉及视频下载，不影响 native 源码身份。实现提交 `3015a0db` 的 Mac CI [44294159236](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44294159236) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1098 通过、779 项平台专用跳过**，其中单元字形/行框度量文件各 **80 项（25 通过、55 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `0bf2b424…`，与本地四份一致。32 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**；按 v5→v6 身份归一后与 §14.47 相比 29 份相同、3 份仅身份摘要变化、几何变化 0 份。两份干净验收包 `cell_glyphs` 退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-font-y*`。
 
+### 14.49 P05.2 / P05.5 空文本计时单元（2026-11-18）
+
+**本批修复 §14.44/§14.46 记录的空文本 `TimingChar` 无法度量的问题；只开放实际 GPU 已证明的语义，不改源文本、索引或时钟。** Claude Opus 5.5 实现与本地验证，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建。
+
+- 复现：真实 opt-in 配置路径中任何含空文本单元的轨道都在度量阶段失败（LTR/RTL、legacy/N3、混合/仅空单元/首尾空单元均为“Skia 度量单元或字体链无效”）。只读 D2D GPU 对照显示：空单元不绘制任何字形，但保留时钟，并占用无墨迹单元框 `size × space% × 25 / 100 / 10 + edge`（与 Skia `cell_geometry` 原有规则相同）；仅空单元的行不绘制任何内容；legacy 按墨迹居中、N3 按布局宽度定位；RTL 按整单元移位。
+- 根因只在度量链：native `shapeCell` 拒绝空 UTF-8（度量与 configure 快照重校验共用），随后 Python `CellMetric` 拒绝无 glyph 的快照。修复后 `shapeCell("")` 返回明确的无 glyph、无墨迹、零设计 advance 单元，并带主字体身份与行框度量；`CellMetric` 只对空文本接受无 glyph，且要求墨迹与 advance 为零。`empty_cell_schema=1` 在 ready 中声明，客户端在度量与选择后端前拒绝旧 sidecar；伪造 glyph、advance 或文本均失败并保留旧场景。字体几何身份不变，非空单元快照与 32 份规范样例完全相同。
+- 覆盖：实际 D2D GPU（realization 关闭、原 1px 预算）16 组代表矩阵（混合/首尾/末尾空单元 × LTR/RTL、反向、no_wipe、暂停、零时长、共享区间分段走字、角色、负字距、legacy/N3、DPR1/1.5、行锚点），仅空单元行在 GPU/Raster/D2D 均为空帧，GPU/Raster 乱序 seek，以及上注音以空单元为基字或跨越空单元（2 项）。下方读音在受控字体中的拒绝与空单元无关（无空单元时同样因缺参考字形拒绝），保持原有明确失败。
+
+Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `7754c453785b1da5cc059dedc5e2cfdee827b8ce83df5961e587972cbd63fd8c`。专项 **33 通过** 另 2 项注音对照通过；串行实际 D2D GPU **283 通过**；Windows 完整 Skia 组合 **1622 通过、7 跳过**；X11/Wayland 完整组合各 **1147 通过、765 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **118 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.48 完全相同。Mac CI 尚待；Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-empty-cell*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

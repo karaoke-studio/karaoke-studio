@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from PyQt6.QtGui import QFontDatabase
 
-from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_source, assert_gpu_parity,
+from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_source, assert_gpu_parity, reverse_source,
                                          collect, configure, ir_for, selection)
 from skia_text_fixture import make_font
 from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
@@ -344,3 +344,154 @@ def test_line_box_metrics_match_actual_gpu(binary, project, tmp_path, case):
     finally:
         QFontDatabase.removeApplicationFont(handle)
         clear_font_weight_cache()
+
+
+# empty_cell_schema=1: an authored empty-text TimingChar keeps its index, text and
+# clock, draws nothing, and occupies the existing GPU's inkless box
+# (size * space% * 25 / 100 / 10 + edge), exactly like Skia's cell_geometry.
+EMPTY = {'mixed': ['A', '', 'W', '字'], 'edges': ['', 'A', 'W', ''], 'trailing': ['A', 'W', '字', ''],
+         'empty_only': ['', '', '', '']}
+
+
+def empty_source(project, texts='mixed', kind='plain', *, reverse=False, effect='none', rtl=False):
+    if kind == 'shared':
+        track, style = reverse_source(project, 'shared', effect)
+        line = replace(track.lines[0], wipe_reverse=reverse)
+        style = replace(style, karaoke_anim=effect, reverse_karaoke_anim=effect)
+    else:
+        track, style = rtl_source(project, kind, reverse=reverse, effect=effect)
+        line = track.lines[0]
+    line = replace(line, chars=[replace(c, text=t) for c, t in zip(line.chars, EMPTY[texts])])
+    return replace(track, lines=[line]), replace(style, right_to_left=rtl)
+
+
+@pytest.mark.parametrize('rtl', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_empty_cells_keep_authored_clocks_and_inkless_boxes(binary, project, rtl, reverse):
+    track, style = empty_source(project, 'edges', rtl=rtl, reverse=reverse)
+    ir = ir_for(binary, (track, style))
+    lettered = ir_for(binary, (replace(track, lines=[replace(track.lines[0], chars=[
+        replace(c, text=c.text or 'A') for c in track.lines[0].chars])]), style))
+    cells = ir['skia_layout']['lines'][0]['cells']
+    assert [c['text'] for c in ir['track']['lines'][0]['chars']] == EMPTY['edges']
+    assert len(cells) == 4
+    for index in (0, 3):
+        metrics = cells[index]['metrics']
+        assert metrics['glyphs'] == [] and metrics['ink'] == [0, 0, 0, 0] and metrics['design_advance'] == 0
+        assert metrics['font_identity'].startswith('skia-m150-hb-ft-v6:')
+        assert cells[index]['wipe_right'] - cells[index]['wipe_left'] == cell_geometry('', metrics, style)[0]
+    size, space = int(style.font_size_px), int(style.space_width_percent)
+    assert cell_geometry('', cells[0]['metrics'], style)[0] == size * space * 25 // 100 // 10
+    # Clocks stay with the authored cells; nothing is dropped or merged.
+    assert ir['track']['lines'][0]['resolved_intervals'] == lettered['track']['lines'][0]['resolved_intervals']
+    if reverse:
+        assert [c['clock_index'] for c in cells] == [3, 2, 1, 0]
+
+
+@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
+def test_old_empty_cell_sidecars_are_rejected_before_measurement_or_selection(binary, monkeypatch, payload):
+    process = SkiaRendererProcess(binary, selection=selection('raster'))
+    try:
+        ready = NativeRendererProcess.start(process)
+    finally:
+        process.abort(reason='empty cell handshake fixture')
+    assert ready['empty_cell_schema'] == 1
+    if payload == 'missing': del ready['empty_cell_schema']
+    else: ready['empty_cell_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
+    sent = []
+    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
+    monkeypatch.setattr(NativeRendererProcess, 'abort', lambda *a, **k: None)
+    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
+    monkeypatch.setattr(NativeRendererProcess, '_send', lambda self, p: sent.append(p))
+    for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
+        with pytest.raises(NativeRendererError, match='空文本'):
+            cls(binary).start()
+    assert not sent
+
+
+@pytest.mark.parametrize('forgery', ['glyph', 'advance', 'text'])
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_forged_empty_cell_snapshots_keep_the_previous_scene(binary, project, forgery, target):
+    ir = ir_for(binary, empty_source(project))
+    bad = copy.deepcopy(ir)
+    empty, letter = (c['metrics'] for c in (bad['skia_layout']['lines'][0]['cells'][1], bad['skia_layout']['lines'][0]['cells'][0]))
+    if forgery == 'glyph': empty['glyphs'] = copy.deepcopy(letter['glyphs'])
+    elif forgery == 'advance': empty['design_advance'] = 1
+    else: bad['track']['lines'][0]['chars'][1]['text'] = 'A'
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir); before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [750], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('rtl', [False, True])
+def test_empty_only_lines_draw_nothing_on_skia_and_actual_gpu(binary, project, rtl):
+    track, style = empty_source(project, 'empty_only', rtl=rtl, reverse=rtl)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert len(ir['skia_layout']['lines'][0]['cells']) == 4
+    times = [199, 700, 1500, 2200]
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir); frames, _ = collect(process, times)
+        assert all(not f[..., 3].any() for f in frames)
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        assert all(not np.frombuffer(r, np.uint8)[3::4].any() for r in raw)
+
+
+def test_empty_cells_gpu_raster_and_out_of_order_seek(binary, project):
+    ir = ir_for(binary, empty_source(project, 'mixed', 'roles', reverse=True, rtl=True), dpr=1.5)
+    order = [2200, 601, 199, 900, 599, 1401, 600, 899, 1399, 200]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            ordered, _ = collect(process, sorted(order))
+            shuffled, _ = collect(process, order, generation=2)
+        by_time = dict(zip(sorted(order), ordered))
+        assert all(np.array_equal(by_time[t], f) for t, f in zip(order, shuffled))
+        results.append(ordered)
+    for a, b in zip(*results):
+        def premult(p):
+            p = p.astype(float); p[..., :3] *= p[..., 3:] / 255
+            return p
+        delta = abs(premult(a) - premult(b))
+        assert delta.mean() < .15 and np.mean(delta.max(axis=-1) > 16) < .003
+
+
+EMPTY_CASES = [
+    ('mixed', False, False, 'none', 'plain', 'legacy', 1.5, None), ('mixed', False, False, 'none', 'plain', 'n3_1074', 1, None),
+    ('mixed', True, False, 'none', 'plain', 'n3_1074', 1.5, None), ('mixed', True, True, 'none', 'plain', 'legacy', 1, None),
+    ('edges', False, True, 'none', 'plain', 'n3_1074', 1.5, None), ('edges', True, False, 'no_wipe', 'plain', 'legacy', 1.5, None),
+    ('trailing', False, False, 'no_wipe', 'plain', 'n3_1074', 1, None), ('trailing', True, True, 'none', 'plain', 'n3_1074', 1.5, None),
+    ('mixed', False, False, 'none', 'pause', 'legacy', 1.5, None), ('mixed', True, False, 'none', 'zero', 'n3_1074', 1.5, None),
+    ('mixed', False, False, 'none', 'shared', 'n3_1074', 1.5, None), ('edges', True, True, 'none', 'shared', 'legacy', 1.5, None),
+    ('mixed', False, True, 'none', 'roles', 'n3_1074', 1.5, None), ('mixed', True, False, 'none', 'negative_gap', 'legacy', 1.5, None),
+    ('edges', False, False, 'none', 'plain', 'n3_1074', 1.5, 'left'), ('trailing', True, False, 'none', 'plain', 'n3_1074', 1.5, 'right'),
+]
+
+
+@GPU
+@pytest.mark.parametrize('case', EMPTY_CASES, ids=lambda c: '-'.join(map(str, c)))
+def test_empty_cells_match_actual_gpu(binary, project, case):
+    texts, rtl, reverse, effect, kind, semantics, dpr, alignment = case
+    track, style = empty_source(project, texts, kind, reverse=reverse, effect=effect, rtl=rtl)
+    assert_gpu_parity(binary, track, replace(style, layout_semantics=semantics), dpr, case, alignment=alignment)
+
+
+@GPU
+@pytest.mark.parametrize('span', [(1, 2), (0, 3)], ids=['empty_base', 'spanning_empty'])
+def test_upper_ruby_over_empty_cells_matches_actual_gpu(binary, project, span):
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+    track, style = empty_source(project, 'mixed')
+    ruby = RubyAnnotation('X', 'A', pos_start_ms=200, pos_end_ms=900, target_line_index=0,
+                          target_char_start=span[0], target_char_end=span[1])
+    track = replace(track, rubies=[ruby])
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert 'p05_resolved_ruby' in ir['required_features']
+    assert_gpu_parity(binary, track, style, 1.5, ('ruby', span))

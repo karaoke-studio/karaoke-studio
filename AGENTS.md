@@ -487,6 +487,8 @@ git submodule status
    旧 sidecar 在度量/选择后端前拒绝，v3 快照不能混入 v4。普通单元按 nominal cmap/hmtx 排列，
    含补充平面字符或多码点含 Mn/Mc/Me/ZWJ 的单元才做 OpenType 塑形；单元框始终取源 nominal
    字形的 advance/首尾 bearing，混排按各 face 归一化。不能把整词 ligature/kerning 恢复为默认。
+   空文本计时单元见 §14.49：`empty_cell_schema=1`，保留原索引/文本/时钟，无字形无墨迹，单元框沿用 GPU 的无墨迹宽度；
+   不得插入可见字形、合并或丢弃空单元的时钟。
    `fi` 与分解重音原 LTR 差异已修复为普通回归；RTL 多码点门禁、完整复杂脚本验收仍保留。
 
    分解式假名浊音见 §14.47。`kana_mark_schema=1` 在 ready 和度量请求/响应中协商；字体几何身份为 v5。

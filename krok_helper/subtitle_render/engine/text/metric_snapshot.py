@@ -36,7 +36,11 @@ class CellMetric:
         encoded = text.encode('utf-8')
         boundaries = {len(encoded)} | {i for i, b in enumerate(encoded) if b & 0xc0 != 0x80}
         clusters = tuple((int(g['cluster_start']), int(g['cluster_end'])) for g in payload['glyphs'])
-        if not clusters or any(a not in boundaries or b not in boundaries or not 0 <= a < b <= len(encoded) for a, b in clusters):
+        if not text:
+            # empty_cell_schema=1: an authored empty cell is glyphless and inkless.
+            if clusters or any(ink) or values[0]:
+                raise ValueError("字体度量包含无效 cluster 映射")
+        elif not clusters or any(a not in boundaries or b not in boundaries or not 0 <= a < b <= len(encoded) for a, b in clusters):
             raise ValueError("字体度量包含无效 cluster 映射")
         return cls(text, str(payload['font_identity']), values[0], ink, values[1], values[2], clusters)
 

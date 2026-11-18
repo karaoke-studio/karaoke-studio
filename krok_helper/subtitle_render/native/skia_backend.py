@@ -13,8 +13,8 @@ from typing import Any
 from .backend import NativeRendererError, heartbeat_lease_s, skia_requested
 from .skia_process import SkiaSidecarProcess, resolve_skia_renderer_path
 from .skia_ipc import OwnedPosixRings
-from .skia_text import (CELL_GLYPH_ERROR, VERTICAL_METRICS_ERROR, has_cell_glyph_schema, has_kana_mark_schema,
-                        has_vertical_metrics_schema)
+from .skia_text import (CELL_GLYPH_ERROR, EMPTY_CELL_ERROR, VERTICAL_METRICS_ERROR, has_cell_glyph_schema,
+                        has_empty_cell_schema, has_kana_mark_schema, has_vertical_metrics_schema)
 
 
 @dataclass(frozen=True)
@@ -120,6 +120,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 不支持假名浊音字形策略，请重新构建')
             if not has_vertical_metrics_schema(ready):
                 raise NativeRendererError(VERTICAL_METRICS_ERROR)
+            if not has_empty_cell_schema(ready):
+                raise NativeRendererError(EMPTY_CELL_ERROR)
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

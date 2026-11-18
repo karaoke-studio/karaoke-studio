@@ -31,6 +31,16 @@ def has_vertical_metrics_schema(payload: dict) -> bool:
     return type(value) is int and value == 1
 
 
+# An authored empty-text cell keeps its clock and the GPU's inkless box but has
+# no glyph; older sidecars reject such cells during measurement.
+EMPTY_CELL_ERROR = 'Skia sidecar 不支持空文本计时单元，请重新构建'
+
+
+def has_empty_cell_schema(payload: dict) -> bool:
+    value = payload.get('empty_cell_schema')
+    return type(value) is int and value == 1
+
+
 class SkiaTextMetricsProcess(SkiaSidecarProcess):
     def start(self):
         if self.is_running:
@@ -54,6 +64,9 @@ class SkiaTextMetricsProcess(SkiaSidecarProcess):
         if not has_vertical_metrics_schema(ready):
             self.abort(reason='Skia vertical metrics handshake failed')
             raise NativeRendererError(VERTICAL_METRICS_ERROR)
+        if not has_empty_cell_schema(ready):
+            self.abort(reason='Skia empty cell handshake failed')
+            raise NativeRendererError(EMPTY_CELL_ERROR)
         return ready
 
     def measure(self, fonts: dict, runs: list[dict]) -> list[dict]:
