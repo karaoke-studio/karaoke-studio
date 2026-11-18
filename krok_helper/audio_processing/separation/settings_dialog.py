@@ -638,7 +638,7 @@ class SeparationSettingsDialog(ModelessDialog):
         group.addSettingCard(self._mode_card)
 
         self._version_card = SettingCard(
-            FIF.INFO, "PyMSS 版本", "兼容范围以需求文档冻结值为准", group
+            FIF.INFO, "PyMSS 版本", "外部环境支持 PyMSS 2.x，连接前需通过能力检测", group
         )
         self._version_label = CaptionLabel("—", self._version_card)
         refresh_button = PushButton(FIF.SYNC, "重新检测", self._version_card)
