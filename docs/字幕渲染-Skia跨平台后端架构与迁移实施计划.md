@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 051731b6
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44259284809 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 78461519
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44279799427 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1877,7 +1877,7 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 - 公共字体路径对含浊音符的塑形段保留源假名的组合形式，继续使用锁定 HarfBuzz 的字体 GPOS。无 GPOS 时恢复浊音符的名义位置与实测的 advance 规则。若无 GPOS 的输出已发生未经验证的 glyph 替换，明确拒绝。字形仍以原 UTF-8 簇映射，测量与最终绘制共用策略，单元框保持源 nominal 度量。其他文字的归一化和项目原文、时钟、Ruby 源规则沿用原契约。
 - 字体几何身份升为 `skia-m150-hb-ft-v5`。`kana_mark_schema=1` 在 ready 和度量请求/响应中校验。RTL 场景要求 `p05_horizontal_rtl_kana_marks` 与基础假名能力，标记必须直接跟随假名基字。重复标记、前置标记和其他文字附着仍不在该 RTL 范围。混排保留基字和标记为不可分字素。新测试覆盖伪造能力、版本、源文本及失败保留旧场景。旧两项预期失败提升为普通对照，保持 1px 预算。
 
-四份本地 Vulkan / CPU-only 目标干净重建，CTest 各 **3/3**，源码身份 `0e7cf7cbeedb39a1ec6cef3deb6ba36d8aaa3bbe88b61c176945d37fed97c70c`。Windows/Linux CPU-only 专项各 **98 通过**。首次因测试夹具重复读取 ready 导致四项假失败，修正后通过。新增第 32 份规范样例 `rtl-kana-mark-layout.json`，Mac 验收包增加 `kana_marks=1`。新增专项在 Windows/X11/Wayland 各 **21 项非 D2D 测试通过**，另有 10 组受控字体 D2D 对照及 2 项原失败对照通过。补测使用系统字体的实际 GPU 对照，Meiryo 与 MS Gothic 左右两向均通过（4 项）。Yu Gothic 两向墨迹纵向仍超预算约 2px，普通及预组合假名的对照也复现纵向偏差，保留为字体画质差异。完整回归和 Mac CI 结果待补。日志前缀 `build/p05-kana-marks*`。
+四份本地 Vulkan / CPU-only 目标干净重建，CTest 各 **3/3**，源码身份 `0e7cf7cbeedb39a1ec6cef3deb6ba36d8aaa3bbe88b61c176945d37fed97c70c`。Windows/Linux CPU-only 专项各 **98 通过**。首次因测试夹具重复读取 ready 导致四项假失败，修正后通过。新增第 32 份规范样例 `rtl-kana-mark-layout.json`，Mac 验收包增加 `kana_marks=1`。新增专项在 Windows/X11/Wayland 各 **21 项非 D2D 测试通过**，另有 10 组受控字体 D2D 对照及 2 项原失败对照通过。补测使用系统字体的实际 GPU 对照，Meiryo 与 MS Gothic 左右两向均通过（4 项）。Yu Gothic 两向墨迹纵向仍超预算约 2px，普通及预组合假名的对照也复现纵向偏差，保留为字体画质差异。本地完整回归：串行实际 D2D GPU（realization 关闭）**252 通过**；Windows 完整 Skia 组合 **1577 通过、7 跳过**；X11/Wayland 完整组合各 **1100 通过、726 项平台专用跳过**（初始运行清单未含新文件，新增 21 项非 D2D 用例在三平台另行运行均通过）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。实现提交 `78461519` 的 Mac CI [44279799427](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44279799427) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1089 通过、768 项平台专用跳过**，其中新假名浊音文件各 **31 项（21 通过、10 项 Windows D2D 跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `0e7cf7cb…`，与本地四份一致。32 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**；与 §14.46 的 31 份相比，按 v4→v5 身份归一后 28 份完全相同、3 份仅身份摘要变化，几何变化 **0** 份。两份干净验收包 `kana_marks` 与 `horizontal_rtl` 退出码均为 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。日志前缀 `build/p05-kana-marks*`。
 
 ## 15. 前期探针清理范围
 
