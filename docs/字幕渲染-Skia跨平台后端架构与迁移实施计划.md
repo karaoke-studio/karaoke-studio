@@ -1849,6 +1849,16 @@ Windows 完整 Skia 组合首轮 **1547 通过、7 跳过、4 失败**：3 项�
 
 Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 **3/3**，源码身份统一为 `5bef7ee659165bfab84241ca4f3adefe5538982022e7481507b9b3e2145773fb`。最终二进制上新增实际 D2D GPU（realization 关闭）**38 通过**（基础12、行锚点12、kern/mark/缺 mark cmap 字体8、反向/no_wipe 6），合同/门禁/预览 **39 通过**，两项通用前沿记录为严格预期失败；加入负字距门禁前、绘制实现相同的上一版二进制（`9e46c8ca…`）串行 D2D 全组合 **192 通过**、同两项严格预期失败（含原 RTL 96+12+4、多码点 LTR 36 等；最终版仅改 native 门禁）。Windows 完整 Skia 组合 **1545 通过、7 跳过**；X11/Wayland 完整组合各 **1068 通过、678 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **63 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **30** 份规范样例 `rtl-cell-layout.json`，30 份 Windows/X11/Wayland 直接比较误差均为 **0**，原 29 份与 §14.43 完全相同。实现提交 `1002aecc` 的 Mac CI [44025881382](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44025881382) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1037 通过、709 项平台专用跳过**，其中 RTL 文件各 **249 项（100 通过、149 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `5bef7ee6…`，与本地四份一致。30 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，原 29 份不变。两份干净验收包 `horizontal_rtl`（含新多码点 RTL 用例）与 `cell_glyphs` 退出码均为 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机、核心行级前沿模型、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-rtl-multi*`。
 
+### 14.45 P05.5 / P05.7 正文重叠单元的唱字层序（2026-11-18）
+
+**本批修复 §14.44 记录的重叠单元前沿差异，并开放负字距多码点 RTL 行；不改变单元时钟、走字前沿、颜色或注音组语义，不关闭 P05。** Claude Opus 5.5 实现与本地验收，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建。
+
+- 两项 strict 预期失败按原样复现（LTR/单码点 RTL，t=900 唱色前沿超出 1px）。重新只读核对 D2D 后确认 **§14.44 的根因表述有误**：现行正文不是一条行级 `wipeEdge`，而是“全部行经 N3 逐字相位排序”（`d2d_backend_render.cpp` 主体绘制段）：每层分别先按倒序画未唱字、再按序画已唱字、最后画正在唱的字，后者用各自委托前沿分割前/后两色。Skia 公共 core 过去按演唱顺序逐格绘制，未唱的后一格会盖住正在唱的前一格落入重叠墨迹的唱色细条，这才是差异来源。
+- `skia/core/prepared_scene` 保持每格原有进度、委托前沿、两段互斥裁剪与颜色，只用 GPU 同口径的 `wipeStart/wipeEnd` 相位分类重排绘制顺序；GPU/Raster 共用同一实现，注音组仍在正文之后按原逻辑绘制。旧 sidecar 无 `body_phase_order_schema=1` 时在选择后端前拒绝。原负字距多码点 RTL 门禁（Python/native）在同一修复下证明后移除；布局快照没有新字段，30 份规范样例与上一批完全一致。
+- 新代表矩阵覆盖四种物理/演唱方向组合、正/负/坍缩字距、`allow_biting`、暂停、零时长、全零时长、角色半透明、no_wipe、legacy/N3、DPR1/1.5，另有 GPU/Raster 乱序重复 seek。曾选用的“独立组合标记 + allow_biting”用例在 D2D 与 Skia 中都因零 advance 负 bearing 使单元宽度极负而整行移出画面（两者一致为空帧），改用多码点单元覆盖 `allow_biting`，不将其视为通过证据。
+
+最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `b7bed443ab1b2b565a73e629285ec9b57a8a2c6b0223955b2dc22b9bebc57572`。串行实际 D2D GPU（realization 关闭）**217 通过、0 预期失败**：原两项已提升为普通回归，新重叠矩阵 19、负字距多码点 RTL 4，其余既有 RTL/多码点/字体/混排对照全部保持通过。Windows 完整 Skia 组合 **1549 通过、7 跳过**（上述串行 D2D 集合单独运行）；X11/Wayland 完整组合各 **1072 通过、701 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **65 通过**（首轮选择表达式误含需要 GPU 构建的 seek 用例，各 2 项因构建不含 GPU 而失败，修正选择后复验）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。30 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.44 完全相同。Mac 双架构与 CI 尚待；多层描边/装饰的分层顺序未在 Skia 正文实现（当前仅实色单层），Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-line-wipe*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
     ready.insert("zero_ruby_no_wipe_schema", 1);
     ready.insert("horizontal_rtl_schema", 1);
     ready.insert("horizontal_rtl_cell_schema", 1);
+    ready.insert("body_phase_order_schema", 1);
     ready.insert("reverse_wipe_schema", 1);
     ready.insert("reverse_overlap_schema", 1);
     ready.insert("resolved_layout_schema", 2);

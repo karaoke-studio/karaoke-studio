@@ -248,12 +248,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         for (const auto& window : source.placementWindows)
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
-        // Overlapping cells expose the core's per-cell wipe clip versus the
-        // GPU's one line-level edge; not validated for RTL multi-codepoint cells.
-        // Layout spacing is the line's (roles keep layout spacing fields).
-        if (cfg.rightToLeft && resolved.letterSpacingPx < 0
-            && std::any_of(source.chars.begin(), source.chars.end(), [](const auto& c) { return c.text.toUcs4().size() > 1; }))
-            throw BackendError("Skia 右至左多码点单元暂不支持负字距");
         for (const auto& cell : source.chars) {
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1
                 && (!features.contains("p05_horizontal_rtl_cells") || !validatedRightToLeftCell(cell.text)))

@@ -59,14 +59,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
-                line_style = style_for_line(source_style, line)
-                _validate_style(line_style)
-                # Overlapping cells expose the core's per-cell wipe clip versus the
-                # GPU's one line-level edge; not validated for RTL multi-codepoint cells.
-                # Layout spacing is the line's (roles keep layout spacing fields).
-                if (source_style.right_to_left and line_style.letter_spacing_px < 0
-                        and any(len(c.text) > 1 for c in line.chars)):
-                    raise ValueError('Skia 右至左多码点单元暂不支持负字距')
+                _validate_style(style_for_line(source_style, line))
             result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font, **plan_kwargs)
         prepared.append(result)
         return result.plan

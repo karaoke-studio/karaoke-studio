@@ -150,6 +150,12 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             return line.wipeRightToLeft ? cell.right-(cell.right-cell.left)*progress
                                     : cell.left+(cell.right-cell.left)*progress;
         };
+        enum class Phase { Before, After, Wiping };
+        struct State { float progress, edge; Phase phase; };
+        std::vector<State> states;
+        states.reserve(line.cells.size());
+        const auto wipeStart = [](const Cell& c) { return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs; };
+        const auto wipeEnd = [](const Cell& c) { return c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs; };
         for (std::size_t index = 0; index < line.cells.size(); ++index) {
             const auto& cell = line.cells[index];
             float progress = rawProgress(cell);
@@ -171,6 +177,18 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                     progress = std::clamp(covered/std::max(cell.right-cell.left, 1.f), 0.f, 1.f);
                 }
             }
+            // The existing GPU's N3 phase classification, used only for paint order.
+            const int start = wipeStart(cell), end = wipeEnd(cell);
+            bool wiping = start < tMs && tMs < end && start != end;
+            if (!wiping && index+1 < line.cells.size()) {
+                const int followingEnd = wipeEnd(line.cells[index+1]);
+                wiping = start < tMs && tMs < followingEnd && start != followingEnd;
+            }
+            states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After)});
+        }
+        const auto drawCell = [&](std::size_t index) {
+            const auto& cell = line.cells[index];
+            const auto [progress, edge, phase] = states[index];
             // Two disjoint clips avoid painting translucent after color over before color.
             if (progress < 1) {
                 canvas.save();
@@ -192,7 +210,16 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 canvas.drawPath(cell.path, paint);
                 canvas.restore();
             }
-        }
+        };
+        // Overlapping cells follow the existing GPU's per-character phase order:
+        // unsung cells last-to-first, then sung cells, then wiping cells on top.
+        // Each cell's own clip and colors are unchanged; only stacking differs.
+        for (std::size_t index = line.cells.size(); index > 0; --index)
+            if (states[index-1].phase == Phase::Before) drawCell(index-1);
+        for (std::size_t index = 0; index < line.cells.size(); ++index)
+            if (states[index].phase == Phase::After) drawCell(index);
+        for (std::size_t index = 0; index < line.cells.size(); ++index)
+            if (states[index].phase == Phase::Wiping) drawCell(index);
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
         canvas.restore();
     }

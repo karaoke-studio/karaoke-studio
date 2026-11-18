@@ -243,7 +243,7 @@ def test_rtl_multicodepoint_cells_are_versioned_whole_cells(binary,project,rever
 
 
 @pytest.mark.parametrize('mutation',['feature','base_feature','schema','schema_bool','schema_string','schema_version',
-                                     'unvalidated_text','negative_spacing'])
+                                     'unvalidated_text'])
 @pytest.mark.parametrize('target',['gpu','raster'])
 def test_native_rtl_cell_contract_rejects_forgeries_and_keeps_scene(binary,project,mutation,target):
     ir=ir_for(binary,rtl_cell_source(project))
@@ -253,8 +253,7 @@ def test_native_rtl_cell_contract_rejects_forgeries_and_keeps_scene(binary,proje
     elif mutation=='schema':del bad['skia_layout']['horizontal_rtl_cell_schema']
     elif mutation.startswith('schema_'):
         bad['skia_layout']['horizontal_rtl_cell_schema']={'schema_bool':True,'schema_string':'1','schema_version':2}[mutation]
-    elif mutation=='unvalidated_text':bad['track']['lines'][0]['chars'][2]['text']='きゃ'
-    else:bad['style']['letter_spacing_px']=-18
+    else:bad['track']['lines'][0]['chars'][2]['text']='きゃ'
     with SkiaRendererProcess(binary,selection=selection(target)) as process:
         configure(process,ir);before,_=collect(process,[750])
         with pytest.raises(NativeRendererError):configure(process,bad)
@@ -262,10 +261,12 @@ def test_native_rtl_cell_contract_rejects_forgeries_and_keeps_scene(binary,proje
     assert np.array_equal(before[0],after[0])
 
 
-def test_rtl_multicodepoint_negative_spacing_stays_gated(binary,project):
-    with pytest.raises(ValueError,match='负字距'):ir_for(binary,rtl_cell_source(project,'negative'))
-    # Single-codepoint RTL keeps its validated negative-gap behavior.
-    assert 'p05_horizontal_rtl' in ir_for(binary,rtl_source(project,'negative_gap'))['required_features']
+def test_rtl_multicodepoint_negative_spacing_is_whole_cell_layout(binary,project):
+    # body_phase_order_schema=1 proves overlapping cells; no extra layout feature.
+    ir=ir_for(binary,rtl_cell_source(project,'negative'))
+    assert ir['skia_layout']['horizontal_rtl_cell_schema']==1
+    cells=ir['skia_layout']['lines'][0]['cells']
+    assert all(a['origin_x']>b['origin_x'] for a,b in zip(cells,cells[1:]))
 
 
 @pytest.mark.parametrize('target',['gpu','raster'])
@@ -280,21 +281,88 @@ def test_role_spacing_never_changes_the_rtl_layout_gate(binary,project,target):
     with SkiaRendererProcess(binary,selection=selection(target)) as process:configure(process,ir)
 
 
-# Existing direction-independent gap, not waived: D2D paints one line-level
-# wipe edge, the Skia core clips each cell by its own front. They differ when a
-# finishing cell's front lies inside an overlapping neighbor's ink (here a lone
-# combining-mark cell whose box has no inset). Reproduces in accepted LTR and
-# single-codepoint RTL; the core paint model is outside this batch.
+# Formerly a strict xfail: a finishing cell's front inside an overlapping
+# neighbor's ink. Fixed by body_phase_order_schema=1 (GPU N3 phase stacking).
 @pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('text_flow',[False,True])
-@pytest.mark.xfail(strict=True,raises=AssertionError,
-    reason='Overlapping-cell front: GPU line-level wipe edge vs Skia per-cell clip; core paint model still open.')
-def test_recorded_existing_overlapping_cell_front_gap(binary,project,text_flow):
+def test_overlapping_cell_front_matches_gpu(binary,project,text_flow):
     track,style=rtl_source(project,'negative_gap')
     line=track.lines[0]
     texts=['A' if text_flow else 'fi','\u0301','字','W']
     track=replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])])
     assert_gpu_parity(binary,track,replace(style,right_to_left=text_flow),1.5,('overlap',text_flow))
+
+
+# body_phase_order_schema=1: the shared core stacks overlapping body cells in
+# the existing GPU's N3 phase order (unsung last-to-first, sung, wiping on top).
+OVERLAP={'mark':['fi','\u0301','字','W'],'cells':['fi','a\u0301','字字','AA']}
+OVERLAP_CASES=[
+    *[('mark',rtl,rev,'none','plain',-18,False,'n3_1074',1.5) for rtl in (False,True) for rev in (False,True)],
+    *[('cells',rtl,rev,'none','plain',-18,False,'legacy',1.5) for rtl in (False,True) for rev in (False,True)],
+    ('mark',False,False,'no_wipe','plain',-18,False,'n3_1074',1.5),
+    ('cells',True,True,'no_wipe','plain',-18,False,'legacy',1.5),
+    ('mark',True,False,'none','pause',-18,False,'n3_1074',1),
+    ('cells',False,True,'none','zero',-18,False,'legacy',1.5),
+    ('cells',True,False,'none','all_zero',-18,False,'n3_1074',1),
+    ('cells',True,False,'none','roles',-18,False,'n3_1074',1.5),
+    ('mark',False,True,'none','roles',-18,False,'legacy',1),
+    ('cells',True,False,'none','plain',3,True,'legacy',1),
+    ('cells',False,True,'none','plain',3,True,'n3_1074',1.5),
+    ('cells',True,False,'none','plain',-100,False,'n3_1074',1.5),
+    ('cells',False,False,'none','plain',3,False,'legacy',1),
+]
+
+
+def overlap_source(project,texts,rtl,reverse,effect,base,spacing,biting):
+    track,style=rtl_source(project,base,reverse=reverse,effect=effect)
+    line=track.lines[0]
+    track=replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,OVERLAP[texts])])])
+    return track,replace(style,right_to_left=rtl,letter_spacing_px=spacing,allow_biting=biting)
+
+
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case',OVERLAP_CASES,ids=lambda c:'-'.join(map(str,c)))
+def test_overlapping_cells_match_actual_gpu(binary,project,case):
+    texts,rtl,reverse,effect,base,spacing,biting,semantics,dpr=case
+    track,style=overlap_source(project,texts,rtl,reverse,effect,base,spacing,biting)
+    assert_gpu_parity(binary,track,replace(style,layout_semantics=semantics),dpr,case)
+
+
+@pytest.mark.parametrize('texts,rtl,reverse',[('cells',True,False),('mark',False,True),('cells',True,True)])
+def test_overlapping_cells_gpu_raster_and_out_of_order_seek(binary,project,texts,rtl,reverse):
+    track,style=overlap_source(project,texts,rtl,reverse,'none','roles',-18,False)
+    ir=ir_for(binary,(track,style),dpr=1.5)
+    order=[2200,601,199,900,599,1401,600,899,1399,200]
+    results=[]
+    for target in ('gpu','raster'):
+        with SkiaRendererProcess(binary,selection=selection(target)) as process:
+            configure(process,ir)
+            ordered,_=collect(process,sorted(order))
+            shuffled,_=collect(process,order,generation=2)
+        by_time=dict(zip(sorted(order),ordered))
+        assert all(np.array_equal(by_time[t],f) for t,f in zip(order,shuffled))
+        results.append(ordered)
+    for a,b in zip(*results):
+        def premult(p):
+            p=p.astype(float);p[...,:3]*=p[...,3:]/255
+            return p
+        delta=abs(premult(a)-premult(b))
+        assert delta.mean()<.15 and np.mean(delta.max(axis=-1)>16)<.003
+
+
+@pytest.mark.parametrize('mutation',['schema','bool','version'])
+def test_old_body_phase_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
+    process=SkiaRendererProcess(binary,selection=selection('raster'))
+    try:ready=NativeRendererProcess.start(process)
+    finally:process.abort(reason='body phase handshake fixture')
+    if mutation=='schema':del ready['body_phase_order_schema']
+    else:ready['body_phase_order_schema']=True if mutation=='bool' else 2
+    sent=[]
+    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
+    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
+    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
+    with pytest.raises(NativeRendererError,match='层序'):SkiaRendererProcess(binary).start()
+    assert not sent
 
 
 @pytest.mark.parametrize('mutation',['schema','feature','bool','version'])
@@ -314,7 +382,7 @@ def test_old_rtl_cell_sidecar_rejected_before_selection(binary,monkeypatch,mutat
 
 
 @pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('kind',['cells','spaces','roles'])
+@pytest.mark.parametrize('kind',['cells','spaces','roles','negative'])
 @pytest.mark.parametrize('semantics',['legacy','n3_1074'])
 @pytest.mark.parametrize('dpr',[1,1.5])
 def test_rtl_multicodepoint_cells_match_actual_gpu(binary,project,kind,semantics,dpr):
