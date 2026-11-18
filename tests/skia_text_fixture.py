@@ -97,3 +97,65 @@ def make_colr_font(path: Path):
     font['CPAL'] = buildCPAL([[(1.0, 0.0, 0.0, 1.0)]])
     font.save(path)
     return path
+
+
+# Japanese kana fixture: fullwidth letters, small kana, precomposed voiced and
+# semi-voiced forms, zero-advance combining U+3099/U+309A with a negative left
+# bearing, spacing voiced marks and representative punctuation.
+KANA_CODEPOINTS = {
+    'kanaL': (0x3042, 0x304B, 0x304D, 0x306F, 0x3084, 0x3046, 0x30AB, 0x30AD, 0x30CF, 0x30A6),
+    'kanaS': (0x3041, 0x3083, 0x3085, 0x3087, 0x3063, 0x3096, 0x30A1, 0x30E3, 0x30C3),
+    'kanaV': (0x304C, 0x304E, 0x30AC),
+    'kanaP': (0x3071, 0x30D1),
+    'dakutenc': (0x3099,), 'handakutenc': (0x309A,), 'dakutens': (0x309B,), 'handakutens': (0x309C,),
+    'comma': (0x3001,), 'stop': (0x3002,), 'open': (0x300C, 0x300E), 'close': (0x300D, 0x300F),
+    'middot': (0x30FB,), 'prolong': (0x30FC,), 'wave': (0x301C,), 'excl': (0xFF01, 0xFF1F),
+    'idsp': (0x3000,),
+}
+
+
+def make_kana_font(path: Path, *, gpos=True, family='LinK P05 Kana', ps_name='LinK-P05-Kana'):
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
+    boxes = {'.notdef': (600, [(50, 0, 550, 700)]), 'space': (250, []), 'A': (600, [(50, 0, 550, 700)]),
+             'kanaL': (1000, [(100, 0, 900, 800)]), 'kanaS': (1000, [(250, 0, 750, 500)]),
+             'kanaV': (1000, [(100, 0, 820, 800), (840, 760, 960, 900)]),
+             'kanaP': (1000, [(100, 0, 820, 800), (860, 780, 960, 880)]),
+             'dakutenc': (0, [(-200, 760, -60, 900)]), 'handakutenc': (0, [(-180, 780, -80, 880)]),
+             'dakutens': (1000, [(600, 600, 900, 900)]), 'handakutens': (1000, [(650, 650, 850, 850)]),
+             'comma': (1000, [(100, 0, 300, 200)]), 'stop': (1000, [(80, 0, 320, 240)]),
+             'open': (1000, [(550, 300, 900, 900)]), 'close': (1000, [(100, -100, 450, 500)]),
+             'middot': (1000, [(400, 300, 600, 500)]), 'prolong': (1000, [(100, 350, 900, 450)]),
+             'wave': (1000, [(100, 300, 900, 500)]), 'excl': (1000, [(420, 0, 580, 800)]), 'idsp': (1000, [])}
+    glyphs, metrics = {}, {}
+    for name, (advance, rects) in boxes.items():
+        pen = TTGlyphPen(None)
+        for x0, y0, x1, y1 in rects:
+            pen.moveTo((x0, y0)); pen.lineTo((x1, y0)); pen.lineTo((x1, y1)); pen.lineTo((x0, y1)); pen.closePath()
+        glyphs[name] = pen.glyph()
+        metrics[name] = (advance, min((r[0] for r in rects), default=0))
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder(list(boxes))
+    cmap = {32: 'space', 65: 'A'}
+    for name, codepoints in KANA_CODEPOINTS.items():
+        cmap.update({c: name for c in codepoints})
+    fb.setupCharacterMap(cmap)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=880, descent=-120)
+    fb.setupNameTable({'familyName': family, 'styleName': 'Regular', 'uniqueFontIdentifier': family,
+                       'fullName': family, 'psName': ps_name, 'version': 'Version 1.0'})
+    fb.setupOS2(sTypoAscender=880, sTypoDescender=-120, usWinAscent=880, usWinDescent=120, usWeightClass=400)
+    fb.setupPost()
+    fb.setupMaxp()
+    if gpos:
+        # Uncomposable base+mark (e.g. U+3046 U+3099, no U+3094 glyph) is placed by GPOS.
+        addOpenTypeFeaturesFromString(fb.font, '''
+            markClass [dakutenc handakutenc] <anchor 0 0> @voice;
+            feature mark { pos base [kanaL kanaS] <anchor 950 0> mark @voice; } mark;
+        ''')
+    fb.font['head'].created = fb.font['head'].modified = 3400000000
+    fb.font.recalcTimestamp = False
+    fb.font.save(path)
+    return path

@@ -25,8 +25,23 @@ _RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0xac), (0xae, 0xff), (0x300, 0x34e), (0
                     (0x4e00, 0x9fff), (0xac00, 0xd7a3))
 
 
+# horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
+# nominal glyphs. Combining U+3099/U+309A stay rejected: the existing GPU
+# neither composes them nor applies fallback mark positioning.
+_RTL_KANA_RANGES = ((0x3000, 0x3002), (0x300c, 0x300f), (0x301c, 0x301c), (0x3041, 0x3096), (0x309b, 0x309c),
+                    (0x30a1, 0x30fc), (0xff01, 0xff01), (0xff1f, 0xff1f))
+
+
+def _in(ranges, c):
+    return any(low <= ord(c) <= high for low, high in ranges)
+
+
 def _validated_rtl_cell(text):
-    return all(any(low <= ord(c) <= high for low, high in _RTL_CELL_RANGES) for c in text)
+    return all(_in(_RTL_CELL_RANGES, c) or _in(_RTL_KANA_RANGES, c) for c in text)
+
+
+def _rtl_kana_cell(text):
+    return len(text) > 1 and any(not _in(_RTL_CELL_RANGES, c) and _in(_RTL_KANA_RANGES, c) for c in text)
 
 
 def _validate_style(style):
@@ -94,6 +109,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if any(len(char.text) > 1 for item in plan.lines for char in item.line.chars):
             ir['required_features'].append('p05_horizontal_rtl_cells')
             ir['skia_layout']['horizontal_rtl_cell_schema'] = 1
+        if any(_rtl_kana_cell(char.text) for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_kana_cells')
+            ir['skia_layout']['horizontal_rtl_kana_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         sources, indices = lower_sources(prepared[0])

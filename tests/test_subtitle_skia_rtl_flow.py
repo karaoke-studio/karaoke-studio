@@ -15,6 +15,9 @@ from test_subtitle_skia_protocol import collect, selection
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
 from test_subtitle_skia_grid import grid
+from skia_text_fixture import make_kana_font
+from PyQt6.QtGui import QFontDatabase
+from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, NativeRendererError
@@ -209,7 +212,7 @@ def rtl_cell_source(project,kind='cells',*,reverse=False,effect='none'):
     return replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])]),style
 
 
-@pytest.mark.parametrize('text',['きゃ','שׁל','سل','A\u200dA','A\u200cA','A\ufe0f','\U0001F469\U0001F4BB',
+@pytest.mark.parametrize('text',['か\u3099','は\u309a','ゝあ','A\uff5e','שׁל','سل','A\u200dA','A\u200cA','A\ufe0f','\U0001F469\U0001F4BB',
                                  'a\u034f','a\u035cb','a\u00adb','\u0103a'])
 def test_unvalidated_rtl_multicodepoint_cells_stay_gated(binary,project,text):
     track,style=rtl_source(project)
@@ -363,6 +366,159 @@ def test_old_body_phase_sidecar_rejected_before_selection(binary,monkeypatch,mut
     monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
     with pytest.raises(NativeRendererError,match='层序'):SkiaRendererProcess(binary).start()
     assert not sent
+
+
+# horizontal_rtl_kana_schema=1: kana/Japanese punctuation cells drawn from
+# nominal glyphs. Combining U+3099/U+309A stay gated (see the LTR records below).
+KANA={'kana':['きゃ','がっ','パァ','キャ'],'punct':['「あ」','、。','ー！','〜・'],
+      'spacing':['か゛','は゜','ぁ\u3000','ッ？']}
+
+
+@pytest.fixture
+def kana(tmp_path,application,request):
+    handle=QFontDatabase.addApplicationFont(str(make_kana_font(tmp_path/'kana.ttf',gpos=getattr(request,'param',True))))
+    assert handle>=0
+    clear_font_weight_cache()
+    try:yield QFontDatabase.applicationFontFamilies(handle)[0]
+    finally:
+        QFontDatabase.removeApplicationFont(handle)
+        clear_font_weight_cache()
+
+
+def kana_source(project,family,texts='kana',kind='plain',*,reverse=False,effect='none',rtl=True):
+    track,style=rtl_source(project,kind,reverse=reverse,effect=effect)
+    line=track.lines[0]
+    chars=KANA[texts] if isinstance(texts,str) else texts
+    track=replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,chars)])])
+    style=replace(style,font_family=family,right_to_left=rtl)
+    if kind=='roles':
+        style=replace(style,custom_style_schemes={'lead':replace(style.custom_style_schemes['lead'],font_family=family)})
+    return track,style
+
+
+@pytest.mark.parametrize('reverse',[False,True])
+def test_rtl_kana_cells_are_versioned_whole_cells(binary,project,kana,reverse,tmp_path):
+    track,style=kana_source(project,kana,'punct',reverse=reverse)
+    ir=ir_for(binary,(track,style))
+    ltr=ir_for(binary,(track,replace(style,right_to_left=False)))
+    cells,plain=ir['skia_layout']['lines'][0]['cells'],ltr['skia_layout']['lines'][0]['cells']
+    assert {'p05_horizontal_rtl_cells','p05_horizontal_rtl_kana_cells'}<=set(ir['required_features'])
+    assert ir['skia_layout']['horizontal_rtl_kana_schema']==1
+    assert 'p05_horizontal_rtl_kana_cells' not in ltr['required_features']
+    assert all(a['origin_x']>b['origin_x'] for a,b in zip(cells,cells[1:]))
+    # Whole cells, nominal glyphs and clocks are exactly the LTR ones.
+    assert [c['metrics'] for c in cells]==[c['metrics'] for c in plain]
+    assert [len(c['metrics']['glyphs']) for c in cells]==[3,2,2,2]
+    assert ir['track']['lines'][0]['resolved_intervals']==ltr['track']['lines'][0]['resolved_intervals']
+    latin=ir_for(binary,rtl_cell_source(project,reverse=reverse))
+    assert 'p05_horizontal_rtl_kana_cells' not in latin['required_features']
+    assert 'horizontal_rtl_kana_schema' not in latin['skia_layout']
+    if reverse:assert [c['clock_index'] for c in cells]==[3,2,1,0]
+    else:
+        (tmp_path/'rtl-kana-layout.json').write_text(json.dumps({
+            'features':ir['required_features'],'schema':ir['skia_layout']['horizontal_rtl_kana_schema'],
+            'lines':ir['skia_layout']['lines'],'intervals':ir['track']['lines'][0]['resolved_intervals']},
+            sort_keys=True),encoding='utf-8')
+
+
+@pytest.mark.parametrize('mutation',['feature','cells_feature','schema','schema_bool','schema_string','schema_version',
+                                     'combining_text'])
+@pytest.mark.parametrize('target',['gpu','raster'])
+def test_native_rtl_kana_contract_rejects_forgeries_and_keeps_scene(binary,project,kana,mutation,target):
+    ir=ir_for(binary,kana_source(project,kana))
+    bad=copy.deepcopy(ir)
+    if mutation=='feature':bad['required_features'].remove('p05_horizontal_rtl_kana_cells')
+    elif mutation=='cells_feature':bad['required_features'].remove('p05_horizontal_rtl_cells')
+    elif mutation=='schema':del bad['skia_layout']['horizontal_rtl_kana_schema']
+    elif mutation.startswith('schema_'):
+        bad['skia_layout']['horizontal_rtl_kana_schema']={'schema_bool':True,'schema_string':'1','schema_version':2}[mutation]
+    else:bad['track']['lines'][0]['chars'][0]['text']='か\u3099'
+    with SkiaRendererProcess(binary,selection=selection(target)) as process:
+        configure(process,ir);before,_=collect(process,[750])
+        with pytest.raises(NativeRendererError):configure(process,bad)
+        after,_=collect(process,[750],generation=2)
+    assert np.array_equal(before[0],after[0])
+
+
+@pytest.mark.parametrize('mutation',['schema','feature','bool','version'])
+def test_old_rtl_kana_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
+    process=SkiaRendererProcess(binary,selection=selection('raster'))
+    try:ready=NativeRendererProcess.start(process)
+    finally:process.abort(reason='RTL kana handshake fixture')
+    if mutation=='schema':del ready['horizontal_rtl_kana_schema']
+    elif mutation=='feature':ready['profiles'].remove('p05_horizontal_rtl_kana_cells')
+    else:ready['horizontal_rtl_kana_schema']=True if mutation=='bool' else 2
+    sent=[]
+    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
+    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
+    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
+    with pytest.raises(NativeRendererError,match='假名'):SkiaRendererProcess(binary).start()
+    assert not sent
+
+
+KANA_CASES=[
+    *[(t,rev,'none','plain',sem,dpr) for t in ('kana','punct','spacing')
+      for rev,sem,dpr in ((False,'n3_1074',1.5),(True,'legacy',1),(False,'legacy',1),(True,'n3_1074',1.5))],
+    ('kana',False,'no_wipe','plain','legacy',1.5),('kana',True,'no_wipe','plain','n3_1074',1),
+    ('kana',False,'none','negative_gap','n3_1074',1.5),('punct',True,'none','negative_gap','legacy',1.5),
+    ('kana',True,'none','roles','n3_1074',1.5),('spacing',False,'none','roles','legacy',1),
+    ('punct',False,'none','pause','n3_1074',1.5),('spacing',True,'none','zero','legacy',1.5),
+]
+
+
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case',KANA_CASES,ids=lambda c:'-'.join(map(str,c)))
+def test_rtl_kana_cells_match_actual_gpu(binary,project,kana,case):
+    texts,reverse,effect,kind,semantics,dpr=case
+    track,style=kana_source(project,kana,texts,kind,reverse=reverse,effect=effect)
+    assert_gpu_parity(binary,track,replace(style,layout_semantics=semantics),dpr,case)
+
+
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('alignment',['left','center','right'])
+def test_rtl_kana_row_anchors_match_actual_gpu(binary,project,kana,alignment):
+    track,style=kana_source(project,kana,'punct',reverse=alignment=='right')
+    assert_gpu_parity(binary,track,replace(style,layout_semantics='n3_1074'),1.5,('anchor',alignment),alignment=alignment)
+
+
+# Existing direction-independent kana gap, not waived: the GPU keeps a
+# combining voicing mark as base + mark (no canonical composition, no fallback
+# mark positioning); HarfBuzz composes か+U+3099 and positions marks without
+# GPOS. Reproduces in accepted LTR; RTL keeps U+3099/U+309A gated.
+@pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kana,texts',[(True,['か\u3099','は\u309a','あ','き']),
+                                       (False,['う\u3099','あ','き','う'])],indirect=['kana'],ids=['compose','fallback'])
+@pytest.mark.xfail(strict=True,raises=AssertionError,
+    reason='GPU draws combining kana voicing marks uncomposed and without fallback positioning; Skia HB composes/positions.')
+def test_recorded_existing_ltr_kana_voicing_mark_gap(binary,project,kana,texts):
+    track,style=kana_source(project,kana,texts,rtl=False)
+    assert_gpu_parity(binary,track,replace(style,layout_semantics='n3_1074'),1.5,('voicing',texts))
+
+
+def test_rtl_kana_gpu_raster_and_out_of_order_seek(binary,project,kana):
+    track,style=kana_source(project,kana,'kana','roles',reverse=True)
+    ir=ir_for(binary,(track,style),dpr=1.5)
+    order=[2200,601,199,900,599,1401,600,899,1399,200]
+    results=[]
+    for target in ('gpu','raster'):
+        with SkiaRendererProcess(binary,selection=selection(target)) as process:
+            configure(process,ir)
+            ordered,_=collect(process,sorted(order))
+            shuffled,_=collect(process,order,generation=2)
+        by_time=dict(zip(sorted(order),ordered))
+        assert all(np.array_equal(by_time[t],f) for t,f in zip(order,shuffled))
+        results.append(ordered)
+    for a,b in zip(*results):
+        def premult(p):
+            p=p.astype(float);p[...,:3]*=p[...,3:]/255
+            return p
+        delta=abs(premult(a)-premult(b))
+        assert delta.mean()<.15 and np.mean(delta.max(axis=-1)>16)<.003
+
+
+@pytest.mark.parametrize('gpu,missing_loader',[(True,False),(False,False),(True,True)])
+def test_real_rtl_kana_preview(binary,project,kana,monkeypatch,tmp_path,gpu,missing_loader):
+    run_preview(binary,monkeypatch,tmp_path,kana_source(project,kana,'punct','roles',reverse=True),gpu,missing_loader)
 
 
 @pytest.mark.parametrize('mutation',['schema','feature','bool','version'])

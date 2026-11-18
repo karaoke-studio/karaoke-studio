@@ -104,6 +104,10 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                     or ready['horizontal_rtl_cell_schema'] != 1
                     or 'p05_horizontal_rtl_cells' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持右至左多码点单元，请重新构建')
+            if (type(ready.get('horizontal_rtl_kana_schema')) is not int
+                    or ready['horizontal_rtl_kana_schema'] != 1
+                    or 'p05_horizontal_rtl_kana_cells' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持右至左假名单元，请重新构建')
             # Overlapping cells are stacked in the existing GPU's N3 phase order.
             if (type(ready.get('body_phase_order_schema')) is not int
                     or ready['body_phase_order_schema'] != 1):

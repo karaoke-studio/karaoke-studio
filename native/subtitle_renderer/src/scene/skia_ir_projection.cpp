@@ -21,14 +21,18 @@ int integer(const QJsonObject& o, const char* key, int minimum, int maximum) {
 }
 // horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
 // placement is GPU-validated. Mirrors engine/render/skia_ir.py exactly.
-bool validatedRightToLeftCell(const QString& text) {
-    for (const auto c : text.toUcs4()) {
-        const bool valid = (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff && c != 0xad)
-            || (c >= 0x300 && c <= 0x36f && c != 0x34f && (c < 0x35c || c > 0x362))
-            || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3);
-        if (!valid) return false;
-    }
-    return true;
+bool validatedRightToLeftScalar(char32_t c) {
+    return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff && c != 0xad)
+        || (c >= 0x300 && c <= 0x36f && c != 0x34f && (c < 0x35c || c > 0x362))
+        || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3);
+}
+// horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
+// nominal glyphs. Combining U+3099/U+309A are excluded (the GPU neither
+// composes them nor applies fallback mark positioning).
+bool validatedRightToLeftKana(char32_t c) {
+    return c == 0x3000 || c == 0x3001 || c == 0x3002 || (c >= 0x300c && c <= 0x300f) || c == 0x301c
+        || (c >= 0x3041 && c <= 0x3096) || c == 0x309b || c == 0x309c || (c >= 0x30a1 && c <= 0x30fc)
+        || c == 0xff01 || c == 0xff1f;
 }
 void validateEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
@@ -44,6 +48,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
             && feature.toString() != "p07_zero_ruby_no_wipe"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
+            && feature.toString() != "p05_horizontal_rtl_kana_cells"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
     }
@@ -78,6 +83,10 @@ void validateEnvelope(const QJsonObject& ir) {
         && (ir.value("skia_layout").toObject().value("horizontal_rtl_cell_schema").toDouble(-1) != 1
             || !ir.value("required_features").toArray().contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左多码点单元布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_horizontal_rtl_kana_cells")
+        && (ir.value("skia_layout").toObject().value("horizontal_rtl_kana_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p05_horizontal_rtl_cells")))
+        throw BackendError("Skia 右至左假名单元布局版本无效");
     if (ir.value("style").toObject().contains("right_to_left")
         && !ir.value("style").toObject().value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");
@@ -249,9 +258,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         for (const auto& cell : source.chars) {
-            if (cfg.rightToLeft && cell.text.toUcs4().size() > 1
-                && (!features.contains("p05_horizontal_rtl_cells") || !validatedRightToLeftCell(cell.text)))
-                throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
+            if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
+                bool valid = features.contains("p05_horizontal_rtl_cells");
+                for (const auto c : cell.text.toUcs4())
+                    valid = valid && (validatedRightToLeftScalar(c)
+                        || (validatedRightToLeftKana(c) && features.contains("p05_horizontal_rtl_kana_cells")));
+                if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
+            }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (cell.vectorGlyph || cell.bitmapGuide
                 || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))

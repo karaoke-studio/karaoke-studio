@@ -454,6 +454,8 @@ git submodule status
    正文右至左单元排列子集见 §14.42：`p05_horizontal_rtl` / `horizontal_rtl_schema=1`，
    多码点单元见 §14.44：`p05_horizontal_rtl_cells` / `horizontal_rtl_cell_schema=1`，仅接受 Python/native 同表的已验证码位，
    上下注音与竖排继续明确拒绝；负字距多码点 RTL 行已由 §14.45 层序修复验证后开放。
+   假名/日文标点单元见 §14.46：`p05_horizontal_rtl_kana_cells` / `horizontal_rtl_kana_schema=1`，仅 nominal 字形子集；
+   组合浊点/半浊点 U+3099/U+309A 在 LTR 也与 GPU 不同（GPU 不合成、无回退定位），RTL 继续拒绝并保留严格预期失败。
    `skia_geometry` 按整单元框移位，不镜像字形；逻辑单元、字体塑形方向与时间归属不变。
    物理走字方向为 `right_to_left XOR wipe_reverse`，不能用反转字符串或重新分配时钟实现。
    重叠正文单元见 §14.45：D2D 按 N3 逐字相位分层（未唱倒序、已唱、正在唱最上），`body_phase_order_schema=1`；

@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
     ready.insert("zero_ruby_no_wipe_schema", 1);
     ready.insert("horizontal_rtl_schema", 1);
     ready.insert("horizontal_rtl_cell_schema", 1);
+    ready.insert("horizontal_rtl_kana_schema", 1);
     ready.insert("body_phase_order_schema", 1);
     ready.insert("reverse_wipe_schema", 1);
     ready.insert("reverse_overlap_schema", 1);
@@ -49,6 +50,7 @@ int main(int argc, char** argv) {
     profiles.append("p07_zero_ruby_no_wipe");
     profiles.append("p05_horizontal_rtl");
     profiles.append("p05_horizontal_rtl_cells");
+    profiles.append("p05_horizontal_rtl_kana_cells");
     profiles.append("p05_reverse_wipe");
     profiles.append("p05_reverse_overlap");
     ready.insert("ruby_unit_schema", 1);
