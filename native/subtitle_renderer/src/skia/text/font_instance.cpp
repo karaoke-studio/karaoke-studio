@@ -69,7 +69,7 @@ FontInstance::FontInstance(const FontSpec& spec) {
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
-    key << "skia-m150-hb-ft-v5:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
+    key << "skia-m150-hb-ft-v6:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
         << ':' << std::bit_cast<std::uint32_t>(spec.scaleX) << ':' << spec.syntheticBold << ':' << spec.syntheticItalic;
     for (const auto& axis : coordinates) key << ':' << axis.axis << '=' << std::bit_cast<std::uint32_t>(axis.value);
     identity_ = key.str();
@@ -88,6 +88,27 @@ FontInstance::FontInstance(const FontSpec& spec) {
     std::vector<hb_variation_t> variations;
     for (const auto& axis : coordinates) variations.push_back({axis.axis, axis.value});
     hb_font_set_variations(shapingFace_.get(), variations.data(), unsigned(variations.size()));
+    // vertical_metrics_schema=1: line-box ascent/descent follow the existing
+    // GPU's font metrics, i.e. OS/2 typo when USE_TYPO_METRICS is set and OS/2
+    // win otherwise (never hhea). A face without a usable OS/2 keeps Skia's.
+    auto os2 = std::shared_ptr<hb_blob_t>(hb_face_reference_table(hbFace.get(), HB_TAG('O','S','/','2')), hb_blob_destroy);
+    unsigned length = 0;
+    const auto* table = reinterpret_cast<const std::uint8_t*>(hb_blob_get_data(os2.get(), &length));
+    if (table && length >= 78) {
+        const bool useTypo = ((table[62] << 8) | table[63]) & 0x80;
+        hb_position_t up = 0, down = 0;
+        const bool found = useTypo
+            ? hb_ot_metrics_get_position(shapingFace_.get(), HB_OT_METRICS_TAG_HORIZONTAL_ASCENDER, &up)
+                && hb_ot_metrics_get_position(shapingFace_.get(), HB_OT_METRICS_TAG_HORIZONTAL_DESCENDER, &down)
+            : hb_ot_metrics_get_position(shapingFace_.get(), HB_OT_METRICS_TAG_HORIZONTAL_CLIPPING_ASCENT, &up)
+                && hb_ot_metrics_get_position(shapingFace_.get(), HB_OT_METRICS_TAG_HORIZONTAL_CLIPPING_DESCENT, &down);
+        const double pixels = double(spec.size) / (double(em) * 64);
+        const double ascent = std::abs(double(up)) * pixels, descent = std::abs(double(down)) * pixels;
+        if (found && std::isfinite(ascent) && std::isfinite(descent) && ascent + descent > 0) {
+            lineAscent_ = float(ascent);
+            lineDescent_ = float(descent);
+        }
+    }
 }
 FontInstance::~FontInstance() = default;
 GlyphGeometry FontInstance::glyphGeometry(SkGlyphID glyph) const {
@@ -103,8 +124,14 @@ GlyphGeometry FontInstance::glyphGeometry(SkGlyphID glyph) const {
     const bool color = exact && exact->requiresColorPaint;
     return {color ? std::optional<SkPath>{} : font_.getPath(glyph), advance, bounds.left(), advance - bounds.right(), color};
 }
-float FontInstance::ascent() const { SkFontMetrics m; font_.getMetrics(&m); return -m.fAscent; }
-float FontInstance::descent() const { SkFontMetrics m; font_.getMetrics(&m); return m.fDescent; }
+float FontInstance::ascent() const {
+    if (lineAscent_) return *lineAscent_;
+    SkFontMetrics m; font_.getMetrics(&m); return -m.fAscent;
+}
+float FontInstance::descent() const {
+    if (lineDescent_) return *lineDescent_;
+    SkFontMetrics m; font_.getMetrics(&m); return m.fDescent;
+}
 float FontInstance::leading() const { SkFontMetrics m; font_.getMetrics(&m); return m.fLeading; }
 float FontInstance::capHeight() const { SkFontMetrics m; font_.getMetrics(&m); return m.fCapHeight; }
 }
