@@ -61,7 +61,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
 @pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'latin', 'multi', 'role', 'ruby', 'rtl',
                                     'dual', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
-    texts = {'small_kana': 'ゃ', 'rotated': 'ー', 'corner': '、', 'latin': 'A', 'multi': '字字'}
+    texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'latin': 'A', 'multi': '字字'}
     track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
     line = track.lines[0]
     if change in texts:
@@ -90,7 +90,7 @@ def test_native_vertical_contract_rejects_forgeries_and_keeps_scene(binary, proj
     elif mutation == 'flow': bad['skia_layout']['lines'][0]['text_flow'] = 'ltr'
     elif mutation == 'top_missing': del cell['wipe_top']
     elif mutation == 'box_inverted': cell['wipe_top'], cell['wipe_bottom'] = cell['wipe_bottom'], cell['wipe_top']
-    elif mutation == 'rotated_text': bad['track']['lines'][0]['chars'][1]['text'] = 'ー'
+    elif mutation == 'rotated_text': bad['track']['lines'][0]['chars'][1]['text'] = '→'
     else:
         bad['style']['vertical'] = False
         del bad['skia_layout']['lines'][0]['text_flow']
@@ -120,8 +120,12 @@ def test_old_vertical_sidecar_rejected_before_selection(binary, monkeypatch, mut
 
 
 @pytest.mark.parametrize('reverse', [False, True])
-def test_vertical_gpu_raster_and_out_of_order_seek(binary, project, reverse):
-    ir = ir_for(binary, vertical_source(project, reverse=reverse), dpr=1.5)
+@pytest.mark.parametrize('japanese', [False, True])
+def test_vertical_gpu_raster_and_out_of_order_seek(binary, project, kana, reverse, japanese):
+    track, style = vertical_source(project, reverse=reverse, texts=['ゃ', '、', 'ー', '」'] if japanese else TEXTS)
+    if japanese:
+        style = replace(style, font_family=kana)
+    ir = ir_for(binary, (track, style), dpr=1.5)
     order = [2200, 601, 199, 900, 599, 1401, 600, 899, 1399, 200]
     results = []
     for target in ('gpu', 'raster'):
@@ -173,3 +177,57 @@ def test_real_vertical_preview(binary, project, monkeypatch, tmp_path, gpu):
 @pytest.mark.parametrize('gpu', [True, False])
 def test_real_vertical_mp4(binary, project, monkeypatch, tmp_path, gpu):
     run_mp4(binary, monkeypatch, tmp_path, vertical_source(project, reverse=True), gpu, False)
+
+
+def test_vertical_japanese_glyphs_keep_cell_geometry(binary, project, kana, tmp_path):
+    track, style = vertical_source(project, texts=['ゃ', '、', 'ー', '」'])
+    style = replace(style, font_family=kana)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    line = ir['skia_layout']['lines'][0]
+    cells = line['cells']
+    assert 'p05_vertical_japanese_glyphs' in ir['required_features']
+    assert ir['skia_layout']['vertical_japanese_glyph_schema'] == 1
+    assert [c['wipe_bottom'] - c['wipe_top'] for c in cells] == pytest.approx([50] * 4)
+    assert [c['baseline_y'] - c['wipe_top'] for c in cells] == pytest.approx([39, 30, 44, 44])
+    assert not any('rotation_pivot_x' in c for c in cells[:2])
+    assert cells[2]['rotation_pivot_x'] == cells[3]['rotation_pivot_x']
+    (tmp_path / 'vertical-japanese-layout.json').write_text(json.dumps({
+        'schema': ir['skia_layout']['vertical_japanese_glyph_schema'],
+        'line': line,
+        'intervals': ir['track']['lines'][0]['resolved_intervals'],
+    }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('mutation', ['feature', 'schema', 'missing_pivot', 'unexpected_pivot', 'pivot_type'])
+def test_invalid_vertical_japanese_transforms_keep_previous_scene(binary, project, kana, mutation):
+    track, style = vertical_source(project, texts=['ゃ', '、', 'ー', '」'])
+    ir = ir_for(binary, (track, replace(style, font_family=kana)))
+    bad = copy.deepcopy(ir)
+    cells = bad['skia_layout']['lines'][0]['cells']
+    if mutation == 'feature':
+        bad['required_features'].remove('p05_vertical_japanese_glyphs')
+    elif mutation == 'schema':
+        bad['skia_layout']['vertical_japanese_glyph_schema'] = True
+    elif mutation == 'missing_pivot':
+        del cells[2]['rotation_pivot_x']
+    elif mutation == 'unexpected_pivot':
+        cells[1]['rotation_pivot_x'] = cells[2]['rotation_pivot_x']
+    else:
+        cells[2]['rotation_pivot_x'] = '500'
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [750], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@GPU
+@pytest.mark.parametrize('texts', [('ゃ', '、', 'ー', '」'), ('ャ', '。', '〜', '「'), ('っ', 'ァ', '『', '』')])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_japanese_glyphs_match_actual_gpu(binary, project, kana, texts, reverse):
+    track, style = vertical_source(project, reverse=reverse, texts=texts)
+    semantics, dpr = ('legacy', 1) if reverse else ('n3_1074', 1.5)
+    assert_gpu_parity(binary, track, replace(style, font_family=kana, layout_semantics=semantics),
+                      dpr, (texts, reverse))

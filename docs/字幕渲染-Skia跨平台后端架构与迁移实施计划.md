@@ -1908,6 +1908,12 @@ Python 按规范主字体行框堆叠等高单元，保留共享布局计划的�
 
 Windows 相关回归 **303 通过**，含 **17 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算）和 G5 预览、短 MP4 的 GPU/Raster 产品验证。Linux llvmpipe 的 X11 和 Wayland 竖排专项各 **39 通过、17 项 Windows 专用跳过**，Windows/Linux 独立 Raster 各 **27 通过**。四份 native 目标干净重建，CTest 各 **3/3**，源码指纹 `3e9257a1705d3e64de6bd98043bcd632fd6ac3ea289df4e626c2499d7158b9a3`。新增 `vertical-solid-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。竖排专项和该样例已纳入下一次阶段 Mac CI。证据前缀 `build/p05-vertical*`。
 
+### 14.51 P05.7 竖排小假名与日文标点（2026-11-18）
+
+在单列实色正文中，小假名按 D2D 的 10% 单元框比例向右上移，顿号和句号按 28% 移动。日文引号、长音符和波浪号绕原单元中心顺时针旋转 90°。这些变换只作用于字形，固定的单元框、时钟和裁剪轴继续使用 §14.50 的几何。原始文本不替换为竖排兼容字符。变换字形使用 `vertical_japanese_glyph_schema=1`；native 校验版本、源字符和旋转轴，GPU/Raster 共用准备后的轮廓。
+
+Windows 竖排专项 **70 通过**，含新增 **6 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算），覆盖正反向、legacy/N3、DPR 1/1.5。X11/Wayland 各 **47 通过、23 项 Windows 专用跳过**（llvmpipe）；Windows/Linux 独立 Raster 各 **31 通过**。四份 native 均干净重建，CTest 各 **3/3**，源码指纹 `8e0c8c79561cd69cf47361b5ea9c2a93f7f0a2d81c788060006f2add17277ccc`。两份竖排规范样例在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**。新样例 `vertical-japanese-layout.json` 随专项纳入下一次阶段 Mac CI。证据前缀 `build/p05-vertical-japanese*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

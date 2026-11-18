@@ -125,6 +125,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('vertical_solid_schema')) is not int or ready['vertical_solid_schema'] != 1
                     or 'p05_vertical_solid' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持竖排实色正文，请重新构建')
+            if (type(ready.get('vertical_japanese_glyph_schema')) is not int or ready['vertical_japanese_glyph_schema'] != 1
+                    or 'p05_vertical_japanese_glyphs' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持竖排日文标点和小假名，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

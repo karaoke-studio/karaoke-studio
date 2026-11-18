@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.engine.layout.display.section_edges import sect
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
 from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
-    validate_vertical_source, validate_vertical_style, vertical_cells)
+    validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
@@ -123,6 +123,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = 1
+        if vertical_japanese_glyphs(track):
+            ir['required_features'].append('p05_vertical_japanese_glyphs')
+            ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
         ir['skia_layout']['horizontal_rtl_schema'] = 1

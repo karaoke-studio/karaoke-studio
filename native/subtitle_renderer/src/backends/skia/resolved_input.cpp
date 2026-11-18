@@ -6,20 +6,56 @@
 #include "../render_backend.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../scene/skia_text_projection.h"
+#include "include/core/SkMatrix.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
 #include <algorithm>
+#include <string_view>
 
 namespace krok::subtitle::native {
 namespace {
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
+
+void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObject& cell,
+                           const std::wstring& text, bool japaneseGlyphs, double dpr) {
+    if (text.size() != 1) throw BackendError("Skia 竖排只支持单码点单元");
+    const auto code = text.front();
+    // Mirror the host's supported Japanese punctuation and small kana. The
+    // fixed cell's clock and bounds are independent of the glyph transform.
+    constexpr std::wstring_view rotate = L"\u300c\u300d\u300e\u300f\u30fc\u301c";
+    constexpr std::wstring_view offset = L"\u3001\u3002\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308e"
+        L"\u30a1\u30a3\u30a5\u30a7\u30a9\u30c3\u30e3\u30e5\u30e7\u30ee\u30f5\u30f6";
+    const bool rotated = rotate.find(code) != rotate.npos;
+    const bool shifted = offset.find(code) != offset.npos;
+    const bool upright = (code >= 0x4e00 && code <= 0x9fff) || (code >= 0xac00 && code <= 0xd7a3)
+        || (code >= 0x3041 && code <= 0x3094) || (code >= 0x30a1 && code <= 0x30fa);
+    if ((rotated || shifted) ? !japaneseGlyphs : !upright)
+        throw BackendError("Skia 竖排单元包含未验证字符或缺少日文字形能力");
+    if (rotated != cell.contains("rotation_pivot_x"))
+        throw BackendError("Skia 竖排单元的字形旋转与源字符不符");
+
+    const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");
+    if (!top.isDouble() || !bottom.isDouble() || !std::isfinite(top.toDouble()) || !std::isfinite(bottom.toDouble())
+        || bottom.toDouble() <= top.toDouble() || std::abs(top.toDouble()) > 1e6 || std::abs(bottom.toDouble()) > 1e6)
+        throw BackendError("Skia 竖排单元框无效");
+    glyph.top = float(top.toDouble() * dpr);
+    glyph.bottom = float(bottom.toDouble() * dpr);
+    if (rotated) {
+        const auto pivot = cell.value("rotation_pivot_x");
+        if (!pivot.isDouble() || !std::isfinite(pivot.toDouble()) || std::abs(pivot.toDouble()) > 1e6)
+            throw BackendError("Skia 竖排旋转轴无效");
+        glyph.path = glyph.path.makeTransform(SkMatrix::RotateDeg(
+            90.f, {float(pivot.toDouble() * dpr), (glyph.top + glyph.bottom) * 0.5f}));
+    }
+}
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
     auto projected = scene::skiaSceneFromIr(ir);
     validateSkiaScene(projected, true);
     const auto layout = ir.value("skia_layout").toObject();
+    const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
     if (layout.value("version").toInt() != 2 || layout.value("metrics_identity").toString().size() != 64
         || !layout.value("fonts").isObject() || !layout.value("lines").isArray()
         || !layout.value("runs").isArray()
@@ -110,13 +146,8 @@ std::uint32_t argb(const RgbaColor& c) {
                 glyph.adjustedWipeEnd = true;
             }
             if (style.vertical) {
-                const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");
-                if (!top.isDouble() || !bottom.isDouble() || !std::isfinite(top.toDouble()) || !std::isfinite(bottom.toDouble())
-                    || bottom.toDouble() <= top.toDouble() || std::abs(top.toDouble()) > 1e6 || std::abs(bottom.toDouble()) > 1e6)
-                    throw BackendError("Skia 竖排单元框无效");
-                glyph.top = float(top.toDouble() * glyphs.dpr);
-                glyph.bottom = float(bottom.toDouble() * glyphs.dpr);
-            } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom")) {
+                applyVerticalGeometry(glyph, cell, line.chars[j].text, japaneseGlyphs, glyphs.dpr);
+            } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("rotation_pivot_x")) {
                 throw BackendError("Skia 横排单元不能携带竖排单元框");
             }
             prepared.cells.push_back(std::move(glyph));

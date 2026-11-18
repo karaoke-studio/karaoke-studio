@@ -29,14 +29,6 @@ bool validatedRightToLeftScalar(char32_t c) {
 // horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
 // nominal glyphs. Combining U+3099/U+309A are excluded (the GPU neither
 // composes them nor applies fallback mark positioning).
-// vertical_solid_schema=1: upright single CJK ideographs, Hangul syllables and
-// full-size kana; the GPU's rotated set and offset small kana/corner marks are excluded.
-bool verticalSimpleScalar(char32_t c) {
-    static const std::u32string small = U"\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308e\u3095\u3096"
-        U"\u30a1\u30a3\u30a5\u30a7\u30a9\u30c3\u30e3\u30e5\u30e7\u30ee\u30f5\u30f6";
-    return (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3)
-        || (((c >= 0x3041 && c <= 0x3096) || (c >= 0x30a1 && c <= 0x30fa)) && small.find(c) == std::u32string::npos);
-}
 bool validatedRightToLeftKana(char32_t c) {
     return c == 0x3000 || c == 0x3001 || c == 0x3002 || (c >= 0x300c && c <= 0x300f) || c == 0x301c
         || (c >= 0x3041 && c <= 0x3096) || c == 0x309b || c == 0x309c || (c >= 0x30a1 && c <= 0x30fc)
@@ -57,6 +49,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p07_zero_ruby_no_wipe"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
+            && feature.toString() != "p05_vertical_japanese_glyphs"
             && feature.toString() != "p05_horizontal_rtl_kana_marks"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
@@ -103,6 +96,11 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p05_vertical_solid")
         && ir.value("skia_layout").toObject().value("vertical_solid_schema").toDouble(-1) != 1)
         throw BackendError("Skia 竖排实色正文布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs")
+        && (ir.value("skia_layout").toObject().value("vertical_japanese_glyph_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p05_vertical_solid")
+            || !ir.value("style").toObject().value("vertical").toBool()))
+        throw BackendError("Skia 竖排日文字形布局版本无效");
     if (ir.value("style").toObject().contains("right_to_left")
         && !ir.value("style").toObject().value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");
@@ -199,7 +197,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     if (cfg.rightToLeft && (!features.contains("p05_horizontal_rtl")
         || !cfg.rubies.empty()))
         throw BackendError("Skia 右至左单元排列缺少能力声明或携带未支持注音");
-    // vertical_solid_schema=1: simple fixed-cell columns only (see verticalSimpleScalar).
+    // vertical_solid_schema=1: fixed-cell columns without annotations or role geometry.
     if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft || !cfg.rubies.empty()
         || cfg.dualLineLayout || std::any_of(cfg.lineOffsetsX.begin(), cfg.lineOffsetsX.end(), [](int v) { return v != 0; })))
         throw BackendError("Skia 竖排仅支持已验证的单列实色正文");
@@ -279,9 +277,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         for (const auto& cell : source.chars) {
-            if (cfg.vertical && (cell.text.toUcs4().size() != 1 || !verticalSimpleScalar(cell.text.toUcs4().front())
-                || &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved))
-                throw BackendError("Skia 竖排单元包含未验证字符、多码点或行内角色");
+            if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
+                throw BackendError("Skia 竖排单元包含尚未支持的行内角色");
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
                 bool valid = features.contains("p05_horizontal_rtl_cells");
                 char32_t previous = 0;

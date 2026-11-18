@@ -4,21 +4,27 @@ vertical_solid_schema=1. Each authored cell is one fixed box ``font_size``
 wide and ``ascent + descent`` tall, stacked from the column top; the glyph keeps
 its horizontal cell-box offset around the column centre and sits on
 ``cell top + ascent``. The column centre and block top follow the GPU's
-margin-only placement. Only upright single CJK ideographs, Hangul syllables and
-full-size kana are validated; rotated, offset or multi-codepoint cells, ruby,
-RTL, multi-row grids and lane offsets stay rejected.
+margin-only placement. Japanese punctuation and small kana may have a separate
+glyph transform. The vertical wipe always follows the original cell box.
 """
 
-_SMALL_KANA = frozenset('ぁぃぅぇぉっゃゅょゎゕゖ'
-                        'ァィゥェォッャュョヮヵヶ')
+_SMALL_KANA = frozenset('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ')
+_CORNER_PUNCTUATION = frozenset('、。')
+_ROTATED_PUNCTUATION = frozenset('「」『』ー〜')
+_TRANSFORMED_GLYPHS = _SMALL_KANA | _CORNER_PUNCTUATION | _ROTATED_PUNCTUATION
 
 
-def vertical_simple_text(text):
+def _supported_text(text):
     if len(text) != 1:
         return False
     code = ord(text)
     return (0x4e00 <= code <= 0x9fff or 0xac00 <= code <= 0xd7a3
-            or ((0x3041 <= code <= 0x3096 or 0x30a1 <= code <= 0x30fa) and text not in _SMALL_KANA))
+            or 0x3041 <= code <= 0x3094 or 0x30a1 <= code <= 0x30fa
+            or text in _CORNER_PUNCTUATION or text in _ROTATED_PUNCTUATION)
+
+
+def vertical_japanese_glyphs(track):
+    return any(char.text in _TRANSFORMED_GLYPHS for line in track.lines for char in line.chars)
 
 
 def validate_vertical_style(style):
@@ -32,7 +38,7 @@ def validate_vertical_source(track):
         raise ValueError('Skia 竖排暂不支持注音')
     for line in track.lines:
         for char in line.chars:
-            if not vertical_simple_text(char.text) or char.role_label is not None:
+            if not _supported_text(char.text) or char.role_label is not None:
                 raise ValueError('Skia 竖排单元包含未验证字符、多码点或行内角色')
 
 
@@ -53,11 +59,16 @@ def vertical_cells(local, measured, item, *, width, height):
     cells = []
     for index, cell in enumerate(local.cells):
         # The glyph keeps its offset from its own horizontal cell-box centre.
-        x = column + measured.offsets[index] - measured.widths[index] / 2
+        text = item.line.chars[index].text
+        offset = 0.28 if text in _CORNER_PUNCTUATION else 0.10 if text in _SMALL_KANA else 0.0
+        x = column + measured.offsets[index] - measured.widths[index] / 2 + size * offset
         ink = cell['metrics']['ink']
         cell_top = top + index * cell_height
-        cells.append({**cell, 'origin_x': x, 'baseline_y': cell_top + ascent,
+        positioned = {**cell, 'origin_x': x, 'baseline_y': cell_top + ascent - cell_height * offset,
                       'wipe_left': x + ink[0], 'wipe_right': x + ink[2],
                       'wipe_top': cell_top, 'wipe_bottom': cell_top + cell_height,
-                      'wipe_end_position': 1.0})
+                      'wipe_end_position': 1.0}
+        if text in _ROTATED_PUNCTUATION:
+            positioned['rotation_pivot_x'] = column
+        cells.append(positioned)
     return cells
