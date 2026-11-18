@@ -14,6 +14,7 @@ struct ResolvedCell {
     std::uint32_t before = 0, after = 0;
     std::vector<krok::subtitle::native::WipePoint> wipePoints;
     bool adjustedWipeEnd = false; // Configuration-only validation marker; never changes time.
+    float top = 0, bottom = 0; // Fixed vertical cell box; wipe axis on vertical lines only.
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
@@ -25,6 +26,9 @@ struct ResolvedLine {
     std::vector<std::vector<ResolvedCell>> rubyGroups;
     bool noWipe = false; // Whole-cell color switches at the final clock endpoint.
     bool wipeRightToLeft = false; // Physical wipe direction, never authored clock ownership or text shaping.
+    // vertical_solid_schema=1: the front runs along y over each cell's top/bottom;
+    // wipeRightToLeft then means bottom-to-top (the existing GPU's reverse vertical).
+    bool vertical = false;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

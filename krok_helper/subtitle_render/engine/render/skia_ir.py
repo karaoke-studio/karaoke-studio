@@ -1,4 +1,4 @@
-"""Canonical metrics -> existing semantic plan -> final horizontal Skia IR.
+"""Canonical metrics -> existing semantic plan -> final Skia IR.
 
 Font discovery and process IPC are injected configuration capabilities. No Qt
 measurement or rendering is used here, and frame draws never call this module.
@@ -7,6 +7,8 @@ from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
 from krok_helper.subtitle_render.engine.layout.display.section_edges import section_edge_context
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
+from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
+    validate_vertical_source, validate_vertical_style, vertical_cells)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
@@ -53,8 +55,10 @@ def _rtl_kana_cell(text):
 
 
 def _validate_style(style):
-    if style.vertical or style.layout_semantics not in {'legacy', 'n3_1074'}:
-        raise ValueError('Skia 当前规范布局仅支持横排')
+    if style.layout_semantics not in {'legacy', 'n3_1074'}:
+        raise ValueError('Skia 当前规范布局不支持此语义')
+    if style.vertical:
+        validate_vertical_style(style)
     if type(style.right_to_left) is not bool:
         raise ValueError('Skia 右至左单元排列标记必须是布尔值')
     if style.dual_line_layout:
@@ -77,6 +81,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if any(len(char.text) > 1 and not _validated_rtl_cell(char.text) for line in source.lines for char in line.chars):
                 raise ValueError('Skia 右至左排列的多码点单元包含尚未验证的字符')
         validate_reverse_source(source)
+        if source_style.vertical:
+            validate_vertical_source(source)
         if any(c.vector_glyph for l in source.lines for c in l.chars):
             raise ValueError('Skia 当前规范布局尚不支持导唱符')
         with layout_pass():
@@ -94,6 +100,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     geometry.set_lanes(plan.lines)
     lines = []
     for index, item in enumerate(plan.lines):
+        if item.layout_style.vertical:
+            lines.append({'cells': vertical_cells(geometry.locals[index], measured.lines[item.track_index], item,
+                                                  width=kwargs['width'], height=kwargs['height']),
+                          'text_flow': 'vertical'})
+            continue
         position = geometry.position(item, kwargs['width'], kwargs['height'])
         cells = positioned_cells(geometry.locals[index], position)
         ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
@@ -109,6 +120,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_overlap_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
+    if style.vertical:
+        ir['required_features'].append('p05_vertical_solid')
+        ir['skia_layout']['vertical_solid_schema'] = 1
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
         ir['skia_layout']['horizontal_rtl_schema'] = 1

@@ -1900,6 +1900,14 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 
 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `7754c453785b1da5cc059dedc5e2cfdee827b8ce83df5961e587972cbd63fd8c`。专项 **33 通过** 另 2 项注音对照通过；串行实际 D2D GPU **283 通过**；Windows 完整 Skia 组合 **1622 通过、7 跳过**；X11/Wayland 完整组合各 **1147 通过、765 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **118 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.48 完全相同。Mac CI 尚待；Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-empty-cell*`。
 
+### 14.50 P05.7 单列实色正文竖排（2026-11-18）
+
+显式选择 Skia 时，legacy 和 N3 的正文可使用单列竖排。支持单码点直立汉字、韩文音节和全尺寸假名，覆盖上、中、下位置以及正向、反向和整字变色。小假名、旋转标点、注音、行内角色、多列和导唱符仍需各自验收。
+
+Python 按规范主字体行框堆叠等高单元，保留共享布局计划的显示窗口和计时。最终 IR 通过 `vertical_solid_schema=1` 携带单元框上下边界，native 消费最终位置。GPU 和 Raster 在同一绘制核心沿 Y 轴走字。反向时沿 Y 轴由下向上裁剪，时间归属继续复用已有反向协议。无效方向、版本、字形或单元框会拒绝该次配置并保留旧场景。
+
+Windows 相关回归 **303 通过**，含 **17 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算）和 G5 预览、短 MP4 的 GPU/Raster 产品验证。Linux llvmpipe 的 X11 和 Wayland 竖排专项各 **39 通过、17 项 Windows 专用跳过**，Windows/Linux 独立 Raster 各 **27 通过**。四份 native 目标干净重建，CTest 各 **3/3**，源码指纹 `3e9257a1705d3e64de6bd98043bcd632fd6ac3ea289df4e626c2499d7158b9a3`。新增 `vertical-solid-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。竖排专项和该样例已纳入下一次阶段 Mac CI。证据前缀 `build/p05-vertical*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     ready.insert("kana_mark_schema", 1);
     ready.insert("vertical_metrics_schema", 1);
     ready.insert("empty_cell_schema", 1);
+    ready.insert("vertical_solid_schema", 1);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);
     ready.insert("standalone_mark_schema", 1);
@@ -53,6 +54,7 @@ int main(int argc, char** argv) {
     profiles.append("p07_zero_ruby_no_wipe");
     profiles.append("p05_horizontal_rtl");
     profiles.append("p05_horizontal_rtl_cells");
+    profiles.append("p05_vertical_solid");
     profiles.append("p05_horizontal_rtl_kana_cells");
     profiles.append("p05_horizontal_rtl_kana_marks");
     profiles.append("p05_reverse_wipe");

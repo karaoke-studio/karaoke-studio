@@ -122,6 +122,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError(VERTICAL_METRICS_ERROR)
             if not has_empty_cell_schema(ready):
                 raise NativeRendererError(EMPTY_CELL_ERROR)
+            if (type(ready.get('vertical_solid_schema')) is not int or ready['vertical_solid_schema'] != 1
+                    or 'p05_vertical_solid' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持竖排实色正文，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

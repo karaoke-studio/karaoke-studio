@@ -23,6 +23,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         Line line{{}, source.startMs, source.endMs};
         line.noWipe = source.noWipe;
         line.wipeRightToLeft = source.wipeRightToLeft;
+        line.vertical = source.vertical;
+        if (source.vertical && !source.rubyGroups.empty())
+            throw std::runtime_error("Skia 竖排行不能携带注音组");
         // Annotation groups currently support only a left-to-right front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
@@ -39,6 +42,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
                 || cell.right < cell.left || cell.endMs < cell.startMs)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
+            if (source.vertical && (!std::isfinite(cell.top) || !std::isfinite(cell.bottom) || cell.bottom <= cell.top))
+                throw std::runtime_error("Skia 竖排单元框无效");
             if (cell.adjustedWipeEnd && cell.wipePoints.empty())
                 throw std::runtime_error("Skia 重叠走字缺少基本时钟");
             if (!cell.wipePoints.empty()) {
@@ -60,7 +65,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 }
             }
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
-                                  cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd});
+                                  cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
+                                  cell.top, cell.bottom});
         }
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
@@ -146,9 +152,15 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                    : std::clamp(float(double(tMs) - cell.startMs) / float(double(cell.endMs) - cell.startMs), 0.f, 1.f));
         };
         // Cells are already in singing order; this flag only chooses the physical front.
+        // Vertical lines wipe along y over the fixed cell box (reverse: bottom to top).
+        const auto low = [&](const Cell& cell) { return line.vertical ? cell.top : cell.left; };
+        const auto high = [&](const Cell& cell) { return line.vertical ? cell.bottom : cell.right; };
         const auto front = [&](const Cell& cell, float progress) {
-            return line.wipeRightToLeft ? cell.right-(cell.right-cell.left)*progress
-                                    : cell.left+(cell.right-cell.left)*progress;
+            return line.wipeRightToLeft ? high(cell)-(high(cell)-low(cell))*progress
+                                    : low(cell)+(high(cell)-low(cell))*progress;
+        };
+        const auto band = [&](float from, float to) {
+            return line.vertical ? SkRect::MakeLTRB(-1e6f, from, 1e6f, to) : SkRect::MakeLTRB(from, -1e6f, to, 1e6f);
         };
         enum class Phase { Before, After, Wiping };
         struct State { float progress, edge; Phase phase; };
@@ -173,8 +185,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                     // N3 delegates the finishing cell's clip to its following
                     // cell (next in singing order) until that cell completes.
                     edge = front(*next, rawProgress(*next));
-                    const float covered = line.wipeRightToLeft ? cell.right-edge : edge-cell.left;
-                    progress = std::clamp(covered/std::max(cell.right-cell.left, 1.f), 0.f, 1.f);
+                    const float covered = line.wipeRightToLeft ? high(cell)-edge : edge-low(cell);
+                    progress = std::clamp(covered/std::max(high(cell)-low(cell), 1.f), 0.f, 1.f);
                 }
             }
             // The existing GPU's N3 phase classification, used only for paint order.
@@ -193,8 +205,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             if (progress < 1) {
                 canvas.save();
                 canvas.clipRect(line.wipeRightToLeft
-                    ? SkRect::MakeLTRB(-1e6f, -1e6f, progress == 0 ? 1e6f : edge, 1e6f)
-                    : SkRect::MakeLTRB(progress == 0 ? -1e6f : edge, -1e6f, 1e6f, 1e6f),
+                    ? band(-1e6f, progress == 0 ? 1e6f : edge)
+                    : band(progress == 0 ? -1e6f : edge, 1e6f),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.before);
                 canvas.drawPath(cell.path, paint);
@@ -203,8 +215,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             if (progress > 0) {
                 canvas.save();
                 canvas.clipRect(line.wipeRightToLeft
-                    ? SkRect::MakeLTRB(progress == 1 ? -1e6f : edge, -1e6f, 1e6f, 1e6f)
-                    : SkRect::MakeLTRB(-1e6f, -1e6f, progress == 1 ? 1e6f : edge, 1e6f),
+                    ? band(progress == 1 ? -1e6f : edge, 1e6f)
+                    : band(-1e6f, progress == 1 ? 1e6f : edge),
                                 SkClipOp::kIntersect, cell.adjustedWipeEnd);
                 paint.setColor(cell.after);
                 canvas.drawPath(cell.path, paint);

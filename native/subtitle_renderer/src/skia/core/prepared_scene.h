@@ -47,6 +47,7 @@ private:
         std::uint32_t before, after;
         std::vector<krok::subtitle::native::WipePoint> wipePoints;
         bool adjustedWipeEnd = false;
+        float top = 0, bottom = 0;
     };
     struct Line {
         std::vector<Cell> cells;
@@ -55,6 +56,7 @@ private:
         std::vector<PreparedWipeGroup> rubyGroups;
         bool noWipe = false;
         bool wipeRightToLeft = false;
+        bool vertical = false;
     };
     int width_, height_;
     std::vector<Line> lines_;

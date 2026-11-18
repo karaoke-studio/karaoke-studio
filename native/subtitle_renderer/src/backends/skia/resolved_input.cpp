@@ -64,8 +64,16 @@ std::uint32_t argb(const RgbaColor& c) {
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
-        prepared.wipeRightToLeft = style.rightToLeft != line.wipeReverse;
-        if (style.rightToLeft || source.contains("text_flow")) {
+        // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
+        prepared.vertical = style.vertical;
+        prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;
+        if (style.vertical) {
+            if (!ir.value("required_features").toArray().contains("p05_vertical_solid")
+                || layout.value("vertical_solid_schema").toDouble(-1) != 1
+                || !source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical"
+                || !source.value("ruby_groups").toArray().isEmpty())
+                throw BackendError("Skia 竖排缺少能力声明或最终方向无效");
+        } else if (style.rightToLeft || source.contains("text_flow")) {
             if (!ir.value("required_features").toArray().contains("p05_horizontal_rtl")
                 || layout.value("horizontal_rtl_schema").toDouble(-1) != 1
                 || !source.value("text_flow").isString()
@@ -73,8 +81,10 @@ std::uint32_t argb(const RgbaColor& c) {
                 || !source.value("ruby_groups").toArray().isEmpty())
                 throw BackendError("Skia 右至左单元排列缺少能力声明或最终方向无效");
         }
-        for (const auto& window : line.placementWindows)
-            prepared.translations.push_back({window.startMs, window.endMs, window.offsetX, window.offsetY});
+        // The existing GPU places vertical columns from margins only; page offsets do not apply.
+        if (!style.vertical)
+            for (const auto& window : line.placementWindows)
+                prepared.translations.push_back({window.startMs, window.endMs, window.offsetX, window.offsetY});
         for (int j = 0; j < cells.size(); ++j) {
             const auto cell = cells[j].toObject();
             const int clock = line.wipeReverse ? cells.size()-1-j : j;
@@ -98,6 +108,16 @@ std::uint32_t argb(const RgbaColor& c) {
                 if (glyph.wipePoints.empty()) glyph.wipePoints = {{glyph.startMs, 0.f}, {glyph.endMs, 1.f}};
                 glyph.wipePoints.back().position = *end;
                 glyph.adjustedWipeEnd = true;
+            }
+            if (style.vertical) {
+                const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");
+                if (!top.isDouble() || !bottom.isDouble() || !std::isfinite(top.toDouble()) || !std::isfinite(bottom.toDouble())
+                    || bottom.toDouble() <= top.toDouble() || std::abs(top.toDouble()) > 1e6 || std::abs(bottom.toDouble()) > 1e6)
+                    throw BackendError("Skia 竖排单元框无效");
+                glyph.top = float(top.toDouble() * glyphs.dpr);
+                glyph.bottom = float(bottom.toDouble() * glyphs.dpr);
+            } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom")) {
+                throw BackendError("Skia 横排单元不能携带竖排单元框");
             }
             prepared.cells.push_back(std::move(glyph));
         }
