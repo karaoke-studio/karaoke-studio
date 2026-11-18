@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
     ready.insert("empty_cell_schema", 1);
     ready.insert("vertical_solid_schema", 2);
     ready.insert("vertical_japanese_glyph_schema", 1);
-    ready.insert("vertical_ruby_schema", 1);
+    ready.insert("vertical_ruby_schema", 2);
     ready.insert("vector_guide_schema", 1);
     ready.insert("primary_solid_outline_schema", 1);
     ready.insert("secondary_solid_outline_schema", 1);

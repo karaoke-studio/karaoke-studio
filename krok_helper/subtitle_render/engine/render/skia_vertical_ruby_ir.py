@@ -13,16 +13,21 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
     track = geometry.track
     annotation_indices = {id(ruby): i for i, ruby in enumerate(track.rubies)}
     entries, readings = [], []
+    version = 1
     for index, (line, style) in enumerate(zip(track.lines, geometry.styles, strict=True)):
         intervals = measured.snapshot.resolve_intervals(line, geometry.style)
         targets = upper_ruby_targets(track, index, line, style, intervals, annotation_indices)
-        if len(targets) > 1 or any(not upright_vertical_text(t.effective.reading) for t in targets):
-            raise ValueError('Skia 竖排每行仅支持一组单码点直立注音')
+        if len(targets) > 1:
+            raise ValueError('Skia 竖排每行仅支持一组直立注音')
         timing = prepare_ruby_target_timing(line, targets, style.ruby_main_progress_mode)
         if targets:
             target = targets[0]
-            if len(timing.readings[0].units) != 1 or timing.readings[0].units != timing.readings[0].glyph_units:
-                raise ValueError('Skia 竖排读音与计时单元不一致')
+            clock = timing.readings[0]
+            if (not clock.units or clock.units != clock.glyph_units
+                    or any(not upright_vertical_text(unit) for unit in clock.units)):
+                raise ValueError('Skia 竖排注音单元必须是单个直立字符')
+            if len(clock.units) > 1:
+                version = 2
             entries.append((target, timing, len(readings)))
             readings.append((target.effective, target.style))
         else:
@@ -57,20 +62,25 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
                 cell['wipe_points'] = wipe_points_to_ir(curve)
         column, top, height_per_cell, _ = vertical_line_box(item, main, len(cells), width, height, allowance)
         ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
-        name, cell_width, glyph_offset, *_ = reading.unit_layouts[0]
-        metrics = reading.cells[0]
-        left, ink_top, right, ink_bottom = metrics['ink']
-        if right <= left or ink_bottom <= ink_top:
-            raise ValueError('Skia 竖排注音需要有墨迹的矢量字形')
-        x = ruby_column + glyph_offset - cell_width / 2
-        baseline = top + min(target.indices) * height_per_cell + ascent
-        unit = {'text': name, 'metrics': metrics, 'run_index': len(measured.runs) + reading.run_indices[0],
-                'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left, 'wipe_right': x + right,
-                'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
-                'wipe_end_position': 1.0, 'interval_ms': list(timing.readings[0].intervals[0])}
+        first = min(target.indices)
+        span_height = (max(target.indices) - first + 1) * height_per_cell
+        reading_top = top + first * height_per_cell
+        units = []
+        for index, (layout, metrics, run, interval) in enumerate(zip(
+                reading.unit_layouts, reading.cells, reading.run_indices, timing.readings[0].intervals, strict=True)):
+            name, cell_width, glyph_offset, *_ = layout
+            left, ink_top, right, ink_bottom = metrics['ink']
+            if right <= left or ink_bottom <= ink_top:
+                raise ValueError('Skia 竖排注音需要有墨迹的矢量字形')
+            x = ruby_column + glyph_offset - cell_width / 2
+            baseline = reading_top + index * span_height / len(reading.cells) + ascent
+            units.append({'text': name, 'metrics': metrics, 'run_index': len(measured.runs) + run,
+                          'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left, 'wipe_right': x + right,
+                          'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
+                          'wipe_end_position': 1.0, 'interval_ms': list(interval)})
         lines.append({'cells': cells, 'text_flow': 'vertical',
-                      'ruby_groups': [{'style_cell': min(target.indices), 'units': [unit]}]})
+                      'ruby_groups': [{'style_cell': first, 'units': units}]})
 
     return {'lines': lines, 'fonts': fonts, 'runs': [*measured.runs, *ruby.runs],
             'metrics_identity': hashlib.sha256(f'{measured.identity}:{ruby.identity}'.encode()).hexdigest(),
-            'ruby_schema': 1, 'vertical_ruby_schema': 1}
+            'ruby_schema': 1, 'vertical_ruby_schema': version}

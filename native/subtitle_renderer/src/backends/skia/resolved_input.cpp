@@ -115,7 +115,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical"
                 || (!source.value("ruby_groups").toArray().isEmpty()
                     && (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
-                        || layout.value("vertical_ruby_schema").toDouble(-1) != 1
                         || source.value("ruby_groups").toArray().size() != 1)))
                 throw BackendError("Skia 竖排缺少能力声明或最终方向无效");
         } else if (style.rightToLeft || source.contains("text_flow")) {

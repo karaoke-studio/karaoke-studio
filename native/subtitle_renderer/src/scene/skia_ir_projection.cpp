@@ -104,14 +104,15 @@ void validateEnvelope(const QJsonObject& ir) {
             || !ir.value("required_features").toArray().contains("p05_vertical_solid")
             || !ir.value("style").toObject().value("vertical").toBool()))
         throw BackendError("Skia 竖排日文字形布局版本无效");
-    // vertical_ruby_schema=1: one single-scalar upright upper reading per vertical line.
-    if (ir.value("required_features").toArray().contains("p05_vertical_ruby")
-        && (ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1) != 1
+    if (ir.value("required_features").toArray().contains("p05_vertical_ruby")) {
+        const double version = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
+        if ((version != 1 && version != 2)
             || !ir.value("required_features").toArray().contains("p05_vertical_solid")
             || !ir.value("required_features").toArray().contains("p05_resolved_ruby")
             || !ir.value("required_features").toArray().contains("p05_upper_ruby")
-            || !ir.value("style").toObject().value("vertical").toBool()))
-        throw BackendError("Skia 竖排注音布局版本无效");
+            || !ir.value("style").toObject().value("vertical").toBool())
+            throw BackendError("Skia 竖排注音布局版本无效");
+    }
     if (ir.value("required_features").toArray().contains("p05_vector_guides")
         && ir.value("skia_layout").toObject().value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");

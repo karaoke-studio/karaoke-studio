@@ -323,9 +323,9 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['multi_reading', 'small_kana', 'latin', 'two_groups', 'reverse', 'lower', 'role'])
+@pytest.mark.parametrize('change', ['combined_unit', 'small_kana', 'latin', 'two_groups', 'reverse', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
-    reading = {'multi_reading': 'じじ', 'small_kana': 'ゃ', 'latin': 'A'}.get(change, '字')
+    reading = {'combined_unit': 'か\u309a', 'small_kana': 'ゃ', 'latin': 'A'}.get(change, '字')
     extra = None
     if change == 'two_groups':
         extra = [RubyAnnotation('字', '字', pos_start_ms=900, pos_end_ms=1400, target_line_index=0,
@@ -376,7 +376,7 @@ def test_old_vertical_ruby_sidecar_rejected_before_selection(binary, monkeypatch
     finally: process.abort(reason='vertical ruby handshake fixture')
     if mutation == 'schema': del ready['vertical_ruby_schema']
     elif mutation == 'feature': ready['profiles'].remove('p05_vertical_ruby')
-    else: ready['vertical_ruby_schema'] = True if mutation == 'bool' else 2
+    else: ready['vertical_ruby_schema'] = True if mutation == 'bool' else 1
     sent = []
     monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
     monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)

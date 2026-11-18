@@ -1952,6 +1952,12 @@ Claude 实现后的相关组合 Windows **950 通过**，X11/Wayland 各 **621 �
 
 Windows 相关组合 **198 通过**，其中导唱符专项 **52 通过**，含 **14 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算），另有真实 G5 GPU/Raster 预览、乱序 seek、资源 ID 与非有限坐标回归。X11/Wayland 专项各 **38 通过、14 跳过**，Windows/Linux 独立 Raster 各 **19 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `cd092ddb67c933eb3e03a1ab7d90037302b922dff295140147128380800c9b5a`。新增 `vector-guide-layout.json` 在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**。证据前缀 `build/p05-vector-guide*`。
 
+### 14.57 P05.6 / P05.7 多单位直立竖排注音（2026-11-19）
+
+在同一组上注音内，多个直立单码点单位沿目标正文跨度等分位置，各自用实际墨迹作为纵向走字范围。读音 part 的时间和空停顿由原共享计时解析，连续组的前沿按这些区间移动。协议 `vertical_ruby_schema=2` 启用多单位，旧单字 v1 布局仍可配置。每行仍限一组，复杂单元、旋转与小假名注音另验。
+
+最终 Windows 竖排相关 **125 通过**，含新增 **4 项实际 D2D GPU 对照**（Meiryo，realization 关闭，1px 几何预算），分别量正文侧的读音墨迹及已唱区域，覆盖普通分段、显式停顿和整字变色，对照包括 Skia Vulkan 和 Raster。X11/Wayland 各 **84 通过、41 跳过**，独立 Windows/Linux Raster 各 **57 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `bd415236105583fc92d41debaeadc690dde291449da871a33b971b0f438a9a2b`。新增 `vertical-multi-ruby-layout.json` 在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**，旧单字竖排样例内容保持相同。证据前缀 `build/p05-vertical-ruby-multi*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
