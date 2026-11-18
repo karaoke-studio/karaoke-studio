@@ -114,7 +114,7 @@ KANA_CODEPOINTS = {
 }
 
 
-def make_kana_font(path: Path, *, gpos=True, family='LinK P05 Kana', ps_name='LinK-P05-Kana'):
+def make_kana_font(path: Path, *, gpos=True, family='LinK P05 Kana', ps_name='LinK-P05-Kana', mark_advance=0, gdef_only=False):
     from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.ttGlyphPen import TTGlyphPen
     from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
@@ -122,7 +122,8 @@ def make_kana_font(path: Path, *, gpos=True, family='LinK P05 Kana', ps_name='Li
              'kanaL': (1000, [(100, 0, 900, 800)]), 'kanaS': (1000, [(250, 0, 750, 500)]),
              'kanaV': (1000, [(100, 0, 820, 800), (840, 760, 960, 900)]),
              'kanaP': (1000, [(100, 0, 820, 800), (860, 780, 960, 880)]),
-             'dakutenc': (0, [(-200, 760, -60, 900)]), 'handakutenc': (0, [(-180, 780, -80, 880)]),
+             'dakutenc': (mark_advance, [(-200, 760, -60, 900)]),
+             'handakutenc': (mark_advance, [(-180, 780, -80, 880)]),
              'dakutens': (1000, [(600, 600, 900, 900)]), 'handakutens': (1000, [(650, 650, 850, 850)]),
              'comma': (1000, [(100, 0, 300, 200)]), 'stop': (1000, [(80, 0, 320, 240)]),
              'open': (1000, [(550, 300, 900, 900)]), 'close': (1000, [(100, -100, 450, 500)]),
@@ -149,7 +150,12 @@ def make_kana_font(path: Path, *, gpos=True, family='LinK P05 Kana', ps_name='Li
     fb.setupOS2(sTypoAscender=880, sTypoDescender=-120, usWinAscent=880, usWinDescent=120, usWeightClass=400)
     fb.setupPost()
     fb.setupMaxp()
-    if gpos:
+    if gdef_only:
+        # Mark glyph classes without any GPOS positioning.
+        addOpenTypeFeaturesFromString(fb.font, '''
+            table GDEF { GlyphClassDef [kanaL kanaS], , [dakutenc handakutenc], ; } GDEF;
+        ''')
+    elif gpos:
         # Uncomposable base+mark (e.g. U+3046 U+3099, no U+3094 glyph) is placed by GPOS.
         addOpenTypeFeaturesFromString(fb.font, '''
             markClass [dakutenc handakutenc] <anchor 0 0> @voice;

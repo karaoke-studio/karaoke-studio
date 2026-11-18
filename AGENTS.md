@@ -326,7 +326,7 @@ git submodule status
    客户端还须检查 `p05_single_line_placement` 能力，不能让旧 sidecar 静默接受新布局。
    `src/skia/text/glyph_outline.*` 使用锁定 FreeType 的公开接口，在 em 尺度读取精细轮廓；
    不要改回 `SkFont::getPath` 的默认 64px 归一化再放大，它会使接近整数边界的单元宽度
-   被截断多丢 1px。字体几何身份已按 §14.43 升为 `skia-m150-hb-ft-v4`；COLR 字形即使有非空
+   被截断多丢 1px。字体几何身份已按 §14.47 升为 `skia-m150-hb-ft-v5`；COLR 字形即使有非空
    单色基底也仍属未支持的彩色绘制，不能把基底当成完整结果。
    P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯
    `engine/style/style_semantics.py`，旧 text/layout 入口保留导出；角色视觉覆盖必须保留
@@ -431,7 +431,7 @@ git submodule status
    候选 HB cluster 的共同边界换 face，`font_shaping` 直接消费锁定 HarfBuzz 的 OpenType 表，
    `mixed_cell` 组合一次路径且保留整个歌词单元时钟。`p05_mixed_fonts` / `mixed_font_schema=1`
    门控 `mixed_fallback`，混排字形/单元快照须含严格字节边界、字体索引与内容身份。
-   字体身份现为 `skia-m150-hb-ft-v4`；不能改回像素字号的 Skia FT advance 回调，它使
+   字体身份现为 `skia-m150-hb-ft-v5`；不能改回像素字号的 Skia FT advance 回调，它使
    多字单元的近整数墨迹宽度被截断。连接文字/IPA/ZWJ/emoji 的混排仍拒绝。
    P05.6 单个独立非间距附加符见 §14.34：`ruby/skia_standalone_marks` 只开放单个 Mn 的
    U+0300–036F（不含 CGJ/双基字连结符）与 U+3099/U+309A。`p05_standalone_marks` /
@@ -487,6 +487,11 @@ git submodule status
    含补充平面字符或多码点含 Mn/Mc/Me/ZWJ 的单元才做 OpenType 塑形；单元框始终取源 nominal
    字形的 advance/首尾 bearing，混排按各 face 归一化。不能把整词 ligature/kerning 恢复为默认。
    `fi` 与分解重音原 LTR 差异已修复为普通回归；RTL 多码点门禁、完整复杂脚本验收仍保留。
+
+   分解式假名浊音见 §14.47。`kana_mark_schema=1` 在 ready 和度量请求/响应中协商；字体几何身份为 v5。
+   U+3099/U+309A 保留基字与标记，使用字体 GPOS；缺 GPOS 时不使用 HB 合成的标记位置。
+   `p05_horizontal_rtl_kana_marks` 要求基础假名能力。RTL 多码点只接收直接跟随假名基字的单个浊音符。
+   字素保持不可拆分，不能为复现定位把浊音符切到另一字体、改写源文字或改变时钟。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，

@@ -149,9 +149,9 @@ def test_forged_or_old_cell_snapshots_keep_the_previous_scene(binary, project, f
     ir = ir_for(binary, (track, replace(style, right_to_left=False)))
     bad = copy.deepcopy(ir)
     fi, decomposed = (c['metrics'] for c in bad['skia_layout']['lines'][0]['cells'][:2])
-    assert fi['font_identity'].startswith('skia-m150-hb-ft-v4:')
+    assert fi['font_identity'].startswith('skia-m150-hb-ft-v5:')
     if forgery == 'old_identity':
-        fi['font_identity'] = fi['font_identity'].replace('-v4:', '-v3:', 1)
+        fi['font_identity'] = fi['font_identity'].replace('-v5:', '-v4:', 1)
     elif forgery == 'ligature_glyph':
         # A cell_glyph_schema-less (HarfBuzz liga) snapshot of the same cell.
         fi['glyphs'] = [{**fi['glyphs'][0], 'cluster_end': 2}]

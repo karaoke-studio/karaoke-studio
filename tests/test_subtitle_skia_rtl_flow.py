@@ -212,7 +212,7 @@ def rtl_cell_source(project,kind='cells',*,reverse=False,effect='none'):
     return replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])]),style
 
 
-@pytest.mark.parametrize('text',['か\u3099','は\u309a','ゝあ','A\uff5e','שׁל','سل','A\u200dA','A\u200cA','A\ufe0f','\U0001F469\U0001F4BB',
+@pytest.mark.parametrize('text',['\u3099か','か\u3099\u309a','A\u3099','ゝあ','A\uff5e','שׁל','سل','A\u200dA','A\u200cA','A\ufe0f','\U0001F469\U0001F4BB',
                                  'a\u034f','a\u035cb','a\u00adb','\u0103a'])
 def test_unvalidated_rtl_multicodepoint_cells_stay_gated(binary,project,text):
     track,style=rtl_source(project)
@@ -369,7 +369,7 @@ def test_old_body_phase_sidecar_rejected_before_selection(binary,monkeypatch,mut
 
 
 # horizontal_rtl_kana_schema=1: kana/Japanese punctuation cells drawn from
-# nominal glyphs. Combining U+3099/U+309A stay gated (see the LTR records below).
+# nominal glyphs. Combining U+3099/U+309A use the separate kana mark policy.
 KANA={'kana':['きゃ','がっ','パァ','キャ'],'punct':['「あ」','、。','ー！','〜・'],
       'spacing':['か゛','は゜','ぁ\u3000','ッ？']}
 
@@ -432,7 +432,7 @@ def test_native_rtl_kana_contract_rejects_forgeries_and_keeps_scene(binary,proje
     elif mutation=='schema':del bad['skia_layout']['horizontal_rtl_kana_schema']
     elif mutation.startswith('schema_'):
         bad['skia_layout']['horizontal_rtl_kana_schema']={'schema_bool':True,'schema_string':'1','schema_version':2}[mutation]
-    else:bad['track']['lines'][0]['chars'][0]['text']='か\u3099'
+    else:bad['track']['lines'][0]['chars'][0]['text']='か\u3099\u309a'
     with SkiaRendererProcess(binary,selection=selection(target)) as process:
         configure(process,ir);before,_=collect(process,[750])
         with pytest.raises(NativeRendererError):configure(process,bad)
@@ -481,16 +481,11 @@ def test_rtl_kana_row_anchors_match_actual_gpu(binary,project,kana,alignment):
     assert_gpu_parity(binary,track,replace(style,layout_semantics='n3_1074'),1.5,('anchor',alignment),alignment=alignment)
 
 
-# Existing direction-independent kana gap, not waived: the GPU keeps a
-# combining voicing mark as base + mark (no canonical composition, no fallback
-# mark positioning); HarfBuzz composes か+U+3099 and positions marks without
-# GPOS. Reproduces in accepted LTR; RTL keeps U+3099/U+309A gated.
+# Former strict xfails for canonical composition and fallback positioning.
 @pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('kana,texts',[(True,['か\u3099','は\u309a','あ','き']),
                                        (False,['う\u3099','あ','き','う'])],indirect=['kana'],ids=['compose','fallback'])
-@pytest.mark.xfail(strict=True,raises=AssertionError,
-    reason='GPU draws combining kana voicing marks uncomposed and without fallback positioning; Skia HB composes/positions.')
-def test_recorded_existing_ltr_kana_voicing_mark_gap(binary,project,kana,texts):
+def test_ltr_kana_voicing_marks_match_gpu(binary,project,kana,texts):
     track,style=kana_source(project,kana,texts,rtl=False)
     assert_gpu_parity(binary,track,replace(style,layout_semantics='n3_1074'),1.5,('voicing',texts))
 

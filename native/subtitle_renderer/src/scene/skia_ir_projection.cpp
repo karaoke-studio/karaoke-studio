@@ -49,6 +49,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p07_zero_ruby_no_wipe"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells"
+            && feature.toString() != "p05_horizontal_rtl_kana_marks"
             && feature.toString() != "p05_reverse_wipe" && feature.toString() != "p05_reverse_overlap")
             throw BackendError("Skia IR: unknown required feature");
     }
@@ -87,6 +88,10 @@ void validateEnvelope(const QJsonObject& ir) {
         && (ir.value("skia_layout").toObject().value("horizontal_rtl_kana_schema").toDouble(-1) != 1
             || !ir.value("required_features").toArray().contains("p05_horizontal_rtl_cells")))
         throw BackendError("Skia 右至左假名单元布局版本无效");
+    if (ir.value("required_features").toArray().contains("p05_horizontal_rtl_kana_marks")
+        && (ir.value("skia_layout").toObject().value("kana_mark_schema").toDouble(-1) != 1
+            || !ir.value("required_features").toArray().contains("p05_horizontal_rtl_kana_cells")))
+        throw BackendError("Skia 右至左假名浊音布局版本无效");
     if (ir.value("style").toObject().contains("right_to_left")
         && !ir.value("style").toObject().value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");
@@ -260,9 +265,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         for (const auto& cell : source.chars) {
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
                 bool valid = features.contains("p05_horizontal_rtl_cells");
-                for (const auto c : cell.text.toUcs4())
-                    valid = valid && (validatedRightToLeftScalar(c)
-                        || (validatedRightToLeftKana(c) && features.contains("p05_horizontal_rtl_kana_cells")));
+                char32_t previous = 0;
+                for (const auto c : cell.text.toUcs4()) {
+                    const bool voice = c == 0x3099 || c == 0x309a;
+                    const bool base = (previous >= 0x3041 && previous <= 0x3096)
+                        || (previous >= 0x30a1 && previous <= 0x30fa);
+                    valid = valid && (voice
+                        ? (base && features.contains("p05_horizontal_rtl_kana_marks"))
+                        : (validatedRightToLeftScalar(c)
+                            || (validatedRightToLeftKana(c) && features.contains("p05_horizontal_rtl_kana_cells"))));
+                    previous = c;
+                }
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);

@@ -37,11 +37,19 @@ def _in(ranges, c):
 
 
 def _validated_rtl_cell(text):
-    return all(_in(_RTL_CELL_RANGES, c) or _in(_RTL_KANA_RANGES, c) for c in text)
+    for i, c in enumerate(text):
+        if c in '\u3099\u309a':
+            # One authored mark following one kana base; repeated/isolated marks
+            # and other mixed-script attachments need their own calibration.
+            if i == 0 or not (0x3041 <= ord(text[i-1]) <= 0x3096 or 0x30a1 <= ord(text[i-1]) <= 0x30fa):
+                return False
+        elif not (_in(_RTL_CELL_RANGES, c) or _in(_RTL_KANA_RANGES, c)):
+            return False
+    return True
 
 
 def _rtl_kana_cell(text):
-    return len(text) > 1 and any(not _in(_RTL_CELL_RANGES, c) and _in(_RTL_KANA_RANGES, c) for c in text)
+    return len(text) > 1 and any(_in(_RTL_KANA_RANGES, c) or c in '\u3099\u309a' for c in text)
 
 
 def _validate_style(style):
@@ -112,6 +120,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if any(_rtl_kana_cell(char.text) for item in plan.lines for char in item.line.chars):
             ir['required_features'].append('p05_horizontal_rtl_kana_cells')
             ir['skia_layout']['horizontal_rtl_kana_schema'] = 1
+        if any(any(c in '\u3099\u309a' for c in char.text) and len(char.text) > 1
+               for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_kana_marks')
+            ir['skia_layout']['kana_mark_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         sources, indices = lower_sources(prepared[0])

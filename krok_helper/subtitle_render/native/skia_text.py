@@ -16,6 +16,11 @@ def has_cell_glyph_schema(payload: dict) -> bool:
     return type(value) is int and value == CELL_GLYPH_SCHEMA
 
 
+def has_kana_mark_schema(payload: dict) -> bool:
+    value = payload.get('kana_mark_schema')
+    return type(value) is int and value == 1
+
+
 class SkiaTextMetricsProcess(SkiaSidecarProcess):
     def start(self):
         if self.is_running:
@@ -33,10 +38,13 @@ class SkiaTextMetricsProcess(SkiaSidecarProcess):
         if not has_cell_glyph_schema(ready):
             self.abort(reason='Skia cell glyph policy handshake failed')
             raise NativeRendererError(CELL_GLYPH_ERROR)
+        if not has_kana_mark_schema(ready):
+            self.abort(reason='Skia kana mark policy handshake failed')
+            raise NativeRendererError('Skia sidecar 不支持假名浊音字形策略，请重新构建')
         return ready
 
     def measure(self, fonts: dict, runs: list[dict]) -> list[dict]:
-        self._send({"cmd": "measure_text", "metrics_schema": 1, "cell_glyph_schema": CELL_GLYPH_SCHEMA,
+        self._send({"cmd": "measure_text", "metrics_schema": 1, "cell_glyph_schema": CELL_GLYPH_SCHEMA, "kana_mark_schema": 1,
                     "fonts": fonts, "runs": runs})
         out = self._expect_ok(self._read_until_event("text_measured", timeout_s=self.configure_timeout_s,
                                                     heartbeat_lease_s=heartbeat_lease_s()))
@@ -44,4 +52,6 @@ class SkiaTextMetricsProcess(SkiaSidecarProcess):
             raise NativeRendererError("Skia 规范度量意外创建了 GPU session")
         if not has_cell_glyph_schema(out):
             raise NativeRendererError(CELL_GLYPH_ERROR)
+        if not has_kana_mark_schema(out):
+            raise NativeRendererError('Skia 度量响应缺少假名浊音字形策略')
         return out["runs"]

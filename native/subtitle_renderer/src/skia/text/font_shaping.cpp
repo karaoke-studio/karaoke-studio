@@ -2,6 +2,7 @@
 #include "include/core/SkTypeface.h"
 #include "modules/skshaper/include/SkShaper_harfbuzz.h"
 #include "third_party/externals/harfbuzz/src/hb.h"
+#include "third_party/externals/harfbuzz/src/hb-ot.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -33,6 +34,29 @@ double pixelScale(const FontInstance& font) {
     int scale = 0; hb_font_get_scale(font.shapingFace(), &scale, nullptr);
     if (scale <= 0) throw std::runtime_error("Skia HarfBuzz 塑形尺度无效");
     return double(font.shapingFont().getSize())/scale;
+}
+bool kanaVoice(std::uint32_t c) { return c == 0x3099 || c == 0x309a; }
+// DirectWrite retains authored kana voicing glyphs instead of Unicode NFC.
+// Override only these normalization pairs; Latin/Hangul normalization stays HB's.
+hb_bool_t composeKanaSource(hb_unicode_funcs_t*, hb_codepoint_t a, hb_codepoint_t b,
+    hb_codepoint_t* composed, void*) {
+    return !kanaVoice(b) && hb_unicode_compose(hb_unicode_funcs_get_default(), a, b, composed);
+}
+hb_bool_t decomposeKanaSource(hb_unicode_funcs_t*, hb_codepoint_t ab,
+    hb_codepoint_t* a, hb_codepoint_t* b, void*) {
+    if (!hb_unicode_decompose(hb_unicode_funcs_get_default(), ab, a, b)) return false;
+    return !kanaVoice(*b);
+}
+std::shared_ptr<hb_unicode_funcs_t> authoredKanaUnicode() {
+    static const auto funcs = [] {
+        auto value = std::shared_ptr<hb_unicode_funcs_t>(
+            hb_unicode_funcs_create(hb_unicode_funcs_get_default()), hb_unicode_funcs_destroy);
+        hb_unicode_funcs_set_compose_func(value.get(), composeKanaSource, nullptr, nullptr);
+        hb_unicode_funcs_set_decompose_func(value.get(), decomposeKanaSource, nullptr, nullptr);
+        hb_unicode_funcs_make_immutable(value.get());
+        return value;
+    }();
+    return funcs;
 }
 }
 
@@ -91,6 +115,10 @@ ShapedRange shapeFontRange(const std::string& utf8, const FontInstance& font,
         if (left >= right) continue;
         auto buffer = std::shared_ptr<hb_buffer_t>(hb_buffer_create(), hb_buffer_destroy);
         if (!hb_buffer_allocation_successful(buffer.get())) throw std::runtime_error("Skia HB buffer 分配失败");
+        const auto sourceScalars = scalars(utf8, left, right);
+        const bool kanaMarks = std::any_of(sourceScalars.begin(), sourceScalars.end(),
+            [](const auto& c) { return kanaVoice(c.value); });
+        if (kanaMarks) hb_buffer_set_unicode_funcs(buffer.get(), authoredKanaUnicode().get());
         hb_buffer_add_utf8(buffer.get(), utf8.data(), int(utf8.size()), left, int(right-left));
         hb_buffer_set_direction(buffer.get(), rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
         hb_buffer_set_script(buffer.get(), hb_script_from_iso15924_tag(scripts->currentScript()));
@@ -102,14 +130,30 @@ ShapedRange shapeFontRange(const std::string& utf8, const FontInstance& font,
         unsigned count = 0;
         const auto info = hb_buffer_get_glyph_infos(buffer.get(), &count);
         const auto positions = hb_buffer_get_glyph_positions(buffer.get(), nullptr);
+        // Without GPOS, DirectWrite leaves kana marks at nominal positions.
+        // HB synthesizes offsets (and mark classes without GDEF). Restore only
+        // kana marks, retaining real GDEF zero advance. Refuse unproven GSUB
+        // remapping rather than guessing which output glyph came from a mark.
+        const auto face = hb_font_get_face(font.shapingFace());
+        const bool nominalKana = kanaMarks && !hb_ot_layout_has_positioning(face);
+        const auto sourceGlyphs = nominalKana ? nominalGlyphs(utf8, font, left, right) : std::vector<SkGlyphID>{};
+        if (nominalKana && (count != sourceGlyphs.size()
+            || !std::equal(sourceGlyphs.begin(), sourceGlyphs.end(), info,
+                [](auto glyph, const auto& item) { return glyph == item.codepoint; })))
+            throw std::runtime_error("Skia 无 GPOS 假名浊音的字形替换尚未验证");
         double vertical = 0;
         for (unsigned i = 0; i < count; ++i) {
             if (info[i].codepoint > 65535 || info[i].cluster < left || info[i].cluster >= right)
                 throw std::runtime_error("Skia HarfBuzz 返回无效字形或 cluster");
-            const double x = cursor+positions[i].x_offset*pixels;
-            const double y = vertical-positions[i].y_offset*pixels;
+            const bool nominalMark = nominalKana && kanaVoice(sourceScalars[i].value);
+            const double x = cursor+(nominalMark ? 0 : positions[i].x_offset)*pixels;
+            const double y = vertical-(nominalMark ? 0 : positions[i].y_offset)*pixels;
             out.glyphs.push_back({SkGlyphID(info[i].codepoint), {float(x), float(y)}, info[i].cluster, 0});
-            cursor += positions[i].x_advance*pixels;
+            const auto advance = nominalMark
+                ? (hb_ot_layout_get_glyph_class(face, info[i].codepoint) == HB_OT_LAYOUT_GLYPH_CLASS_MARK
+                    ? 0 : hb_font_get_glyph_h_advance(font.shapingFace(), info[i].codepoint))
+                : positions[i].x_advance;
+            cursor += advance*pixels;
             vertical -= positions[i].y_advance*pixels;
         }
     }

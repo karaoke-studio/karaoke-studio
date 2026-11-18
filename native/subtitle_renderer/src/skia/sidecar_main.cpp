@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     ready.insert("pixel_formats", QJsonArray{"rgba8888", "bgra8888_premultiplied"});
     ready.insert("text_metrics_schema", 1);
     ready.insert("cell_glyph_schema", 1);
+    ready.insert("kana_mark_schema", 1);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);
     ready.insert("standalone_mark_schema", 1);
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
     profiles.append("p05_horizontal_rtl");
     profiles.append("p05_horizontal_rtl_cells");
     profiles.append("p05_horizontal_rtl_kana_cells");
+    profiles.append("p05_horizontal_rtl_kana_marks");
     profiles.append("p05_reverse_wipe");
     profiles.append("p05_reverse_overlap");
     ready.insert("ruby_unit_schema", 1);
