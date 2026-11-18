@@ -32,6 +32,7 @@ int main(int argc, char** argv) {
     ready.insert("primary_solid_outline_schema", 1);
     ready.insert("secondary_solid_outline_schema", 1);
     ready.insert("line_fade_schema", 1);
+    ready.insert("line_motion_schema", 1);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);
     ready.insert("standalone_mark_schema", 1);
@@ -67,6 +68,7 @@ int main(int argc, char** argv) {
     profiles.append("p06_primary_solid_outline");
     profiles.append("p06_secondary_solid_outline");
     profiles.append("p07_line_fade");
+    profiles.append("p07_line_motion");
     profiles.append("p05_horizontal_rtl_kana_cells");
     profiles.append("p05_horizontal_rtl_kana_marks");
     profiles.append("p05_reverse_wipe");

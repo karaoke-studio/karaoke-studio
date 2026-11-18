@@ -24,7 +24,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.noWipe = source.noWipe;
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
-        line.fade = source.fade;
+        line.animation = source.animation;
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
@@ -65,7 +65,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             }
             if (cell.outline) line.hasOutline = true;
             if (cell.outerOutline) line.hasOuterOutline = true;
-            if (line.fade.active()) {
+            if (line.animation.active()) {
                 line.paintBounds.join(cell.path.getBounds());
                 if (cell.outline) line.paintBounds.join(cell.outline->path.getBounds());
                 if (cell.outerOutline) line.paintBounds.join(cell.outerOutline->path.getBounds());
@@ -78,7 +78,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             totalCells += group.size();
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
             line.rubyGroups.emplace_back(group, source.noWipe, source.vertical);
-            if (line.fade.active())
+            if (line.animation.active())
                 for (const auto& cell : group) line.paintBounds.join(cell.path.getBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
@@ -135,9 +135,11 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     paint.setAntiAlias(true);
     for (const auto& line : lines_) {
         if (tMs < line.startMs || tMs >= line.endMs) continue;
-        const float opacity = line.fade.opacityAt(tMs, line.startMs, line.endMs);
-        if (opacity <= 0.f) continue;
+        const auto animation = line.animation.at(tMs, line.startMs, line.endMs);
+        if (animation.opacity <= 0.f) continue;
         SkAutoCanvasRestore restore(&canvas, true);
+        if (animation.dx != 0 || animation.dy != 0)
+            canvas.translate(animation.dx, animation.dy);
         for (const auto& translation : line.translations) {
             if (translation.startMs <= tMs && tMs < translation.endMs) {
                 canvas.translate(translation.x, translation.y);
@@ -145,8 +147,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
         }
         // Fade the composed line, preserving overlaps and translucent strokes.
-        if (opacity < 1.f && !line.paintBounds.isEmpty())
-            canvas.saveLayerAlphaf(&line.paintBounds, opacity);
+        if (animation.opacity < 1.f && !line.paintBounds.isEmpty())
+            canvas.saveLayerAlphaf(&line.paintBounds, animation.opacity);
         const auto rawProgress = [&](const Cell& cell) {
             if (line.wipeRightToLeft && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
                 return 0.f;

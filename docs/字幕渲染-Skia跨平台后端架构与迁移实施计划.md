@@ -1964,6 +1964,12 @@ Windows 相关组合 **198 通过**，其中导唱符专项 **52 通过**，含 
 
 Windows 相关 **153 通过**，含 **4 项实际 D2D GPU 对照**（正文、双描边、矢量导唱符和竖排注音，realization 关闭），含 G5 GPU 预览和短 MP4 Raster 导出。整行透明度对照覆盖开始、渐入、全显、渐出和结束，峰值 alpha 误差不超过 2 个编码值。X11/Wayland 专项各 **7 通过、4 跳过**，独立 Windows/Linux Raster 各 **4 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `fcbbc9d9fc7c9c22e8ee1fa6a1e6ca84b24984d3ee6b8947a26f5d389fc08be2`。新增 `line-fade-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。证据前缀 `build/p07-line-fade*`。
 
+### 14.59 P07.1 整行横移与升降（2026-11-19）
+
+`line_motion_schema=1` 接通横移入场、横移退场和升降两端。Skia 使用共享显示窗口和生效时长计算保留比例，首行横移方向向左、后续行向右，升降的进入与离开方向相反。位移由物理字号和 D2D 的最小距离决定，透明度沿用整行淡化。坐标变换、页面位移和临时层覆盖同一份准备路径，计时不受画面位移影响。
+
+Windows 相关 **170 通过**，含新增 **4 项实际 D2D GPU 对照**（realization 关闭），覆盖两种方向、淡化与位移混用、双行不同横移方向。另验证 DPR 1.5 下的小字最小距离和无变形时钟。X11/Wayland 专项各 **7 通过、4 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，统一指纹 `f0236cc583dbe1fe1c5a69c520920a3809fbfcffe20a26a57aab97a871ee3fd7`。规范样例 `line-motion-layout.json` 在 Windows/X11/Wayland 严格误差为 **0**。证据前缀 `build/p07-line-motion*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
