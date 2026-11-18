@@ -150,6 +150,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_line_motion')
         ir['skia_layout']['line_motion_schema'] = 1
+    if any(line.get('entry_anim') == 'char_fade' or line.get('exit_anim') == 'char_fade'
+           for line in ir['track']['lines']):
+        ir['required_features'].append('p07_character_fade')
+        ir['skia_layout']['character_fade_schema'] = 1
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

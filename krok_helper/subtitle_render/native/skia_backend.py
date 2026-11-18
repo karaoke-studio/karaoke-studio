@@ -146,6 +146,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('line_motion_schema')) is not int or ready['line_motion_schema'] != 1
                     or 'p07_line_motion' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持出入场位移，请重新构建')
+            if (type(ready.get('character_fade_schema')) is not int or ready['character_fade_schema'] != 1
+                    or 'p07_character_fade' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持逐字淡化，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

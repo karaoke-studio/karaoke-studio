@@ -47,7 +47,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
             && feature.toString() != "p07_zero_ruby_no_wipe" && feature.toString() != "p07_line_fade"
-            && feature.toString() != "p07_line_motion"
+            && feature.toString() != "p07_line_motion" && feature.toString() != "p07_character_fade"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
@@ -123,6 +123,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_line_motion")
         && ir.value("skia_layout").toObject().value("line_motion_schema").toDouble(-1) != 1)
         throw BackendError("Skia 出入场位移布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_character_fade")
+        && ir.value("skia_layout").toObject().value("character_fade_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 逐字淡化布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -252,9 +255,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     std::map<const protocol::ResolvedStyle*, int> roleStyles;
     const bool allowFade = features.contains("p07_line_fade");
     const bool allowMotion = features.contains("p07_line_motion");
-    const auto supportedAnimation = [allowFade, allowMotion](const QString& animation, const char* slide) {
+    const bool allowCharacterFade = features.contains("p07_character_fade");
+    const auto supportedAnimation = [allowFade, allowMotion, allowCharacterFade](const QString& animation, const char* slide) {
         return animation == "none" || (allowFade && animation == "fade")
-            || (allowMotion && (animation == slide || animation == "rise"));
+            || (allowMotion && (animation == slide || animation == "rise"))
+            || (allowCharacterFade && animation == "char_fade");
     };
     for (const auto& source : cfg.lines) {
         if (source.annotationBaselineY

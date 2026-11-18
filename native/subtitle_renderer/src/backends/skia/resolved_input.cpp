@@ -109,12 +109,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
         const float slide = std::max(style.fontSize * .9f, 36.f) * (line.lane == 0 ? -1.f : 1.f);
         const float rise = std::max(style.fontSize * .35f, 18.f);
-        prepared.animation = {line.entryAnimation == "none" ? 0 : line.entryDurationMs,
-                              line.exitAnimation == "none" ? 0 : line.exitDurationMs,
+        const bool charEntry = line.entryAnimation == "char_fade", charExit = line.exitAnimation == "char_fade";
+        prepared.animation = {line.entryAnimation == "none" || charEntry ? 0 : line.entryDurationMs,
+                              line.exitAnimation == "none" || charExit ? 0 : line.exitDurationMs,
                               line.entryAnimation == "slide_in" ? slide : 0.f,
                               line.entryAnimation == "rise" ? rise : 0.f,
                               line.exitAnimation == "slide_out" ? slide : 0.f,
                               line.exitAnimation == "rise" ? -rise : 0.f};
+        const int delay = cells.size() > 1 ? 350 / (int(cells.size()) - 1) : 0;
+        prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
+                                  line.endMs, delay};
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;
@@ -195,6 +199,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset, totalCells, totalGroups);
+        if (prepared.characterFade.active() && !prepared.rubyGroups.empty())
+            throw BackendError("Skia 逐字淡化暂不支持注音组合");
         if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
         out.lines.push_back(std::move(prepared));
     }

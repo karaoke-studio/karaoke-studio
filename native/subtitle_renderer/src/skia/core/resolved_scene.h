@@ -1,5 +1,6 @@
 #pragma once
 #include "include/core/SkPath.h"
+#include "character_fade.h"
 #include "line_animation.h"
 #include "solid_outline.h"
 #include "../../model/wipe_point.h"
@@ -35,6 +36,7 @@ struct ResolvedLine {
     // wipeRightToLeft then means bottom-to-top (the existing GPU's reverse vertical).
     bool vertical = false;
     LineAnimation animation;
+    CharacterFade characterFade;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

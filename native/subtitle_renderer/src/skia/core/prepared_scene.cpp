@@ -25,6 +25,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
         line.animation = source.animation;
+        line.characterFade = source.characterFade;
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
@@ -179,7 +180,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             return line.vertical ? SkRect::MakeLTRB(-1e6f, from, 1e6f, to) : SkRect::MakeLTRB(from, -1e6f, to, 1e6f);
         };
         enum class Phase { Before, After, Wiping };
-        struct State { float progress, edge; Phase phase; };
+        struct State { float progress, edge; Phase phase; float opacity; };
         std::vector<State> states;
         states.reserve(line.cells.size());
         const auto wipeStart = [](const Cell& c) { return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs; };
@@ -212,7 +213,10 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 const int followingEnd = wipeEnd(line.cells[index+1]);
                 wiping = start < tMs && tMs < followingEnd && start != followingEnd;
             }
-            states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After)});
+            const float opacity = line.characterFade.opacityAt(tMs, line.startMs, line.endMs,
+                                                                int(index), int(line.cells.size()));
+            states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
+                              opacity});
         }
         enum class Layer { OuterOutline, Outline, Body };
         const auto drawCell = [&](std::size_t index, Layer layer) {
@@ -221,7 +225,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             const bool drawOutline = layer != Layer::Body;
             if (drawOutline && !stroke) return;
             const auto& path = drawOutline ? stroke->path : cell.path;
-            const auto [progress, edge, phase] = states[index];
+            const auto [progress, edge, phase, opacity] = states[index];
+            if (opacity <= 0) return;
             // The outline can reach beyond the integer wipe padding, just as
             // the vertical glyph can reach beyond its fixed cell.
             const bool atFront = (line.vertical || drawOutline) && phase == Phase::Wiping;
@@ -235,6 +240,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 }
                 paint.setColor(drawOutline ? (sung ? stroke->after : stroke->before)
                                            : (sung ? cell.after : cell.before));
+                if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
                 canvas.drawPath(path, paint);
             };
             // Two disjoint clips avoid painting translucent after color over before color.

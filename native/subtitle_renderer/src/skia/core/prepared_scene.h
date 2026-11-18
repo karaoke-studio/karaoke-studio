@@ -62,6 +62,7 @@ private:
         bool hasOutline = false;
         bool hasOuterOutline = false;
         LineAnimation animation;
+        CharacterFade characterFade;
         SkRect paintBounds = SkRect::MakeEmpty();
     };
     int width_, height_;

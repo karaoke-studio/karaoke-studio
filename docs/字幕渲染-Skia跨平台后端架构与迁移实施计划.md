@@ -1970,6 +1970,12 @@ Windows 相关 **153 通过**，含 **4 项实际 D2D GPU 对照**（正文、�
 
 Windows 相关 **170 通过**，含新增 **4 项实际 D2D GPU 对照**（realization 关闭），覆盖两种方向、淡化与位移混用、双行不同横移方向。另验证 DPR 1.5 下的小字最小距离和无变形时钟。X11/Wayland 专项各 **7 通过、4 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，统一指纹 `f0236cc583dbe1fe1c5a69c520920a3809fbfcffe20a26a57aab97a871ee3fd7`。规范样例 `line-motion-layout.json` 在 Windows/X11/Wayland 严格误差为 **0**。证据前缀 `build/p07-line-motion*`。
 
+### 14.60 P07.1 逐字淡化（2026-11-19）
+
+`character_fade_schema=1` 接通 `char_fade` 的入场和退场。使用归一化后的演唱顺序。字符按 350ms 分布错开，每个字符经过 250ms 线性淡化；入场窗口和退场窗口均沿用 D2D 的 600ms 规则，退场还受最后演唱时刻约束。逐字透明度作用于每层画笔，可与另一端的整行位移合用。含实际读音组的逐字淡化暂需独立验收。
+
+Windows 相关 **150 通过**，含新增 **5 项实际 D2D GPU 对照**（realization 关闭），覆盖普通、双描边、导唱符、反向和升降混用。另验证单字、四字的 stagger 和完整时序。X11/Wayland 专项各 **7 通过、5 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `b75c3686c90f440d20f66aed9331a7ffc4e6434be7d2f8f918685832e27a52cd`。样例 `character-fade-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。证据前缀 `build/p07-character-fade*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
