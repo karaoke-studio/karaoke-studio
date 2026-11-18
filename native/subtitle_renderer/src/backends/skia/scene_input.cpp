@@ -71,7 +71,9 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLaye
         supportedStyle(style, canonical, outlineLayers);
         if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
             || !line.rubies.empty() || !line.bursts.empty() || (!canonical && !line.placementWindows.empty())
-            || line.fadeInMs || line.fadeOutMs || line.entryAnimation != "none" || line.exitAnimation != "none"
+            || line.fadeInMs || line.fadeOutMs
+            || (line.entryAnimation != "none" && !(canonical && line.entryAnimation == "fade"))
+            || (line.exitAnimation != "none" && !(canonical && line.exitAnimation == "fade"))
             || (line.karaokeAnimation != "none" && line.karaokeAnimation != "inherit"
                 && !(canonical && line.karaokeAnimation == "no_wipe"))
             || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || (line.wipeReverse && !canonical)

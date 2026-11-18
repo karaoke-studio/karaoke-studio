@@ -1,5 +1,6 @@
 #pragma once
 #include "include/core/SkPath.h"
+#include "line_fade.h"
 #include "solid_outline.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
@@ -33,6 +34,7 @@ struct ResolvedLine {
     // vertical_solid_schema=1: the front runs along y over each cell's top/bottom;
     // wipeRightToLeft then means bottom-to-top (the existing GPU's reverse vertical).
     bool vertical = false;
+    LineFade fade;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

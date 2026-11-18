@@ -142,6 +142,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(char.vector_glyph is not None for item in plan.lines for char in item.render_line.chars):
         ir['required_features'].append('p05_vector_guides')
         ir['skia_layout']['vector_guide_schema'] = 1
+    if any(line.get('entry_anim') == 'fade' or line.get('exit_anim') == 'fade'
+           for line in ir['track']['lines']):
+        ir['required_features'].append('p07_line_fade')
+        ir['skia_layout']['line_fade_schema'] = 1
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

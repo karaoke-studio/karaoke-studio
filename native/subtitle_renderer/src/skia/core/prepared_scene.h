@@ -61,6 +61,8 @@ private:
         bool vertical = false;
         bool hasOutline = false;
         bool hasOuterOutline = false;
+        LineFade fade;
+        SkRect paintBounds = SkRect::MakeEmpty();
     };
     int width_, height_;
     std::vector<Line> lines_;

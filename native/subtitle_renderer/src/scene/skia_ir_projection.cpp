@@ -46,7 +46,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_ruby_markers" && feature.toString() != "p05_ruby_units"
             && feature.toString() != "p05_font_fallback" && feature.toString() != "p05_mixed_fonts"
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
-            && feature.toString() != "p07_zero_ruby_no_wipe"
+            && feature.toString() != "p07_zero_ruby_no_wipe" && feature.toString() != "p07_line_fade"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
@@ -116,6 +116,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p05_vector_guides")
         && ir.value("skia_layout").toObject().value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_line_fade")
+        && ir.value("skia_layout").toObject().value("line_fade_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 出入场淡化布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -243,9 +246,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     // Pointers refer to the immutable parser cache for this projection only.
     // Materialize a role once, rather than copying a full style into each cell.
     std::map<const protocol::ResolvedStyle*, int> roleStyles;
+    const bool allowFade = features.contains("p07_line_fade");
+    const auto supportedAnimation = [allowFade](const QString& animation) {
+        return animation == "none" || (allowFade && animation == "fade");
+    };
     for (const auto& source : cfg.lines) {
         if (source.annotationBaselineY
-            || source.entryAnimation != "none" || source.exitAnimation != "none"
+            || !supportedAnimation(source.entryAnimation) || !supportedAnimation(source.exitAnimation)
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
                 && source.karaokeAnimation != "no_wipe")
             || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled
@@ -297,6 +304,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         }
         TextLine line;
         line.wipeReverse = source.wipeReverse;
+        line.entryAnimation = source.entryAnimation.toStdString();
+        line.entryDurationMs = source.entryDurationMs;
+        line.exitAnimation = source.exitAnimation.toStdString();
+        line.exitDurationMs = source.exitDurationMs;
         line.karaokeAnimation = source.karaokeAnimation.toStdString();
         line.lane = source.lane;
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;

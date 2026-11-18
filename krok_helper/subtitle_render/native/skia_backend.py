@@ -140,6 +140,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('secondary_solid_outline_schema')) is not int or ready['secondary_solid_outline_schema'] != 1
                     or 'p06_secondary_solid_outline' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持二重实色描边，请重新构建')
+            if (type(ready.get('line_fade_schema')) is not int or ready['line_fade_schema'] != 1
+                    or 'p07_line_fade' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持出入场淡化，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

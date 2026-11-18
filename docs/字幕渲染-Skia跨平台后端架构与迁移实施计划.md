@@ -1958,6 +1958,12 @@ Windows 相关组合 **198 通过**，其中导唱符专项 **52 通过**，含 
 
 最终 Windows 竖排相关 **125 通过**，含新增 **4 项实际 D2D GPU 对照**（Meiryo，realization 关闭，1px 几何预算），分别量正文侧的读音墨迹及已唱区域，覆盖普通分段、显式停顿和整字变色，对照包括 Skia Vulkan 和 Raster。X11/Wayland 各 **84 通过、41 跳过**，独立 Windows/Linux Raster 各 **57 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `bd415236105583fc92d41debaeadc690dde291449da871a33b971b0f438a9a2b`。新增 `vertical-multi-ruby-layout.json` 在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**，旧单字竖排样例内容保持相同。证据前缀 `build/p05-vertical-ruby-multi*`。
 
+### 14.58 P07.1 出入场淡化（2026-11-19）
+
+显式 Skia 路径接受 `line_fade_schema=1`，直接消费共享计划的显示窗口和生效时长。入场使用二次缓出，退场使用二次缓入，重叠时两者相乘。字形、描边、导唱符和注音先合成，再按整行透明度输出；GPU 与 Raster 使用同一合成。临时层用配置期计算出的绘制边界，保留相切墨迹的抗锯齿余量。淡化之外的行级变换留待逐项验收。
+
+Windows 相关 **153 通过**，含 **4 项实际 D2D GPU 对照**（正文、双描边、矢量导唱符和竖排注音，realization 关闭），含 G5 GPU 预览和短 MP4 Raster 导出。整行透明度对照覆盖开始、渐入、全显、渐出和结束，峰值 alpha 误差不超过 2 个编码值。X11/Wayland 专项各 **7 通过、4 跳过**，独立 Windows/Linux Raster 各 **4 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `fcbbc9d9fc7c9c22e8ee1fa6a1e6ca84b24984d3ee6b8947a26f5d389fc08be2`。新增 `line-fade-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。证据前缀 `build/p07-line-fade*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

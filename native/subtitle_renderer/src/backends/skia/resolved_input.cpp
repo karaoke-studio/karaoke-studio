@@ -107,6 +107,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
+        prepared.fade = {line.entryAnimation == "fade" ? line.entryDurationMs : 0,
+                         line.exitAnimation == "fade" ? line.exitDurationMs : 0};
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;
