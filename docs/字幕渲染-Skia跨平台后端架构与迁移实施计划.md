@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 3015a0db
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44294159236 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 4c6966ce
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44309865841 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1899,6 +1899,8 @@ Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 
 - 覆盖：实际 D2D GPU（realization 关闭、原 1px 预算）16 组代表矩阵（混合/首尾/末尾空单元 × LTR/RTL、反向、no_wipe、暂停、零时长、共享区间分段走字、角色、负字距、legacy/N3、DPR1/1.5、行锚点），仅空单元行在 GPU/Raster/D2D 均为空帧，GPU/Raster 乱序 seek，以及上注音以空单元为基字或跨越空单元（2 项）。下方读音在受控字体中的拒绝与空单元无关（无空单元时同样因缺参考字形拒绝），保持原有明确失败。
 
 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `7754c453785b1da5cc059dedc5e2cfdee827b8ce83df5961e587972cbd63fd8c`。专项 **33 通过** 另 2 项注音对照通过；串行实际 D2D GPU **283 通过**；Windows 完整 Skia 组合 **1622 通过、7 跳过**；X11/Wayland 完整组合各 **1147 通过、765 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **118 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.48 完全相同。Mac CI 尚待；Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-empty-cell*`。
+
+Mac CI [44309865841](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44309865841) 最终 **5/5 成功**。ARM64 干净环境验包首次因 GitHub 托管 runner 容量取消，仅重跑该任务后通过。两架构产品测试各 **1115 通过、797 跳过**，单元字形文件各 **42 通过、73 跳过**，预览各 **21 通过、1 跳过**，字体资源各 **3 通过**。四份 Metal/Raster 指纹均与本地一致。32 份五环境样例严格比较误差均为 **0**，与 §14.48 相同。两份验收包均报告 `functional_passed=true`、`cell_glyphs=0`，托管虚拟 Metal 的 `hardware_gate_passed=false`。§14.6 入口已更新到 `4c6966ce` 的验收包。
 
 ### 14.50 P05.7 单列实色正文竖排（2026-11-18）
 
