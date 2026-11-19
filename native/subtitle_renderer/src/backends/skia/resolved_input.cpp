@@ -2,6 +2,7 @@
 #include "resolved_wipe.h"
 #include "resolved_glyph.h"
 #include "resolved_ruby.h"
+#include "image_fill_cache.h"
 #include "scene_input.h"
 #include "vertical_text.h"
 #include "../render_backend.h"
@@ -62,7 +63,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool bodyGradients = features.contains("p06_body_gradient");
     const bool outlineGradients = features.contains("p06_outline_gradient");
-    validateSkiaScene(projected, true, outlineLayers, bodyGradients, outlineGradients);
+    const bool imageFills = features.contains("p06_image_fill");
+    validateSkiaScene(projected, true, outlineLayers, bodyGradients, outlineGradients, imageFills);
+    SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -327,17 +330,29 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
         }
         const bool primaryOutline = style.strokeWidth > 0, secondaryOutline = style.stroke2Width > 0;
-        const bool outlineGradient = (primaryOutline && (style.beforeStrokePaint.mode != "solid" || style.afterStrokePaint.mode != "solid"))
-            || (secondaryOutline && (style.beforeStroke2Paint.mode != "solid" || style.afterStroke2Paint.mode != "solid"));
-        const bool gradient = style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid" || outlineGradient;
-        if (gradient) {
-            if (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)
+        // Drawn layers in before/after pairs: body, primary outline, outer ring.
+        const PaintStyle* layers[] = {&style.beforeFillPaint, &style.afterFillPaint,
+            primaryOutline ? &style.beforeStrokePaint : nullptr, primaryOutline ? &style.afterStrokePaint : nullptr,
+            secondaryOutline ? &style.beforeStroke2Paint : nullptr, secondaryOutline ? &style.afterStroke2Paint : nullptr};
+        const auto anyLayer = [&](auto&& predicate) {
+            return std::ranges::any_of(layers, [&](const PaintStyle* paint) { return paint && predicate(*paint); });
+        };
+        const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
+        const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
+        if (gradient || image) {
+            if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
+                || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
                 || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
                 || !prepared.rubyGroups.empty() || !projected.charStyles.empty())
                 throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");
-            if (std::ranges::any_of(prepared.cells, [](const auto& glyph) { return !glyph.path.isEmpty(); })) {
+            // Image paints need no line domain: the existing GPU tiles them on the canvas.
+            for (int i = 0; i < 6 && image; ++i)
+                if (layers[i] && layers[i]->mode == "image")
+                    (i < 2 ? prepared.images.body : i < 4 ? prepared.images.outline : prepared.images.outer)[i % 2]
+                        = imageCache.fill(*layers[i], projected.layoutReferenceScale);
+            if (gradient && std::ranges::any_of(prepared.cells, [](const auto& glyph) { return !glyph.path.isEmpty(); })) {
                 const auto rect = source.value("body_gradient_bounds").toArray();
                 if (rect.size() != 4 || std::ranges::any_of(rect, [](const auto& v) {
                         return !v.isDouble() || !std::isfinite(v.toDouble()) || std::abs(v.toDouble()) > 1e6;
@@ -361,9 +376,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     prepared.afterOuterGradient = lineGradient(style.afterStroke2Paint, ink, pad);
                 }
             }
-        } else if (source.contains("body_gradient_bounds")) {
-            throw BackendError("Skia 实色正文携带了未声明的渐变范围");
         }
+        if (!gradient && source.contains("body_gradient_bounds"))
+            throw BackendError("Skia 实色正文携带了未声明的渐变范围");
         if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
         out.lines.push_back(std::move(prepared));
     }

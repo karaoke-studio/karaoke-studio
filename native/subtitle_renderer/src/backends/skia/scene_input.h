@@ -3,6 +3,6 @@
 #include "core/prepared_scene.h"
 namespace krok::subtitle::native {
 void validateSkiaScene(const RenderScene&, bool canonical = false, int outlineLayers = 0, bool bodyGradients = false,
-                       bool outlineGradients = false);
+                       bool outlineGradients = false, bool imageFills = false);
 ::subtitle::skia::SubtitleInput skiaSceneInput(const RenderScene& scene);
 }

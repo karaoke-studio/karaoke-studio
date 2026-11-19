@@ -5,6 +5,7 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include <algorithm>
+#include <array>
 
 namespace subtitle::skia {
 void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible) const {
@@ -114,7 +115,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                           transform, std::move(animatedInk)});
     }
     enum class Layer { OuterOutline, Outline, Body };
-    const auto drawCell = [&](std::size_t index, Layer layer) {
+    using PhaseShaders = std::array<sk_sp<SkShader>, 2>;
+    const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {
         const auto& cell = line.cells[index];
         const auto& stroke = layer == Layer::OuterOutline ? cell.outerOutline : cell.outline;
         const bool drawOutline = layer != Layer::Body;
@@ -148,9 +150,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 if (layer == Layer::OuterOutline && cell.outline)
                     canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
             }
-            const auto shader = layer == Layer::Body ? (sung ? line.afterGradient : line.beforeGradient)
-                : layer == Layer::Outline ? (sung ? line.afterOutlineGradient : line.beforeOutlineGradient)
-                : (sung ? line.afterOuterGradient : line.beforeOuterGradient);
+            const auto& shader = shaders[sung];
             paint.setShader(shader);
             paint.setColor(shader ? SK_ColorWHITE : drawOutline ? (sung ? stroke->after : stroke->before)
                                                                : (sung ? cell.after : cell.before));
@@ -186,13 +186,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Overlapping cells follow the existing GPU's per-character phase order:
     // unsung cells last-to-first, then sung cells, then wiping cells on top.
     // Each cell's own clip and colors are unchanged; only stacking differs.
-    const auto drawLayer = [&](Layer layer) {
+    const auto drawLayer = [&](Layer layer, const ImageFill (&images)[2], PhaseShaders shaders) {
+        for (std::size_t phase = 0; phase < shaders.size(); ++phase)
+            if (images[phase]) shaders[phase] = images[phase].shaderAt(canvas.getTotalMatrix());
         for (std::size_t index = line.cells.size(); index > 0; --index)
-            if (states[index-1].phase == Phase::Before) drawCell(index-1, layer);
+            if (states[index-1].phase == Phase::Before) drawCell(index-1, layer, shaders);
         for (std::size_t index = 0; index < line.cells.size(); ++index)
-            if (states[index].phase == Phase::After) drawCell(index, layer);
+            if (states[index].phase == Phase::After) drawCell(index, layer, shaders);
         for (std::size_t index = 0; index < line.cells.size(); ++index)
-            if (states[index].phase == Phase::Wiping) drawCell(index, layer);
+            if (states[index].phase == Phase::Wiping) drawCell(index, layer, shaders);
     };
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false);
     if (geometry)
@@ -201,9 +203,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
                               state.transform, line.characterGeometry.fontPx);
         }
-    if (line.hasOuterOutline) drawLayer(Layer::OuterOutline);
-    if (line.hasOutline) drawLayer(Layer::Outline);
-    drawLayer(Layer::Body);
+    if (line.hasOuterOutline)
+        drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
+    if (line.hasOutline)
+        drawLayer(Layer::Outline, line.images.outline, {line.beforeOutlineGradient, line.afterOutlineGradient});
+    drawLayer(Layer::Body, line.images.body, {line.beforeGradient, line.afterGradient});
     // The GPU repaints the sweeping cells after the body.
     line.scanline.draw(canvas, line.cells, tMs, line.inkStart, line.inkTop, [&](std::size_t index, bool sung) {
         const auto& cell = line.cells[index];

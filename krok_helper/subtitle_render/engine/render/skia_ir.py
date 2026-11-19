@@ -244,7 +244,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['scanline_band_schema'] = (
             4 if any(line.get('scanline') and line.get('wipe_reverse') for line in ir['track']['lines']) else 3
         )
-    gradients, outlined_gradients = write_body_gradient_bounds(track, ir, plan)
+    gradients, outlined_gradients, images = write_body_gradient_bounds(track, ir, plan)
+    if images:
+        # Static image paints on any body or outline layer of a plain line.
+        ir['required_features'].append('p06_image_fill')
     if gradients:
         ir['required_features'].append('p06_body_gradient')
     if outlined_gradients:

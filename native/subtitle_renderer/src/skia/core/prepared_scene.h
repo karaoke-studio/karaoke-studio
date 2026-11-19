@@ -67,6 +67,7 @@ private:
         LineAnimation animation;
         sk_sp<SkShader> beforeGradient, afterGradient;
         sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
+        LineImageFills images;
         NoiseTransition noise;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;

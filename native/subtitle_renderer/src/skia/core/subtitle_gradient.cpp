@@ -51,7 +51,8 @@ sk_sp<SkShader> subtitleGradient(const krok::subtitle::native::PaintStyle& paint
 }
 
 sk_sp<SkShader> lineGradient(const krok::subtitle::native::PaintStyle& paint, const SkRect& ink, float visualPad) {
-    if (paint.mode == "solid") return nullptr;
+    if (paint.mode != "gradient_horizontal" && paint.mode != "gradient_vertical" && paint.mode != "split_vertical")
+        return nullptr;
     if (paint.mode == "gradient_horizontal")
         return subtitleGradient(paint, SkRect::MakeLTRB(ink.left(), ink.top(), std::max(ink.right(), ink.left() + 1.f), ink.bottom()));
     return subtitleGradient(paint, SkRect::MakeLTRB(ink.left(), ink.top() - visualPad, ink.right(), ink.bottom() + visualPad));

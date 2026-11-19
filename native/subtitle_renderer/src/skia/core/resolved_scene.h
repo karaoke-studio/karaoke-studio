@@ -9,6 +9,7 @@
 #include "sing_particles.h"
 #include "solid_outline.h"
 #include "subtitle_gradient.h"
+#include "image_fill.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
 #include <optional>
@@ -46,6 +47,7 @@ struct ResolvedLine {
     LineAnimation animation;
     sk_sp<SkShader> beforeGradient, afterGradient;
     sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
+    LineImageFills images; // Device-anchored static image paints; take precedence over gradients.
     NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;

@@ -1,4 +1,4 @@
-"""Project the line-wide coordinates needed by Skia body and outline gradients."""
+"""Project the line-wide coordinates needed by Skia body and outline gradients and image paints."""
 
 from ..style.style_semantics import effective_karaoke_colors
 
@@ -19,26 +19,30 @@ def _layer_modes(look):
 
 
 def write_body_gradient_bounds(track, ir, plan):
-    """Write the glyph ink union of gradient lines; return (gradients, outlined gradients).
+    """Write the glyph ink union of gradient lines; return (gradients, outlined gradients, images).
 
-    The existing GPU maps every layer of a line onto this ink union: a
+    The existing GPU maps every gradient layer of a line onto this ink union: a
     horizontal paint spans the glyph ink, a vertical paint spans the ink padded
     by the line's visual outline pad (applied natively at the reference scale).
+    Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
-    enabled = outlined_gradient = False
+    enabled = outlined_gradient = images = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
-        if not modes & _GRADIENTS:
+        if not modes & (_GRADIENTS | {'image'}):
             continue
         source = ir['track']['lines'][item.track_index]
-        if (not modes <= (_GRADIENTS | {'solid'})
+        if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or look.vertical or look.right_to_left or item.line.wipe_reverse
                 or source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
                 or source.get('scanline') or source.get('fx_bursts') or source.get('stroke_flash')
                 or source.get('karaoke_anim') != 'none' or track.rubies or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
+        images = images or 'image' in modes
+        if not modes & _GRADIENTS:
+            continue
         boxes = []
         for cell in final['cells']:
             left, top, right, bottom = cell['metrics']['ink']
@@ -50,4 +54,4 @@ def write_body_gradient_bounds(track, ir, plan):
             final['body_gradient_bounds'] = [min(left), min(top), max(right), max(bottom)]
         enabled = True
         outlined_gradient = outlined_gradient or outlined
-    return enabled, outlined_gradient
+    return enabled, outlined_gradient, images

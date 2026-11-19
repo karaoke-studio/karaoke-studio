@@ -25,16 +25,17 @@ std::filesystem::path fontPath(const std::wstring& value) {
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
-void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool bodyGradients, bool outlineGradients) {
+void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool bodyGradients, bool outlineGradients,
+                    bool imageFills) {
     const auto gradient = [](const PaintStyle& paint) {
         return !paint.stops.empty()
             && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical");
     };
     const auto supportedBodyFill = [&](const PaintStyle& paint) {
-        return paint.mode == "solid" || (bodyGradients && gradient(paint));
+        return paint.mode == "solid" || (bodyGradients && gradient(paint)) || (imageFills && paint.mode == "image");
     };
     const auto supportedOutline = [&](const PaintStyle& paint) {
-        return paint.mode == "solid" || (outlineGradients && gradient(paint));
+        return paint.mode == "solid" || (outlineGradients && gradient(paint)) || (imageFills && paint.mode == "image");
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
         || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
@@ -69,17 +70,17 @@ void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool 
 }
 }
 void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLayers, bool bodyGradients,
-                       bool outlineGradients) {
+                       bool outlineGradients, bool imageFills) {
     if (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
         || scene.viewportOffsetY != 0 || scene.lineBand.enabled || (!canonical && !scene.charStyles.empty())
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
     if (outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");
-    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, outlineLayers, false, false);
+    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, outlineLayers, false, false, false);
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
-        supportedStyle(style, canonical, outlineLayers, bodyGradients, outlineGradients);
+        supportedStyle(style, canonical, outlineLayers, bodyGradients, outlineGradients, imageFills);
         if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
             || !line.rubies.empty() || (!canonical && !line.bursts.empty()) || (!canonical && !line.placementWindows.empty())
             || line.fadeInMs || line.fadeOutMs
