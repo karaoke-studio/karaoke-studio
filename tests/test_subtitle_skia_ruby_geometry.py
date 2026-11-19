@@ -246,10 +246,13 @@ def test_main_role_anchor_can_come_from_outside_ruby_target(binary,annotated):
     assert result.lines[0].rubies[0].baseline_offset==pytest.approx(-80-28*.2,abs=1e-4)
 
 
-def test_invalid_main_outline_and_reversed_clock_are_gated(binary,annotated):
+def test_main_outline_moves_ruby_anchor_and_reverse_omits_ruby(binary,annotated):
     track,style=annotated
-    with pytest.raises(ValueError,match='带描边'):
-        prepare(binary,track,replace(style,stroke_width_px=5))
+    _, plain = prepare(binary, track, style)
+    _, outlined = prepare(binary, track, replace(style, stroke_width_px=5, ruby_stroke_width_px=0))
+    assert outlined.lines[0].rubies[0].baseline_offset == pytest.approx(
+        plain.lines[0].rubies[0].baseline_offset - 2.5,
+    )
     # Reverse singing is not a text direction: the shared selection omits its
     # annotations exactly like the GPU, so no target, gap or anchor remains.
     _,reverse=prepare(binary,replace(track,lines=[replace(track.lines[0],wipe_reverse=True)]),style)
