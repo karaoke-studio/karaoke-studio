@@ -1,4 +1,5 @@
 #include "core/prepared_scene.h"
+#include "character_wipe.h"
 #include "../../effects/wipe_clock.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkData.h"
@@ -26,6 +27,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.vertical = source.vertical;
         line.animation = source.animation;
         line.characterFade = source.characterFade;
+        line.transformedWipe = source.transformedWipe;
         line.scanline = source.scanline;
         const auto& band = source.scanline;
         if (band.enabled && (!std::isfinite(band.halfWidth) || band.halfWidth < .5f || band.halfWidth > 8192
@@ -250,7 +252,20 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             if (opacity <= 0) return;
             // The outline can reach beyond the integer wipe padding, just as
             // the vertical glyph can reach beyond its fixed cell.
-            const bool atFront = (line.vertical || drawOutline) && phase == Phase::Wiping;
+            const bool animatedClip = line.transformedWipe && transform.transformed && phase == Phase::Wiping;
+            float clipEdge = edge;
+            if (animatedClip) {
+                auto owner = index;
+                if (tMs > wipeEnd(cell) && index + 1 < line.cells.size() && !line.cells[index + 1].path.isEmpty())
+                    owner = index + 1;
+                const auto& clipCell = line.cells[owner];
+                const auto& matrix = states[owner].transform.matrix;
+                const float ratio = transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
+                                                         wipeStart(clipCell), wipeEnd(clipCell), tMs);
+                clipEdge = transformedWipeEdge(line.cells.front().pivot.layoutLeft,
+                    matrix.mapPoint({clipCell.left, 0}).x(), matrix.mapPoint({clipCell.right, 0}).x(), ratio);
+            }
+            const bool atFront = (line.vertical || drawOutline || animatedClip) && phase == Phase::Wiping;
             const bool before = !atFront && progress == 0;
             const bool after = !atFront && progress == 1;
             const auto draw = [&](bool sung) {
@@ -269,18 +284,18 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             if (!after) {
                 canvas.save();
                 canvas.clipRect(line.wipeRightToLeft
-                    ? band(-1e6f, before ? 1e6f : edge)
-                    : band(before ? -1e6f : edge, 1e6f),
-                                SkClipOp::kIntersect, cell.adjustedWipeEnd);
+                    ? band(-1e6f, before ? 1e6f : clipEdge)
+                    : band(before ? -1e6f : clipEdge, 1e6f),
+                                SkClipOp::kIntersect, cell.adjustedWipeEnd || animatedClip);
                 draw(false);
                 canvas.restore();
             }
             if (!before) {
                 canvas.save();
                 canvas.clipRect(line.wipeRightToLeft
-                    ? band(after ? -1e6f : edge, 1e6f)
-                    : band(-1e6f, after ? 1e6f : edge),
-                                SkClipOp::kIntersect, cell.adjustedWipeEnd);
+                    ? band(after ? -1e6f : clipEdge, 1e6f)
+                    : band(-1e6f, after ? 1e6f : clipEdge),
+                                SkClipOp::kIntersect, cell.adjustedWipeEnd || animatedClip);
                 draw(true);
                 canvas.restore();
             }

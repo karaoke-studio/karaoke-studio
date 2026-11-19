@@ -59,6 +59,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     validateSkiaScene(projected, true, outlineLayers);
     const auto layout = ir.value("skia_layout").toObject();
+    const bool allowTransformedWipe = layout.value("character_transform_schema").toDouble() == 2;
     const auto verticalVersion = layout.value("vertical_solid_schema").toDouble(-1);
     const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
     if (layout.value("version").toInt() != 2 || layout.value("metrics_identity").toString().size() != 64
@@ -129,6 +130,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
                                   line.endMs, delay, kindOf(line.entryAnimation), kindOf(line.exitAnimation)};
         const bool transforms = prepared.characterFade.transforms();
+        prepared.transformedWipe = transforms && allowTransformedWipe;
         const bool pivots = transforms || !line.bursts.empty();
         // scanline_band_schema=1: the line style's solid band; the projection gated the subset.
         if (line.scanlineEnabled)
@@ -254,7 +256,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             // Transformed cells are never wiping: entry finishes before each cell starts,
             // exit begins after every cell ends. Overlap uses a per-glyph front (unverified).
             const auto& fade = prepared.characterFade;
-            for (std::size_t i = 0; i < prepared.cells.size(); ++i) {
+            for (std::size_t i = 0; !allowTransformedWipe && i < prepared.cells.size(); ++i) {
                 const auto& c = prepared.cells[i];
                 const int start = c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs;
                 const int end = c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs;

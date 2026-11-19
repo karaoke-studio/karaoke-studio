@@ -180,6 +180,7 @@ jobs:
                       "horizontal_rtl": 1,
                       "cell_glyphs": 1,
                       "kana_marks": 1,
+                      "render_feature_suite": 1,
                       "files": {f"native/{p.relative_to(native).as_posix()}": hashlib.sha256(p.read_bytes()).hexdigest()
                                 for p in files}}
           out = Path(os.environ["RUNNER_TEMP"]) / f"mac-validation-{arch}.tar.gz"

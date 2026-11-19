@@ -27,10 +27,10 @@ TIMES = [0, 30, 65, 125, 180, 200, 251, 300, 366, 400, 450, 500, 599, 700, 2200,
          2399, 2400, 2450, 2500, 2600, 2652, 2700, 2768, 2800, 2884, 2900, 2999, 3000]
 
 
-def transform_source(project, entry='char_drip', exit='char_drip', *, overlap=False):
+def transform_source(project, entry='char_drip', exit='char_drip'):
     track, style = clock_source(project)
     line = track.lines[0]
-    shift = 0 if overlap else 400
+    shift = 400
     chars = [replace(c, start_ms=c.start_ms + shift) for c in line.chars]
     line = replace(line, chars=chars, end_ms=line.end_ms + shift, wipe_reverse=False)
     return replace(track, lines=[line]), replace(style, right_to_left=False, entry_anim=entry, entry_lead_ms=600,
@@ -42,7 +42,7 @@ def test_ir_carries_canonical_pivots_only_with_the_capability(binary, project, t
     track, style = transform_source(project, 'spin_flip', 'char_drip')
     ir = ir_for(binary, (track, style), dpr=1.5)
     plain = ir_for(binary, (track, replace(style, entry_anim='none', exit_anim='none')), dpr=1.5)
-    assert 'p07_character_transform' in ir['required_features'] and ir['skia_layout']['character_transform_schema'] == 1
+    assert 'p07_character_transform' in ir['required_features'] and ir['skia_layout']['character_transform_schema'] == 2
     assert 'p07_character_transform' not in plain['required_features']
     assert 'p07_character_fade' not in ir['required_features']
     cells, bare = ir['skia_layout']['lines'][0]['cells'], plain['skia_layout']['lines'][0]['cells']
@@ -89,10 +89,10 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
     assert np.array_equal(frames, expected)
 
 
-@pytest.mark.parametrize('case', ['overlap', 'outline', 'outer_outline', 'scanline', 'rtl',
+@pytest.mark.parametrize('case', ['outline', 'outer_outline', 'scanline', 'rtl',
                                   'reverse', 'vertical', 'ruby', 'roles', 'guide', 'no_wipe'])
 def test_unverified_combinations_are_rejected(binary, project, case):
-    track, style = transform_source(project, overlap=case == 'overlap')
+    track, style = transform_source(project)
     if case == 'outline': style = replace(style, stroke_width_px=6)
     elif case == 'outer_outline': style = replace(two_outlines(project)[1], entry_anim='char_drip', entry_lead_ms=600)
     elif case == 'scanline': style = band(style)
@@ -114,7 +114,7 @@ def test_unverified_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 2, 'missing_pivot', 'pivot_type',
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 3, 'missing_pivot', 'pivot_type',
                                       'inverted_cell', 'unclaimed_pivot', 'overlap'])
 def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, transform_source(project))
@@ -129,7 +129,9 @@ def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
         bad = ir_for(binary, (transform_source(project)[0], replace(transform_source(project)[1],
                                                                     entry_anim='none', exit_anim='none')))
         bad['skia_layout']['lines'][0]['cells'][0]['layout_left'] = 0
-    elif mutation == 'overlap': bad['track']['lines'][0]['display_start_ms'] = 400
+    elif mutation == 'overlap':
+        bad['skia_layout']['character_transform_schema'] = 1
+        bad['track']['lines'][0]['display_start_ms'] = 400
     else: bad['skia_layout']['character_transform_schema'] = mutation
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
@@ -220,3 +222,75 @@ def test_geometry_and_phase_match_actual_d2d_gpu(binary, project, entry, exit, d
         assert abs(sung(a)/full_a - sung(b)/full_b) * width <= 1, (entry, exit, t, 'front')
     # Animated geometry, not only the steady line, is held to the original budget.
     assert sum(t < 600 or t > 2400 for t in resolved) >= 8, resolved
+
+
+OVERLAP_TIMES = [0, 35, 45, 65, 100, 125, 140, 149, 159, 160, 171, 200, 248, 249,
+                 250, 251, 260, 275, 330, 365, 400, 599, 700, 1200, 2200]
+
+
+def singing_overlap(project, effect, handoff=False):
+    track, style = transform_source(project, effect, 'none')
+    line = track.lines[0]
+    chars = [replace(c, start_ms=t) for c, t in zip(line.chars, (40, 150, 260, 380), strict=True)]
+    if handoff:
+        chars[0] = replace(chars[0], pause_release_ms=140)
+    return replace(track, lines=[replace(line, chars=chars, end_ms=1200)]), style
+
+
+@pytest.mark.parametrize('effect', ['char_drip', 'spin_flip'])
+def test_transform_wipe_keeps_same_clock_and_supports_out_of_order_seek(binary, project, effect):
+    track, style = singing_overlap(project, effect, handoff=True)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    plain = ir_for(binary, (track, replace(style, entry_anim='none')), dpr=1.5)
+    assert ir['skia_layout']['character_transform_schema'] == 2
+    assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
+    results = []
+    times = [400, 125, 330, 200, 125]
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        assert np.array_equal(frames[1], frames[-1])
+        assert frames[1][..., 1].max() > 0 and frames[1][..., 0].max() > 0
+        results.append(frames)
+    for time, gpu, raster in zip(times, *results, strict=True):
+        assert within_one_pixel(gpu[..., 3] > 127, raster[..., 3] > 127), time
+        assert abs(premultiplied(gpu) - premultiplied(raster)).mean() < .13, time
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect,handoff,dpr', [('char_drip', False, 1), ('char_drip', True, 1.5),
+                                                ('spin_flip', False, 1), ('spin_flip', True, 1.5)])
+def test_transform_wipe_front_matches_actual_d2d_gpu(binary, project, effect, handoff, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = singing_overlap(project, effect, handoff)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(OVERLAP_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    shape = (round(360*dpr), round(640*dpr), 4)
+    refs = [np.frombuffer(p, np.uint8).reshape(shape) for p in raw]
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
+        configure(process, ir_for(binary, (track, style), dpr=dpr))
+        frames, _ = collect(process, OVERLAP_TIMES)
+    split = 0
+    for time, a, b in zip(OVERLAP_TIMES, refs, frames, strict=True):
+        pa, pb = premultiplied(a), premultiplied(b)
+        peak_a, peak_b = int(a[..., 3].max()), int(b[..., 3].max())
+        assert abs(peak_a - peak_b) <= 2, (effect, handoff, dpr, time)
+        # At half opacity a 127/128 rounding difference can switch the entire
+        # glyph's alpha>127 mask. Resolve faint coverage at half its own peak.
+        threshold = 127 if min(peak_a, peak_b) > 128 else min(peak_a, peak_b) // 2
+        ma, mb = a[..., 3] > threshold, b[..., 3] > threshold
+        assert within_one_pixel(ma, mb), (effect, handoff, dpr, time, 'ink')
+        assert abs(pa - pb).mean() < .13, (effect, handoff, dpr, time, 'RGBA')
+        if not ma.any() and not mb.any():
+            continue
+        painted_height = np.count_nonzero((ma | mb).any(axis=1))
+        assert abs(pa[..., 1].sum() - pb[..., 1].sum()) / (255 * painted_height) <= 1, (
+            effect, handoff, dpr, time, 'sung front')
+        if time < 600 and pa[..., 0].max() > 128 and pa[..., 1].max() > 128:
+            assert within_one_pixel((pa[..., 1] > 128), (pb[..., 1] > 128)), (
+                effect, handoff, dpr, time, 'front shape')
+            split += 1
+    assert split >= 5

@@ -552,7 +552,8 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P07.1 基础显隐、fade、slide、rise、char_fade、char_drip、spin_flip；全局/逐行覆盖、时长零值和阶段重叠规则。
   - [x] 已验收整行淡化、横移、升降和基础逐字淡化，见 §14.58–§14.60。
   - [x] 已验收正向、无描边横排正文的逐字滴落和翻转，以及该范围的零时长，见 §14.62。
-  - [ ] 逐字变换与唱字阶段的重叠，以及描边、注音等组合仍待验收。
+  - [x] 已验收该范围内逐字滴落、翻转与唱字重叠的动态走字前沿，见 §14.64。
+  - [ ] 逐字变换的描边、注音等组合及其跨平台验收仍待完成。
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
 - [ ] P07.3 普通 wipe/no_wipe、反向、共享计时块、空 pause、角色边界、Utopia、ruby Utopia、zoom_pulse、stroke_flash，含完成后的外层释放与下一字符接管。实色正向横排 no_wipe 子集见 §14.35；完整方向/特效组合仍待验收。
 - [ ] P07.4 全部已支持粒子种类与伴生层、sprite 覆盖、双色/跟随字体/复用配色、数量/速度、front/back、geometry/decor、逐字锚点及整行锚点。
@@ -1085,6 +1086,13 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 只运行上述步骤，不要修改仓库文件，不要创建分支、提交或推送。如果某一步报错，原样贴回完整的错误信息。
 ```
+
+**后续按同一候选提交集中验收。** §14 各批的「Mac 真机待测」可共用一次结果包中覆盖对应能力的实测。Mac CI 先验证 arm64/x64 的 Metal/Raster 构建、规范样例和干净环境验包。新包的 `render_feature_suite=1` 将单列竖排及注音、矢量导唱符、双描边、出入场、走字线与唱字星光的代表用例合为一项，并覆盖 G5 预览、短 MP4 和 Metal/Raster 帧比对。开发期间由 CI 承担分阶段复验。按 2026-11-19 用户决定，等迁移完成后再更新上方固定提交与验收包，由朋友在 Apple Silicon 上对最终候选运行同一脚本一次。登记结果同时核对仓库提交、包清单、`render_feature_suite` 退出码、`functional_passed` 与 `hardware_gate_passed`。
+
+- Mac 托管 CI 的虚拟 Metal 结果可作为功能和打包证据。真实设备结果用于 Metal 及 Qt Quick 的硬件验收。Intel 真机按 §1.1 的范围另行登记。
+- Linux 的 X11/Wayland 已有软件 Vulkan 结果，真实 Vulkan GPU 的渲染、验证层与设备生命周期需在 Linux 硬件上另验。
+- 尚未实现或未通过画质预算的功能组合，以及 P11 的 30 分钟真实负载和完整歌曲导出，都按各自验收项推进。上述一次实机专项覆盖的是已经接入的功能。
+
 
 **首次真机结果（2026-11-14）**：Apple M4 Pro（arm64，20 核 GPU，Metal 4 家族），macOS 26.6.2 (25G83)，Python 3.14.7；仓库与验收包均为 `90ec1d81`（CI 运行 43560806767）。退出码全部为 0：Metal 真硬件冒烟（hardware=true，120 帧，9 项能力检查）、Raster 冒烟、owned Metal 后端（hardware=1）、原生能力测试 7 通过 1 跳过（Vulkan 专用）、Qt Quick 预览 5 通过 1 跳过（Vulkan 验证专用），`MTL_DEBUG_LAYER=1` 下预览同样通过。结果包与日志保存在维护者本地，不入库。macOS x64 不在初始硬件验收范围（§1.1），未做真机。
 
@@ -2007,6 +2015,13 @@ Windows 相关 **109 通过**，含新增 **8 项实际 D2D GPU 对照**（不�
 `sing_twinkle_schema=1` 接通正向横排的实色原速唱字星光（`twinkle`）。Python 沿用原规划器输出 burst 和种子，用规范单元左右边、字体度量中线及整行最大 ascent/descent 准备锚点。native 使用共享 `effects::burstParticlesAt` 和同一个 `star4` 轮廓，在正文前方合成。按 D2D 的四角星几何简化实测，在物理坐标以 0.75px 的轴向二阶差阈值细分二次曲线再做抗锯齿。倒序和回跳的同后端帧逐字节一致。粒子可超过末字的唱字结束点，当前验证限制在行显示窗内。速度、跟随取色、描边/装饰、其他粒子及和入退场、扫字线、注音的组合仍需验收。
 
 Windows 相关 **106 项通过**，含 **4 项真实 D2D GPU** 对照（关闭 WARP 和 realization），覆盖 DPR 1/1.5、停顿、单色与双色。GPU/Raster 使用既有粒子区域预算和 1px 高亮轮廓检查。唯一命名低透明度样例为 DPR 1 的 1500ms 换字帧，14 个像素跨了 alpha 16 的掩码阈值，较大一侧最高 24，两侧像素差最高 10，覆盖总量相差 0.3%；对该帧逐像素检查低透明度边缘，其他帧执行原 IoU 预算。已并排复核 Arial 实字的 D2D/Vulkan/Raster 画面。X11/Wayland 各 **14 通过、4 项 D2D 跳过**，独立 Windows/Linux Raster 各 **12 通过**。四份 native 干净重建，CTest 各 **3/3**，源码标识 `cb822fc1cd966e9c708991b808e2f4692199ce6aa1a90f62a7d6474208336af3`。Windows/X11/Wayland 的 `sing-twinkle-layout.json` 字节相同。Mac 工作流已登记专项和样例，阶段收口时运行。证据前缀 `build/p07-twinkle*`。
+
+
+### 14.64 P07.1 逐字变换和走字的重叠（2026-11-19）
+
+`character_transform_schema=2` 开放正向横排无描边正文的逐字滴落/翻转和走字重叠。当前 glyph 有变换且正处于走字相位时，以变换后的实际墨迹求前沿。当前字收尾时沿用 D2D 的下一可用字接管规则，以原始走字曲线计算进度，并在线局部坐标取整。普通位置、时序、逐字透明度和图层顺序沿用既有路径。native 仍可接收 v1 的非重叠场景。描边、注音、走字线和反向等组合仍保留门槛。
+
+Windows 相关 **122 通过**，含逐字变换 **12 组真实 D2D GPU** 对照，其中新增 **4 组**覆盖滴落/翻转、停顿接管与 DPR 1/1.5。覆盖重叠时的相位透明度、墨迹、分色位置和 1px 唱色前沿预算。峰值 alpha 在半透明阈值附近时，以实际峰值的一半辨析边缘，避免 127/128 取整差令整字掩码消失。GPU/Raster 在乱序回跳中同后端重复帧逐字节一致。X11/Wayland 各 **29 通过、12 项 D2D 跳过**，独立 Windows/Linux Raster 各 **23 通过**。四份 native 干净重建，CTest 各 **3/3**，源码标识 `71394dd5d8e613a88c27fbf609c9c3531894413c12689d10fab6f02e13e043b2`。三处规范布局样例字节相同。Mac 验收包的新代表用例组已先用 Windows Vulkan 执行，**27 项通过**。证据前缀 `build/p07-transform-wipe*`。
 
 ## 15. 前期探针清理范围
 

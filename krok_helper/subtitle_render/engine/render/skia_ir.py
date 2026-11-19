@@ -91,7 +91,7 @@ _TRANSFORMS = {'char_drip', 'spin_flip'}
 
 
 def _character_transforms(track, ir, plan, measured):
-    """character_transform_schema=1: canonical layout-cell and glyph-run pivots, body text only."""
+    """character_transform_schema=2: canonical layout-cell and glyph-run pivots, body text only."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
@@ -109,12 +109,6 @@ def _character_transforms(track, ir, plan, measured):
         if not (entry or exit_):
             continue
         cells, metrics = ir['skia_layout']['lines'][index]['cells'], measured.lines[item.track_index]
-        delay = 350 // (len(cells) - 1) if len(cells) > 1 else 0
-        start, end = source['display_start_ms'], source['display_end_ms']
-        for i, interval in enumerate(source['resolved_intervals']):
-            # A transformed cell never wipes: the GPU then clips it with a per-glyph front.
-            if (entry and interval[0] < start + delay * i + 250) or (exit_ and interval[1] > max(source['end_ms'], end - 600)):
-                raise ValueError('Skia 逐字滴落/翻转期间暂不支持走字')
         write_horizontal_pivots(cells, metrics)
 
 
@@ -205,7 +199,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         _character_transforms(track, ir, plan, measured)
         ir['required_features'].append('p07_character_transform')
-        ir['skia_layout']['character_transform_schema'] = 1
+        ir['skia_layout']['character_transform_schema'] = 2
     if any(line.get('scanline') for line in ir['track']['lines']):
         _validate_scanline_band(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_scanline_band')

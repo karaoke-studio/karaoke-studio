@@ -41,6 +41,7 @@ struct ResolvedLine {
     bool vertical = false;
     LineAnimation animation;
     CharacterFade characterFade;
+    bool transformedWipe = false;
     ScanlineBand scanline;
     std::vector<SingParticleBurst> particles; // Front layer, drawn after the text stack.
 };

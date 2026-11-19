@@ -31,6 +31,22 @@ GPU_FIELDS = ("sppci_model", "sppci_cores", "spdisplays_mtlgpufamilysupport", "s
               "sppci_device_type", "spdisplays_metal")
 
 
+RENDER_FEATURE_CASES = (
+    "tests/test_subtitle_skia_vertical.py::test_vertical_gpu_raster_and_out_of_order_seek",
+    "tests/test_subtitle_skia_vertical.py::test_vertical_ruby_gpu_raster_and_out_of_order_seek",
+    "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_ruby_units_split_one_span_and_keep_the_pause",
+    "tests/test_subtitle_skia_vector_guides.py::test_vector_guide_gpu_raster_and_out_of_order_seek",
+    "tests/test_subtitle_skia_secondary_outline.py::test_outer_ring_preserves_inner_alpha",
+    "tests/test_subtitle_skia_line_fade.py::test_fade_g5_preview",
+    "tests/test_subtitle_skia_line_fade.py::test_fade_raster_export",
+    "tests/test_subtitle_skia_line_motion.py::test_motion_relative_to_static_line",
+    "tests/test_subtitle_skia_character_fade.py::test_character_fade_matches_fixed_stagger",
+    "tests/test_subtitle_skia_character_transform.py::test_transform_wipe_keeps_same_clock_and_supports_out_of_order_seek",
+    "tests/test_subtitle_skia_scanline.py::test_gpu_and_raster_draw_the_same_band_under_out_of_order_seek",
+    "tests/test_subtitle_skia_sing_particles.py::test_singing_twinkle_agrees_between_gpu_and_raster",
+)
+
+
 def run(command, log: Path, env=None, timeout=900) -> int:
     with log.open("w", encoding="utf-8") as out:
         out.write("$ " + " ".join(str(c) for c in command) + "\n")
@@ -251,6 +267,9 @@ def main(argv=None) -> int:
     if manifest.get("kana_marks", 0) >= 1:
         steps["kana_marks"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                "tests/test_subtitle_skia_kana_marks.py", "--basetemp", logs / "kana-mark-tests"]
+    if manifest.get("render_feature_suite", 0) >= 1:
+        steps["render_feature_suite"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                                        *RENDER_FEATURE_CASES, "--basetemp", logs / "render-feature-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"
