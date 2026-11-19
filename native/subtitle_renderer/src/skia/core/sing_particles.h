@@ -21,6 +21,21 @@ struct SingParticleBurst {
     float originX = 0, originY = 0, boxW = 1, boxH = 0; // Character pivot and anchor box.
 };
 
+struct ParticleVisibility {
+    int entryLeadMs = 0;
+    bool exitTail = false;
+
+    bool outside(const std::vector<SingParticleBurst>& bursts, int time, int start, int end) const {
+        const bool prelude = entryLeadMs > 0 && time < start && time >= start - entryLeadMs - 100;
+        const bool tail = exitTail && time >= end;
+        if (!prelude && !tail) return false;
+        return std::any_of(bursts.begin(), bursts.end(), [&](const SingParticleBurst& item) {
+            const auto& burst = item.burst;
+            return (tail || burst.sweep > 0) && time >= burst.startMs && time < burst.endMs;
+        });
+    }
+};
+
 namespace particle_detail {
 inline SkPoint midpoint(SkPoint a, SkPoint b) {
     return {(a.x() + b.x()) * .5f, (a.y() + b.y()) * .5f};

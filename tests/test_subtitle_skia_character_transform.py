@@ -114,7 +114,7 @@ def test_unverified_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 6, 'missing_pivot', 'pivot_type',
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 7, 'missing_pivot', 'pivot_type',
                                       'inverted_cell', 'unclaimed_pivot', 'overlap'])
 def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, transform_source(project))

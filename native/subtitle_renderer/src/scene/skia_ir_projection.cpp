@@ -91,6 +91,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const int transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toInt();
     const bool allowGeometry = allowCharacterTransform && transformVersion >= 4;
     const bool allowHalo = allowGeometry && transformVersion >= 5;
+    const bool allowFalling = allowHalo && transformVersion >= 6;
     const int twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toInt(1);
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble();
     const auto transformAnimation = [=](const QString& animation, bool entry) {
@@ -98,7 +99,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (allowGeometry && (entry ? animation == "tracking_in" || animation == "wave_in"
                                        : animation == "scatter_out" || animation == "converge_out"))
             || (allowHalo && (entry ? animation == "stretch_in" || animation == "glow_in"
-                                    : animation == "stretch_out" || animation == "glow_out"));
+                                    : animation == "stretch_out" || animation == "glow_out"))
+            || (allowFalling && isSkiaFallingParticle(animation));
     };
     const auto supportedAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")

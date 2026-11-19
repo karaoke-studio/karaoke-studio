@@ -1,4 +1,5 @@
 #include "skia_particle_projection.h"
+#include "skia_ir_contract.h"
 #include "paint_projection.h"
 #include "../model/backend_caps.h"
 #include <algorithm>
@@ -9,11 +10,15 @@ namespace krok::subtitle::native::scene {
 void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
                           const protocol::ResolvedStyle& style, int offset, int version, RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
+    const bool entry = version >= 9 && isSkiaFallingParticle(source.entryAnimation);
+    const bool exit = version >= 9 && isSkiaFallingParticle(source.exitAnimation);
+    const bool animated = entry || exit;
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if (cfg.vertical || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
-        || source.entryAnimation != "none" || source.exitAnimation != "none" || !cfg.rubies.empty()
+        || (source.entryAnimation != "none" && !entry) || (source.exitAnimation != "none" && !exit)
+        || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled)) || !cfg.rubies.empty()
         || style.strokeWidthPx > 0 || style.stroke2WidthPx > 0 || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");
@@ -22,8 +27,11 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");
         const bool ripple = version >= 4 && fx.kind == "ripple";
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic");
-        const bool falling = version >= 5 && (fx.kind == "petal" || fx.kind == "feather"
-                                               || fx.kind == "snow" || fx.kind == "snow_solid");
+        const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
+        const bool validSweep = animated
+            ? (entry && fx.sweep == 1 && fx.kind == source.entryAnimation)
+                || (exit && fx.sweep == -1 && fx.kind == source.exitAnimation)
+            : !falling || fx.sweep == 0;
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
                                             || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
@@ -52,7 +60,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
         if (!(star || symbol || ripple || falling || lightning || flame || scanline) || fx.anchor != "char"
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
-            || !validBand
+            || !validBand || !validSweep
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10

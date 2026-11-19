@@ -456,11 +456,11 @@ def test_singing_ripple_matches_actual_d2d_and_gpu_raster(binary, project, speed
         results.append(frames)
     for time, d2d, gpu, raster in zip(times, reference, *results, strict=True):
         sample = ('ripple', speed, crop, time)
-        assert_ripple_contours(d2d, gpu, sample)
+        assert_thin_particle_contours(d2d, gpu, sample)
         assert_particle_region(gpu, raster, sample, check_contour=False)
 
 
-def assert_ripple_contours(d2d, gpu, sample):
+def assert_thin_particle_contours(d2d, gpu, sample, *, coverage_epsilon=0):
     budget = COMPARISON_BUDGETS['image_categories']['particles']
     threshold = COMPARISON_BUDGETS['low_alpha']['mask_threshold']
     a, b = blue_coverage(d2d), blue_coverage(gpu)
@@ -468,10 +468,12 @@ def assert_ripple_contours(d2d, gpu, sample):
     if not a.any():
         return
     assert abs(a.sum() - b.sum()) <= budget['max_alpha_sum_relative'] * max(a.sum(), b.sum()), sample
-    assert within_one_pixel(a > threshold, b > threshold), sample
+    ma, mb = a > threshold, b > threshold
+    at_same_level = abs(a - b) <= coverage_epsilon
+    assert within_one_pixel(ma | (at_same_level & mb), mb | (at_same_level & ma)), sample
 
     # The two APIs distribute edge coverage differently on one-pixel-wide
-    # rings. Compare the same local area after checking raw extent and mass.
+    # contours. Compare the same local area after checking raw extent and mass.
     y, x = np.where((a > 0) | (b > 0))
     region = np.s_[max(y.min()-1, 0):y.max()+2, max(x.min()-1, 0):x.max()+2]
 
@@ -484,7 +486,8 @@ def assert_ripple_contours(d2d, gpu, sample):
     ma, mb = reference[..., 2] > threshold, candidate[..., 2] > threshold
     union = ma | mb
     if union.any():
-        assert (ma & mb).sum() / union.sum() >= budget['min_alpha_iou'], sample
+        matching = (ma & mb) | (union & (abs(reference[..., 2] - candidate[..., 2]) <= coverage_epsilon))
+        assert matching.sum() / union.sum() >= budget['min_alpha_iou'], sample
         difference = abs(reference[union] - candidate[union])
         assert difference.mean() <= budget['max_union_channel_mae'], sample
         assert np.percentile(difference, 95) <= budget['max_union_p95'], sample

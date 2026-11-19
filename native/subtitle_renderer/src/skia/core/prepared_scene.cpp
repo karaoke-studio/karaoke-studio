@@ -50,6 +50,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 || (source.wipeRightToLeft && (!band.enabled || item.burst.kind != "scanline")))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
         line.particles = source.particles;
+        line.particleVisibility = source.particleVisibility;
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
@@ -169,8 +170,11 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     for (const auto& line : lines_) {
-        if (tMs < line.startMs || tMs >= line.endMs) continue;
-        const auto animation = line.animation.at(tMs, line.startMs, line.endMs);
+        const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
+        if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs, line.endMs))
+            continue;
+        const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
+                                           : LineAnimation::State{1.f, 0.f, 0.f};
         if (animation.opacity <= 0.f) continue;
         SkAutoCanvasRestore restore(&canvas, true);
         if (animation.dx != 0 || animation.dy != 0)
@@ -180,6 +184,11 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 canvas.translate(translation.x, translation.y);
                 break;
             }
+        }
+        if (!textVisible) {
+            drawSingParticles(canvas, line.particles, tMs, false);
+            drawSingParticles(canvas, line.particles, tMs, true);
+            continue;
         }
         // Fade the composed line, preserving overlaps and translucent strokes.
         // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.

@@ -47,6 +47,7 @@ struct ResolvedLine {
     bool transformedWipe = false;
     ScanlineBand scanline;
     std::vector<SingParticleBurst> particles;
+    ParticleVisibility particleVisibility;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

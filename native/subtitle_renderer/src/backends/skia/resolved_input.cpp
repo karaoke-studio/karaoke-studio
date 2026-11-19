@@ -6,6 +6,7 @@
 #include "vertical_text.h"
 #include "../render_backend.h"
 #include "../../scene/skia_ir_projection.h"
+#include "../../scene/skia_ir_contract.h"
 #include "../../scene/skia_text_projection.h"
 #include "../../skia/core/stroke_flash.h"
 #include "include/core/SkMatrix.h"
@@ -125,9 +126,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             return animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
         };
         const bool charEntry = perCharacter(line.entryAnimation), charExit = perCharacter(line.exitAnimation);
-        const bool geoEntry = line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in"
+        const bool particleEntry = scene::isSkiaFallingParticle(QString::fromStdString(line.entryAnimation));
+        const bool particleExit = scene::isSkiaFallingParticle(QString::fromStdString(line.exitAnimation));
+        const bool geoEntry = particleEntry || line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in"
             || line.entryAnimation == "stretch_in" || line.entryAnimation == "glow_in";
-        const bool geoExit = line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
+        const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
             || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out";
         prepared.animation = {line.entryAnimation == "none" || charEntry || geoEntry ? 0 : line.entryDurationMs,
                               line.exitAnimation == "none" || charExit || geoExit ? 0 : line.exitDurationMs,
@@ -142,6 +145,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                       geoEntry ? line.entryDurationMs : 0, geoExit ? line.exitDurationMs : 0,
                                       line.endMs, style.fontSize};
         const bool geometry = prepared.characterGeometry.active();
+        prepared.particleVisibility = {particleEntry ? effects::fallEntryLeadMs(line.entryAnimation) : 0, particleExit};
         if (geometry && (style.strokeWidth > 0 || style.stroke2Width > 0))
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
         const bool transforms = prepared.characterFade.transforms() || geometry;

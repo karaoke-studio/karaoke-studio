@@ -71,6 +71,7 @@ private:
         bool transformedWipe = false;
         ScanlineBand scanline;
         std::vector<SingParticleBurst> particles;
+        ParticleVisibility particleVisibility;
         float inkStart = 0, inkTop = 0; // The band appears after the front enters body ink.
         SkRect paintBounds = SkRect::MakeEmpty();
     };
