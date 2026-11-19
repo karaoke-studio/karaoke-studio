@@ -1,5 +1,6 @@
 #include "commands/skia/command_router.h"
 #include "protocol/json_protocol.h"
+#include "scene/skia_ir_contract.h"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QJsonArray>
 #include <iostream>
@@ -13,7 +14,7 @@ int main(int argc, char** argv) {
     ready.insert("schema", 3);
     ready.insert("selection_version", 1);
     ready.insert("shared_memory_lifecycle_schema", 1);
-    ready.insert("profiles", QJsonArray{"p04_ascii_solid_wipe", "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles", "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe", "p05_resolved_ruby"});
+    ready.insert("profiles", scene::skiaIrProfiles());
     QJsonArray targets{"raster"};
 #ifdef KROK_SKIA_SIDECAR_GPU
     targets.append("gpu");
@@ -34,9 +35,9 @@ int main(int argc, char** argv) {
     ready.insert("line_fade_schema", 1);
     ready.insert("line_motion_schema", 1);
     ready.insert("character_fade_schema", 1);
-    ready.insert("scanline_band_schema", 4);
-    ready.insert("character_transform_schema", 5);
-    ready.insert("sing_twinkle_schema", 7);
+    ready.insert("scanline_band_schema", scene::kScanlineBandSchema);
+    ready.insert("character_transform_schema", scene::kCharacterTransformSchema);
+    ready.insert("sing_twinkle_schema", scene::kSingingParticleSchema);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);
     ready.insert("standalone_mark_schema", 1);
@@ -52,41 +53,10 @@ int main(int argc, char** argv) {
     ready.insert("resolved_wipe_schema", 1);
     ready.insert("resolved_ruby_schema", 1);
     ready.insert("upper_ruby_schema", 1);
-    auto profiles = ready.value("profiles").toArray();
-    profiles.append("p05_upper_ruby");
-    profiles.append("p05_overlap_wipe");
-    profiles.append("p05_lower_ruby");
-    profiles.append("p05_ruby_markers");
-    profiles.append("p05_ruby_units");
-    profiles.append("p05_font_fallback");
-    profiles.append("p05_mixed_fonts");
-    profiles.append("p05_standalone_marks");
-    profiles.append("p07_no_wipe");
-    profiles.append("p07_zero_ruby_no_wipe");
-    profiles.append("p05_horizontal_rtl");
-    profiles.append("p05_horizontal_rtl_cells");
-    profiles.append("p05_vertical_solid");
-    profiles.append("p05_vertical_japanese_glyphs");
-    profiles.append("p05_vertical_ruby");
-    profiles.append("p05_vector_guides");
-    profiles.append("p06_primary_solid_outline");
-    profiles.append("p06_secondary_solid_outline");
-    profiles.append("p07_line_fade");
-    profiles.append("p07_line_motion");
-    profiles.append("p07_character_fade");
-    profiles.append("p07_scanline_band");
-    profiles.append("p07_character_transform");
-    profiles.append("p07_sing_twinkle");
-    profiles.append("p07_stroke_flash");
-    profiles.append("p05_horizontal_rtl_kana_cells");
-    profiles.append("p05_horizontal_rtl_kana_marks");
-    profiles.append("p05_reverse_wipe");
-    profiles.append("p05_reverse_overlap");
     ready.insert("ruby_unit_schema", 1);
     ready.insert("ruby_marker_schema", 1);
     ready.insert("lower_ruby_schema", 1);
     ready.insert("overlap_schema", 1);
-    ready.insert("profiles", profiles);
     ready.insert("fingerprint", KROK_SKIA_FINGERPRINT);
     protocol::writeJson(ready);
     commands::SkiaCommandRouter router;
