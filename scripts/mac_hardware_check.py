@@ -119,11 +119,22 @@ def environment() -> dict:
             "repo_commit": output(["git", "-C", str(REPO), "rev-parse", "HEAD"])}
 
 
+def archive_results(archive: Path, summary: Path, logs: Path, *, compact: bool) -> None:
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as out:
+        out.write(summary, "summary.json")
+        candidates = logs.iterdir() if compact else logs.rglob("*")
+        for path in sorted(candidates):
+            if path.is_file() and (not compact or path.suffix in {".json", ".log"}):
+                out.write(path, f"logs/{path.relative_to(logs).as_posix()}")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("bundle", type=Path, help="mac-validation-ARCH.zip (or the .tar.gz inside it)")
     parser.add_argument("--allow-virtual-gpu", action="store_true",
                         help="CI only: a virtual Metal device is not a failure (hardware gate stays open)")
+    parser.add_argument("--compact-results", action="store_true",
+                        help="Save only logs and reports when the check passes")
     options = parser.parse_args(argv)
     if sys.platform != "darwin":
         parser.error("Run this on the Mac being checked")
@@ -284,14 +295,12 @@ def main(argv=None) -> int:
     hardware_ok = hardware is True and all(results[name] == 0 for name in hardware_steps)
     summary = {"bundle": manifest, "environment": env_info, "exit_codes": results,
                "metal_hardware": hardware, "functional_passed": functional_ok, "hardware_gate_passed": hardware_ok}
-    (WORK / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    summary_path = WORK / "summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
     archive = REPO / "build/mac-hardware-check-results.zip"
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as out:
-        out.write(WORK / "summary.json", "summary.json")
-        for path in sorted(logs.rglob("*")):
-            if path.is_file():
-                out.write(path, f"logs/{path.relative_to(logs)}")
+    passed = functional_ok and (hardware_ok or options.allow_virtual_gpu)
+    archive_results(archive, summary_path, logs, compact=options.compact_results and passed)
     print(json.dumps({k: summary[k] for k in ("exit_codes", "metal_hardware", "functional_passed",
                                                "hardware_gate_passed")}, indent=2))
     print(f"\nSend back: {archive}")

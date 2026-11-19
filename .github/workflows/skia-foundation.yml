@@ -223,7 +223,7 @@ jobs:
           name: mac-validation-${{ matrix.arch }}
           path: downloaded
       - name: One-command hardware check (hosted Metal is virtual, so only the hardware gate may fail)
-        run: python scripts/mac_hardware_check.py downloaded/mac-validation-${{ matrix.arch }}.tar.gz --allow-virtual-gpu
+        run: python scripts/mac_hardware_check.py downloaded/mac-validation-${{ matrix.arch }}.tar.gz --allow-virtual-gpu --compact-results
       - uses: actions/upload-artifact@v4
         if: always()
         with:

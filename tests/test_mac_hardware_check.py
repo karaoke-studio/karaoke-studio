@@ -56,3 +56,23 @@ def test_gpu_summary_keeps_only_whitelisted_fields():
     assert check.gpu_summary(json.dumps(displays)) == [
         {"sppci_model": "Apple M2", "sppci_cores": "10", "spdisplays_mtlgpufamilysupport": "spdisplays_metal3"}]
     assert "error" in check.gpu_summary("not json")[0]
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_archive_results_keeps_reports_and_can_omit_successful_test_payloads(tmp_path, compact):
+    summary = tmp_path / "summary.json"
+    summary.write_text('{"functional_passed": true}', encoding="utf-8")
+    logs = tmp_path / "logs"
+    test_files = logs / "preview-tests"
+    test_files.mkdir(parents=True)
+    (logs / "metal.json").write_text('{"hardware": false}', encoding="utf-8")
+    (logs / "preview.log").write_text("21 passed", encoding="utf-8")
+    (test_files / "test-video.mp4").write_bytes(b"generated test media")
+    archive = tmp_path / "results.zip"
+    check.archive_results(archive, summary, logs, compact=compact)
+    with zipfile.ZipFile(archive) as result:
+        expected = {"summary.json", "logs/metal.json", "logs/preview.log"}
+        if not compact:
+            expected.add("logs/preview-tests/test-video.mp4")
+        assert set(result.namelist()) == expected
+        assert result.read("logs/preview.log") == b"21 passed"
