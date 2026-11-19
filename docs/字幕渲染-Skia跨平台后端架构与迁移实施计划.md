@@ -2173,6 +2173,8 @@ Windows 关联 **163 项通过**，含 **4 组新增实际 D2D GPU 对照**（�
 
 Windows 关联 **90 项通过**，含 **2 组实际 D2D GPU 对照**（关闭 WARP 和 realization），覆盖 DPR 1/1.5、入退场边界和合成误差。X11/Wayland 各 **2 通过、2 项 D2D 跳过**，独立 Windows/Linux Raster 各 **1 通过**。四份构建 CTest 各 **3/3**，源码标识 `e0aa58a843a768bdb9cd025a2340467ae9f6b7b9318c84878abb47a60a30363a`。代表用例已登记到后续 Mac CI 和最终实机包。证据前缀 `build/p07-noise-transition*`。
 
+以提交 `8f08ae8f` 在 Windows 各连续 45 秒交替回访入场、退场与稳定帧。Vulkan 渲染 1,624 帧，Raster 渲染 1,264 帧。各目标内同时间点的帧哈希始终一致，sidecar RSS 的采样波动分别约 0.30 MiB 和 0.04 MiB。场景为 640×360、DPR 1.5 的单行噪声样例。P11 的整首歌曲和多行负载仍待验收。
+
 ### 14.85 P07.8 火焰与闪电的入退场（2026-11-19）
 
 `character_transform_schema=8` 与 `sing_twinkle_schema=11` 接通正向单行横排实色基础正文的火焰和闪电过渡。火焰保留内外焰、背光、余烬、点火冲击及退场灰烬，闪电保留三种旋转轮廓、背光、爆闪、冲击环和火星。正文继续使用共享透明度与缩放函数，冲击环复用水波纹的薄环覆盖。按 D2D 策略保留实际窗外粒子，含闪电入场提前发射。扫字、注音等混合仍有独立门槛。
@@ -2193,7 +2195,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 正向横排基础正文可对正文、第一道和第二道描边分别设置唱前/唱后实色、横向、纵向或分层渐变。横向取整行字形墨迹范围，最小宽度 1px。纵向与分层在墨迹顶部和底部各加按布局参考比例计算的描边外扩。正文有半透明色阶时，两道描边裁去正文内部。第一道描边半透明时，外描边也裁去内描边。Skia GPU 与 Raster 共用准备结果和 shader。
 - Windows 相关回归 120 项通过。新增的 7 组实测使用真实 D2D GPU（关闭 WARP 和 realization），比较 D2D GPU 与 Vulkan、Vulkan 与 Raster，覆盖单道渐变、外描边渐变、纵向正文加实色双描边、三层渐变组合、半透明色阶及 DPR 1/1.5。WSL X11 和 Wayland 各 23 项通过，12 项 Windows 专用对照按平台跳过。Windows 和 Linux 的 Raster-only 各 15 项通过，四个构建的 CTest 各 3/3。正文和描边渐变规范样例在 Windows、X11 和 Wayland 上逐字节一致。
-- 新能力通过 `p06_outline_gradient` 协商。能力或绘制范围缺失时拒绝 configure 并保留上一个场景。独立复跑渐变、native 架构和 Mac 验包脚本测试共 47 项通过。角色、注音、图片、装饰及动画组合仍需实现。规范样例和专项用例已列入下一轮双架构 Mac CI。
+- 新能力通过 `p06_outline_gradient` 协商。能力或绘制范围缺失时拒绝 configure 并保留上一个场景。独立复跑渐变、native 架构和 Mac 验包脚本测试共 47 项通过。三层渐变还通过 Windows G5 产品预览和 640×360 MP4 导出冒烟，Vulkan 与 Raster 各通过两项。Windows Qt Quick 的基础 Vulkan 纹理交接和四种窗口生命周期也通过同步验证层测试。角色、注音、图片、装饰及动画组合仍需实现。规范样例和专项用例已列入双架构 [Mac CI 44481840921](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44481840921)。
 
 ## 15. 前期探针清理范围
 
