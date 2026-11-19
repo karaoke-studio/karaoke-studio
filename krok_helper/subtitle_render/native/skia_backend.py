@@ -155,7 +155,7 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('character_transform_schema')) is not int or ready['character_transform_schema'] != 2
                     or 'p07_character_transform' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持逐字滴落/翻转，请重新构建')
-            if (type(ready.get('sing_twinkle_schema')) is not int or ready['sing_twinkle_schema'] != 1
+            if (type(ready.get('sing_twinkle_schema')) is not int or ready['sing_twinkle_schema'] != 2
                     or 'p07_sing_twinkle' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia 渲染器不支持版本化唱字星光')
             if "raster" not in ready.get("execution_targets", []):

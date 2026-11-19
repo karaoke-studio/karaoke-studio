@@ -137,8 +137,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_character_transform")
         && transformVersion != 1 && transformVersion != 2)
         throw BackendError("Skia 逐字滴落/翻转布局版本无效");
+    const auto twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_sing_twinkle")
-        && ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1) != 1)
+        && twinkleVersion != 1 && twinkleVersion != 2)
         throw BackendError("Skia 唱字星光布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
@@ -271,6 +272,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
     const bool allowCharacterTransform = features.contains("p07_character_transform");
+    const bool extendedTwinkle = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble() == 2;
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble();
     const auto transformAnimation = [](const QString& animation) {
         return animation == "char_drip" || animation == "spin_flip";
@@ -356,7 +358,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;
-        projectSkiaSingParticles(cfg, source, resolved, offset, out, line);
+        projectSkiaSingParticles(cfg, source, resolved, offset, extendedTwinkle, out, line);
         if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});

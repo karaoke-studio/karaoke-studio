@@ -17,10 +17,9 @@ def write_singing_twinkle(track, ir, plan, measured):
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 唱字星光仅支持正向横排基础正文')
         for burst in bursts:
-            if (burst['kind'] != 'twinkle' or not burst.get('front', True)
-                    or burst.get('time_scale', 1) != 1 or 'paint_id' in burst or 'char_color_ids' in burst
-                    or burst['start_ms'] < source['display_start_ms'] or burst['end_ms'] > source['display_end_ms']):
-                raise ValueError('Skia 唱字粒子当前仅支持实色原速唱字星光')
+            if (burst['kind'] not in {'twinkle', 'twinkle_classic'} or not burst.get('front', True)
+                    or 'paint_id' in burst or 'char_color_ids' in burst):
+                raise ValueError('Skia 唱字粒子当前仅支持实色唱字星光')
         metrics = measured.lines[item.track_index]
         write_horizontal_pivots(final['cells'], metrics)
         final['particle_box_height'] = (

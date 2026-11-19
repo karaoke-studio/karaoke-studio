@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace subtitle::skia {
-// sing_twinkle_schema=1: the existing GPU's solid-color singing twinkle. The
+// Both of the existing GPU's solid-color singing star effects use this sprite. The
 // shared deterministic evaluator owns every trajectory; this module only maps
 // each particle onto the 1000-unit sprite path (scale, rotate, translate).
 struct SingParticleBurst {
