@@ -297,6 +297,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p05_standalone_marks')
         if lower_enabled:
             ir['required_features'].append('p05_lower_ruby')
+        if 'ruby_solid_outline_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_ruby_solid_outline')
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
         ir['skia_layout']['font_chain_schema'] = 1

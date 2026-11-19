@@ -2,7 +2,9 @@
 #include "resolved_wipe.h"
 #include "vertical_text.h"
 #include "../render_backend.h"
+#include "../text_semantics.h"
 #include <QtCore/QJsonArray>
+#include <algorithm>
 #include <cmath>
 
 namespace krok::subtitle::native {
@@ -18,11 +20,28 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 std::uint32_t rgbaPaint(const QJsonValue& value) {
     if (!value.isArray() || value.toArray().size() != 4)
-        throw BackendError("Skia 下方注音实色必须为 RGBA 字节");
+        throw BackendError("Skia 注音实色必须为 RGBA 字节");
     const auto color = value.toArray();
     const auto r = integer(color[0], 0, 255), g = integer(color[1], 0, 255);
     const auto b = integer(color[2], 0, 255), a = integer(color[3], 0, 255);
     return (std::uint32_t(a) << 24) | (std::uint32_t(r) << 16) | (std::uint32_t(g) << 8) | b;
+}
+struct OutlinePaint {
+    int width = 0;
+    std::uint32_t before = 0, after = 0;
+    bool hasAlpha() const { return (before >> 24) < 255 || (after >> 24) < 255; }
+};
+OutlinePaint outlinePaint(const QJsonObject& outlines, const char* key) {
+    if (!outlines.contains(key)) return {};
+    const auto layer = outlines.value(key).toObject();
+    return {integer(layer.value("width"), 1, 4096),
+            rgbaPaint(layer.value("before")), rgbaPaint(layer.value("after"))};
+}
+bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const PaintStyle& after,
+                    float width, double dpr) {
+    if (std::abs(outline.width * dpr - width) > 1e-4) return false;
+    return !outline.width || (before.mode == "solid" && after.mode == "solid"
+        && outline.before == argb(before.color) && outline.after == argb(after.color));
 }
 void validateStandaloneMark(const QString& text, const QJsonObject& cell, const QJsonObject& ir) {
     const auto code = text.toUcs4().front();
@@ -62,6 +81,8 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         throw BackendError("Skia 注音最终布局缺少版本或能力声明");
     std::vector<std::vector<::subtitle::skia::ResolvedCell>> groups;
     const auto& line = scene.lines[lineIndex];
+    const bool vertical = scene.lineStyles[lineIndex].vertical;
+    const bool allowOutlines = ir.value("required_features").toArray().contains("p06_ruby_solid_outline");
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
         throw BackendError("Skia 注音组总数超限");
@@ -74,9 +95,8 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         const auto& paint = line.chars[index].styleIndex >= 0
             ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
         if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"
-            || paint.rubyStrokeWidth || paint.rubyStroke2Width || paint.rubyLatinStrokeWidth || paint.rubyLatinStroke2Width
             || paint.rubyDecorationKindForState(false) != "none" || paint.rubyDecorationKindForState(true) != "none"))
-            throw BackendError("Skia 注音最终绘制当前仅支持实色、无描边和装饰");
+            throw BackendError("Skia 注音最终绘制当前仅支持实色和无装饰");
         const auto fill = object.value("paint").toObject();
         const auto before = lower ? rgbaPaint(fill.value("before")) : argb(paint.rubyBeforeFillPaint.color);
         const auto after = lower ? rgbaPaint(fill.value("after")) : argb(paint.rubyAfterFillPaint.color);
@@ -84,6 +104,28 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         if (!units.isArray() || units.toArray().isEmpty() || units.toArray().size() > 4096
             || (totalCells += units.toArray().size()) > 65536)
             throw BackendError("Skia 注音最终单元数量无效或超限");
+        const auto outlines = object.value("outlines").toObject();
+        if (object.contains("outlines") && (!allowOutlines || vertical || outlines.isEmpty()
+            || outlines.size() != int(outlines.contains("stroke")) + int(outlines.contains("stroke2"))))
+            throw BackendError("Skia 注音描边要求横排布局和有效的实色描边能力");
+        const auto primary = outlinePaint(outlines, "stroke");
+        const auto secondary = outlinePaint(outlines, "stroke2");
+        if (!lower) {
+            const auto reading = units.toArray();
+            const bool latin = std::ranges::all_of(reading, [](const auto& item) {
+                return isLatinText(item.toObject().value("text").toString().toStdWString());
+            });
+            const float width = latin ? paint.rubyLatinStrokeWidth : paint.rubyStrokeWidth;
+            const float width2 = latin ? paint.rubyLatinStroke2Width : paint.rubyStroke2Width;
+            if (!matchesOutline(primary, paint.rubyBeforeStrokePaint, paint.rubyAfterStrokePaint, width, glyphs.dpr)
+                || !matchesOutline(secondary, paint.rubyBeforeStroke2Paint, paint.rubyAfterStroke2Paint,
+                                   width2, glyphs.dpr))
+                throw BackendError("Skia 上注音描边与实色样式不一致");
+        }
+        const bool protectFill = (before >> 24) < 255 || (after >> 24) < 255;
+        const float innerWidth = float(primary.width * glyphs.dpr);
+        const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
+        const double wipePad = (primary.width / 2) / glyphs.dpr;
         std::vector<::subtitle::skia::ResolvedCell> cells;
         for (const auto& unit : units.toArray()) {
             if (!unit.isObject()) throw BackendError("Skia 注音最终单元必须为对象");
@@ -113,8 +155,18 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
             if (shiftedStart < -172800000 || shiftedEnd > 172800000)
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
-                before, after);
-            if (scene.lineStyles[lineIndex].vertical) {
+                before, after, wipePad);
+            if (!glyph.path.isEmpty()) {
+                using namespace ::subtitle::skia;
+                if (primary.width)
+                    glyph.outline = SolidOutline{prepareOutlinePath(glyph.path, innerWidth), primary.before,
+                                                primary.after, protectFill, innerWidth};
+                if (secondary.width)
+                    glyph.outerOutline = SolidOutline{prepareOutlinePath(glyph.path, outerWidth), secondary.before,
+                                                     secondary.after,
+                                                     protectFill || (primary.width && primary.hasAlpha()), outerWidth};
+            }
+            if (vertical) {
                 const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");
                 const auto ink = cell.value("metrics").toObject().value("ink").toArray();
                 const auto baseline = cell.value("baseline_y").toDouble();

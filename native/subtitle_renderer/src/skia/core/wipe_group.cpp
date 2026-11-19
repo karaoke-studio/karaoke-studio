@@ -34,8 +34,21 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto draw = [&](bool after) {
-        paint.setColor(after ? cells_.front().after : cells_.front().before);
-        for (const auto& cell : cells_) canvas.drawPath(cell.path, paint);
+        for (const auto& cell : cells_) {
+            const auto outline = [&](const SolidOutline& stroke, bool outer) {
+                SkAutoCanvasRestore restore(&canvas, stroke.protectBody);
+                if (stroke.protectBody) {
+                    canvas.clipPath(cell.path, SkClipOp::kDifference, true);
+                    if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+                }
+                paint.setColor(after ? stroke.after : stroke.before);
+                canvas.drawPath(stroke.path, paint);
+            };
+            if (cell.outerOutline) outline(*cell.outerOutline, true);
+            if (cell.outline) outline(*cell.outline, false);
+            paint.setColor(after ? cell.after : cell.before);
+            canvas.drawPath(cell.path, paint);
+        }
     };
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs >= c.endMs; });

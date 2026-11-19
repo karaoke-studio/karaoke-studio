@@ -139,10 +139,15 @@ def test_outlined_upper_ruby_declares_capability_and_replays(binary, reading, la
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_outlined_lower_ruby_replays_all_three_bands(binary, source, target):
+@pytest.mark.parametrize('outlined_reading', [False, True])
+def test_outlined_lower_ruby_replays_all_three_bands(binary, source, target, outlined_reading):
     track, style, resolve = source
-    ir = lower_ir(binary, (track, outlined(style, 2), resolve), dpr=1.5)
+    style = outlined(style, 2)
+    if outlined_reading:
+        style = annotated_paint(style, 2)
+    ir = lower_ir(binary, (track, style, resolve), dpr=1.5)
     assert {'p06_outline_ruby', 'p05_lower_ruby'} <= set(ir['required_features'])
+    assert ('p06_ruby_solid_outline' in ir['required_features']) == outlined_reading
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [199, 450, 1900, 450])
@@ -168,12 +173,104 @@ def test_outlined_ruby_without_capability_keeps_previous_scene(binary, reading, 
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-@pytest.mark.parametrize('change', [{'ruby_stroke_width_px': 4}, {'ruby_stroke2_enabled': True, 'ruby_stroke2_width_px': 3}])
-def test_annotation_outlines_remain_explicitly_gated(binary, reading, change):
+def annotated_paint(style, layers, translucent=False):
+    alpha = 'A0' if translucent else 'FF'
+    colors_ = colors(f'#{alpha}FF0000', f'#{alpha}00FF00')
+    before = replace(colors_.before, stroke=PaintFill(color=f'#{alpha}0000FF'), stroke2=PaintFill(color='#FF00FFFF'))
+    after = replace(colors_.after, stroke=PaintFill(color=f'#{alpha}FFFF00'), stroke2=PaintFill(color='#FFFF00FF'))
+    return replace(style, ruby_colors_follow_main=False, ruby_karaoke_colors=replace(colors_, before=before, after=after),
+                   ruby_stroke_width_px=3, ruby_stroke2_enabled=layers == 2, ruby_stroke2_width_px=4)
+
+
+def test_non_solid_annotation_outlines_remain_explicitly_gated(binary, reading):
     track, style = upper_source(reading, 1)
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+    style = annotated_paint(style, 1)
+    colors_ = style.ruby_karaoke_colors
+    before = replace(colors_.before, stroke=PaintFill(mode='gradient_horizontal', start_color='#FF0000', end_color='#0000FF'))
+    with pytest.raises(ValueError, match='注音描边'):
+        upper_ir(binary, (track, replace(style, ruby_karaoke_colors=replace(colors_, before=before))), 1)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_annotated_solid_outlines_preserve_final_wipe_and_replay(binary, reading, target, tmp_path):
+    track, style = upper_source(reading, 2)
+    ir = upper_ir(binary, (track, annotated_paint(style, 2, True)), 1.5)
+    layout = ir['skia_layout']
+    assert 'p06_ruby_solid_outline' in ir['required_features'] and layout['ruby_solid_outline_schema'] == 1
+    ruby = layout['lines'][0]['ruby_groups'][0]
+    assert set(ruby['outlines']) == {'stroke', 'stroke2'}
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_ruby_solid_outline')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [299, 900, 2300, 900])
         with pytest.raises(NativeRendererError):
-            process.configure(track, replace(style, **change), width=640, height=360, fps=60)
+            configure(process, bad)
+        again, _ = collect(process, [900], generation=2)
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
+    assert not np.array_equal(frames[0], frames[2])
+    if target == 'gpu':
+        (tmp_path / 'ruby-solid-outline-layout.json').write_text(json.dumps(ruby, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('layers,translucent', [(1, False), (2, False), (2, True)])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_annotated_solid_outlines_match_actual_d2d_and_gpu_raster(binary, reading, layers, translucent, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = upper_source(reading, 2)
+    style = annotated_paint(style, layers, translucent)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
+    sample = ('ruby_outline', layers, translucent, dpr)
+    assert_annotated_parity(UPPER_TIMES, refs, gpu, sample, 2)
+    assert_annotated_parity(UPPER_TIMES, gpu, raster, (*sample, 'raster'), 2)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_lower_annotated_solid_outlines_match_actual_d2d_and_gpu_raster(binary, source, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style, resolve = source
+    style = annotated_paint(outlined(style, 2), 2)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(LOWER_TIMES), force_warp=False, track=track,
+                                   width=900, height=600, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(600*dpr), round(900*dpr), 4) for p in raw]
+    ir = lower_ir(binary, (track, style, resolve), dpr=dpr)
+    assert {'p06_ruby_solid_outline', 'p05_lower_ruby'} <= set(ir['required_features'])
+    assert all('outlines' in group for group in ir['skia_layout']['lines'][0]['ruby_groups'])
+    gpu, raster = render_skia(binary, ir, LOWER_TIMES)
+    sample = ('lower_ruby_outline', dpr)
+    assert_annotated_parity(LOWER_TIMES, refs, gpu, sample, 3)
+    assert_annotated_parity(LOWER_TIMES, gpu, raster, (*sample, 'raster'), 3)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('text,width', [('AA', 7), ('字字', 3), ('A字', 3)])
+def test_annotation_outline_width_follows_the_whole_reading_script(binary, reading, text, width):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = upper_source(reading, 2)
+    ruby = replace(track.rubies[0], reading=text, reading_parts=[text[0], '', text[1]])
+    track = replace(track, rubies=[ruby])
+    style = replace(annotated_paint(style, 2, True), ruby_latin_stroke_width_px=7, ruby_latin_stroke2_width_px=5)
+    dpr = 1.5
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(540, 960, 4) for p in raw]
+    ir = upper_ir(binary, (track, style), dpr)
+    outlines = ir['skia_layout']['lines'][0]['ruby_groups'][0]['outlines']
+    assert outlines['stroke']['width'] == width
+    gpu, raster = render_skia(binary, ir, UPPER_TIMES)
+    assert_annotated_parity(UPPER_TIMES, refs, gpu, (text, width), 2)
+    assert_annotated_parity(UPPER_TIMES, gpu, raster, (text, width, 'raster'), 2)
 
 
 def test_old_sidecar_without_outlined_ruby_is_rejected(binary, monkeypatch):

@@ -177,5 +177,6 @@ def test_ruby_stroke_measurement_changes_boxes_without_reshaping(binary,mixed):
     a,b=first.readings[0],second.readings[0]
     assert a.cells==b.cells
     assert b.unit_layouts[0][1]==a.unit_layouts[0][1]+5
-    assert b.unit_layouts[0][2]==a.unit_layouts[0][2]+2.5
+    # D2D places an odd five-pixel stroke with a two-pixel inset.
+    assert b.unit_layouts[0][2] == a.unit_layouts[0][2] + 2
     assert first.identity!=second.identity

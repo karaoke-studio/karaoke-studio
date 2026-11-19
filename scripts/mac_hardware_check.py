@@ -66,6 +66,8 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_gradients.py::test_outline_gradients_declare_capability_and_replay",
     "tests/test_subtitle_skia_image_fills.py::test_image_fills_declare_capability_seek_and_reconfigure",
     "tests/test_subtitle_skia_outline_ruby.py::test_outlined_upper_ruby_declares_capability_and_replays",
+    "tests/test_subtitle_skia_outline_ruby.py::test_annotated_solid_outlines_preserve_final_wipe_and_replay",
+    "tests/test_subtitle_skia_outline_ruby.py::test_outlined_lower_ruby_replays_all_three_bands",
 )
 
 

@@ -147,7 +147,7 @@ def test_invalid_lower_contract_keeps_previous_scene(binary, independent, mutati
     assert np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', [{'ruby_stroke_width_px': 4}, {'ruby_decoration_kind': 'shadow'},
+@pytest.mark.parametrize('change', [{'ruby_decoration_kind': 'shadow'},
     {'ruby_karaoke_colors': {'before': {'text': {'mode': 'gradient_horizontal'}}}}])
 def test_unsupported_independent_lower_appearance_is_explicit(binary, independent, change):
     track, style, _ = independent

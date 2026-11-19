@@ -8,6 +8,7 @@ from krok_helper.subtitle_render.engine.ruby.skia_timing import prepare_ruby_wip
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import prepare_overlap_wipes
 from .skia_lower_ir import lower_solid_paint
+from .skia_ruby_paint_ir import solid_ruby_outlines
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
@@ -32,6 +33,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         fonts[key] = resource
     run_offset = len(measured.runs)
     lines = []
+    has_outlines = False
     for item, local, timing in zip(prepared.plan.lines, ruby.lines, timings, strict=True):
         position = geometry.position(item, width, height)
         reverse = item.line.wipe_reverse
@@ -54,15 +56,26 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 continue
             indices = group.target.indices
             style_cell = next((i for i in indices if item.line.chars[i].role_label), indices[0])
+            outlines = solid_ruby_outlines(group.target.style)
+            # The existing GPU floors a half-width in reference pixels, then
+            # uses that integer directly in the physical annotation clip.
+            wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
             units = []
             for unit_index, (cell, text, interval) in enumerate(zip(group.cells, clock.units, clock.intervals, strict=True)):
                 units.append({**cell, 'run_index': cell['run_index']+run_offset, 'text': text,
                     'interval_ms': list(interval), 'baseline_y': cell['baseline_y']+position.baseline_y,
                     **{key: cell[key]+position.offset_x for key in ('origin_x', 'wipe_left', 'wipe_right')}})
                 units[-1]['wipe_end_position'] = overlap[1][group_index][unit_index]
+                ink = cell['metrics']['ink']
+                if wipe_pad and ink[2] > ink[0] and ink[3] > ink[1]:
+                    units[-1]['wipe_left'] -= wipe_pad
+                    units[-1]['wipe_right'] += wipe_pad
                 if unit_projection:
                     units[-1]['glyph_text'] = clock.glyph_units[unit_index]
             serialized = {'style_cell': style_cell, 'units': units}
+            if outlines:
+                serialized['outlines'] = outlines
+                has_outlines = True
             if group.target.lower:
                 serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index],
                                   paint=lower_solid_paint(group.target.style))
@@ -74,4 +87,5 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'standalone_mark_schema': 1} if standalone_marks else {}),
             'overlap_schema': 1,
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
+            **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}

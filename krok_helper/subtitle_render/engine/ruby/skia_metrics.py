@@ -53,9 +53,9 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
         main, _ = font_style_for_ruby_cell(style, '')
         baseline_run = batch.instance(main)
         units = []
+        stroke = ruby_stroke_width(ruby_script_stroke_style(style, reading))
         for unit in text_units:
             selected, stretch = font_style_for_ruby_cell(style, unit)
-            stroke = ruby_stroke_width(ruby_script_stroke_style(style, unit))
             run = batch.instance(selected, stretch, text=unit)
             units.append((unit, run, batch.cell(run, unit), selected, stroke))
         references.append((baseline_run, units))

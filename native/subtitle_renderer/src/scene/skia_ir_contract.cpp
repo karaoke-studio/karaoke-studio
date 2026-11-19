@@ -47,6 +47,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_outline_gradient",
         "p06_image_fill",
         "p06_outline_ruby",
+        "p06_ruby_solid_outline",
         "p07_line_fade",
         "p07_line_motion",
         "p07_character_fade",
@@ -184,6 +185,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_outline_ruby")
         && (!features.contains("p06_primary_solid_outline") || !features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 描边正文与注音组合缺少描边或注音能力声明");
+    if (features.contains("p06_ruby_solid_outline")
+        && (!features.contains("p05_resolved_ruby") || layout.value("ruby_solid_outline_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 注音描边缺少版本化布局或注音能力声明");
     if (features.contains("p06_outline_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 描边渐变缺少正文渐变或描边能力声明");
