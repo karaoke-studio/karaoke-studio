@@ -2148,6 +2148,12 @@ Windows 关联 **141 项通过**，含 **2 组新增真实 D2D GPU 对照**（�
 
 Windows 关联 **149 项通过**，另有 **2 项在核对细边缘后独立复核通过**。最终 **21 项聚焦用例通过**，含 **4 组新增实际 D2D GPU 对照**（关闭 WARP 和 realization），核对四种下落轮廓、窗首窗末和减速。羽毛 930ms 的一个暗边像素跨阈值导致包围盒多 1px，逐像素差 2/255。镂空雪花部分原始 IoU 最低约 0.924，原始覆盖量差小于 0.9%，3×3 局部覆盖平均误差小于 1.8，阈值差按 4/255 核对。雪花原始边缘的 P00 预算仍待统一画质收口。Skia GPU/Raster 使用原粒子预算。X11/Wayland 各 **10 通过、4 项 D2D 跳过**，独立 Windows/Linux Raster 各 **6 通过**。四份构建 CTest 各 **3/3**，源码标识 `991cbf6601219918422dc1ce67d6abd4dede0026665882fff4ebcc7a91cac29a`。下落过渡规范布局样例在 Windows/X11/Wayland 各自逐字节一致。证据前缀 `build/p07-particle-transitions*`。
 
+### 14.82 Mac 双架构扫字线与几何特效汇总 CI（2026-11-19）
+
+提交 `2ac5dace` 的双架构 Mac CI **5/5 成功**。Apple Silicon 与 Intel 各 **1429 项产品测试通过、962 项跳过**，干净环境包的新增特效套件各 **85 项通过**。两份包均为 `render_feature_suite=1`、`functional_passed=true`、`hardware_gate_passed=false`。下载核对的 **61 份规范布局样例全部字节一致**，其中正反向扫字线粒子、几何过渡、辉光、描边闪光与粒子同场六份样例也和本地 X11 对应证据相同。[Mac CI 44468827694](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44468827694)
+
+本轮覆盖到正向唱字与扫字粒子同场，粒子入退场和独立尾奏等后续改动列入下一次阶段验收。Mac 真机仍按用户决定集中在最终候选版。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
