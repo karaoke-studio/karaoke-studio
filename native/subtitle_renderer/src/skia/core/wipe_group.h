@@ -10,7 +10,8 @@ public:
                                std::optional<std::size_t> glowOffset = std::nullopt);
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
     void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
-    void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after) const;
+    void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
+                        const SingingScale&, float originX) const;
 private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible) const;
     float frontAt(int timeMs, float startEdge) const;

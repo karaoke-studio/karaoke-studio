@@ -111,7 +111,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (cell.outerOutline) line.hasOuterOutline = true;
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
             if (line.animation.active()) includeCellPaint(line.paintBounds, cell);
-            for (auto& glow : line.glow) glow.appendCell(cell.path);
+            for (auto& glow : line.glow)
+                glow.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth});
@@ -137,7 +138,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 glowOffset = rubyGlowCells;
                 rubyGlowCells += group.cells.size();
                 for (auto& layer : line.rubyGlow)
-                    for (const auto& cell : group.cells) layer.appendCell(cell.path);
+                    for (const auto& cell : group.cells)
+                        layer.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             }
             line.rubyGroups.emplace_back(group, source.noWipe, source.vertical, glowOffset);
             if (line.animation.active())

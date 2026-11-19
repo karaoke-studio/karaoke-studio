@@ -30,20 +30,28 @@ std::vector<PreparedGlow> PreparedGlow::prepare(const StaticGlow& spec, bool mer
     return layers;
 }
 
-void PreparedGlow::appendCell(const SkPath& path) {
-    if (path.isEmpty()) {
-        cells_.emplace_back();
-        return;
-    }
+SkPaint PreparedGlow::strokePaint() const {
     SkPaint stroke;
     stroke.setStyle(SkPaint::kStroke_Style);
     stroke.setStrokeJoin(SkPaint::kMiter_Join);
     stroke.setStrokeMiter(10.f);
     stroke.setStrokeWidth(strokeWidth_);
+    return stroke;
+}
+
+void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak) {
+    if (path.isEmpty()) {
+        cells_.emplace_back();
+        return;
+    }
     bool fill = false;
-    auto outline = skpathutils::FillPathWithPaint(path, stroke, &fill);
+    auto outline = skpathutils::FillPathWithPaint(path, strokePaint(), &fill);
     if (!fill || !outline.isFinite()) throw std::runtime_error("Skia 字幕光晕轮廓无效");
-    ink_.join(outline.computeTightBounds());
+    const auto bounds = outline.computeTightBounds();
+    ink_.join(bounds);
+    // Singing scales monotonically between identity and its peak. A scaled
+    // outline bounds the fixed-width stroke of the scaled glyph from outside.
+    if (!peak.isIdentity()) ink_.join(peak.mapRect(bounds));
     cells_.push_back(std::move(outline));
 }
 
@@ -67,8 +75,9 @@ bool PreparedGlow::visible(bool after) const {
     return (!phase_ || *phase_ == after) && ((after ? after_ : before_) >> 24);
 }
 
-void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std::optional<float> edge) const {
-    const auto& path = cells_[index];
+void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std::optional<float> edge,
+                            const SkPath* posed) const {
+    const auto& path = posed ? *posed : cells_[index];
     if (!visible(after) || path.isEmpty()) return;
     SkAutoCanvasRestore restore(&canvas, edge.has_value());
     if (edge) {
@@ -76,7 +85,7 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
                                 : SkRect::MakeLTRB(*edge, -1e6f, 1e6f, 1e6f);
         canvas.clipRect(clip, SkClipOp::kIntersect, true);
     }
-    SkPaint paint;
+    auto paint = posed ? strokePaint() : SkPaint{};
     paint.setAntiAlias(true);
     paint.setColor(after ? after_ : before_);
     canvas.drawPath(path, paint);

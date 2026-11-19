@@ -23,6 +23,13 @@ void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, b
     brush.setColor(after ? cell.after : cell.before);
     canvas.drawPath(cell.path, brush);
 }
+
+float singingFront(const ResolvedCell& cell, int timeMs, float originX, const SkRect& ink) {
+    const float progress = cell.wipePoints.empty()
+        ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
+        : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
+    return transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad);
+}
 }
 
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
@@ -75,11 +82,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
             if (after ? before : complete) continue;
             SkAutoCanvasRestore restore(&canvas, !before && !complete);
             if (!before && !complete) {
-                const SkRect ink = cell.path.computeTightBounds();
-                const float progress = cell.wipePoints.empty()
-                    ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
-                    : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
-                const float edge = transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad);
+                const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
                 const auto clip = after ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
                                         : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
                 canvas.clipRect(clip, SkClipOp::kIntersect, true);
@@ -89,8 +92,24 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
     }
 }
 
-void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after) const {
+void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
+                                      const SingingScale& scale, float originX) const {
     if (!glowOffset_ || bounds_.isEmpty()) return;
+    if (scale.active) {
+        for (std::size_t index = 0; index < cells_.size(); ++index) {
+            const auto& cell = cells_[index];
+            const bool before = timeMs <= cell.startMs;
+            const bool complete = !before && timeMs >= cell.endMs;
+            if (cell.path.isEmpty() || (after ? before : complete)) continue;
+            const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+            std::optional<SkPath> posed;
+            if (transform.transformed) posed = cell.path.makeTransform(transform.matrix);
+            const auto edge = before || complete ? std::nullopt : std::optional(singingFront(
+                cell, timeMs, originX, (posed ? *posed : cell.path).computeTightBounds()));
+            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr);
+        }
+        return;
+    }
     const bool before = std::ranges::all_of(cells_, [=](const auto& cell) { return timeMs <= cell.startMs; });
     const bool complete = !before && lineWipeComplete(cells_, timeMs);
     if (after ? before : complete) return;
@@ -113,14 +132,8 @@ void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingSc
         const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
         const bool before = timeMs <= cell.startMs;
         std::optional<float> clip;
-        if (!before && timeMs < cell.endMs) {
-            const float progress = cell.wipePoints.empty()
-                ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
-                : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
-            const auto ink = cell.path.computeTightBounds();
-            clip = transformedWipeEdge(originX, transform.matrix.mapPoint({ink.left(), 0}).x(),
-                transform.matrix.mapPoint({ink.right(), 0}).x(), progress, cell.pivot.wipePad);
-        }
+        if (!before && timeMs < cell.endMs)
+            clip = singingFront(cell, timeMs, originX, transform.matrix.mapRect(cell.path.computeTightBounds()));
         return StaticShadow::WipePose{transform, before, clip};
     });
 }

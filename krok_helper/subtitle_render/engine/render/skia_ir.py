@@ -378,5 +378,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
     _write_utopia_pivots(ir, plan, measured)
+    if 'p07_singing_scale' in ir['required_features'] and (
+            'p06_static_glow' in ir['required_features'] or 'p06_ruby_glow' in ir['required_features']):
+        ir['required_features'].append('p07_singing_glow')
     project_reverse_wipe(ir)
     return ir

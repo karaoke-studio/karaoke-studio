@@ -1,6 +1,8 @@
 #pragma once
 
 #include "include/core/SkImageFilter.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkSurface.h"
 #include <cstdint>
@@ -29,14 +31,16 @@ public:
     };
 
     static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
-    void appendCell(const SkPath&);
+    void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I());
     bool visible(bool after) const;
     Source createSource(SkCanvas&) const;
-    void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge) const;
+    void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
+                  const SkPath* posed = nullptr) const;
     void composite(SkCanvas&, const Source&) const;
 
 private:
     PreparedGlow(const StaticGlow&, const GlowState&, std::optional<bool> phase);
+    SkPaint strokePaint() const;
     std::uint32_t before_, after_;
     int radius_;
     float strokeWidth_;

@@ -9,11 +9,10 @@ import numpy as np
 import pytest
 
 from test_subtitle_skia_static_shadow import application, binary, project, ir_for, collect, configure, selection
-from test_subtitle_skia_static_shadow import shadow_source, premultiplied
+from test_subtitle_skia_static_shadow import shadow_source, shaded_ruby, premultiplied
 from test_subtitle_skia_outline_ruby import (
     annotated, mixed, pages, reading, upper_ir, render_skia, UPPER_TIMES,
 )
-from test_subtitle_skia_static_shadow import shaded_ruby
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -158,17 +157,21 @@ def glowing_ruby(reading, case):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, tmp_path):
+@pytest.mark.parametrize('singing', [False, True])
+def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, singing, tmp_path):
     track, style = glowing_ruby(reading, 'two_groups')
+    if singing:
+        style = replace(style, karaoke_anim='utopia')
     ir = upper_ir(binary, (track, style), 1)
     plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
                                              ruby_decoration_kind_before='none')), 1)
     assert {'p06_static_glow', 'p06_ruby_glow'} <= set(ir['required_features'])
+    assert ('p07_singing_glow' in ir['required_features']) == singing
     assert 'p06_ruby_glow' not in plain['required_features']
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     assert len(ir['skia_layout']['lines'][0]['ruby_groups']) == 2
     invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p06_ruby_glow')
+    invalid['required_features'].remove('p07_singing_glow' if singing else 'p06_ruby_glow')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [299, 550, 2300, 550])
@@ -181,20 +184,55 @@ def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, tmp_path):
     assert all(np.count_nonzero(a[..., 3] > 16) > np.count_nonzero(b[..., 3] > 16)
                for a, b in zip(frames[:3], baseline, strict=True))
     if target == 'gpu':
-        (tmp_path / 'ruby-glow-layout.json').write_text(json.dumps({
+        filename = 'ruby-singing-glow-layout.json' if singing else 'ruby-glow-layout.json'
+        (tmp_path / filename).write_text(json.dumps({
             'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
         }, sort_keys=True), encoding='utf-8')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case,dpr', [('inherited', 1), ('inherited', 1.5), ('independent', 1.5), ('two_groups', 1)])
-def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr):
+@pytest.mark.parametrize('case,dpr,singing', [
+    ('inherited', 1, False), ('inherited', 1.5, False),
+    ('independent', 1.5, False), ('two_groups', 1, False),
+    ('inherited', 1, True), ('independent', 1.5, True), ('two_groups', 1, True),
+])
+def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr, singing):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     track, style = glowing_ruby(reading, case)
+    if singing:
+        style = replace(style, karaoke_anim='utopia')
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
     refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
     gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
-    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, case, dpr)
+    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, (case, singing), dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_p00_multi_lane_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, application):
+    from scripts.subtitle_render_corpus import _ordinary_scenario
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    case = _ordinary_scenario()
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as gpu:
+        gpu.configure(case.track, case.style, width=1920, height=1080, fps=60)
+        gpu_frames, _ = collect(gpu, case.timestamps_ms)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as raster:
+        raster.configure(case.track, case.style, width=1920, height=1080, fps=60)
+        raster_frames, _ = collect(raster, case.timestamps_ms)
+    assert_glow_parity(case.timestamps_ms, refs, gpu_frames, raster_frames, case.name, 1)
+    limit = COMPARISON_BUDGETS['image_categories']['decorated_text']['max_bbox_edge_delta_px_at_1080']
+
+    def bounds(frame):
+        rows, columns = np.where(frame[..., 3] > 16)
+        return np.array([columns.min(), rows.min(), columns.max(), rows.max()])
+
+    for time, ref, gpu_frame, raster_frame in zip(case.timestamps_ms, refs, gpu_frames, raster_frames, strict=True):
+        assert np.max(np.abs(bounds(ref) - bounds(gpu_frame))) <= limit, (time, 'D2D')
+        assert np.max(np.abs(bounds(gpu_frame) - bounds(raster_frame))) <= limit, (time, 'Raster')

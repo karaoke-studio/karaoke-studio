@@ -86,8 +86,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowShadow = ir.value("required_features").toArray().contains("p06_ruby_shadow")
         && !vertical && line.karaokeAnimation != "no_wipe"
         && line.entryAnimation == "none" && line.exitAnimation == "none";
-    const bool allowGlow = ir.value("required_features").toArray().contains("p06_ruby_glow")
-        && !vertical && line.karaokeAnimation == "none"
+    const auto features = ir.value("required_features").toArray();
+    const bool allowSingingGlow = features.contains("p07_singing_glow")
+        && line.karaokeAnimation == "utopia" && !line.zoomPulseEnabled;
+    const bool allowGlow = features.contains("p06_ruby_glow")
+        && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow)
         && line.entryAnimation == "none" && line.exitAnimation == "none"
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
@@ -117,7 +120,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
             if (!allowGlow || decor.mode != "solid" || !std::isfinite(radius) || radius > 532.f)
-                throw BackendError("Skia 当前仅支持横排上注音的静态实色光晕");
+                throw BackendError("Skia 当前仅支持横排上注音的实色光晕与普通唱字放大");
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
         };
         const ::subtitle::skia::StaticGlow glow{

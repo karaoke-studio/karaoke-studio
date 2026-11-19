@@ -365,11 +365,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.glow = skiaStaticGlow(style);
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
         const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
+        const bool singingGlow = singingScale && !line.zoomPulseEnabled && features.contains("p07_singing_glow");
         if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.scanlineEnabled
                 || !line.bursts.empty() || line.strokeFlashEnabled
-                || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia)
+                || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia && !singingGlow)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {

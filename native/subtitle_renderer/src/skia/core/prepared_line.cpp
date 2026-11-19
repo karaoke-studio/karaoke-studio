@@ -116,7 +116,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         }();
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
-            && (cell.outline || cell.outerOutline || transform.glowAlpha > 0))
+            && (cell.outline || cell.outerOutline || transform.glowAlpha > 0 || !line.glow.empty()))
             animatedInk = cell.path.makeTransform(transform.matrix);
         states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
                           transform, std::move(animatedInk)});
@@ -222,7 +222,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const auto source = layer.createSource(canvas);
         if (!source.surface) continue;
         for (const auto& group : line.rubyGroups)
-            group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after);
+            group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
+                                 line.singingScale, line.rubySingingOrigin);
         layer.composite(canvas, source);
     }
     for (const auto& layer : line.glow) {
@@ -234,11 +235,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (!source.surface) continue;
         auto& glowCanvas = *source.surface->getCanvas();
         inPhaseOrder([&](std::size_t index, Phase phase) {
+            const auto& ink = states[index].animatedInk;
+            const auto* posed = ink ? &*ink : nullptr;
             if (phase == Phase::Wiping) {
-                layer.drawCell(glowCanvas, index, false, states[index].edge);
-                layer.drawCell(glowCanvas, index, true, states[index].edge);
+                const float edge = utopia ? transformedEdge(index) : states[index].edge;
+                layer.drawCell(glowCanvas, index, false, edge, posed);
+                layer.drawCell(glowCanvas, index, true, edge, posed);
             } else {
-                layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt);
+                layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt, posed);
             }
         });
         layer.composite(canvas, source);

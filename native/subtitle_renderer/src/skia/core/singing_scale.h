@@ -9,6 +9,10 @@ struct SingingScale {
     int curveLevel = 1;
     int peakPercent = 125;
 
+    SkMatrix peakMatrix(const CharacterPivot& pivot) const {
+        return active ? matrix(pivot, zoomPulse ? float(peakPercent) / 100.f : 1.15f) : SkMatrix::I();
+    }
+
     CharacterTransformState at(int time, int start, int end, const CharacterPivot& pivot) const {
         if (!active || end <= start || time <= start) return {};
         float scale = 1.f;
@@ -26,12 +30,17 @@ struct SingingScale {
             scale = 1.f + .15f * progress;
         }
         if (scale == 1.f) return {};
-        const float x = zoomPulse ? (pivot.layoutLeft + pivot.layoutRight) * .5f : pivot.layoutLeft;
-        const float y = zoomPulse ? pivot.centerY : pivot.baseline;
         CharacterTransformState state;
-        state.matrix = SkMatrix::MakeAll(scale, 0, x * (1.f - scale), 0, scale, y * (1.f - scale), 0, 0, 1);
+        state.matrix = matrix(pivot, scale);
         state.transformed = true;
         return state;
+    }
+
+private:
+    SkMatrix matrix(const CharacterPivot& pivot, float scale) const {
+        const float x = zoomPulse ? (pivot.layoutLeft + pivot.layoutRight) * .5f : pivot.layoutLeft;
+        const float y = zoomPulse ? pivot.centerY : pivot.baseline;
+        return SkMatrix::MakeAll(scale, 0, x * (1.f - scale), 0, scale, y * (1.f - scale), 0, 0, 1);
     }
 };
 }
