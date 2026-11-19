@@ -12,7 +12,7 @@ from .skia_ruby_paint_ir import ruby_decoration_kinds, solid_ruby_outlines
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
-def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None, singing_lines=()):
+def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None, singing_lines=(), zoom_lines=()):
     geometry, measured = prepared.geometry, prepared.measured
     ruby = geometry.ruby
     if ruby is None:
@@ -37,6 +37,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
         singing = line_index in singing_lines
+        zoom = line_index in zoom_lines
         reverse = item.line.wipe_reverse
         if reverse and (local.rubies or any(curve is not None for curve in timing.main)):
             raise ValueError('Skia 反向走字行不能携带注音组或注音分段时钟（现有 GPU 省略该行注音）')
@@ -73,9 +74,15 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                     units[-1]['wipe_right'] += wipe_pad
                 if singing:
                     units[-1]['utopia_layout_left'] = cell['layout_left'] + position.offset_x
+                if zoom:
+                    units[-1]['utopia_layout_right'] = cell['layout_right'] + position.offset_x
                 if unit_projection:
                     units[-1]['glyph_text'] = clock.glyph_units[unit_index]
             serialized = {'style_cell': style_cell, 'units': units}
+            if zoom:
+                if group.zoom_center_offset is None:
+                    raise ValueError('Skia 注音整字放大缺少规范字体轴心')
+                serialized['zoom_pivot_y'] = position.baseline_y + group.baseline_offset + group.zoom_center_offset
             if outlines:
                 serialized['outlines'] = outlines
                 has_outlines = True

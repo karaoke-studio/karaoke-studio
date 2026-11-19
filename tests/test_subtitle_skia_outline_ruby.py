@@ -389,37 +389,53 @@ def test_outlined_upper_and_lower_ruby_match_actual_d2d_and_gpu_raster(binary, s
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_ruby_utopia_singing_preserves_units_and_replay(binary, reading, target, tmp_path):
+@pytest.mark.parametrize('animation', ['utopia', 'zoom_pulse'])
+def test_ruby_utopia_singing_preserves_units_and_replay(binary, reading, target, animation, tmp_path):
     track, style = upper_source(reading, 2)
     style = annotated_paint(style, 2, True)
-    ir = upper_ir(binary, (track, replace(style, karaoke_anim='utopia')), 1.5)
+    zoom = animation == 'zoom_pulse'
+    ir = upper_ir(binary, (track, replace(style, karaoke_anim=animation)), 1.5)
     static = upper_ir(binary, (track, style), 1.5)
     assert {'p07_singing_scale', 'p07_ruby_singing_scale'} <= set(ir['required_features'])
     line = ir['skia_layout']['lines'][0]
     group, = line['ruby_groups']
     assert all('utopia_layout_left' in unit for unit in group['units'])
+    assert ('p07_ruby_zoom_pulse' in ir['required_features']) == zoom
+    if zoom:
+        assert np.isfinite(group['zoom_pivot_y'])
+        assert all(unit['utopia_layout_left'] <= unit['utopia_layout_right'] for unit in group['units'])
     assert [u['interval_ms'] for u in group['units']] == [
         u['interval_ms'] for u in static['skia_layout']['lines'][0]['ruby_groups'][0]['units']
     ]
     bad = copy.deepcopy(ir)
-    del bad['skia_layout']['lines'][0]['ruby_groups'][0]['units'][0]['utopia_layout_left']
+    del bad['skia_layout']['lines'][0]['ruby_groups'][0]['units'][0][
+        'utopia_layout_right' if zoom else 'utopia_layout_left']
+    invalid = [bad]
+    if zoom:
+        bad_center = copy.deepcopy(ir)
+        bad_center['skia_layout']['lines'][0]['ruby_groups'][0]['zoom_pivot_y'] = None
+        invalid.append(bad_center)
+    settled = 2400
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
-        frames, _ = collect(process, [299, 550, 1400, 2300, 550])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
+        frames, _ = collect(process, [299, 550, 1400, settled, 550])
+        for malformed in invalid:
+            with pytest.raises(NativeRendererError):
+                configure(process, malformed)
         again, _ = collect(process, [550], generation=2)
         configure(process, static)
-        still, _ = collect(process, [299, 550, 1400, 2300], generation=3)
+        still, _ = collect(process, [299, 550, 1400, settled], generation=3)
     assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
     assert np.array_equal(frames[-2], still[-1])
     assert not np.array_equal(frames[1], still[1])
     if target == 'gpu':
-        (tmp_path / 'ruby-singing-scale-layout.json').write_text(json.dumps(line, sort_keys=True), encoding='utf-8')
+        name = 'ruby-zoom-pulse-layout.json' if zoom else 'ruby-singing-scale-layout.json'
+        (tmp_path / name).write_text(json.dumps(line, sort_keys=True), encoding='utf-8')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case,dpr', [('upper', 1), ('upper', 1.5), ('outlined', 1), ('outlined', 1.5), ('lower', 1.5)])
+@pytest.mark.parametrize('case,dpr', [('upper', 1), ('upper', 1.5), ('outlined', 1), ('outlined', 1.5),
+                                     ('lower', 1.5), ('zoom', 1), ('zoom', 1.5), ('zoom_japanese', 1.5)])
 def test_ruby_utopia_singing_matches_actual_d2d_and_gpu_raster(binary, reading, source, case, dpr):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
@@ -430,10 +446,17 @@ def test_ruby_utopia_singing_matches_actual_d2d_and_gpu_raster(binary, reading, 
         ir = lower_ir(binary, (track, style, resolve), dpr=dpr)
     else:
         track, style = upper_source(reading, 2)
-        if case == 'outlined':
+        zoom = case in {'zoom', 'zoom_japanese'}
+        if case in {'outlined', 'zoom'}:
             style = annotated_paint(style, 2, True)
-        style = replace(style, karaoke_anim='utopia')
+        if case == 'zoom_japanese':
+            ruby, = track.rubies
+            track = replace(track, rubies=[replace(ruby, reading='字字', reading_parts=['字', '', '字'])])
+            style = replace(annotated_paint(style, 2), zoom_pulse_curve_level=3, zoom_pulse_peak_pct=140)
+        style = replace(style, karaoke_anim='zoom_pulse' if zoom else 'utopia')
         width, height, times = 640, 360, UPPER_TIMES
+        if zoom:
+            times = sorted({*times, 950, 1199, 1200, 1950, 2199, 2200, 2399, 2400})
         ir = upper_ir(binary, (track, style), dpr)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,

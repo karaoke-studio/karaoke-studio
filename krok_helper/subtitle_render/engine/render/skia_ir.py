@@ -95,8 +95,10 @@ def _write_utopia_pivots(ir, plan, measured):
         style = item.layout_style
         annotated = bool(final.get('ruby_groups'))
         line_animation = scales and animations != {'none'} and _ordinary_line_animation(source)
+        ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
         if (style.vertical or style.right_to_left or item.line.wipe_reverse
-                or (annotated and (source.get('zoom_pulse') or (animations != {'none'} and not line_animation)))
+                or (annotated and ((source.get('zoom_pulse') and not ruby_zoom)
+                                   or (animations != {'none'} and not line_animation)))
                 or (not line_animation and not animations <= {'none', 'utopia'})
                 or source.get('karaoke_anim') not in {'none', 'utopia'}
                 or (line_animation and source.get('zoom_pulse'))
@@ -343,7 +345,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['skia_layout']['kana_mark_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
+        markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         sources, indices = lower_sources(prepared[0])
+        zoom_lines = {
+            index for index, (line, geometry_line) in enumerate(zip(ir['track']['lines'], geometry.ruby.lines, strict=True))
+            if line.get('zoom_pulse') and geometry_line.rubies
+            and not lower_enabled and not markers
+            and {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
+        }
         singing_lines = {
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
@@ -351,12 +360,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
-            singing_lines=singing_lines)
+            singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
+        if zoom_lines:
+            ir['required_features'].append('p07_ruby_zoom_pulse')
         if 'p07_scanline_band' in ir['required_features']:
             ir['required_features'].append('p07_ruby_scanline')
-        markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         if markers:
             ir['required_features'].append('p05_ruby_markers')
         if 'ruby_unit_schema' in ir['skia_layout']:

@@ -39,6 +39,7 @@ class RubyGeometry:
     baseline_offset: float
     cells: tuple
     glyph_units: tuple[str, ...] = ()
+    zoom_center_offset: float | None = None
 
 
 @dataclass(frozen=True)
@@ -172,7 +173,7 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                               'wipe_left': x + ink[0] if visible else origin,
                               'wipe_right': x + ink[2] if visible else origin + width})
             rubies.append(RubyGeometry(target, tuple(span), baseline, tuple(cells),
-                                       tuple(unit[0] for unit in metrics.unit_layouts)))
+                                       tuple(unit[0] for unit in metrics.unit_layouts), metrics.zoom_center_offset))
         # The collision envelope takes visible lower ink.
         boxes = [local.ink] if local.ink else []
         for group in rubies:

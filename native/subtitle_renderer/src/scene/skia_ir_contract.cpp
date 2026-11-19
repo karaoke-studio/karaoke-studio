@@ -59,6 +59,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_singing_scale",
         "p07_singing_glow",
         "p07_ruby_singing_scale",
+        "p07_ruby_zoom_pulse",
         "p07_utopia_line_animation",
         "p07_utopia_transition",
         "p07_character_fade",
@@ -189,6 +190,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_ruby_singing_scale")
         && (!features.contains("p05_resolved_ruby") || !features.contains("p07_singing_scale")))
         throw BackendError("Skia Utopia 注音缺少注音或唱字能力声明");
+    if (features.contains("p07_ruby_zoom_pulse")
+        && (!features.contains("p07_ruby_singing_scale") || features.contains("p05_lower_ruby")
+            || features.contains("p05_ruby_markers")))
+        throw BackendError("Skia 注音整字放大缺少正向上注音能力声明");
     if (features.contains("p07_utopia_transition") && layout.value("utopia_transition_schema").toDouble(-1) != 1)
         throw BackendError("Skia Utopia 出入场布局版本无效");
     if (features.contains("p07_character_fade")

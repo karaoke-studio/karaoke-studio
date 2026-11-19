@@ -35,13 +35,18 @@ void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, b
         paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; });
 }
 
-// A unit posed by Utopia singing, with outlines rebuilt around the posed glyph.
+// Protected ruby rings scale with the glyph. Opaque outlines keep their width.
 std::optional<ResolvedCell> posedUnit(const ResolvedCell& cell, const CharacterTransformState& transform) {
     if (!transform.transformed) return std::nullopt;
     ResolvedCell visual = cell;
     visual.path = cell.path.makeTransform(transform.matrix);
-    if (visual.outline) visual.outline->path = prepareOutlinePath(visual.path, visual.outline->width);
-    if (visual.outerOutline) visual.outerOutline->path = prepareOutlinePath(visual.path, visual.outerOutline->width);
+    for (auto* layer : {&visual.outline, &visual.outerOutline}) {
+        if (*layer) {
+            auto& outline = **layer;
+            outline.path = outline.protectBody ? outline.path.makeTransform(transform.matrix)
+                                               : prepareOutlinePath(visual.path, outline.width);
+        }
+    }
     return visual;
 }
 

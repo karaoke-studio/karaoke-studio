@@ -15,6 +15,12 @@ int integer(const QJsonValue& value, int minimum, int maximum) {
         throw BackendError("Skia 注音最终时钟或样式索引无效");
     return int(n);
 }
+double pivotCoordinate(const QJsonValue& value) {
+    const double n = value.toDouble();
+    if (!value.isDouble() || !std::isfinite(n) || std::abs(n) > 1e6)
+        throw BackendError("Skia Utopia 注音缺少有效的单元轴心");
+    return n;
+}
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
@@ -84,9 +90,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool vertical = scene.lineStyles[lineIndex].vertical;
     const bool allowOutlines = ir.value("required_features").toArray().contains("p06_ruby_solid_outline");
     const bool allowShadow = ir.value("required_features").toArray().contains("p06_ruby_shadow")
-        && !vertical && line.karaokeAnimation != "no_wipe"
+        && !vertical && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
         && line.entryAnimation == "none" && line.exitAnimation == "none";
     const auto features = ir.value("required_features").toArray();
+    const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia" && !line.zoomPulseEnabled;
     const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
@@ -102,6 +109,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
+        if ((zoom && lower) || object.contains("zoom_pivot_y") != zoom)
+            throw BackendError("Skia 注音整字放大轴心与布局不一致");
+        const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
         const auto& paint = line.chars[index].styleIndex >= 0
             ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
@@ -187,13 +197,19 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
                 before, after, wipePad);
+            if (cell.contains("utopia_layout_right") != zoom)
+                throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
             if (line.karaokeAnimation == "utopia") {
-                const auto left = cell.value("utopia_layout_left");
-                if (!left.isDouble() || !std::isfinite(left.toDouble()) || std::abs(left.toDouble()) > 1e6)
-                    throw BackendError("Skia Utopia 注音缺少有效的单元轴心");
-                glyph.pivot.layoutLeft = float(left.toDouble() * glyphs.dpr);
+                const double left = pivotCoordinate(cell.value("utopia_layout_left"));
+                glyph.pivot.layoutLeft = float(left * glyphs.dpr);
                 glyph.pivot.baseline = float(cell.value("baseline_y").toDouble() * glyphs.dpr);
                 glyph.pivot.wipePad = lower ? float(int(innerWidth) / 2) : float(int(paint.rubyStrokeWidth) / 2);
+                if (zoom) {
+                    const double right = pivotCoordinate(cell.value("utopia_layout_right"));
+                    if (right < left) throw BackendError("Skia 注音整字放大单元跨度无效");
+                    glyph.pivot.layoutRight = float(right * glyphs.dpr);
+                    glyph.pivot.centerY = float(zoomCenter * glyphs.dpr);
+                }
             } else if (cell.contains("utopia_layout_left")) {
                 throw BackendError("Skia 注音单元轴心缺少 Utopia 能力声明");
             }

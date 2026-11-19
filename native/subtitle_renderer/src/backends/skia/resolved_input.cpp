@@ -161,7 +161,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (!lineAnimation && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
-                || line.zoomPulseEnabled || utopiaEntry || utopiaExit))
+                || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
+                || utopiaEntry || utopiaExit))
             || !projected.charStyles.empty()))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};

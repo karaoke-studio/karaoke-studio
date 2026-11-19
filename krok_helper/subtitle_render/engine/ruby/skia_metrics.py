@@ -10,6 +10,7 @@ import json
 
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 
+from krok_helper.subtitle_render.domain.models import effective_karaoke_zoom_pulse
 from krok_helper.subtitle_render.engine.text.skia_batch import TextMeasurementBatch
 from krok_helper.subtitle_render.engine.text.skia_width import cell_geometry
 from krok_helper.subtitle_render.engine.text.metric_snapshot import CellMetric
@@ -23,6 +24,7 @@ class MeasuredRubyReading:
     run_indices: tuple[int, ...]
     unit_layouts: tuple[tuple[str, float, float, float, float], ...]
     baseline_metrics: dict
+    zoom_center_offset: float | None = None
 
 
 @dataclass(frozen=True)
@@ -52,16 +54,20 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
     for (reading, style), text_units in zip(readings, visual_units, strict=True):
         main, _ = font_style_for_ruby_cell(style, '')
         baseline_run = batch.instance(main)
+        zoom_reference = None
+        if effective_karaoke_zoom_pulse(style):
+            slot, stretch = font_style_for_ruby_cell(style, reading)
+            zoom_reference = (batch.instance(slot, stretch), slot.font_size_px)
         units = []
         stroke = ruby_stroke_width(ruby_script_stroke_style(style, reading))
         for unit in text_units:
             selected, stretch = font_style_for_ruby_cell(style, unit)
             run = batch.instance(selected, stretch, text=unit)
             units.append((unit, run, batch.cell(run, unit), selected, stroke))
-        references.append((baseline_run, units))
+        references.append((baseline_run, units, zoom_reference))
     measured = batch.measure(measure)
     results = []
-    for baseline_run, units in references:
+    for baseline_run, units, zoom_reference in references:
         cells, indices, layouts = [], [], []
         for unit, run, index, selected, stroke in units:
             cell = measured[run]['cells'][index]
@@ -73,10 +79,20 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
             cells.append(cell)
             indices.append(run)
             layouts.append((unit, float(width), offset, ink_left, ink_right))
+        center = None
+        if zoom_reference is not None:
+            run, size = zoom_reference
+            font = measured[run]['font_metrics']
+            # The zoom pivot uses the integer reference font box, shared by
+            # the whole reading even when its cells use different faces.
+            center = int(size * font['descent'] / max(font['ascent'] + font['descent'], 1)) - size / 2
         results.append(MeasuredRubyReading(tuple(cells), tuple(indices), tuple(layouts),
-                                          measured[baseline_run]['font_metrics']))
+                                          measured[baseline_run]['font_metrics'], center))
     # Content-based metrics and geometry, independent of machine-local file paths.
     signature = [asdict(r) for r in results]
+    for row in signature:
+        if row['zoom_center_offset'] is None:
+            del row['zoom_center_offset']
     if any(len(run['font_ids']) > 1 for run in batch.runs):
         signature.append({'font_chains': [r['font_chain'] for r in measured]})
     identity = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
