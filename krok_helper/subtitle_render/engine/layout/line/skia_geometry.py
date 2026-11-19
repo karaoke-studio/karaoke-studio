@@ -27,11 +27,12 @@ def local_line_geometry(measured, style, *, char_gaps=None):
         x = cursor + offset
         ink = metrics['ink']
         visible = ink[2] > ink[0] and ink[3] > ink[1]
+        wipe_pad = measured.edge_sizes[i] // 2
         if visible:
             ink_boxes.append((x + ink[0], ink[1], x + ink[2], ink[3]))
         cells.append({'metrics': metrics, 'run_index': measured.run_indices[i], 'origin_x': x,
-                      'wipe_left': x + ink[0] if visible else cursor,
-                      'wipe_right': x + ink[2] if visible else cursor + width})
+                      'wipe_left': x + ink[0] - wipe_pad if visible else cursor,
+                      'wipe_right': x + ink[2] + wipe_pad if visible else cursor + width})
         if width > 0:
             cursor += (max(width + style.letter_spacing_px, 0)
                        if lefts is None and i + 1 < len(measured.cells) else width)

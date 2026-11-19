@@ -93,14 +93,17 @@ def main_wipe_points(intervals, base_count):
 
 
 def prepare_ruby_wipe_timing(line, prepared_line, mode):
+    return prepare_ruby_target_timing(line, (geometry.target for geometry in prepared_line.rubies), mode)
+
+
+def prepare_ruby_target_timing(line, targets, mode):
     """Consume selected targets in source order; first overlapping group wins.
 
     Explicit internal main boundaries preserve base timing and still reserve
     group ownership, matching the GPU projection. Outer boundaries do not.
     """
     main, readings, assigned = [None] * len(line.chars), [], set()
-    for geometry in prepared_line.rubies:
-        target = geometry.target
+    for target in targets:
         ruby, indices = target.effective, target.indices
         if not indices or any(type(i) is not int or not 0 <= i < len(line.chars) for i in indices):
             raise ValueError('注音走字目标超出正文单元范围')

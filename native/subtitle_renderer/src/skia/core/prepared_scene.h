@@ -47,6 +47,10 @@ private:
         std::uint32_t before, after;
         std::vector<krok::subtitle::native::WipePoint> wipePoints;
         bool adjustedWipeEnd = false;
+        float top = 0, bottom = 0;
+        std::optional<SolidOutline> outline;
+        std::optional<SolidOutline> outerOutline;
+        CharacterPivot pivot;
     };
     struct Line {
         std::vector<Cell> cells;
@@ -55,6 +59,14 @@ private:
         std::vector<PreparedWipeGroup> rubyGroups;
         bool noWipe = false;
         bool wipeRightToLeft = false;
+        bool vertical = false;
+        bool hasOutline = false;
+        bool hasOuterOutline = false;
+        LineAnimation animation;
+        CharacterFade characterFade;
+        ScanlineBand scanline;
+        float inkLeft = 0; // Body ink union left: the GPU band needs a sung front past it.
+        SkRect paintBounds = SkRect::MakeEmpty();
     };
     int width_, height_;
     std::vector<Line> lines_;

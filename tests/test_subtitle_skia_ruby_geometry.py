@@ -261,7 +261,7 @@ def test_negative_spacing_and_zero_width_cells_share_main_position_policy(binary
     from krok_helper.subtitle_render.engine.layout.line.skia_geometry import local_line_geometry
     from types import SimpleNamespace
     metrics={'ink':[0,-10,5,0]}
-    measured=SimpleNamespace(cells=[metrics]*3,widths=[10,0,10],offsets=[0]*3,run_indices=[0]*3)
+    measured=SimpleNamespace(cells=[metrics]*3,widths=[10,0,10],offsets=[0]*3,run_indices=[0]*3,edge_sizes=[0]*3)
     style=replace(annotated[1],letter_spacing_px=-20,layout_semantics=semantics)
     local=local_line_geometry(measured,style,char_gaps=[0,3,5])
     expected=char_left_positions(measured.widths,0,False,-20,char_gaps=[0,3,5],

@@ -1486,12 +1486,11 @@ class RealSeparationBackend(SeparationBackend):
 
     @staticmethod
     def _external_version_supported(version: str) -> bool:
-        # Managed runtime manifests remain pinned. Only validated external
-        # releases enter this list; a newer major/minor is not assumed compatible.
+        # Managed runtime manifests remain pinned. Linux external environments
+        # have no version gate; Windows/macOS accept 2.x with capability checks.
         if sys.platform.startswith("linux"):
-            # Linux 测试阶段暂不设版本门槛；探测本身仍要求能读出 pymss 版本。
             return True
-        return version == PYMSS_VERSION or (sys.platform == "darwin" and version == "2.3.5")
+        return re.fullmatch(r"2\.[0-9]+\.[0-9]+", version) is not None
 
     def external_ai_python(self) -> str | None:
         selected = str(self._settings.get("external_executable", "")).strip()
@@ -1538,7 +1537,7 @@ class RealSeparationBackend(SeparationBackend):
             raise _ExternalVersionMismatch("无法获取外部 PyMSS 环境版本，请重新检测环境。")
         if not self._external_version_supported(version):
             raise _ExternalVersionMismatch(
-                f"外部环境为 PyMSS {version}，尚未通过兼容性验证。"
+                f"外部环境为 PyMSS {version}，当前支持 PyMSS 2.x，请选择兼容环境。"
             )
         return version
 

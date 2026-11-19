@@ -59,13 +59,13 @@ def test_import_from_browser_replaces_invalid_existing_cookie_file(isolated_cook
     assert cookie_path.read_text(encoding="utf-8").startswith("# Netscape HTTP Cookie File")
 
 
-def test_get_profile_youtube_returns_logged_in_label(isolated_cookie_manager, cookie_writer) -> None:
-    cookie_writer(isolated_cookie_manager, SOURCE_YOUTUBE, domain=".youtube.com")
+def test_get_profile_youtube_returns_pending_label(isolated_cookie_manager, cookie_writer) -> None:
+    cookie_writer(isolated_cookie_manager, SOURCE_YOUTUBE, domain=".youtube.com", name="SAPISID")
 
     profile = isolated_cookie_manager.get_profile(SOURCE_YOUTUBE)
 
     assert profile is not None
-    assert profile.nickname == "已登录"
+    assert profile.nickname == "已导入，待验证"
 
 
 def test_get_profile_returns_none_when_no_cookie(isolated_cookie_manager) -> None:

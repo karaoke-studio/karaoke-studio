@@ -3,6 +3,7 @@
 #include "glyph_outline.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 struct hb_font_t;
@@ -41,5 +42,6 @@ private:
     std::string identity_;
     std::unique_ptr<GlyphOutlineSource> outlines_;
     std::shared_ptr<hb_font_t> shapingFace_;
+    std::optional<float> lineAscent_, lineDescent_; // GPU line-box metrics (see constructor).
 };
 }

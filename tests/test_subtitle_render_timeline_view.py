@@ -8,8 +8,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QMouseEvent  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt6.QtGui import QMouseEvent, QNativeGestureEvent, QPointingDevice, QWheelEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.frontend.editor.timeline_view import (  # noqa: E402
@@ -455,6 +455,147 @@ def test_zoom_about_anchor_keeps_anchor_fixed(qapp) -> None:
     # 缩放下限 2 秒
     widget._zoom_about(anchor, 0.0001)
     assert widget.view_span_ms == 2000
+
+
+@pytest.fixture
+def mac_timeline(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.editor import timeline_view as module
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    widget = TrackTimelineView()
+    widget.resize(800, 160)
+    widget.set_tracks([("主字幕", _make_track())])
+    widget.set_duration(60_000)
+    widget._set_view(20_000, 15_000)
+    yield widget
+    widget.deleteLater()
+
+
+def _timeline_wheel(widget, *, pixels=(0, 0), angle=(0, 0),
+                    phase=Qt.ScrollPhase.ScrollUpdate, inverted=False,
+                    modifiers=Qt.KeyboardModifier.NoModifier):
+    pos = QPointF(400, 60)
+    event = QWheelEvent(pos, widget.mapToGlobal(pos), QPoint(*pixels), QPoint(*angle),
+                        Qt.MouseButton.NoButton, modifiers, phase, inverted)
+    widget.wheelEvent(event)
+    return event
+
+
+def _timeline_gesture(widget, kind, value=0.0):
+    pos = QPointF(400, 60)
+    event = QNativeGestureEvent(kind, QPointingDevice.primaryPointingDevice(),
+                               2, pos, pos, widget.mapToGlobal(pos), value, QPointF())
+    QApplication.sendEvent(widget, event)
+    return event
+
+
+@pytest.mark.parametrize("inverted", [False, True])
+def test_mac_timeline_pixel_pan_preserves_scale_and_playhead(mac_timeline, inverted):
+    widget = mac_timeline
+    seeks = []
+    widget.seekRequested.connect(seeks.append)
+    expected = 20_000 - 24 * 15_000 / widget._plot_width()
+    event = _timeline_wheel(widget, pixels=(24, 1), angle=(120, 120), inverted=inverted)
+    assert event.isAccepted()
+    assert widget.view_start_ms == pytest.approx(expected)
+    assert widget.view_span_ms == 15_000
+    assert widget._time_ms == 0
+    assert not seeks
+
+
+def test_mac_timeline_scroll_phases_axis_lock_and_momentum(mac_timeline):
+    widget = mac_timeline
+    _timeline_wheel(widget, phase=Qt.ScrollPhase.ScrollBegin)
+    _timeline_wheel(widget, pixels=(-12, 1))
+    start = widget.view_start_ms
+    _timeline_wheel(widget, pixels=(-2, 15), phase=Qt.ScrollPhase.ScrollMomentum)
+    assert widget.view_start_ms == pytest.approx(start + 2 * 15_000 / widget._plot_width())
+    _timeline_wheel(widget, phase=Qt.ScrollPhase.ScrollEnd)
+    assert not widget._scroll_active
+    start = widget.view_start_ms
+    event = _timeline_wheel(widget, pixels=(1, 20), phase=Qt.ScrollPhase.ScrollBegin)
+    assert not event.isAccepted()
+    assert widget.view_start_ms == start
+
+
+def test_mac_timeline_angle_fallback_and_boundaries(mac_timeline):
+    widget = mac_timeline
+    _timeline_wheel(widget, angle=(-120, 0))
+    assert widget.view_start_ms == pytest.approx(20_000 + 40 * 15_000 / widget._plot_width())
+    _timeline_wheel(widget, pixels=(-100_000, 0))
+    assert widget.view_start_ms == 45_000
+    _timeline_wheel(widget, pixels=(100_000, 0))
+    assert widget.view_start_ms == 0
+
+
+def test_mac_timeline_pinch_anchor_and_zoom_limits(mac_timeline):
+    widget = mac_timeline
+    anchor = widget._ms_for_x(400)
+    x_before = widget._x_for_ms(anchor)
+    _timeline_gesture(widget, Qt.NativeGestureType.BeginNativeGesture)
+    _timeline_gesture(widget, Qt.NativeGestureType.ZoomNativeGesture, 0.25)
+    assert widget.view_span_ms == pytest.approx(12_000)
+    assert widget._x_for_ms(anchor) == pytest.approx(x_before, abs=0.1)
+    _timeline_gesture(widget, Qt.NativeGestureType.ZoomNativeGesture, -0.2)
+    assert widget.view_span_ms == pytest.approx(15_000)
+    _timeline_gesture(widget, Qt.NativeGestureType.ZoomNativeGesture, 100)
+    assert widget.view_span_ms == 2000
+    start = widget.view_start_ms
+    _timeline_gesture(widget, Qt.NativeGestureType.ZoomNativeGesture, 0.25)
+    assert widget.view_start_ms == pytest.approx(start)
+    _timeline_gesture(widget, Qt.NativeGestureType.ZoomNativeGesture, -0.999)
+    assert widget.view_span_ms == 60_000
+    assert widget.view_start_ms == 0
+    _timeline_gesture(widget, Qt.NativeGestureType.EndNativeGesture)
+    assert not widget._pinch_active
+
+
+@pytest.mark.parametrize("value", [-1.0, float("nan"), float("inf")])
+def test_mac_timeline_invalid_pinch_is_ignored(mac_timeline, value):
+    _timeline_gesture(mac_timeline, Qt.NativeGestureType.ZoomNativeGesture, value)
+    assert mac_timeline.view_start_ms == 20_000
+    assert mac_timeline.view_span_ms == 15_000
+
+
+def test_mac_timeline_follow_resumes_after_gesture_and_delay(mac_timeline, monkeypatch):
+    from krok_helper.subtitle_render.frontend.editor import timeline_view as module
+    now = [100.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    widget = mac_timeline
+    _timeline_wheel(widget, pixels=(-10, 0), phase=Qt.ScrollPhase.ScrollBegin)
+    start = widget.view_start_ms
+    now[0] = 120.0  # Long gesture must not resume following mid-scroll.
+    widget.set_time(1000)
+    assert widget.view_start_ms == start
+    _timeline_wheel(widget, phase=Qt.ScrollPhase.ScrollEnd)
+    now[0] = 125.0
+    widget.set_time(2000)
+    assert widget.view_start_ms == start
+    now[0] = 127.0
+    widget.set_time(3000)
+    assert widget.view_start_ms < start
+
+
+@pytest.mark.parametrize("event_type", [QEvent.Type.Hide, QEvent.Type.WindowDeactivate])
+def test_mac_timeline_interrupted_gesture_resets_follow(mac_timeline, event_type):
+    _timeline_wheel(mac_timeline, pixels=(10, 0))
+    _timeline_gesture(mac_timeline, Qt.NativeGestureType.BeginNativeGesture)
+    QApplication.sendEvent(mac_timeline, QEvent(event_type))
+    assert not mac_timeline._pinch_active
+    assert not mac_timeline._scroll_active
+    assert mac_timeline._manual_view_until == 0
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_timeline_mouse_wheel_pan_and_ctrl_zoom_unchanged(mac_timeline, monkeypatch, platform):
+    from krok_helper.subtitle_render.frontend.editor import timeline_view as module
+    monkeypatch.setattr(module.sys, "platform", platform)
+    widget = mac_timeline
+    _timeline_wheel(widget, angle=(0, 120), phase=Qt.ScrollPhase.NoScrollPhase)
+    assert widget.view_start_ms == 17_750
+    assert widget.view_span_ms == 15_000
+    _timeline_wheel(widget, angle=(0, 120), phase=Qt.ScrollPhase.NoScrollPhase,
+                    modifiers=Qt.KeyboardModifier.ControlModifier)
+    assert widget.view_span_ms == 12_000
 
 
 def test_pan_clamps_to_timeline(qapp) -> None:

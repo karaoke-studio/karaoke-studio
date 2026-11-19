@@ -2056,14 +2056,13 @@ class YtDlpService:
         return {}
 
     def _youtube_download_extractor_args_hint(self, url: str, extractor_args_hint: str) -> str:
-        """Keep a successful reload client; otherwise use a GVS-compatible client."""
-        if self.detect_source(url) != SOURCE_YOUTUBE:
-            return extractor_args_hint
-        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
-            return extractor_args_hint
-        if not self._ensure_youtube_visionos_client():
-            return extractor_args_hint
-        return YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+        """Preserve the client that supplied the selected format IDs.
+
+        Empty means yt-dlp's default profile, not an unknown client. Switching
+        to VisionOS here can discard authenticated formats before downloading.
+        Existing error-driven retries still handle GVS failures when necessary.
+        """
+        return extractor_args_hint
 
     def _ensure_youtube_visionos_client(self) -> bool:
         """Backport yt-dlp's VisionOS client to stable builds that predate it.
@@ -2139,6 +2138,7 @@ class YtDlpService:
             or "please reload this page" in lower
             or "http error 403" in lower
             or "requested format is not available" in lower
+            or "当前清晰度不可用" in message
             or "video is not available" in lower
             or "video is unavailable" in lower
             or "downloaded file is empty" in lower
@@ -2189,12 +2189,12 @@ class YtDlpService:
         if "downloaded file is empty" in lower or "empty file" in lower:
             return (
                 "YouTube 返回了空文件，通常是当前清晰度/播放客户端不可用、Cookie 失效或 yt-dlp 版本偏旧。"
-                "已尝试兼容模式；如果仍失败，请刷新 Firefox Cookie、更新 yt-dlp，或换一个清晰度重试。"
+                "已尝试兼容模式；如果仍失败，请重新登录 YouTube、更新 yt-dlp，或换一个清晰度重试。"
             )
         if "the page needs to be reloaded" in lower or "please reload this page" in lower:
             return "YouTube 播放客户端返回临时错误，已保留登录状态并切换客户端重试，请稍后再试。"
         if "not a bot" in lower:
-            return "YouTube 触发了机器人校验，已尝试兼容模式。请在 Firefox 中打开 YouTube，确认已登录并完成网页验证，然后点击「从 Firefox 导入 Cookie」刷新登录 Cookie，再重新解析下载；若仍失败，请稍后重试。"
+            return "YouTube 触发了机器人校验，已尝试兼容模式。请点击「登录 YouTube」完成网页验证，或导入新的 Cookie 文件，再重新解析下载；若仍失败，请稍后重试。"
         if "sign in to confirm your age" in lower or "login required" in lower:
             return "该视频需要登录后访问，请检查 Bilibili 登录状态是否有效。"
         if "http error 403" in lower:

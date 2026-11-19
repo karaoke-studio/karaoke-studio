@@ -15,7 +15,9 @@
 
 5. **生产默认后端不得自行切换**（2026-11-16 用户明令）：除非用户后续主动、明确要求更改生产默认后端，否则永久保持现有生产默认；Skia 开发、迁移、测试、全部验收通过或计划中的切换任务均不构成授权。不得自行修改默认后端选择、GPU 默认偏好、发布打包默认或通过回退策略间接切换。相关计划的自动切换条款也必须等待用户明确指令。
 
-6. **委派 Claude 时节省 Codex token**（2026-11-17 用户要求）：复用已有上下文，任务说明保持简短，以目标、必要边界和验收为主；实现、排查和大批测试优先交给 Claude。Codex 只读取简短进度、最终 diff 和关键验证结果，避免反复读取完整日志、重复长提示和无意义轮询。
+6. **委派 Claude 时节省 Codex token**（2026-11-17 用户要求）：复用已有上下文，任务说明保持简短，以目标、必要边界和验收为主；实现、排查和大批测试优先交给 Claude。等待 CLI 子进程退出或接收结构化完成事件，再读取最终 diff 和关键验证结果。避免定时反复检查 Claude 日志和 CI 状态。
+
+7. **Skia 实施连续推进**（2026-11-18 用户要求）：验收、提交和推送后直接接下一批，直到当前任务完成、额度耗尽或出现需要用户决定的阻塞。普通小改动跑本地相关用例，完整双架构 Mac CI 集中在阶段收口；涉及 Metal、Qt 预览或打包的改动及时验证相应路径。可以在 CI 后台运行时推进独立任务。
 
 ---
 
@@ -326,7 +328,8 @@ git submodule status
    客户端还须检查 `p05_single_line_placement` 能力，不能让旧 sidecar 静默接受新布局。
    `src/skia/text/glyph_outline.*` 使用锁定 FreeType 的公开接口，在 em 尺度读取精细轮廓；
    不要改回 `SkFont::getPath` 的默认 64px 归一化再放大，它会使接近整数边界的单元宽度
-   被截断多丢 1px。字体几何身份已按 §14.43 升为 `skia-m150-hb-ft-v4`；COLR 字形即使有非空
+   被截断多丢 1px。字体几何身份已按 §14.48 升为 `skia-m150-hb-ft-v6`：行框 ascent/descent 与 GPU 相同，
+   USE_TYPO_METRICS 时取 OS/2 typo、否则取 OS/2 win（不用 hhea），`vertical_metrics_schema=1` 协商；COLR 字形即使有非空
    单色基底也仍属未支持的彩色绘制，不能把基底当成完整结果。
    P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯
    `engine/style/style_semantics.py`，旧 text/layout 入口保留导出；角色视觉覆盖必须保留
@@ -431,7 +434,7 @@ git submodule status
    候选 HB cluster 的共同边界换 face，`font_shaping` 直接消费锁定 HarfBuzz 的 OpenType 表，
    `mixed_cell` 组合一次路径且保留整个歌词单元时钟。`p05_mixed_fonts` / `mixed_font_schema=1`
    门控 `mixed_fallback`，混排字形/单元快照须含严格字节边界、字体索引与内容身份。
-   字体身份现为 `skia-m150-hb-ft-v4`；不能改回像素字号的 Skia FT advance 回调，它使
+   字体身份现为 `skia-m150-hb-ft-v5`；不能改回像素字号的 Skia FT advance 回调，它使
    多字单元的近整数墨迹宽度被截断。连接文字/IPA/ZWJ/emoji 的混排仍拒绝。
    P05.6 单个独立非间距附加符见 §14.34：`ruby/skia_standalone_marks` 只开放单个 Mn 的
    U+0300–036F（不含 CGJ/双基字连结符）与 U+3099/U+309A。`p05_standalone_marks` /
@@ -453,10 +456,13 @@ git submodule status
    不得翻转 HarfBuzz 文本方向来实现反向演唱。§14.35 的正向限制由本子集扩展，竖排和其他特效仍拒绝。
    正文右至左单元排列子集见 §14.42：`p05_horizontal_rtl` / `horizontal_rtl_schema=1`，
    多码点单元见 §14.44：`p05_horizontal_rtl_cells` / `horizontal_rtl_cell_schema=1`，仅接受 Python/native 同表的已验证码位，
-   含多码点单元且行布局字距为负的 RTL 行、上下注音与竖排继续明确拒绝。
+   上下注音与竖排继续明确拒绝；负字距多码点 RTL 行已由 §14.45 层序修复验证后开放。
+   假名/日文标点单元见 §14.46：`p05_horizontal_rtl_kana_cells` / `horizontal_rtl_kana_schema=1`，仅 nominal 字形子集；
+   组合浊点/半浊点 U+3099/U+309A 在 LTR 也与 GPU 不同（GPU 不合成、无回退定位），RTL 继续拒绝并保留严格预期失败。
    `skia_geometry` 按整单元框移位，不镜像字形；逻辑单元、字体塑形方向与时间归属不变。
    物理走字方向为 `right_to_left XOR wipe_reverse`，不能用反转字符串或重新分配时钟实现。
-   重叠单元前沿：D2D 用一条行级 wipe edge、Skia 核心逐单元裁剪，LTR/单码点 RTL 同样复现，保留严格预期失败，不放宽预算或宣称完整 bidi。
+   重叠正文单元见 §14.45：D2D 按 N3 逐字相位分层（未唱倒序、已唱、正在唱最上），`body_phase_order_schema=1`；
+   公共 core 只改层序，不改单元时钟、裁剪前沿或颜色。§14.44 曾误记为“行级 wipe edge”。
 
    含注音轨道的反向行见 §14.38：共享选择、下方派生、Painter 与 Qt→GPU 投影对反向行一律省略
    上/下注音（D2D 中的 ruby 索引重映射不可达），实际 D2D 有/无注音来源像素一致。因此 Skia 保留源注音，
@@ -483,7 +489,14 @@ git submodule status
    旧 sidecar 在度量/选择后端前拒绝，v3 快照不能混入 v4。普通单元按 nominal cmap/hmtx 排列，
    含补充平面字符或多码点含 Mn/Mc/Me/ZWJ 的单元才做 OpenType 塑形；单元框始终取源 nominal
    字形的 advance/首尾 bearing，混排按各 face 归一化。不能把整词 ligature/kerning 恢复为默认。
+   空文本计时单元见 §14.49：`empty_cell_schema=1`，保留原索引/文本/时钟，无字形无墨迹，单元框沿用 GPU 的无墨迹宽度；
+   不得插入可见字形、合并或丢弃空单元的时钟。
    `fi` 与分解重音原 LTR 差异已修复为普通回归；RTL 多码点门禁、完整复杂脚本验收仍保留。
+
+   分解式假名浊音见 §14.47。`kana_mark_schema=1` 在 ready 和度量请求/响应中协商；字体几何身份为 v5。
+   U+3099/U+309A 保留基字与标记，使用字体 GPOS；缺 GPOS 时不使用 HB 合成的标记位置。
+   `p05_horizontal_rtl_kana_marks` 要求基础假名能力。RTL 多码点只接收直接跟随假名基字的单个浊音符。
+   字素保持不可拆分，不能为复现定位把浊音符切到另一字体、改写源文字或改变时钟。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。
    `commands/skia/posix_ring_owner` 持有独占创建的服务端私有 key；客户端读完批次后确认释放，

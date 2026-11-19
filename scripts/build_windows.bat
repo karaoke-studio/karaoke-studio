@@ -36,6 +36,7 @@ call :ensure_pkg PyInstaller pyinstaller || exit /b 1
 call :ensure_pyqt6 || exit /b 1
 call :ensure_pkg fontTools fonttools || exit /b 1
 call :ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets" || exit /b 1
+%PYTHON_BIN% -m pip install "PyQt6==%PYQT6_BINDING_VERSION%" "PyQt6-Qt6==%PYQT6_QT_VERSION%" "PyQt6-WebEngine==6.11.0" "PyQt6-WebEngine-Qt6==6.11.0" || exit /b 1
 %PYTHON_BIN% -m pip install "yt-dlp[default]" || exit /b 1
 %PYTHON_BIN% scripts\fetch_deno.py || exit /b 1
 call :ensure_pkg requests requests || exit /b 1
@@ -155,6 +156,8 @@ echo Building Windows package...
     --hidden-import PyQt6.sip ^
     --hidden-import PyQt6.QtMultimedia ^
     --hidden-import PyQt6.QtMultimediaWidgets ^
+    --hidden-import PyQt6.QtWebEngineCore ^
+    --hidden-import PyQt6.QtWebEngineWidgets ^
     --hidden-import encodings.idna ^
     --hidden-import colorsys ^
     --hidden-import sudachipy ^
@@ -202,13 +205,9 @@ echo Building Windows package...
     --exclude-module PyQt6.QtNetworkAuth ^
     --exclude-module PyQt6.QtPdf ^
     --exclude-module PyQt6.QtPdfWidgets ^
-    --exclude-module PyQt6.QtPositioning ^
-    --exclude-module PyQt6.QtQml ^
-    --exclude-module PyQt6.QtQuick ^
     --exclude-module PyQt6.QtQuick3D ^
     --exclude-module PyQt6.QtQuickControls2 ^
     --exclude-module PyQt6.QtQuickTest ^
-    --exclude-module PyQt6.QtQuickWidgets ^
     --exclude-module PyQt6.QtRemoteObjects ^
     --exclude-module PyQt6.QtScxml ^
     --exclude-module PyQt6.QtSensors ^
@@ -217,10 +216,7 @@ echo Building Windows package...
     --exclude-module PyQt6.QtStateMachine ^
     --exclude-module PyQt6.QtTest ^
     --exclude-module PyQt6.QtTextToSpeech ^
-    --exclude-module PyQt6.QtWebChannel ^
-    --exclude-module PyQt6.QtWebEngineCore ^
     --exclude-module PyQt6.QtWebEngineQuick ^
-    --exclude-module PyQt6.QtWebEngineWidgets ^
     --exclude-module PyQt6.QtWebSockets ^
     --exclude-module PyQt6.QtWebView ^
     app.py
@@ -256,7 +252,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "foreach ($rel in $removeFiles) { $path = Join-Path $plugins $rel; if (Test-Path $path) { Remove-Item -LiteralPath $path -Force } };" ^
     "$removeDirs = @('generic','networkinformation','platforminputcontexts');" ^
     "foreach ($rel in $removeDirs) { $path = Join-Path $plugins $rel; if ((Test-Path $path -PathType Container) -and -not (Get-ChildItem $path -Force)) { Remove-Item -LiteralPath $path -Force } };" ^
-    "$dlls = @('Qt6Pdf.dll','Qt6VirtualKeyboard.dll','Qt6Quick.dll','Qt6Qml.dll');" ^
+    "$dlls = @('Qt6Pdf.dll','Qt6VirtualKeyboard.dll');" ^
     "foreach ($base in @($qt6, (Join-Path $qt6 'bin'), $root)) { if (-not (Test-Path $base)) { continue }; foreach ($name in $dlls) { $path = Join-Path $base $name; if (Test-Path $path) { Remove-Item -LiteralPath $path -Force } } }"
 if errorlevel 1 (
     echo.

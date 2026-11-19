@@ -58,6 +58,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--package-updater-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--package-spawn-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--package-gpu-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--youtube-web-login", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--youtube-login-request", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--youtube-login-mode", choices=("default", "firefox"), default="default", help=argparse.SUPPRESS)
+    parser.add_argument("--youtube-login-smoke", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -194,6 +198,14 @@ def run_gui(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    if args.youtube_web_login:
+        if args.youtube_login_request is None:
+            return 2
+        from krok_helper.video_download.youtube_login_window import main as login_main
+        login_args = ["--request", str(args.youtube_login_request), "--mode", args.youtube_login_mode]
+        if args.youtube_login_smoke:
+            login_args.append("--smoke")
+        return login_main(login_args)
     if args.package_updater_smoke:
         from krok_helper.updater.macos_metadata import verify_bundled_sparkle
 

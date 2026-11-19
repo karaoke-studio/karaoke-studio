@@ -248,6 +248,9 @@ def main(argv=None) -> int:
     if manifest.get("cell_glyphs", 0) >= 1:
         steps["cell_glyphs"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                  "tests/test_subtitle_skia_cell_glyphs.py", "--basetemp", logs / "cell-glyph-tests"]
+    if manifest.get("kana_marks", 0) >= 1:
+        steps["kana_marks"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
+                               "tests/test_subtitle_skia_kana_marks.py", "--basetemp", logs / "kana-mark-tests"]
     results = {name: run(command, logs / f"{name}.log", env) for name, command in steps.items()}
 
     metal_report = logs / "metal.json"

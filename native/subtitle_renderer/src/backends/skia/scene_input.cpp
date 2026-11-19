@@ -1,5 +1,6 @@
 #include "scene_input.h"
 #include "../render_backend.h"
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -24,16 +25,23 @@ std::filesystem::path fontPath(const std::wstring& value) {
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
-void supportedStyle(const TextStyle& s, bool canonical) {
+void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers) {
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
-        || s.vertical || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
+        || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
         || (!canonical && (s.dualLineLayout || s.laneCount != 1))
         || (canonical && s.smartHorizontal != "none" && s.smartHorizontal != "center_position" && s.smartHorizontal != "equal_margins")
         || (s.alignment != "left" && s.alignment != "center" && s.alignment != "right")
         || (s.verticalPosition != "top" && s.verticalPosition != "center" && s.verticalPosition != "bottom")
         || (!canonical && (s.alignment != "center" || s.verticalPosition != "bottom" || s.smartHorizontal != "none"))
         || (s.allowBiting && !canonical)
-        || s.strokeWidth != 0 || s.stroke2Width != 0 || s.latinStrokeWidth != 0 || s.latinStroke2Width != 0
+        || (outlineLayers == 0 && (s.strokeWidth != 0 || s.latinStrokeWidth != 0))
+        || (outlineLayers > 0 && (s.strokeWidth < 0 || !std::isfinite(s.strokeWidth)
+            || s.strokeWidth != s.latinStrokeWidth
+            || s.beforeStrokePaint.mode != "solid" || s.afterStrokePaint.mode != "solid"))
+        || (outlineLayers < 2 && (s.stroke2Width != 0 || s.latinStroke2Width != 0))
+        || (outlineLayers == 2 && (s.stroke2Width < 0 || !std::isfinite(s.stroke2Width)
+            || s.stroke2Width != s.latinStroke2Width
+            || s.beforeStroke2Paint.mode != "solid" || s.afterStroke2Paint.mode != "solid"))
         || s.decorationKindForState(false) != "none" || s.decorationKindForState(true) != "none"
         || s.beforeFillPaint.mode != "solid" || s.afterFillPaint.mode != "solid"
         // Canonical fonts come exclusively from the validated layout resource
@@ -50,28 +58,30 @@ void supportedStyle(const TextStyle& s, bool canonical) {
             "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }
 }
-void validateSkiaScene(const RenderScene& scene, bool canonical) {
+void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLayers) {
     if (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
         || scene.viewportOffsetY != 0 || scene.lineBand.enabled || (!canonical && !scene.charStyles.empty())
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
-    for (const auto& style : scene.charStyles) supportedStyle(style, canonical);
+    if (outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");
+    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, outlineLayers);
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
-        supportedStyle(style, canonical);
+        supportedStyle(style, canonical, outlineLayers);
         if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
             || !line.rubies.empty() || !line.bursts.empty() || (!canonical && !line.placementWindows.empty())
-            || line.fadeInMs || line.fadeOutMs || line.entryAnimation != "none" || line.exitAnimation != "none"
+            || line.fadeInMs || line.fadeOutMs
+            || (!canonical && (line.entryAnimation != "none" || line.exitAnimation != "none"))
             || (line.karaokeAnimation != "none" && line.karaokeAnimation != "inherit"
                 && !(canonical && line.karaokeAnimation == "no_wipe"))
-            || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || (line.wipeReverse && !canonical)
+            || (line.scanlineEnabled && !canonical) || line.zoomPulseEnabled || line.strokeFlashEnabled || (line.wipeReverse && !canonical)
             || line.staticOverlay || line.annotationBaselineY || line.displayWindows.size() != 1)
             throw BackendError("Skia P04: unsupported line animation/layout/annotation");
         if (line.displayWindows[0].fadeInMs > 0 || line.displayWindows[0].fadeOutMs > 0)
             throw BackendError("Skia P04: fading requires P07");
         for (const auto& ch : line.chars) {
-            if ((!canonical && (ch.text.size() != 1 || ch.styleIndex >= 0)) || ch.vectorGlyph || ch.bitmapGuide
+            if ((!canonical && (ch.text.size() != 1 || ch.styleIndex >= 0 || ch.vectorGlyph)) || ch.bitmapGuide
                 || !ch.wipePoints.empty() || !ch.fallbackFamily.empty())
                 throw BackendError("Skia P04: shaping, guide symbols, fallback fonts and custom wipe curves require later phases");
             if (ch.styleIndex < -1 || ch.styleIndex >= int(scene.charStyles.size()))

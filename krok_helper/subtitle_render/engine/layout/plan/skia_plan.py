@@ -16,6 +16,8 @@ from ...text.skia_batch import font_snapshot
 from .model import TrackLayoutPlan
 from .page_offsets import PageOffsetResolvers, resolve_page_offset_windows
 from .semantic import LayoutPlanResolvers, build_track_layout_plan
+from dataclasses import replace
+from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
 
 
 @dataclass(frozen=True)
@@ -29,9 +31,11 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
     with layout_pass(), font_snapshot(resolve_font):
         section_edge_context(track, style)
         styles = [style_for_line(style, line) for line in track.lines]
-        measured = measure_track(track, style, styles, measure=measure, resolve_font=resolve_font)
+        # Measure the same guide-expanded lines the shared plan lays out.
+        rendered = replace(track, lines=[render_line_with_guide_symbols(line) for line in track.lines])
+        measured = measure_track(rendered, style, styles, measure=measure, resolve_font=resolve_font)
         ruby = (prepare_ruby_geometry(track, style, styles, measured, measure=measure, resolve_font=resolve_font)
-                if track.rubies or any(s.lower_ruby_enabled for s in styles) else None)
+                if not style.vertical and (track.rubies or any(s.lower_ruby_enabled for s in styles)) else None)
         geometry = SkiaCollisionGeometry(track, style, styles, measured, ruby_geometry=ruby)
 
         def display(source, appearance, **size):

@@ -521,7 +521,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
 - [ ] P05.6 完成上/下 ruby、reading parts、空 pause、checkpoint、对齐、锚点、角色假名和 lower ruby 跟随规则。基础实色上注音已接入产品（§14.24）；下方注音的纯语义、规范几何与终端探针见 §14.25–§14.27，基础实色产品接入见 §14.28，空读音/短语标记兼容见 §14.29，part 局部字形与单元级 NFC 子集见 §14.30，单个独立非间距附加符见 §14.34，含注音轨道中的反向行见 §14.38；完整注音组合尚未验收。
-- [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。正文正向文本的横排反向走字子集见 §14.36，含源注音/下方读音轨道的反向行及其 GPU 镜像终点见 §14.38；单码点正文的右至左排列子集见 §14.42，已验证多码点计时单元的右至左扩展见 §14.44，完整 RTL 与竖排仍待完成。
+- [ ] P05.7 完成竖排、RTL/逆序走字、标点/小假名位置、导唱符几何与共享页级网格；保留 semantic 版本区别。正文正向文本的横排反向走字子集见 §14.36，含源注音/下方读音轨道的反向行及其 GPU 镜像终点见 §14.38；单码点正文的右至左排列子集见 §14.42，已验证多码点计时单元的右至左扩展见 §14.44，假名/日文标点单元见 §14.46，完整 RTL 与竖排仍待完成。
 - [ ] P05.8 测试字体更换/注册/移除后所有关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
 
@@ -1063,8 +1063,8 @@ LLVM `--coff-imports` 检查 Windows Raster 可执行文件：依赖 MSVCP140/VC
 
 1. git clone --recursive https://github.com/karaoke-studio/karaoke-studio.git
    cd karaoke-studio
-   git checkout 1002aecc
-2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44025881382 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
+   git checkout 4c6966ce
+2. 打开 https://github.com/karaoke-studio/karaoke-studio/actions/runs/44309865841 ，在页面底部的 Artifacts 里下载 mac-validation-arm64（Apple Silicon）或 mac-validation-x64（Intel）。
 3. 在仓库根目录运行：
    python3 scripts/mac_hardware_check.py ~/Downloads/mac-validation-arm64.zip
    （Intel 机型换成 x64 的文件。）运行大约 5 到 10 分钟，期间会弹出几个小窗口，请保持登录、不要锁屏。
@@ -1848,6 +1848,145 @@ Windows 完整 Skia 组合首轮 **1547 通过、7 跳过、4 失败**：3 项�
 - 首轮实际 GPU 对照 **194/196**：负字距下的多码点 RTL 在 DPR1.5、t=599 唱色前沿差 1.26px。逐列探针显示 Skia 首单元前沿冻结在 overlap 终点，D2D 继续着色。根因是公共核心与 GPU 的绘制模型不同：D2D 正文只使用一条行级 `wipeEdge`，边缘已唱侧的所有字形都画唱后色；Skia 核心按单元各自裁剪。仅当结束单元的前沿落入重叠邻格墨迹内时可见（分解重音单元因 mark 右 bearing 被钳为 0 而无右内缩）。已接受的 LTR 与单码点 RTL 用独立组合标记单元同样复现（4 项失败），`allow_biting` 多码点双向通过。这不是 RTL 多码点的新缺陷，但该组合未获证明：Python/native 对含多码点单元且行布局字距为负的 RTL 行明确拒绝；角色方案字距不进入布局（行布局字段保留），两端也一致按行字距判定。通用前沿差异以 LTR/单码点 RTL 两项 `strict=True`、仅接受断言失败的预期失败记录，不放宽 1px 预算，核心绘制模型留待后续。空文本单元在 LTR 同样无法度量，属既有明确失败，未在本批更改。
 
 Windows/Linux Vulkan 与 CPU-only 四份最终目标均干净重建，CTest 各 **3/3**，源码身份统一为 `5bef7ee659165bfab84241ca4f3adefe5538982022e7481507b9b3e2145773fb`。最终二进制上新增实际 D2D GPU（realization 关闭）**38 通过**（基础12、行锚点12、kern/mark/缺 mark cmap 字体8、反向/no_wipe 6），合同/门禁/预览 **39 通过**，两项通用前沿记录为严格预期失败；加入负字距门禁前、绘制实现相同的上一版二进制（`9e46c8ca…`）串行 D2D 全组合 **192 通过**、同两项严格预期失败（含原 RTL 96+12+4、多码点 LTR 36 等；最终版仅改 native 门禁）。Windows 完整 Skia 组合 **1545 通过、7 跳过**；X11/Wayland 完整组合各 **1068 通过、678 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **63 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **30** 份规范样例 `rtl-cell-layout.json`，30 份 Windows/X11/Wayland 直接比较误差均为 **0**，原 29 份与 §14.43 完全相同。实现提交 `1002aecc` 的 Mac CI [44025881382](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44025881382) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1037 通过、709 项平台专用跳过**，其中 RTL 文件各 **249 项（100 通过、149 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `5bef7ee6…`，与本地四份一致。30 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，原 29 份不变。两份干净验收包 `horizontal_rtl`（含新多码点 RTL 用例）与 `cell_glyphs` 退出码均为 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机、核心行级前沿模型、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-rtl-multi*`。
+
+### 14.45 P05.5 / P05.7 正文重叠单元的唱字层序（2026-11-18）
+
+**本批修复 §14.44 记录的重叠单元前沿差异，并开放负字距多码点 RTL 行；不改变单元时钟、走字前沿、颜色或注音组语义，不关闭 P05。** Claude Opus 5.5 实现与本地验收，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建。
+
+- 两项 strict 预期失败按原样复现（LTR/单码点 RTL，t=900 唱色前沿超出 1px）。重新只读核对 D2D 后确认 **§14.44 的根因表述有误**：现行正文不是一条行级 `wipeEdge`，而是“全部行经 N3 逐字相位排序”（`d2d_backend_render.cpp` 主体绘制段）：每层分别先按倒序画未唱字、再按序画已唱字、最后画正在唱的字，后者用各自委托前沿分割前/后两色。Skia 公共 core 过去按演唱顺序逐格绘制，未唱的后一格会盖住正在唱的前一格落入重叠墨迹的唱色细条，这才是差异来源。
+- `skia/core/prepared_scene` 保持每格原有进度、委托前沿、两段互斥裁剪与颜色，只用 GPU 同口径的 `wipeStart/wipeEnd` 相位分类重排绘制顺序；GPU/Raster 共用同一实现，注音组仍在正文之后按原逻辑绘制。旧 sidecar 无 `body_phase_order_schema=1` 时在选择后端前拒绝。原负字距多码点 RTL 门禁（Python/native）在同一修复下证明后移除；布局快照没有新字段，30 份规范样例与上一批完全一致。
+- 新代表矩阵覆盖四种物理/演唱方向组合、正/负/坍缩字距、`allow_biting`、暂停、零时长、全零时长、角色半透明、no_wipe、legacy/N3、DPR1/1.5，另有 GPU/Raster 乱序重复 seek。曾选用的“独立组合标记 + allow_biting”用例在 D2D 与 Skia 中都因零 advance 负 bearing 使单元宽度极负而整行移出画面（两者一致为空帧），改用多码点单元覆盖 `allow_biting`，不将其视为通过证据。
+
+最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `b7bed443ab1b2b565a73e629285ec9b57a8a2c6b0223955b2dc22b9bebc57572`。串行实际 D2D GPU（realization 关闭）**217 通过、0 预期失败**：原两项已提升为普通回归，新重叠矩阵 19、负字距多码点 RTL 4，其余既有 RTL/多码点/字体/混排对照全部保持通过。Windows 完整 Skia 组合 **1549 通过、7 跳过**（上述串行 D2D 集合单独运行）；X11/Wayland 完整组合各 **1072 通过、701 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **65 通过**（首轮选择表达式误含需要 GPU 构建的 seek 用例，各 2 项因构建不含 GPU 而失败，修正选择后复验）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。30 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.44 完全相同。实现提交 `069a55c7` 的 Mac CI [44247626643](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44247626643) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1041 通过、732 项平台专用跳过**，其中 RTL/重叠文件各 **276 项（104 通过、172 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `b7bed443…`，与本地四份一致。30 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，与上一批 30 份完全相同。两份干净验收包 `horizontal_rtl`（含重叠层序用例）退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。多层描边/装饰的分层顺序未在 Skia 正文实现（当前仅实色单层），Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-line-wipe*`。
+
+### 14.46 P05.7 假名与日文标点多码点单元的右至左排列（2026-11-18）
+
+**本批在 §14.44/§14.45 之上开放 nominal 字形的假名/日文标点多码点 RTL 单元；组合浊点/半浊点仍拒绝，不是完整 bidi，不关闭 P05。** Claude Opus 5.5 实现与本地验收，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建；不做源文本规范化，不改 HarfBuzz 方向或单元字形策略。
+
+- 先复现门禁（Python 拒绝 `きゃ`、native 拒绝伪造 `きゃ` 并保留旧场景，**13 通过**）。新增确定性 FontTools `make_kana_font`：全角/小写假名、预组合浊音/半浊音、零 advance 负 bearing 的组合 U+3099/U+309A、间隔 ゛゜、代表日文标点与全角空格，可选 GPOS mark 锚点；原 `make_font` 字节不变。
+- 改动前探针（探针副本移除 Python 门禁、清除 RTL 标记交给 Skia 绘制同一最终几何）与实际 D2D GPU 对照：小写假名、预组合浊音、括号/句读/长音/中点/波浪线/全角！？、全角空格及间隔浊点单元在 RTL 与 LTR 均 **≤1px**。含组合 U+3099/U+309A 的单元在 **LTR 同样失配**：D2D（DirectWrite）不合成假名浊点，`か+゛` 绘为基字+标记（有 GPOS 时按锚点，无 GPOS 时不定位）；HarfBuzz 在字体含 `が/ぱ/パ` 时规范合成，并在缺 GPOS 时做回退标记定位。原样 LTR 记录为两项 `strict=True` 仅接受断言失败的预期失败（合成 5px、回退定位 2px 墨迹框），不放宽预算；修正需改变公共塑形策略，留待后续，RTL 中继续拒绝。
+- `p05_horizontal_rtl_kana_cells` / `horizontal_rtl_kana_schema=1` 仅在 RTL 多码点单元确含新增码位时加入，并要求 `p05_horizontal_rtl_cells`；原 v1 码位表、单元快照与字体身份不变。新增码位：U+3000–3002、U+300C–300F、U+301C、U+3041–3096、U+309B–309C、U+30A1–30FC、U+FF01、U+FF1F；U+3099/U+309A、叠字符 U+309D/E 与其他全角形式、其他文字、ZWJ/变体选择符、补充平面/彩色、RTL 注音与竖排继续明确拒绝。旧 sidecar 在选择后端前拒绝；native 拒绝缺能力、缺多码点基础能力、错误 schema 与伪造组合浊点文本并保留旧场景。
+
+最终 Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `07f4926195443f29655734df8d979145bd6adf991211dc3a040be03d7b7c542b`。串行实际 D2D GPU（realization 关闭）**240 通过、2 项上述严格预期失败**，其中假名 RTL 矩阵 20（假名/标点/间隔浊点 × 反向/legacy/N3/DPR1/1.5、no_wipe、负字距、角色、暂停、零时长）与行锚点 3 全部通过，原 RTL/重叠/多码点/字体对照保持通过。GPU/Raster 乱序重复 seek 与真实预览（GPU、GPU 关闭、loader 失败回退 Raster）均通过。Windows 完整 Skia 组合 **1576 通过、7 跳过**；X11/Wayland 完整组合各 **1099 通过、726 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **81 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。新增第 **31** 份规范样例 `rtl-kana-layout.json`，31 份 Windows/X11/Wayland 误差均为 **0**，原 30 份与 §14.45 完全相同。实现提交 `051731b6` 的 Mac CI [44259284809](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44259284809) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1067 通过、758 项平台专用跳过**，其中 RTL/假名文件各 **328 项（130 通过、198 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `07f49261…`，与本地四份一致。31 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**，原 30 份不变。两份干净验收包 `horizontal_rtl`（含假名 RTL 用例）退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。组合浊点塑形、其他全角形式、Linux 真硬件、Mac 真机、完整 bidi/复杂文字与完整 P05 继续保留。日志前缀 `build/p05-kana-cells*`。
+
+### 14.47 P05.2 / P05.7 分解式假名浊音（2026-11-18）
+
+本批校准 §14.46 的两项左至右差异，并接入右至左正文中跟随假名基字的 U+3099/U+309A。Claude Opus 5.5 复现并采集 GPU 对照，在额度耗尽后由 Codex 完成实现与验收。生产 D2D 仍为对照基线。
+
+- 两项旧严格预期失败按原样复现。受控字体分别测量预组合 glyph 有无、GPOS 有无、只有 GDEF 和标记名义 advance 非零的情况。D2D 从源字形绘制分解式浊音，有 GPOS 则按其定位；无 GPOS 则保留名义位置，GDEF 标记类可将其绘制 advance 归零，未分类时保留其名义 advance。原 Skia 的自动合成与回退定位分别造成约 5px / 2px 差异。
+- 公共字体路径对含浊音符的塑形段保留源假名的组合形式，继续使用锁定 HarfBuzz 的字体 GPOS。无 GPOS 时恢复浊音符的名义位置与实测的 advance 规则。若无 GPOS 的输出已发生未经验证的 glyph 替换，明确拒绝。字形仍以原 UTF-8 簇映射，测量与最终绘制共用策略，单元框保持源 nominal 度量。其他文字的归一化和项目原文、时钟、Ruby 源规则沿用原契约。
+- 字体几何身份升为 `skia-m150-hb-ft-v5`。`kana_mark_schema=1` 在 ready 和度量请求/响应中校验。RTL 场景要求 `p05_horizontal_rtl_kana_marks` 与基础假名能力，标记必须直接跟随假名基字。重复标记、前置标记和其他文字附着仍不在该 RTL 范围。混排保留基字和标记为不可分字素。新测试覆盖伪造能力、版本、源文本及失败保留旧场景。旧两项预期失败提升为普通对照，保持 1px 预算。
+
+四份本地 Vulkan / CPU-only 目标干净重建，CTest 各 **3/3**，源码身份 `0e7cf7cbeedb39a1ec6cef3deb6ba36d8aaa3bbe88b61c176945d37fed97c70c`。Windows/Linux CPU-only 专项各 **98 通过**。首次因测试夹具重复读取 ready 导致四项假失败，修正后通过。新增第 32 份规范样例 `rtl-kana-mark-layout.json`，Mac 验收包增加 `kana_marks=1`。新增专项在 Windows/X11/Wayland 各 **21 项非 D2D 测试通过**，另有 10 组受控字体 D2D 对照及 2 项原失败对照通过。补测使用系统字体的实际 GPU 对照，Meiryo 与 MS Gothic 左右两向均通过（4 项）。Yu Gothic 两向墨迹纵向仍超预算约 2px，普通及预组合假名的对照也复现纵向偏差，保留为字体画质差异。本地完整回归：串行实际 D2D GPU（realization 关闭）**252 通过**；Windows 完整 Skia 组合 **1577 通过、7 跳过**；X11/Wayland 完整组合各 **1100 通过、726 项平台专用跳过**（初始运行清单未含新文件，新增 21 项非 D2D 用例在三平台另行运行均通过）；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。实现提交 `78461519` 的 Mac CI [44279799427](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44279799427) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1089 通过、768 项平台专用跳过**，其中新假名浊音文件各 **31 项（21 通过、10 项 Windows D2D 跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `0e7cf7cb…`，与本地四份一致。32 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**；与 §14.46 的 31 份相比，按 v4→v5 身份归一后 28 份完全相同、3 份仅身份摘要变化，几何变化 **0** 份。两份干净验收包 `kana_marks` 与 `horizontal_rtl` 退出码均为 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。日志前缀 `build/p05-kana-marks*`。
+
+### 14.48 P05.5 行框纵向度量与 GPU 的字体表规则（2026-11-18）
+
+**本批修复 §14.47 记录的 Yu Gothic 约 2px 纵向差异；原因是行框度量取自不同字体表，不是画质、轮廓或字体特例。** Claude Opus 5.5 实现与本地验证，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建。
+
+- 复现：Yu Gothic 普通、预组合与分解式假名在左右两向的整行墨迹均比 GPU 下移 **2 物理像素**（DPR1.5，上下边同时偏移、水平不变，6 项失败），Meiryo/MS Gothic 通过。字体表对比：Yu Gothic `hhea` 1802/455 与 OS/2 win 2017/619 不同（USE_TYPO_METRICS 关闭），Meiryo/MS Gothic 的 hhea 与 win 相同。
+- 受控字体逐表区分（`build/p05-font-y/probe-C*.json`）：仅 win 不同、仅 hhea 不同、开启 USE_TYPO_METRICS 时 typo 不同或 win 不同。GPU 的行框/基线算式使用 DirectWrite 字体度量，即 **USE_TYPO_METRICS 时取 OS/2 typo，否则取 OS/2 win，从不使用 hhea**；Skia/FreeType 原为 USE_TYPO_METRICS 时 typo、否则 hhea。两边 legacy/N3 算式相同，只是度量来源不同。
+- `skia/text/font_instance` 的 ascent/descent 改为同一规则（锁定 HarfBuzz 度量接口，含可变字体 MVAR），无可用 OS/2 时保留原 Skia 值；度量、configure 快照重校验、混排、注音参考与 GPU/Raster 共用该唯一入口。字体几何身份升为 `skia-m150-hb-ft-v6`，`vertical_metrics_schema=1` 在 ready 与度量请求/响应中协商，旧 sidecar 在度量与选择后端前拒绝。不改源文本、单元、时钟或容差。
+- 确定性回归：FontTools 受控字体逐项断言 typo/win/hhea 选择及无 OS/2 回退；实际 D2D GPU（realization 关闭）对四类表组合覆盖 legacy/N3、DPR1/1.5、RTL/反向、角色与 no_wipe（11 项），原 1px 预算。
+
+修复后真实字体复验 **10 通过**：Yu Gothic 普通/预组合/分解式左右两向 6 项、Meiryo 与 MS Gothic 各 2 项。Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `0bf2b424d34658b62920ad35af599eb6242f8ded2a21cdd3939245f24e9f7568`。串行实际 D2D GPU **263 通过**；Windows 完整 Skia 组合 **1607 通过、7 跳过**；X11/Wayland 完整组合各 **1130 通过、747 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **107 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**；与 §14.47 相比按 v5→v6 身份归一后 29 份相同、3 份仅身份摘要变化、几何变化 0 份（受控字体 hhea/typo/win 一致）。期间合入的 PR #30 只涉及视频下载，不影响 native 源码身份。实现提交 `3015a0db` 的 Mac CI [44294159236](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44294159236) **5 项全部成功**、无重试：arm64/x64 产品组合各 **1098 通过、779 项平台专用跳过**，其中单元字形/行框度量文件各 **80 项（25 通过、55 项 Windows D2D/平台专用跳过）**；字体资源契约各 **3 通过**，预览/生命周期各 **21 通过、1 跳过**；`text-metrics-compare` 成功。两架构 Metal/Raster 四份 native 指纹均为 `0bf2b424…`，与本地四份一致。32 份 Windows/X11/Wayland/Mac arm64/Mac x64 规范样例严格比较器五方误差全部为 **0**；按 v5→v6 身份归一后与 §14.47 相比 29 份相同、3 份仅身份摘要变化、几何变化 0 份。两份干净验收包 `cell_glyphs` 退出码 **0**、`functional_passed=true`；托管虚拟 Metal 下 `metal_hardware_smoke`/`native_capabilities` 硬件步骤非零、`hardware_gate_passed=false`，不作为真机通过。§14.6 朋友入口已更新到该提交与运行。Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-font-y*`。
+
+### 14.49 P05.2 / P05.5 空文本计时单元（2026-11-18）
+
+**本批修复 §14.44/§14.46 记录的空文本 `TimingChar` 无法度量的问题；只开放实际 GPU 已证明的语义，不改源文本、索引或时钟。** Claude Opus 5.5 实现与本地验证，Codex 审查。生产默认、D2D 实现、GPU 偏好、打包、版本与 submodule 不变，D2D 未重建。
+
+- 复现：真实 opt-in 配置路径中任何含空文本单元的轨道都在度量阶段失败（LTR/RTL、legacy/N3、混合/仅空单元/首尾空单元均为“Skia 度量单元或字体链无效”）。只读 D2D GPU 对照显示：空单元不绘制任何字形，但保留时钟，并占用无墨迹单元框 `size × space% × 25 / 100 / 10 + edge`（与 Skia `cell_geometry` 原有规则相同）；仅空单元的行不绘制任何内容；legacy 按墨迹居中、N3 按布局宽度定位；RTL 按整单元移位。
+- 根因只在度量链：native `shapeCell` 拒绝空 UTF-8（度量与 configure 快照重校验共用），随后 Python `CellMetric` 拒绝无 glyph 的快照。修复后 `shapeCell("")` 返回明确的无 glyph、无墨迹、零设计 advance 单元，并带主字体身份与行框度量；`CellMetric` 只对空文本接受无 glyph，且要求墨迹与 advance 为零。`empty_cell_schema=1` 在 ready 中声明，客户端在度量与选择后端前拒绝旧 sidecar；伪造 glyph、advance 或文本均失败并保留旧场景。字体几何身份不变，非空单元快照与 32 份规范样例完全相同。
+- 覆盖：实际 D2D GPU（realization 关闭、原 1px 预算）16 组代表矩阵（混合/首尾/末尾空单元 × LTR/RTL、反向、no_wipe、暂停、零时长、共享区间分段走字、角色、负字距、legacy/N3、DPR1/1.5、行锚点），仅空单元行在 GPU/Raster/D2D 均为空帧，GPU/Raster 乱序 seek，以及上注音以空单元为基字或跨越空单元（2 项）。下方读音在受控字体中的拒绝与空单元无关（无空单元时同样因缺参考字形拒绝），保持原有明确失败。
+
+Windows/Linux Vulkan 与 CPU-only 四份目标均干净重建，CTest 各 **3/3**，源码身份统一为 `7754c453785b1da5cc059dedc5e2cfdee827b8ce83df5961e587972cbd63fd8c`。专项 **33 通过** 另 2 项注音对照通过；串行实际 D2D GPU **283 通过**；Windows 完整 Skia 组合 **1622 通过、7 跳过**；X11/Wayland 完整组合各 **1147 通过、765 项平台专用跳过**；独立 CPU-only Windows/Linux 各 **118 通过**；关联架构/协议/字体/构建工具 **532 通过、10 跳过**。32 份规范样例 Windows/X11/Wayland 误差均为 **0**，与 §14.48 完全相同。Mac CI 尚待；Linux 真硬件、Mac 真机与完整 P05 继续保留。日志前缀 `build/p05-empty-cell*`。
+
+Mac CI [44309865841](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44309865841) 最终 **5/5 成功**。ARM64 干净环境验包首次因 GitHub 托管 runner 容量取消，仅重跑该任务后通过。两架构产品测试各 **1115 通过、797 跳过**，单元字形文件各 **42 通过、73 跳过**，预览各 **21 通过、1 跳过**，字体资源各 **3 通过**。四份 Metal/Raster 指纹均与本地一致。32 份五环境样例严格比较误差均为 **0**，与 §14.48 相同。两份验收包均报告 `functional_passed=true`、`cell_glyphs=0`，托管虚拟 Metal 的 `hardware_gate_passed=false`。§14.6 入口已更新到 `4c6966ce` 的验收包。
+
+### 14.50 P05.7 单列实色正文竖排（2026-11-18）
+
+显式选择 Skia 时，legacy 和 N3 的正文可使用单列竖排。支持单码点直立汉字、韩文音节和全尺寸假名，覆盖上、中、下位置以及正向、反向和整字变色。小假名、旋转标点、注音、行内角色、多列和导唱符仍需各自验收。
+
+Python 按规范主字体行框堆叠等高单元，保留共享布局计划的显示窗口和计时。最终 IR 通过 `vertical_solid_schema=1` 携带单元框上下边界，native 消费最终位置。GPU 和 Raster 在同一绘制核心沿 Y 轴走字。反向时沿 Y 轴由下向上裁剪，时间归属继续复用已有反向协议。无效方向、版本、字形或单元框会拒绝该次配置并保留旧场景。
+
+Windows 相关回归 **303 通过**，含 **17 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算）和 G5 预览、短 MP4 的 GPU/Raster 产品验证。Linux llvmpipe 的 X11 和 Wayland 竖排专项各 **39 通过、17 项 Windows 专用跳过**，Windows/Linux 独立 Raster 各 **27 通过**。四份 native 目标干净重建，CTest 各 **3/3**，源码指纹 `3e9257a1705d3e64de6bd98043bcd632fd6ac3ea289df4e626c2499d7158b9a3`。新增 `vertical-solid-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。竖排专项和该样例已纳入下一次阶段 Mac CI。证据前缀 `build/p05-vertical*`。
+
+### 14.51 P05.7 竖排小假名与日文标点（2026-11-18）
+
+在单列实色正文中，小假名按 D2D 的 10% 单元框比例向右上移，顿号和句号按 28% 移动。日文引号、长音符和波浪号绕原单元中心顺时针旋转 90°。这些变换只作用于字形，固定的单元框、时钟和裁剪轴继续使用 §14.50 的几何。原始文本不替换为竖排兼容字符。变换字形使用 `vertical_japanese_glyph_schema=1`；native 校验版本、源字符和旋转轴，GPU/Raster 共用准备后的轮廓。
+
+Windows 竖排专项 **70 通过**，含新增 **6 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算），覆盖正反向、legacy/N3、DPR 1/1.5。X11/Wayland 各 **47 通过、23 项 Windows 专用跳过**（llvmpipe）；Windows/Linux 独立 Raster 各 **31 通过**。四份 native 均干净重建，CTest 各 **3/3**，源码指纹 `8e0c8c79561cd69cf47361b5ea9c2a93f7f0a2d81c788060006f2add17277ccc`。两份竖排规范样例在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**。新样例 `vertical-japanese-layout.json` 随专项纳入下一次阶段 Mac CI。证据前缀 `build/p05-vertical-japanese*`。
+
+### 14.52 P05.7 竖排英数与无墨迹单元（2026-11-18）
+
+单列正文继续保留主字/英数槽，加入单码点英数、空文本和半角/全角空格。无墨迹单元保留计时与固定高度，字号较大的英数字形可以超出单元。实测反向走字在交接帧仍会裁剪越界墨迹，Skia 在走字阶段据同一实际前沿裁剪并沿用原有绘制层序。含新增字符的 IR 使用 `vertical_solid_schema=2`，新 sidecar 同时接收原直立字形和日文标点的 v1 布局。
+
+Windows 专项 **80 通过**，另两项大号英数与空单元混排对照通过，新增实测 GPU 对照合计 **10 项**（realization 关闭，既有 1px 预算）。Linux X11/Wayland 专项各 **49 通过、31 项 Windows 专用跳过**；独立 Raster 各 **33 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `b9b39732f2e3199b48114b7a642e0f032697d113ce287a0293605c20e17fe178`。新增 `vertical-inkless-layout.json` 与前两份竖排样例在 Windows、X11、Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**，既有竖排样例内容相同。证据前缀 `build/p05-vertical-spaces*`。
+
+### 14.53 P06.1 横排正文第一道实色描边（2026-11-18）
+
+单列从左至右横排正文支持第一道实色描边，含前后态分别取色和整字切换。同一规范度量带入生效边宽，形成最终单元宽度、走字边界与行框。legacy 行框在上下各增加向上取整的半边宽，N3 则按整数半边宽拆分加高后的行框。描边使用圆连接，按走字阶段叠在正文下方。任一态正文半透明时，描边裁掉本字正文轮廓，正文中心仍保持原 alpha。轮廓在配置期展开，GPU 与 Raster 共用路径、画笔和裁剪逻辑。
+
+`primary_solid_outline_schema=1` 单独声明该范围。注音、独立英数描边宽度、行内角色、RTL、反向、竖排和多列的描边组合继续拒绝，二重描边尚待迁移。失败配置保留上一已配置场景。
+
+Windows **14 项描边专项通过**，含 **7 项实际 D2D GPU 对照**（realization 关闭，覆盖宽 6–9、DPR 1/1.5、不透明与半透明、三种纵向锚点及负字距），两项新增产品预览与短 MP4 亦通过。Windows 相关组合首轮 **182 通过、6 项旧度量夹具失败**，显式补足原先隐含的零描边后定向复验 **6/6 通过**。X11/Wayland 专项各 **9 通过、7 跳过**，Windows/Linux 独立 Raster 各 **6 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `d8f3fa14e5fecbf3bcfb10a3ca5280d8b3ef0db75e1a9b6d5e363648787505a5`。新增 `primary-solid-outline-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**，随专项纳入后续阶段 Mac CI。证据前缀 `build/p06-outline*`。
+
+### 14.54 P06.1 横排正文第二道实色描边（2026-11-18）
+
+在 §14.53 的单列横排范围内，`secondary_solid_outline_schema=1` 启用第二道描边，支持仅外描边。`UseEdge2` 关闭时，存量宽度仍随样式保留，画面等同于外描边宽度为零。总展开宽度为生效内外描边宽度之和。两层描边分别按走字阶段绘制，顺序为外描边、内描边、正文。任一态正文或内描边半透明时，外描边裁去内层轮廓，保留正文和内描边的 alpha；沿用第一道边宽确定单元宽度和走字边界。legacy 行框考虑两道描边总宽，N3 仍取第一道边宽。
+
+Windows 相关组合 **99 通过**，包含两道描边共 **13 项实际 D2D GPU 对照**（realization 关闭，原 1px 几何预算）。新增 6 项覆盖不透明、正文半透明、内描边半透明、仅外描边与 `UseEdge2` 关闭。外环颜色对照按纯色区域分类，边缘混色仍由整体轮廓几何检测。X11/Wayland 专项各 **7 通过、6 跳过**，Windows/Linux 独立 Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `30f140ea46b81711014e42d400171d3a9a2a392df592cdec73ad49739dd56746`。新增 `secondary-solid-outline-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**，第一道描边样例保持相同。证据前缀 `build/p06-outline2*`。
+
+§14.50–§14.54 的 Mac 合并复验以 `f11a1dbd` 运行于 [44329167304](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44329167304)。Intel 主任务 **1180 通过、843 跳过**，其中竖排 **49 通过、33 跳过**，第一道描边 **9 通过、7 跳过**，第二道描边 **7 通过、6 跳过**。Metal/Raster 指纹与本地一致，37 份规范样例与 Windows/X11/Wayland 的严格比较误差为 **0**。Apple Silicon 主任务连续两次因托管机容量在分配前被取消，依赖它的双架构验包和比较任务均未执行。§14.6 仍指向上一批完整通过的验收包。
+
+### 14.55 P05.6 / P05.7 单字直立竖排注音（2026-11-19）
+
+单列正向实色正文每行可带一组单码点直立上注音，竖排时读音放在正文右侧。继续复用上注音目标归属、规范度量和计时。正文让位由注音槽字体的行框计算，按实际像素比例取整再加间距。读音的纵向锚点取正文跨度首单元，走字边界取读音的墨迹上下缘。GPU/Raster 的注音组复用同一裁剪核心。协议 `vertical_ruby_schema=1` 校验能力、字形和墨迹边界。
+
+D2D 对照使用 Windows 已安装的 Meiryo。D2D 为应用内私有字体计算整列让位时可能采用系统 face，本机探针观察到与显式字体度量相差约 8 逻辑像素。Skia 继续用当前显式字体快照。多字、多组、旋转或小假名读音、下方读音、行内角色与反向组合仍需专项验收。
+
+Claude 实现后的相关组合 Windows **950 通过**，X11/Wayland 各 **621 通过、329 项平台专用跳过**。Codex 补齐墨迹边界校验后，最终 Windows 竖排专项 **119 通过**，含新增 **4 项实际 D2D GPU 对照**（realization 关闭，原 1px 预算）。X11/Wayland 各 **82 通过、37 跳过**，Windows/Linux 独立 Raster 各 **55 通过**。四份 native 干净重建，CTest 各 **3/3**，统一指纹 `44259df8219c9690684b7199f3b36a088c74d722fdf8ef5042d4d6b44064fcb9`。新增 `vertical-ruby-layout.json` 在 Windows、X11、Wayland 和 Linux 独立 Raster 严格比较误差均为 **0**。证据前缀 `build/p05-vertical-ruby*`。
+
+### 14.56 P05.7 横排实色矢量导唱符（2026-11-19）
+
+显式 Skia 路径接入原工程的矢量导唱符，覆盖前置、锚定、替换和行内形式，沿用同一个导唱符展开器和共享计时计划。正文与导唱符使用同一字形序列，保留原始索引和时钟。绘制沿用 D2D 的分数 advance，计时继续使用整数宽度。Qt-free 度量按归一化 M/L/C/Q/Z 路径计算墨迹，Skia 在配置期准备路径。内容 ID 复用原 dedup 表，引用和紧致边界在 native 复核。同文不同导唱符使用独立度量快照。协议 `vector_guide_schema=1`。位图、竖排、RTL、注音、导唱符角色和描边组合尚待验收。
+
+Windows 相关组合 **198 通过**，其中导唱符专项 **52 通过**，含 **14 项实际 D2D GPU 对照**（realization 关闭，既有 1px 预算），另有真实 G5 GPU/Raster 预览、乱序 seek、资源 ID 与非有限坐标回归。X11/Wayland 专项各 **38 通过、14 跳过**，Windows/Linux 独立 Raster 各 **19 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `cd092ddb67c933eb3e03a1ab7d90037302b922dff295140147128380800c9b5a`。新增 `vector-guide-layout.json` 在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**。证据前缀 `build/p05-vector-guide*`。
+
+### 14.57 P05.6 / P05.7 多单位直立竖排注音（2026-11-19）
+
+在同一组上注音内，多个直立单码点单位沿目标正文跨度等分位置，各自用实际墨迹作为纵向走字范围。读音 part 的时间和空停顿由原共享计时解析，连续组的前沿按这些区间移动。协议 `vertical_ruby_schema=2` 启用多单位，旧单字 v1 布局仍可配置。每行仍限一组，复杂单元、旋转与小假名注音另验。
+
+最终 Windows 竖排相关 **125 通过**，含新增 **4 项实际 D2D GPU 对照**（Meiryo，realization 关闭，1px 几何预算），分别量正文侧的读音墨迹及已唱区域，覆盖普通分段、显式停顿和整字变色，对照包括 Skia Vulkan 和 Raster。X11/Wayland 各 **84 通过、41 跳过**，独立 Windows/Linux Raster 各 **57 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `bd415236105583fc92d41debaeadc690dde291449da871a33b971b0f438a9a2b`。新增 `vertical-multi-ruby-layout.json` 在 Windows/X11/Wayland 和 Linux 独立 Raster 的严格比较误差均为 **0**，旧单字竖排样例内容保持相同。证据前缀 `build/p05-vertical-ruby-multi*`。
+
+### 14.58 P07.1 出入场淡化（2026-11-19）
+
+显式 Skia 路径接受 `line_fade_schema=1`，直接消费共享计划的显示窗口和生效时长。入场使用二次缓出，退场使用二次缓入，重叠时两者相乘。字形、描边、导唱符和注音先合成，再按整行透明度输出；GPU 与 Raster 使用同一合成。临时层用配置期计算出的绘制边界，保留相切墨迹的抗锯齿余量。淡化之外的行级变换留待逐项验收。
+
+Windows 相关 **153 通过**，含 **4 项实际 D2D GPU 对照**（正文、双描边、矢量导唱符和竖排注音，realization 关闭），含 G5 GPU 预览和短 MP4 Raster 导出。整行透明度对照覆盖开始、渐入、全显、渐出和结束，峰值 alpha 误差不超过 2 个编码值。X11/Wayland 专项各 **7 通过、4 跳过**，独立 Windows/Linux Raster 各 **4 通过**。四份 native 均干净重建，CTest 各 **3/3**，指纹 `fcbbc9d9fc7c9c22e8ee1fa6a1e6ca84b24984d3ee6b8947a26f5d389fc08be2`。新增 `line-fade-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。证据前缀 `build/p07-line-fade*`。
+
+### 14.59 P07.1 整行横移与升降（2026-11-19）
+
+`line_motion_schema=1` 接通横移入场、横移退场和升降两端。Skia 使用共享显示窗口和生效时长计算保留比例，首行横移方向向左、后续行向右，升降的进入与离开方向相反。位移由物理字号和 D2D 的最小距离决定，透明度沿用整行淡化。坐标变换、页面位移和临时层覆盖同一份准备路径，计时不受画面位移影响。
+
+Windows 相关 **170 通过**，含新增 **4 项实际 D2D GPU 对照**（realization 关闭），覆盖两种方向、淡化与位移混用、双行不同横移方向。另验证 DPR 1.5 下的小字最小距离和无变形时钟。X11/Wayland 专项各 **7 通过、4 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，统一指纹 `f0236cc583dbe1fe1c5a69c520920a3809fbfcffe20a26a57aab97a871ee3fd7`。规范样例 `line-motion-layout.json` 在 Windows/X11/Wayland 严格误差为 **0**。证据前缀 `build/p07-line-motion*`。
+
+### 14.60 P07.1 逐字淡化（2026-11-19）
+
+`character_fade_schema=1` 接通 `char_fade` 的入场和退场。使用归一化后的演唱顺序。字符按 350ms 分布错开，每个字符经过 250ms 线性淡化；入场窗口和退场窗口均沿用 D2D 的 600ms 规则，退场还受最后演唱时刻约束。逐字透明度作用于每层画笔，可与另一端的整行位移合用。含实际读音组的逐字淡化暂需独立验收。
+
+Windows 相关 **150 通过**，含新增 **5 项实际 D2D GPU 对照**（realization 关闭），覆盖普通、双描边、导唱符、反向和升降混用。另验证单字、四字的 stagger 和完整时序。X11/Wayland 专项各 **7 通过、5 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `b75c3686c90f440d20f66aed9331a7ffc4e6434be7d2f8f918685832e27a52cd`。样例 `character-fade-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。证据前缀 `build/p07-character-fade*`。
+
+### 14.61 P07.5 正向横排实色扫字线（2026-11-19）
+
+`scanline_band_schema=1` 接通 D2D 的普通高亮带首个子集：正向、横排从左至右、`color` 模式、`band` 形态、柔化为 0、无粒子特效。绘制集中在 `skia/core/scanline_band.h`，投影只做门控和参数传递。锋面沿用 D2D 的整行 `wipeEdge`：按演唱顺序取首个未完成字的走字坐标；处于停顿间隙时，锋面停在下一字起点减去外描边一半再减 0.5px 处。整行唱完、或锋面尚未越过正文墨迹左缘时不画带。只有闭区间 `[start, end]` 内且时长非零的字参与重绘，所以字间间隙和停顿内不出现高亮带。每个参与字按外描边、描边、正文的顺序，用统一颜色重绘一次；裁剪区为锋面左右各半个线宽的抗锯齿区域，并沿用逐字透明度和整行淡化合成层。时钟复用各单元已解析的时间和分段点，不重新计算时序。反向、右至左、竖排、no_wipe、Utopia、注音、导唱符、行内角色，以及 brighten/role/跟随/柔化/烈焰/水泡/图片/粒子等组合，在 Python 和 native 两侧都会拒绝；伪造的能力声明或样式也会被拒绝，并保留上一场景。
+
+Windows 相关 **84 通过**，含新增 **10 项实际 D2D GPU 对照**（realization 关闭，原始 1px 墨迹/锋面预算，另加高亮带左右边缘 1px 与面积预算）。对照覆盖普通（DPR 1/1.5）、释放停顿、零时长字、共享源区间分段点、窄带、双描边、逐字淡化、整行淡化，以及升入/滑出位移。Skia GPU 与 Raster 的乱序回跳一致，覆盖 4 种情形。X11/Wayland 专项各 **32 通过、10 跳过**（D2D 对照），独立 Windows/Linux Raster 各 **26 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `f65146176021328bab9e58c890e87b3c05140b66183a807ca543b0c506d75878`。样例 `scanline-band-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。Mac CI 已加入专项和规范样例，留待阶段收口时运行。证据前缀 `build/p07-scanline*`。
+
+### 14.62 P07.1 逐字滴落与翻转（2026-11-19）
+
+`character_transform_schema=1` 接通 `char_drip` 和 `spin_flip`，范围限于正向、横排从左至右、无描边的正文。时钟复用 `CharacterFade`：350ms 错开、250ms 渐变，退场优先于入场。`char_drip` 在进度大于 0 时即完全不透明，按 `-侧向 × tan(min(90°×(1-p), 89°))` 绕版面单元右缘做纵向错切。`spin_flip` 的透明度等于进度，并绕单元中心做“平移、纵向错切、缩放、反平移”变换。轴心来自规范布局：Python 以 `origin_x - offset` 和 `width` 给出版面单元左右缘（`layout_left`/`layout_right`），以字形运行（请求字体槽）的 ascent/descent 加基线给出 `pivot_y`，不使用墨迹中心。矩阵只作用于路径，走字裁剪仍在行坐标中进行。变换期间整行淡化层不设边界。门控：变换期间不得有字在走字（入场须在各字开始前完成，退场须在各字结束后开始，否则 D2D 改用逐字形锋面）。描边、扫字线、注音、导唱符、行内角色、右至左、竖排、反向和 no_wipe 在 Python 和 native 两侧都会拒绝；伪造的能力声明、轴心或时序也会被拒绝，并保留上一场景。
+
+Windows 相关 **109 通过**，含新增 **8 项实际 D2D GPU 对照**（不使用 WARP，realization 关闭）。对照覆盖滴落、翻转（各 DPR 1/1.5）、滴落接翻转、升入接翻转、翻转接滑出、淡化接滴落。两侧都能分辨原始 1px 墨迹时（峰值 alpha>128），沿用 alpha>127 的 1px 墨迹/掩码预算，另有锋面预算、峰值 alpha ±2 的相位检查和覆盖加权质心 ≤0.5px 的轴心检查。每例至少 8 个动画帧达到原始几何预算。缩小到 12% 以下的翻转笔画不足 1px，此时覆盖率反映的是抗锯齿而不是几何，因此只做相位和质心检查。Skia GPU 与 Raster 在倒序、重复的独立定位下一致，覆盖 3 种情形。X11/Wayland 专项各 **27 通过、8 跳过**（D2D 对照），独立 Windows/Linux Raster 各 **23 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `7551c5562c0e7a1316b6de238993b11a5af14d72143b6fedd776c821d4b32ec3`。样例 `character-transform-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。复核补齐零时长路径，完整 Windows 专项 36 项通过，Wayland 的拒绝与零时长用例 12 项通过。Mac CI 已纳入专项和规范样例，留待阶段收口时运行。证据前缀 `build/p07-transform*`。
 
 ## 15. 前期探针清理范围
 

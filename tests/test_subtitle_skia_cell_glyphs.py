@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from PyQt6.QtGui import QFontDatabase
 
-from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_source, assert_gpu_parity,
+from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_source, assert_gpu_parity, reverse_source,
                                          collect, configure, ir_for, selection)
 from skia_text_fixture import make_font
 from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
@@ -149,9 +149,9 @@ def test_forged_or_old_cell_snapshots_keep_the_previous_scene(binary, project, f
     ir = ir_for(binary, (track, replace(style, right_to_left=False)))
     bad = copy.deepcopy(ir)
     fi, decomposed = (c['metrics'] for c in bad['skia_layout']['lines'][0]['cells'][:2])
-    assert fi['font_identity'].startswith('skia-m150-hb-ft-v4:')
+    assert fi['font_identity'].startswith('skia-m150-hb-ft-v6:')
     if forgery == 'old_identity':
-        fi['font_identity'] = fi['font_identity'].replace('-v4:', '-v3:', 1)
+        fi['font_identity'] = fi['font_identity'].replace('-v6:', '-v5:', 1)
     elif forgery == 'ligature_glyph':
         # A cell_glyph_schema-less (HarfBuzz liga) snapshot of the same cell.
         fi['glyphs'] = [{**fi['glyphs'][0], 'cluster_end': 2}]
@@ -235,3 +235,263 @@ def assert_feature_font_parity(binary, project, tmp_path, kind, semantics, dpr, 
     finally:
         QFontDatabase.removeApplicationFont(handle)
         clear_font_weight_cache()
+
+
+# vertical_metrics_schema=1: line-box ascent/descent follow the existing GPU's
+# font metrics: OS/2 typo when USE_TYPO_METRICS is set, otherwise OS/2 win.
+# hhea never decides the baseline (it is what Skia/FreeType used before).
+# name: (hhea asc, hhea desc, typo asc, typo desc, win asc, win desc, USE_TYPO_METRICS)
+VERTICAL_FONTS = {'win_over_hhea': (800, 200, 800, 200, 900, 400, False),
+                  'hhea_ignored': (900, 400, 800, 200, 800, 200, False),
+                  'typo_flag': (800, 200, 900, 400, 800, 200, True),
+                  'typo_flag_win_ignored': (800, 200, 800, 200, 900, 400, True)}
+
+
+def vertical_font(path, name, *, os2=True):
+    from fontTools.ttLib import TTFont
+    make_font(path, family=f'LinK Vertical {name}', ps_name=f'LinK-Vertical-{name}')
+    font = TTFont(path, recalcTimestamp=False)
+    hhea_up, hhea_down, typo_up, typo_down, win_up, win_down, use_typo = VERTICAL_FONTS.get(name, VERTICAL_FONTS['hhea_ignored'])
+    font['hhea'].ascent, font['hhea'].descent = hhea_up, -hhea_down
+    if os2:
+        table = font['OS/2']
+        table.sTypoAscender, table.sTypoDescender, table.usWinAscent, table.usWinDescent = typo_up, -typo_down, win_up, win_down
+        table.version = max(table.version, 4)
+        table.fsSelection = (table.fsSelection | 1 << 7) if use_typo else (table.fsSelection & ~(1 << 7))
+    else:
+        del font['OS/2']
+    font.save(path)
+    return path
+
+
+@pytest.mark.parametrize('name,expected', [('win_over_hhea', (900, 400)), ('hhea_ignored', (800, 200)),
+                                           ('typo_flag', (900, 400)), ('typo_flag_win_ignored', (800, 200))])
+def test_line_box_metrics_follow_gpu_os2_rule(binary, tmp_path, name, expected):
+    path = vertical_font(tmp_path / f'{name}.ttf', name)
+    with SkiaTextMetricsProcess(binary) as process:
+        run = process.measure({'f': {'path': str(path)}}, [{'font_ids': ['f'], 'size': 1000, 'cells': ['A']}])[0]
+    assert (run['font_metrics']['ascent'], run['font_metrics']['descent']) == pytest.approx(expected, abs=1e-3)
+    assert (run['cells'][0]['ascent'], run['cells'][0]['descent']) == pytest.approx(expected, abs=1e-3)
+    assert run['font_metrics']['font_identity'].startswith('skia-m150-hb-ft-v6:')
+
+
+def test_face_without_os2_keeps_hhea_line_box(binary, tmp_path):
+    path = vertical_font(tmp_path / 'no-os2.ttf', 'no_os2', os2=False)
+    with SkiaTextMetricsProcess(binary) as process:
+        run = process.measure({'f': {'path': str(path)}}, [{'font_ids': ['f'], 'size': 1000, 'cells': ['A']}])[0]
+    assert (run['font_metrics']['ascent'], run['font_metrics']['descent']) == pytest.approx((900, 400), abs=1e-3)
+
+
+@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
+def test_old_vertical_metrics_sidecars_and_requests_are_rejected(binary, monkeypatch, tmp_path, payload):
+    process = SkiaRendererProcess(binary, selection=selection('raster'))
+    try:
+        ready = NativeRendererProcess.start(process)
+    finally:
+        process.abort(reason='vertical metrics handshake fixture')
+    assert ready['vertical_metrics_schema'] == 1
+    bad = dict(ready)
+    if payload == 'missing': del bad['vertical_metrics_schema']
+    else: bad['vertical_metrics_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
+    sent = []
+    with monkeypatch.context() as patch:
+        patch.setattr(NativeRendererProcess, 'start', lambda self: bad)
+        patch.setattr(NativeRendererProcess, 'abort', lambda *a, **k: None)
+        patch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
+        patch.setattr(NativeRendererProcess, '_send', lambda self, p: sent.append(p))
+        for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
+            with pytest.raises(NativeRendererError, match='纵向度量'):
+                cls(binary).start()
+    assert not sent
+    path = make_font(tmp_path / 'base.ttf')
+    original = SkiaTextMetricsProcess._send
+
+    def send(self, request):
+        if request.get('cmd') == 'measure_text':
+            request = dict(request)
+            if payload == 'missing': del request['vertical_metrics_schema']
+            else: request['vertical_metrics_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
+        return original(self, request)
+
+    with SkiaTextMetricsProcess(binary) as metrics:
+        monkeypatch.setattr(SkiaTextMetricsProcess, '_send', send)
+        with pytest.raises(NativeRendererError, match='纵向度量'):
+            measure(metrics, path, ['A'])
+
+
+VERTICAL_CASES = [*[(name, sem, dpr, False, False, 'plain') for name in VERTICAL_FONTS
+                    for sem, dpr in (('legacy', 1.5), ('n3_1074', 1))],
+                  ('win_over_hhea', 'n3_1074', 1.5, True, True, 'roles'),
+                  ('win_over_hhea', 'legacy', 1, True, False, 'plain'),
+                  ('hhea_ignored', 'n3_1074', 1.5, False, True, 'no_wipe')]
+
+
+@GPU
+@pytest.mark.parametrize('case', VERTICAL_CASES, ids=lambda c: '-'.join(map(str, c)))
+def test_line_box_metrics_match_actual_gpu(binary, project, tmp_path, case):
+    name, semantics, dpr, rtl, reverse, kind = case
+    handle = QFontDatabase.addApplicationFont(str(vertical_font(tmp_path / f'{name}.ttf', name)))
+    assert handle >= 0
+    clear_font_weight_cache()
+    try:
+        effect = 'no_wipe' if kind == 'no_wipe' else 'none'
+        track, style = rtl_source(project, 'roles' if kind == 'roles' else 'plain', reverse=reverse, effect=effect)
+        family = QFontDatabase.applicationFontFamilies(handle)[0]
+        style = replace(style, font_family=family, right_to_left=rtl, layout_semantics=semantics)
+        if kind == 'roles':
+            style = replace(style, custom_style_schemes={'lead': replace(style.custom_style_schemes['lead'], font_family=family)})
+        assert_gpu_parity(binary, track, style, dpr, case)
+    finally:
+        QFontDatabase.removeApplicationFont(handle)
+        clear_font_weight_cache()
+
+
+# empty_cell_schema=1: an authored empty-text TimingChar keeps its index, text and
+# clock, draws nothing, and occupies the existing GPU's inkless box
+# (size * space% * 25 / 100 / 10 + edge), exactly like Skia's cell_geometry.
+EMPTY = {'mixed': ['A', '', 'W', '字'], 'edges': ['', 'A', 'W', ''], 'trailing': ['A', 'W', '字', ''],
+         'empty_only': ['', '', '', '']}
+
+
+def empty_source(project, texts='mixed', kind='plain', *, reverse=False, effect='none', rtl=False):
+    if kind == 'shared':
+        track, style = reverse_source(project, 'shared', effect)
+        line = replace(track.lines[0], wipe_reverse=reverse)
+        style = replace(style, karaoke_anim=effect, reverse_karaoke_anim=effect)
+    else:
+        track, style = rtl_source(project, kind, reverse=reverse, effect=effect)
+        line = track.lines[0]
+    line = replace(line, chars=[replace(c, text=t) for c, t in zip(line.chars, EMPTY[texts])])
+    return replace(track, lines=[line]), replace(style, right_to_left=rtl)
+
+
+@pytest.mark.parametrize('rtl', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_empty_cells_keep_authored_clocks_and_inkless_boxes(binary, project, rtl, reverse):
+    track, style = empty_source(project, 'edges', rtl=rtl, reverse=reverse)
+    ir = ir_for(binary, (track, style))
+    lettered = ir_for(binary, (replace(track, lines=[replace(track.lines[0], chars=[
+        replace(c, text=c.text or 'A') for c in track.lines[0].chars])]), style))
+    cells = ir['skia_layout']['lines'][0]['cells']
+    assert [c['text'] for c in ir['track']['lines'][0]['chars']] == EMPTY['edges']
+    assert len(cells) == 4
+    for index in (0, 3):
+        metrics = cells[index]['metrics']
+        assert metrics['glyphs'] == [] and metrics['ink'] == [0, 0, 0, 0] and metrics['design_advance'] == 0
+        assert metrics['font_identity'].startswith('skia-m150-hb-ft-v6:')
+        assert cells[index]['wipe_right'] - cells[index]['wipe_left'] == cell_geometry('', metrics, style)[0]
+    size, space = int(style.font_size_px), int(style.space_width_percent)
+    assert cell_geometry('', cells[0]['metrics'], style)[0] == size * space * 25 // 100 // 10
+    # Clocks stay with the authored cells; nothing is dropped or merged.
+    assert ir['track']['lines'][0]['resolved_intervals'] == lettered['track']['lines'][0]['resolved_intervals']
+    if reverse:
+        assert [c['clock_index'] for c in cells] == [3, 2, 1, 0]
+
+
+@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
+def test_old_empty_cell_sidecars_are_rejected_before_measurement_or_selection(binary, monkeypatch, payload):
+    process = SkiaRendererProcess(binary, selection=selection('raster'))
+    try:
+        ready = NativeRendererProcess.start(process)
+    finally:
+        process.abort(reason='empty cell handshake fixture')
+    assert ready['empty_cell_schema'] == 1
+    if payload == 'missing': del ready['empty_cell_schema']
+    else: ready['empty_cell_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
+    sent = []
+    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
+    monkeypatch.setattr(NativeRendererProcess, 'abort', lambda *a, **k: None)
+    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
+    monkeypatch.setattr(NativeRendererProcess, '_send', lambda self, p: sent.append(p))
+    for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
+        with pytest.raises(NativeRendererError, match='空文本'):
+            cls(binary).start()
+    assert not sent
+
+
+@pytest.mark.parametrize('forgery', ['glyph', 'advance', 'text'])
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_forged_empty_cell_snapshots_keep_the_previous_scene(binary, project, forgery, target):
+    ir = ir_for(binary, empty_source(project))
+    bad = copy.deepcopy(ir)
+    empty, letter = (c['metrics'] for c in (bad['skia_layout']['lines'][0]['cells'][1], bad['skia_layout']['lines'][0]['cells'][0]))
+    if forgery == 'glyph': empty['glyphs'] = copy.deepcopy(letter['glyphs'])
+    elif forgery == 'advance': empty['design_advance'] = 1
+    else: bad['track']['lines'][0]['chars'][1]['text'] = 'A'
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir); before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [750], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('rtl', [False, True])
+def test_empty_only_lines_draw_nothing_on_skia_and_actual_gpu(binary, project, rtl):
+    track, style = empty_source(project, 'empty_only', rtl=rtl, reverse=rtl)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert len(ir['skia_layout']['lines'][0]['cells']) == 4
+    times = [199, 700, 1500, 2200]
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir); frames, _ = collect(process, times)
+        assert all(not f[..., 3].any() for f in frames)
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        assert all(not np.frombuffer(r, np.uint8)[3::4].any() for r in raw)
+
+
+def test_empty_cells_gpu_raster_and_out_of_order_seek(binary, project):
+    ir = ir_for(binary, empty_source(project, 'mixed', 'roles', reverse=True, rtl=True), dpr=1.5)
+    order = [2200, 601, 199, 900, 599, 1401, 600, 899, 1399, 200]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            ordered, _ = collect(process, sorted(order))
+            shuffled, _ = collect(process, order, generation=2)
+        by_time = dict(zip(sorted(order), ordered))
+        assert all(np.array_equal(by_time[t], f) for t, f in zip(order, shuffled))
+        results.append(ordered)
+    for a, b in zip(*results):
+        def premult(p):
+            p = p.astype(float); p[..., :3] *= p[..., 3:] / 255
+            return p
+        delta = abs(premult(a) - premult(b))
+        assert delta.mean() < .15 and np.mean(delta.max(axis=-1) > 16) < .003
+
+
+EMPTY_CASES = [
+    ('mixed', False, False, 'none', 'plain', 'legacy', 1.5, None), ('mixed', False, False, 'none', 'plain', 'n3_1074', 1, None),
+    ('mixed', True, False, 'none', 'plain', 'n3_1074', 1.5, None), ('mixed', True, True, 'none', 'plain', 'legacy', 1, None),
+    ('edges', False, True, 'none', 'plain', 'n3_1074', 1.5, None), ('edges', True, False, 'no_wipe', 'plain', 'legacy', 1.5, None),
+    ('trailing', False, False, 'no_wipe', 'plain', 'n3_1074', 1, None), ('trailing', True, True, 'none', 'plain', 'n3_1074', 1.5, None),
+    ('mixed', False, False, 'none', 'pause', 'legacy', 1.5, None), ('mixed', True, False, 'none', 'zero', 'n3_1074', 1.5, None),
+    ('mixed', False, False, 'none', 'shared', 'n3_1074', 1.5, None), ('edges', True, True, 'none', 'shared', 'legacy', 1.5, None),
+    ('mixed', False, True, 'none', 'roles', 'n3_1074', 1.5, None), ('mixed', True, False, 'none', 'negative_gap', 'legacy', 1.5, None),
+    ('edges', False, False, 'none', 'plain', 'n3_1074', 1.5, 'left'), ('trailing', True, False, 'none', 'plain', 'n3_1074', 1.5, 'right'),
+]
+
+
+@GPU
+@pytest.mark.parametrize('case', EMPTY_CASES, ids=lambda c: '-'.join(map(str, c)))
+def test_empty_cells_match_actual_gpu(binary, project, case):
+    texts, rtl, reverse, effect, kind, semantics, dpr, alignment = case
+    track, style = empty_source(project, texts, kind, reverse=reverse, effect=effect, rtl=rtl)
+    assert_gpu_parity(binary, track, replace(style, layout_semantics=semantics), dpr, case, alignment=alignment)
+
+
+@GPU
+@pytest.mark.parametrize('span', [(1, 2), (0, 3)], ids=['empty_base', 'spanning_empty'])
+def test_upper_ruby_over_empty_cells_matches_actual_gpu(binary, project, span):
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+    track, style = empty_source(project, 'mixed')
+    ruby = RubyAnnotation('X', 'A', pos_start_ms=200, pos_end_ms=900, target_line_index=0,
+                          target_char_start=span[0], target_char_end=span[1])
+    track = replace(track, rubies=[ruby])
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert 'p05_resolved_ruby' in ir['required_features']
+    assert_gpu_parity(binary, track, style, 1.5, ('ruby', span))

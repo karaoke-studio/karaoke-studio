@@ -367,7 +367,9 @@ def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monk
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
     monkeypatch.setattr(renderer, "paint_frame", lambda *a, **k: pytest.fail("subtitle QPainter fallback was called"))
     track, style = supported_project
-    job = RenderJob(track, replace(style, stroke_width_px=7), tmp_path / "unused", tmp_path / "unsupported.mp4",
+    job = RenderJob(track, replace(style, stroke_width_px=7, stroke2_width_px=6, stroke2_enabled=True,
+                                  right_to_left=True),
+                    tmp_path / "unused", tmp_path / "unsupported.mp4",
                     background_source=BackgroundSource(kind="solid"), width=640, height=360, fps=60,
                     duration_ms=1500, include_audio=False, gpu_export_enabled=False)
     with pytest.raises(ProcessingError):

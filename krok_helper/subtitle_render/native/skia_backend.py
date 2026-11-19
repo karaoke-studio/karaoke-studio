@@ -13,7 +13,8 @@ from typing import Any
 from .backend import NativeRendererError, heartbeat_lease_s, skia_requested
 from .skia_process import SkiaSidecarProcess, resolve_skia_renderer_path
 from .skia_ipc import OwnedPosixRings
-from .skia_text import CELL_GLYPH_ERROR, has_cell_glyph_schema
+from .skia_text import (CELL_GLYPH_ERROR, EMPTY_CELL_ERROR, VERTICAL_METRICS_ERROR, has_cell_glyph_schema,
+                        has_empty_cell_schema, has_kana_mark_schema, has_vertical_metrics_schema)
 
 
 @dataclass(frozen=True)
@@ -104,8 +105,56 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                     or ready['horizontal_rtl_cell_schema'] != 1
                     or 'p05_horizontal_rtl_cells' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持右至左多码点单元，请重新构建')
+            if (type(ready.get('horizontal_rtl_kana_schema')) is not int
+                    or ready['horizontal_rtl_kana_schema'] != 1
+                    or 'p05_horizontal_rtl_kana_cells' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持右至左假名单元，请重新构建')
+            # Overlapping cells are stacked in the existing GPU's N3 phase order.
+            if (type(ready.get('body_phase_order_schema')) is not int
+                    or ready['body_phase_order_schema'] != 1):
+                raise NativeRendererError('Skia sidecar 不支持正文重叠单元的唱字层序，请重新构建')
             if not has_cell_glyph_schema(ready):
                 raise NativeRendererError(CELL_GLYPH_ERROR)
+            if (not has_kana_mark_schema(ready)
+                    or 'p05_horizontal_rtl_kana_marks' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持假名浊音字形策略，请重新构建')
+            if not has_vertical_metrics_schema(ready):
+                raise NativeRendererError(VERTICAL_METRICS_ERROR)
+            if not has_empty_cell_schema(ready):
+                raise NativeRendererError(EMPTY_CELL_ERROR)
+            if (type(ready.get('vertical_solid_schema')) is not int or ready['vertical_solid_schema'] != 2
+                    or 'p05_vertical_solid' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持竖排实色正文，请重新构建')
+            if (type(ready.get('vertical_japanese_glyph_schema')) is not int or ready['vertical_japanese_glyph_schema'] != 1
+                    or 'p05_vertical_japanese_glyphs' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持竖排日文标点和小假名，请重新构建')
+            if (type(ready.get('vertical_ruby_schema')) is not int or ready['vertical_ruby_schema'] != 2
+                    or 'p05_vertical_ruby' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持竖排注音，请重新构建')
+            if (type(ready.get('vector_guide_schema')) is not int or ready['vector_guide_schema'] != 1
+                    or 'p05_vector_guides' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持矢量导唱符，请重新构建')
+            if (type(ready.get('primary_solid_outline_schema')) is not int or ready['primary_solid_outline_schema'] != 1
+                    or 'p06_primary_solid_outline' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持实色描边，请重新构建')
+            if (type(ready.get('secondary_solid_outline_schema')) is not int or ready['secondary_solid_outline_schema'] != 1
+                    or 'p06_secondary_solid_outline' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持二重实色描边，请重新构建')
+            if (type(ready.get('line_fade_schema')) is not int or ready['line_fade_schema'] != 1
+                    or 'p07_line_fade' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持出入场淡化，请重新构建')
+            if (type(ready.get('line_motion_schema')) is not int or ready['line_motion_schema'] != 1
+                    or 'p07_line_motion' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持出入场位移，请重新构建')
+            if (type(ready.get('character_fade_schema')) is not int or ready['character_fade_schema'] != 1
+                    or 'p07_character_fade' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持逐字淡化，请重新构建')
+            if (type(ready.get('scanline_band_schema')) is not int or ready['scanline_band_schema'] != 1
+                    or 'p07_scanline_band' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持扫字线高亮带，请重新构建')
+            if (type(ready.get('character_transform_schema')) is not int or ready['character_transform_schema'] != 1
+                    or 'p07_character_transform' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持逐字滴落/翻转，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

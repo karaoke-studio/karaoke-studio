@@ -2581,6 +2581,10 @@ class KrokHelperQtApp(QMainWindow):
         delivers ``closeEvent`` to them, so their own teardown hooks must be called
         from the host or live QThreads/QMediaPlayers get destroyed while running.
         """
+        download_page = getattr(self, "video_download_page", None)
+        shutdown_login = getattr(download_page, "shutdown_youtube_login", None)
+        if callable(shutdown_login):
+            shutdown_login()
         subtitle_page = getattr(self, "subtitle_render_page", None)
         shutdown = (
             getattr(subtitle_page, "shutdown_for_host_exit", None)

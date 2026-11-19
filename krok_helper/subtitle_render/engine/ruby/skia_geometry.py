@@ -77,6 +77,21 @@ def _main_box_ascent(line, style, measured, targets):
                for i in indices)
 
 
+def upper_ruby_targets(track, index, line, appearance, clock, annotation_indices):
+    # Keep loader ownership even for hand-built tracks lacking a source index.
+    owner = line if line.track_line_index is not None else replace(line, track_line_index=index)
+    targets = []
+    for ruby in active_rubies_for_line(track.rubies, owner, intervals=clock):
+        indices = ruby_target_indices(ruby, line, clock)
+        if not indices:
+            continue
+        effective = effective_ruby_for_target(ruby, indices, clock)
+        brush = ruby_style_for_target_indices(appearance, line, indices)
+        style = ruby_script_stroke_style(brush, effective.reading)
+        targets.append(RubyTarget(annotation_indices[id(ruby)], tuple(indices), effective, style))
+    return targets
+
+
 def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, measure):
     """Use canonical intervals for ownership, repeated-text targets and clamping.
 
@@ -96,20 +111,8 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             raise ValueError('Skia 当前注音几何准备尚不支持带描边的主字')
         clock = measured.snapshot.resolve_intervals(line, style)
         intervals.append(clock)
-        # Loader ownership is authoritative; hand-created tracks still have a
-        # concrete source index and must not leak annotations into peer lines.
-        owner = line if line.track_line_index is not None else replace(line, track_line_index=index)
-        line_targets = []
-        for ruby in active_rubies_for_line(track.rubies, owner, intervals=clock):
-            indices = ruby_target_indices(ruby, line, clock)
-            if not indices:
-                continue
-            effective = effective_ruby_for_target(ruby, indices, clock)
-            brush = ruby_style_for_target_indices(appearance, line, indices)
-            ruby_style = ruby_script_stroke_style(brush, effective.reading)
-            target = RubyTarget(annotation_indices[id(ruby)], tuple(indices), effective, ruby_style)
-            line_targets.append(target)
-            readings.append((effective, ruby_style))
+        line_targets = upper_ruby_targets(track, index, line, appearance, clock, annotation_indices)
+        readings.extend((target.effective, target.style) for target in line_targets)
         for generated in lower[index]:
             target = RubyTarget(-1-generated.clock.annotation_index, generated.indices,
                                 generated.effective, generated.style, True)

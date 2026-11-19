@@ -1,4 +1,4 @@
-"""Canonical metrics -> existing semantic plan -> final horizontal Skia IR.
+"""Canonical metrics -> existing semantic plan -> final Skia IR.
 
 Font discovery and process IPC are injected configuration capabilities. No Qt
 measurement or rendering is used here, and frame draws never call this module.
@@ -7,10 +7,14 @@ from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
 from krok_helper.subtitle_render.engine.layout.display.section_edges import section_edge_context
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
+from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
+    validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs, vertical_solid_schema)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
+from .skia_vertical_ruby_ir import vertical_ruby_layout
+from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -25,13 +29,38 @@ _RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0xac), (0xae, 0xff), (0x300, 0x34e), (0
                     (0x4e00, 0x9fff), (0xac00, 0xd7a3))
 
 
+# horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
+# nominal glyphs. Combining U+3099/U+309A stay rejected: the existing GPU
+# neither composes them nor applies fallback mark positioning.
+_RTL_KANA_RANGES = ((0x3000, 0x3002), (0x300c, 0x300f), (0x301c, 0x301c), (0x3041, 0x3096), (0x309b, 0x309c),
+                    (0x30a1, 0x30fc), (0xff01, 0xff01), (0xff1f, 0xff1f))
+
+
+def _in(ranges, c):
+    return any(low <= ord(c) <= high for low, high in ranges)
+
+
 def _validated_rtl_cell(text):
-    return all(any(low <= ord(c) <= high for low, high in _RTL_CELL_RANGES) for c in text)
+    for i, c in enumerate(text):
+        if c in '\u3099\u309a':
+            # One authored mark following one kana base; repeated/isolated marks
+            # and other mixed-script attachments need their own calibration.
+            if i == 0 or not (0x3041 <= ord(text[i-1]) <= 0x3096 or 0x30a1 <= ord(text[i-1]) <= 0x30fa):
+                return False
+        elif not (_in(_RTL_CELL_RANGES, c) or _in(_RTL_KANA_RANGES, c)):
+            return False
+    return True
+
+
+def _rtl_kana_cell(text):
+    return len(text) > 1 and any(_in(_RTL_KANA_RANGES, c) or c in '\u3099\u309a' for c in text)
 
 
 def _validate_style(style):
-    if style.vertical or style.layout_semantics not in {'legacy', 'n3_1074'}:
-        raise ValueError('Skia 当前规范布局仅支持横排')
+    if style.layout_semantics not in {'legacy', 'n3_1074'}:
+        raise ValueError('Skia 当前规范布局不支持此语义')
+    if style.vertical:
+        validate_vertical_style(style)
     if type(style.right_to_left) is not bool:
         raise ValueError('Skia 右至左单元排列标记必须是布尔值')
     if style.dual_line_layout:
@@ -39,6 +68,56 @@ def _validate_style(style):
             raise ValueError('Skia 智能水平布局模式无效')
         if len(style.line_alignments) > 32:
             raise ValueError('Skia 当前最多支持 32 行网格')
+
+
+def _validate_scanline_band(track, style, lines):
+    """scanline_band_schema=1: forward horizontal solid-color band without glow."""
+    from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
+    for source, line in zip(track.lines, lines, strict=True):
+        if not line.get('scanline'):
+            continue
+        look = style_for_line(style, source)
+        if (look.scanline_mode != 'color' or look.scanline_shape != 'band' or look.scanline_glow_px != 0
+                or look.scanline_effect != 'none' or look.vertical or look.right_to_left or source.wipe_reverse
+                or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')
+                or track.rubies or look.lower_ruby_enabled
+                or any(c.role_label is not None or c.vector_glyph is not None
+                       for c in render_line_with_guide_symbols(source).chars)):
+            raise ValueError('Skia 扫字线当前仅支持正向横排实色高亮带（无柔化）')
+
+
+_TRANSFORMS = {'char_drip', 'spin_flip'}
+
+
+def _character_transforms(track, ir, plan, measured):
+    """character_transform_schema=1: canonical layout-cell and glyph-run pivots, body text only."""
+    from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
+    for index, item in enumerate(plan.lines):
+        source = ir['track']['lines'][item.track_index]
+        if not {source.get('entry_anim'), source.get('exit_anim')} & _TRANSFORMS:
+            continue
+        line, look = track.lines[item.track_index], item.layout_style
+        if (look.vertical or look.right_to_left or line.wipe_reverse or source.get('karaoke_anim') != 'none'
+                or source.get('scanline') or track.rubies or look.lower_ruby_enabled or look.stroke_width_px > 0
+                or (look.stroke2_enabled and look.stroke2_width_px > 0)
+                or any(c.role_label is not None or c.vector_glyph is not None
+                       for c in render_line_with_guide_symbols(line).chars)):
+            raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排无描边正文')
+        entry = source.get('entry_anim') in _TRANSFORMS and source['entry_duration_ms'] > 0
+        exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
+        if not (entry or exit_):
+            continue
+        cells, metrics = ir['skia_layout']['lines'][index]['cells'], measured.lines[item.track_index]
+        delay = 350 // (len(cells) - 1) if len(cells) > 1 else 0
+        start, end = source['display_start_ms'], source['display_end_ms']
+        for i, (cell, offset, width, run, interval) in enumerate(zip(
+                cells, metrics.offsets, metrics.widths, metrics.slot_metrics, source['resolved_intervals'], strict=True)):
+            # A transformed cell never wipes: the GPU then clips it with a per-glyph front.
+            if (entry and interval[0] < start + delay * i + 250) or (exit_ and interval[1] > max(source['end_ms'], end - 600)):
+                raise ValueError('Skia 逐字滴落/翻转期间暂不支持走字')
+            left = cell['origin_x'] - offset
+            cell.update(layout_left=left, layout_right=left + width,
+                        pivot_y=cell['baseline_y'] + (float(run['descent']) - float(run['ascent'])) / 2)
 
 
 def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
@@ -54,19 +133,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if any(len(char.text) > 1 and not _validated_rtl_cell(char.text) for line in source.lines for char in line.chars):
                 raise ValueError('Skia 右至左排列的多码点单元包含尚未验证的字符')
         validate_reverse_source(source)
-        if any(c.vector_glyph for l in source.lines for c in l.chars):
-            raise ValueError('Skia 当前规范布局尚不支持导唱符')
+        if source_style.vertical:
+            validate_vertical_source(source)
+        validate_vector_guides(source, source_style)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
-                line_style = style_for_line(source_style, line)
-                _validate_style(line_style)
-                # Overlapping cells expose the core's per-cell wipe clip versus the
-                # GPU's one line-level edge; not validated for RTL multi-codepoint cells.
-                # Layout spacing is the line's (roles keep layout spacing fields).
-                if (source_style.right_to_left and line_style.letter_spacing_px < 0
-                        and any(len(c.text) > 1 for c in line.chars)):
-                    raise ValueError('Skia 右至左多码点单元暂不支持负字距')
+                _validate_style(style_for_line(source_style, line))
             result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font, **plan_kwargs)
         prepared.append(result)
         return result.plan
@@ -74,18 +147,30 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     with font_snapshot(resolve_font):  # Every plan of this IR shares one content snapshot.
         ir = build_render_ir(track, style, layout_plan_builder=build_plan,
                              serialize_source_baselines=False, **kwargs)
+        vertical_ruby = None
+        if style.vertical and track.rubies:
+            vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
+                                                dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     lines = []
-    for index, item in enumerate(plan.lines):
-        position = geometry.position(item, kwargs['width'], kwargs['height'])
-        cells = positioned_cells(geometry.locals[index], position)
-        ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
-                                 dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,
-                                 right_to_left=item.layout_style.right_to_left)
-        for cell, end in zip(cells, ends, strict=True):
-            cell['wipe_end_position'] = end
-        lines.append({'cells': cells})
+    if vertical_ruby is None:
+        for index, item in enumerate(plan.lines):
+            if item.layout_style.vertical:
+                lines.append({'cells': vertical_cells(geometry.locals[item.track_index], measured.lines[item.track_index], item,
+                                                      width=kwargs['width'], height=kwargs['height']),
+                              'text_flow': 'vertical'})
+                continue
+            position = geometry.position(item, kwargs['width'], kwargs['height'])
+            cells = positioned_cells(geometry.locals[index], position)
+            ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
+                                     dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,
+                                     right_to_left=item.layout_style.right_to_left)
+            for cell, end in zip(cells, ends, strict=True):
+                cell['wipe_end_position'] = end
+            lines.append({'cells': cells})
+    else:
+        lines = vertical_ruby['lines']
     # Every canonical line carries the GPU's final wipe endpoint, so the
     # overlap contract is part of the base canonical feature set.
     ir['required_features'] = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles',
@@ -93,6 +178,46 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_overlap_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
+    if vertical_ruby is not None:
+        ir['skia_layout'].update(vertical_ruby)
+        ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_ruby']
+    secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
+                            for item in plan.lines)
+    if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
+        ir['required_features'].append('p06_primary_solid_outline')
+        ir['skia_layout']['primary_solid_outline_schema'] = 1
+    if secondary_outline:
+        ir['required_features'].append('p06_secondary_solid_outline')
+        ir['skia_layout']['secondary_solid_outline_schema'] = 1
+    if any(char.vector_glyph is not None for item in plan.lines for char in item.render_line.chars):
+        ir['required_features'].append('p05_vector_guides')
+        ir['skia_layout']['vector_guide_schema'] = 1
+    if any(line.get('entry_anim') == 'fade' or line.get('exit_anim') == 'fade'
+           for line in ir['track']['lines']):
+        ir['required_features'].append('p07_line_fade')
+        ir['skia_layout']['line_fade_schema'] = 1
+    if any(line.get('entry_anim') in {'slide_in', 'rise'} or line.get('exit_anim') in {'slide_out', 'rise'}
+           for line in ir['track']['lines']):
+        ir['required_features'].append('p07_line_motion')
+        ir['skia_layout']['line_motion_schema'] = 1
+    if any(line.get('entry_anim') == 'char_fade' or line.get('exit_anim') == 'char_fade'
+           for line in ir['track']['lines']):
+        ir['required_features'].append('p07_character_fade')
+        ir['skia_layout']['character_fade_schema'] = 1
+    if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
+        _character_transforms(track, ir, plan, measured)
+        ir['required_features'].append('p07_character_transform')
+        ir['skia_layout']['character_transform_schema'] = 1
+    if any(line.get('scanline') for line in ir['track']['lines']):
+        _validate_scanline_band(track, style, ir['track']['lines'])
+        ir['required_features'].append('p07_scanline_band')
+        ir['skia_layout']['scanline_band_schema'] = 1
+    if style.vertical:
+        ir['required_features'].append('p05_vertical_solid')
+        ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)
+        if vertical_japanese_glyphs(track):
+            ir['required_features'].append('p05_vertical_japanese_glyphs')
+            ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
         ir['skia_layout']['horizontal_rtl_schema'] = 1
@@ -101,6 +226,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if any(len(char.text) > 1 for item in plan.lines for char in item.line.chars):
             ir['required_features'].append('p05_horizontal_rtl_cells')
             ir['skia_layout']['horizontal_rtl_cell_schema'] = 1
+        if any(_rtl_kana_cell(char.text) for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_kana_cells')
+            ir['skia_layout']['horizontal_rtl_kana_schema'] = 1
+        if any(any(c in '\u3099\u309a' for c in char.text) and len(char.text) > 1
+               for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_kana_marks')
+            ir['skia_layout']['kana_mark_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         sources, indices = lower_sources(prepared[0])

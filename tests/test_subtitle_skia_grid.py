@@ -37,7 +37,8 @@ def test_fixed_grid_is_independent_of_line_contents(semantics,top,center):
     for position,first in (('top',top),('center',center),('bottom',290)):
         style=Style(layout_semantics=semantics,dual_line_layout=True,line_alignments=['left']*3,
             line_horizontal_layout='center',font_size_px=50,line_y_position=position,
-            line_y_margin_px=40,line_gap_px=20,ruby_font_size_px=45,ruby_stroke_width_px=0)
+            line_y_margin_px=40,line_gap_px=20,stroke_width_px=0,stroke2_width_px=0,
+            ruby_font_size_px=45,ruby_stroke_width_px=0)
         for lane in range(3):
             item=SimpleNamespace(layout_style=style,lane=lane,page_line_count=3,center_override=False)
             result=place_horizontal_line(item,{'ascent':40,'descent':10},width=640,height=480,

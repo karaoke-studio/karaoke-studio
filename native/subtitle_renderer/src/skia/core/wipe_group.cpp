@@ -6,8 +6,8 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
-PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, bool noWipe)
-    : cells_(cells), noWipe_(noWipe) {
+PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, bool noWipe, bool vertical)
+    : cells_(cells), noWipe_(noWipe), vertical_(vertical) {
     if (cells.empty() || cells.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -17,6 +17,8 @@ PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, boo
             || cell.endMs > 172800000
             || cell.before != cells.front().before || cell.after != cells.front().after)
             throw std::runtime_error("Skia 注音组几何、时钟或配色无效");
+        if (vertical_ && (!std::isfinite(cell.top) || !std::isfinite(cell.bottom) || cell.bottom <= cell.top))
+            throw std::runtime_error("Skia 竖排注音走字范围无效");
         if (!cell.wipePoints.empty() && (cell.wipePoints.size() != 2
             || cell.wipePoints.front().timeMs != cell.startMs || cell.wipePoints.front().position != 0
             || cell.wipePoints.back().timeMs != cell.endMs || !std::isfinite(cell.wipePoints.back().position)
@@ -37,16 +39,26 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
     };
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs >= c.endMs; });
-    float edge = bounds_.left();
+    const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
+    float edge = startEdge;
     for (const auto& cell : cells_) {
         if (timeMs < cell.startMs) break;
         const float progress = noWipe_ ? (timeMs >= cell.endMs ? 1.f : 0.f)
             : timeMs <= cell.startMs ? 0.f : (timeMs >= cell.endMs ? 1.f
             : float(timeMs - cell.startMs) / float(cell.endMs - cell.startMs));
         const float endpoint = cell.wipePoints.empty() ? 1.f : cell.wipePoints.back().position;
-        edge = cell.left + (cell.right - cell.left) * (progress * endpoint);
+        const float low = vertical_ ? cell.top : cell.left;
+        const float high = vertical_ ? cell.bottom : cell.right;
+        edge = low + (high - low) * (progress * endpoint);
         if (timeMs <= cell.endMs) break;
     }
+    const auto clip = [&](bool after) {
+        const float low = after ? -1e6f : edge;
+        const float high = after ? edge : 1e6f;
+        canvas.clipRect(vertical_ ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
+                                  : SkRect::MakeLTRB(low, -1e6f, high, 1e6f),
+                        SkClipOp::kIntersect, antialiasClip_);
+    };
     if (before) {
         draw(false);
         // D2D's no-wipe endpoint is already 1 at an initial zero-duration
@@ -54,10 +66,10 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
         // through that endpoint (or uncut if the whole group is complete).
         // This singular boundary intentionally preserves that alpha overlap.
         if (noWipe_ && cells_.front().startMs == cells_.front().endMs
-            && timeMs == cells_.front().startMs && edge > bounds_.left()) {
+            && timeMs == cells_.front().startMs && edge > startEdge) {
             canvas.save();
             if (!complete)
-                canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f), SkClipOp::kIntersect, antialiasClip_);
+                clip(true);
             draw(true);
             canvas.restore();
         }
@@ -67,12 +79,12 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
     // Disjoint clips preserve translucent alpha; completed groups release
     // their clip so overhangs keep the established full-after appearance.
     canvas.save();
-    canvas.clipRect(SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f), SkClipOp::kIntersect, antialiasClip_);
+    clip(false);
     draw(false);
     canvas.restore();
-    if (edge > bounds_.left()) {
+    if (edge > startEdge) {
         canvas.save();
-        canvas.clipRect(SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f), SkClipOp::kIntersect, antialiasClip_);
+        clip(true);
         draw(true);
         canvas.restore();
     }

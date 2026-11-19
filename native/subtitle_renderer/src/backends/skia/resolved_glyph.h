@@ -1,6 +1,7 @@
 #pragma once
 #include "core/resolved_scene.h"
 #include "text/font_instance.h"
+#include "../../model/glyph_resources.h"
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
 #include <memory>
@@ -15,6 +16,10 @@ struct ResolvedGlyphContext {
     std::vector<bool> mixedFallback;
     double dpr = 1;
     ::subtitle::skia::ResolvedCell cell(const QJsonObject&, const QString& text, int startMs, int endMs,
-                                     std::uint32_t before, std::uint32_t after) const;
+                                     std::uint32_t before, std::uint32_t after, double wipePad = 0) const;
+    // vector_guide_schema=1: an authored guide outline at logical font size.
+    ::subtitle::skia::ResolvedCell vectorCell(const QJsonObject&, const VectorGlyph&, const QString& glyphId,
+                                           double size, int startMs, int endMs,
+                                           std::uint32_t before, std::uint32_t after) const;
 };
 }

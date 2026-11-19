@@ -24,18 +24,26 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
         raise ValueError('Skia 行网格索引无效')
     if style.line_y_position not in {'top', 'center', 'bottom'}:
         raise ValueError('Skia 行纵向位置无效')
+    edge = max(int(style.stroke_width_px), 0)
     if style.layout_semantics == 'legacy':
         left, right = ink_left, ink_right
         ascent, descent = float(metrics['ascent']), float(metrics['descent'])
-        # Main outlines are gated off here, so an inherited ruby stroke is 0.
-        extra = max(style.ruby_gap_px + max(int(style.ruby_font_size_px), 1)
-                    + max(int(style.ruby_stroke_width_px or 0), 0), 0)
+        edge2 = max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
+        visual_pad = math.ceil((edge + edge2) / 2)
+        ascent += visual_pad
+        descent += visual_pad
+        ruby_size = max(int(style.ruby_font_size_px), 1)
+        ruby_edge = style.ruby_stroke_width_px
+        if ruby_edge is None:
+            ruby_edge = math.floor(edge * ruby_size / max(int(style.font_size_px), 1) + 0.5)
+        extra = max(style.ruby_gap_px + ruby_size + max(int(ruby_edge), 0), 0)
     elif style.layout_semantics == 'n3_1074':
         left, right = 0, max(layout_width, 1)
         size = max(int(style.font_size_px), 1)
         descent = math.floor(size * max(float(metrics['descent']), 0)
                              / max(float(metrics['ascent']) + float(metrics['descent']), 1))
-        ascent, extra = size - descent, 0
+        descent += edge // 2
+        ascent, extra = size + edge - descent, 0
     else:
         raise ValueError('Skia 不支持此布局语义')
     if row_frame is not None:
