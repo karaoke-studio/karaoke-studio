@@ -164,6 +164,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia 渲染器不支持噪声出入场，请重新构建')
             if 'p06_body_gradient' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia 渲染器不支持正文渐变，请重新构建')
+            if 'p06_outline_gradient' not in ready.get('profiles', []):
+                raise NativeRendererError('Skia 渲染器不支持描边渐变，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

@@ -121,3 +121,151 @@ def test_invalid_gradient_keeps_previous_scene(binary, project, mutation):
             configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert np.array_equal(before, after)
+
+
+def layer_paint(mode, start, end):
+    if mode == 'solid':
+        return PaintFill(color=start)
+    return PaintFill(mode=mode, start_color=start, end_color=end, split_stops=[(0, start), (50, end)])
+
+
+# (body, outline, outer ring); translucent stops exercise the existing GPU's body protection.
+OUTLINE_CASES = {
+    'primary': ('solid', 'gradient_horizontal', None),
+    'secondary': ('solid', 'solid', 'gradient_vertical'),
+    'body_padded': ('gradient_vertical', 'solid', 'solid'),
+    'all': ('split_vertical', 'gradient_vertical', 'gradient_horizontal'),
+    'translucent': ('gradient_horizontal', 'gradient_vertical', 'solid'),
+}
+
+
+def outline_gradient_source(project, case):
+    body, outline, outer = OUTLINE_CASES[case]
+    track, style = gradient_source(project, body if body != 'solid' else 'gradient_horizontal',
+                                   translucent=case == 'translucent')
+    alpha = '#A0' if case == 'translucent' else '#FF'
+    colors = style.karaoke_colors
+    before, after = colors.before, colors.after
+    if body == 'solid':
+        before, after = replace(before, text=PaintFill(color='#FFFF0000')), replace(after, text=PaintFill(color='#FF00FF00'))
+    before = replace(before, stroke=layer_paint(outline, alpha + '2040E0', alpha + 'F0D020'))
+    after = replace(after, stroke=layer_paint(outline, alpha + 'E02090', alpha + '20E0E0'))
+    if outer:
+        before = replace(before, stroke2=layer_paint(outer, '#FF102060', '#FFE0E0E0'))
+        after = replace(after, stroke2=layer_paint(outer, '#FF601020', '#FF30A040'))
+    return track, replace(style, karaoke_colors=replace(colors, before=before, after=after), stroke_width_px=5,
+                          stroke2_enabled=outer is not None, stroke2_width_px=4 if outer else 0)
+
+
+def assert_text_parity(refs, results, sample):
+    budget = COMPARISON_BUDGETS['image_categories']['text']
+    for t, d2d, gpu, raster in zip(TIMES, refs, *results, strict=True):
+        for name, a, b in (('d2d', d2d, gpu), ('raster', gpu, raster)):
+            ma, mb = a[..., 3] > 16, b[..., 3] > 16
+            union = ma | mb
+            if not union.any():
+                continue
+            assert ma.any() and mb.any(), (*sample, name, t)
+            assert within_one_pixel(ma, mb), (*sample, name, t, 'ink')
+            assert (ma & mb).sum() / union.sum() >= budget['min_alpha_iou'], (*sample, name, t, 'mask')
+            diff = abs(premultiplied(a)[union] - premultiplied(b)[union])
+            assert diff.mean() <= budget['max_union_channel_mae'], (*sample, name, t, diff.mean())
+            assert np.percentile(diff, 95) <= budget['max_union_p95'], (*sample, name, t, np.percentile(diff, 95))
+
+
+@pytest.mark.parametrize('case', list(OUTLINE_CASES))
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_outline_gradients_declare_capability_and_replay(binary, project, case, target, tmp_path):
+    track, style = outline_gradient_source(project, case)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    features = ir['required_features']
+    assert {'p06_body_gradient', 'p06_outline_gradient', 'p06_primary_solid_outline'} <= set(features)
+    assert ('p06_secondary_solid_outline' in features) == (OUTLINE_CASES[case][2] is not None)
+    solid = ir_for(binary, (track, replace(style, karaoke_colors=replace(
+        style.karaoke_colors,
+        before=replace(style.karaoke_colors.before, text=PaintFill(color='#FFFF0000'),
+                       stroke=PaintFill(color='#FF2040E0'), stroke2=PaintFill(color='#FF102060')),
+        after=replace(style.karaoke_colors.after, text=PaintFill(color='#FF00FF00'),
+                      stroke=PaintFill(color='#FFE02090'), stroke2=PaintFill(color='#FF601020'))))), dpr=1.5)
+    # Gradients change paint only: the same glyph geometry and clocks as solid outlines.
+    line = dict(ir['skia_layout']['lines'][0])
+    line.pop('body_gradient_bounds')
+    assert line == solid['skia_layout']['lines'][0]
+    assert ir['track']['lines'][0]['resolved_intervals'] == solid['track']['lines'][0]['resolved_intervals']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*TIMES, 750, 0])
+        configure(process, solid)
+        plain, _ = collect(process, TIMES, generation=2)
+    assert np.array_equal(frames[3], frames[-2]) and np.array_equal(frames[0], frames[-1])
+    for t, frame, reference in zip(TIMES, frames[:len(TIMES)], plain, strict=True):
+        # Same coverage footprint as the solid stack; the paint differs inside it.
+        assert np.array_equal(frame[..., 3] > 0, reference[..., 3] > 0) or case == 'translucent', (case, t)
+    assert not np.array_equal(frames[1], plain[1])
+    if case == 'all' and target == 'gpu':
+        (tmp_path / 'outline-gradient-layout.json').write_text(json.dumps({
+            'features': features, 'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case,dpr', [('primary', 1.5), ('secondary', 1.5), ('body_padded', 1.5), ('body_padded', 1),
+                                      ('all', 1.5), ('all', 1), ('translucent', 1.5)])
+def test_outline_gradient_matches_actual_d2d_and_gpu_raster(binary, project, case, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = outline_gradient_source(project, case)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, TIMES)
+        results.append(frames)
+    assert_text_parity(refs, results, (case, dpr))
+
+
+@pytest.mark.parametrize('mutation', ['feature', 'body_feature', 'bounds'])
+def test_invalid_outline_gradient_keeps_previous_scene(binary, project, mutation):
+    ir = ir_for(binary, outline_gradient_source(project, 'all'))
+    bad = copy.deepcopy(ir)
+    if mutation == 'feature':
+        bad['required_features'].remove('p06_outline_gradient')
+    elif mutation == 'body_feature':
+        bad['required_features'].remove('p06_body_gradient')
+    else:
+        del bad['skia_layout']['lines'][0]['body_gradient_bounds']
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [750], generation=2)
+    assert before[0][..., 3].any() and np.array_equal(before, after)
+
+
+def test_outline_gradient_with_roles_is_rejected(binary, project):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    track, style = outline_gradient_source(project, 'primary')
+    style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
+    line = track.lines[0]
+    track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])])
+    with pytest.raises(ValueError, match='正文渐变'):
+        ir_for(binary, (track, style))
+
+
+def test_old_sidecar_without_outline_gradients_is_rejected(binary, monkeypatch):
+    process = SkiaRendererProcess(binary, selection=selection('raster'))
+    try: ready = NativeRendererProcess.start(process)
+    finally: process.abort(reason='handshake fixture')
+    ready['profiles'] = [p for p in ready['profiles'] if p != 'p06_outline_gradient']
+    sent = []
+    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
+    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
+    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
+    with pytest.raises(NativeRendererError, match='描边渐变'): SkiaRendererProcess(binary).start()
+    assert not sent

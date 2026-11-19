@@ -66,6 +66,7 @@ private:
         bool hasStrokeFlash = false;
         LineAnimation animation;
         sk_sp<SkShader> beforeGradient, afterGradient;
+        sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
         NoiseTransition noise;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;

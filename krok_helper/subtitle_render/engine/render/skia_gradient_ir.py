@@ -1,4 +1,4 @@
-"""Project the line-wide coordinates needed by a Skia body gradient."""
+"""Project the line-wide coordinates needed by Skia body and outline gradients."""
 
 from ..style.style_semantics import effective_karaoke_colors
 
@@ -6,18 +6,34 @@ from ..style.style_semantics import effective_karaoke_colors
 _GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
 
 
+def _layer_modes(look):
+    """Paint modes of every drawn layer: body, then each present outline."""
+    colors = effective_karaoke_colors(look)
+    modes = {colors.before.text.mode, colors.after.text.mode}
+    outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
+    if look.stroke_width_px > 0:
+        modes |= {colors.before.stroke.mode, colors.after.stroke.mode}
+    if look.stroke2_enabled and look.stroke2_width_px > 0:
+        modes |= {colors.before.stroke2.mode, colors.after.stroke2.mode}
+    return modes, outlined
+
+
 def write_body_gradient_bounds(track, ir, plan):
-    enabled = False
+    """Write the glyph ink union of gradient lines; return (gradients, outlined gradients).
+
+    The existing GPU maps every layer of a line onto this ink union: a
+    horizontal paint spans the glyph ink, a vertical paint spans the ink padded
+    by the line's visual outline pad (applied natively at the reference scale).
+    """
+    enabled = outlined_gradient = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
-        colors = effective_karaoke_colors(look)
-        modes = {colors.before.text.mode, colors.after.text.mode}
+        modes, outlined = _layer_modes(look)
         if not modes & _GRADIENTS:
             continue
         source = ir['track']['lines'][item.track_index]
         if (not modes <= (_GRADIENTS | {'solid'})
                 or look.vertical or look.right_to_left or item.line.wipe_reverse
-                or look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
                 or source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
                 or source.get('scanline') or source.get('fx_bursts') or source.get('stroke_flash')
                 or source.get('karaoke_anim') != 'none' or track.rubies or look.lower_ruby_enabled
@@ -33,4 +49,5 @@ def write_body_gradient_bounds(track, ir, plan):
             left, top, right, bottom = zip(*boxes, strict=True)
             final['body_gradient_bounds'] = [min(left), min(top), max(right), max(bottom)]
         enabled = True
-    return enabled
+        outlined_gradient = outlined_gradient or outlined
+    return enabled, outlined_gradient

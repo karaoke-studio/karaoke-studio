@@ -148,7 +148,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 if (layer == Layer::OuterOutline && cell.outline)
                     canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
             }
-            const auto shader = drawOutline ? nullptr : sung ? line.afterGradient : line.beforeGradient;
+            const auto shader = layer == Layer::Body ? (sung ? line.afterGradient : line.beforeGradient)
+                : layer == Layer::Outline ? (sung ? line.afterOutlineGradient : line.beforeOutlineGradient)
+                : (sung ? line.afterOuterGradient : line.beforeOuterGradient);
             paint.setShader(shader);
             paint.setColor(shader ? SK_ColorWHITE : drawOutline ? (sung ? stroke->after : stroke->before)
                                                                : (sung ? cell.after : cell.before));

@@ -26,6 +26,10 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.animation = source.animation;
         line.beforeGradient = source.beforeGradient;
         line.afterGradient = source.afterGradient;
+        line.beforeOutlineGradient = source.beforeOutlineGradient;
+        line.afterOutlineGradient = source.afterOutlineGradient;
+        line.beforeOuterGradient = source.beforeOuterGradient;
+        line.afterOuterGradient = source.afterOuterGradient;
         line.noise = source.noise;
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;

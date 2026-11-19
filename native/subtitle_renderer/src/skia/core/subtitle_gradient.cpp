@@ -49,4 +49,22 @@ sk_sp<SkShader> subtitleGradient(const krok::subtitle::native::PaintStyle& paint
     if (!shader) throw std::runtime_error("Skia 无法创建字幕渐变");
     return shader;
 }
+
+sk_sp<SkShader> lineGradient(const krok::subtitle::native::PaintStyle& paint, const SkRect& ink, float visualPad) {
+    if (paint.mode == "solid") return nullptr;
+    if (paint.mode == "gradient_horizontal")
+        return subtitleGradient(paint, SkRect::MakeLTRB(ink.left(), ink.top(), std::max(ink.right(), ink.left() + 1.f), ink.bottom()));
+    return subtitleGradient(paint, SkRect::MakeLTRB(ink.left(), ink.top() - visualPad, ink.right(), ink.bottom() + visualPad));
+}
+
+float outlineVisualPad(float strokeWidth, float stroke2Width, float layoutScale) {
+    const float scale = std::max(layoutScale, .01f);
+    return std::ceil((std::max(strokeWidth / scale, 0.f) + std::max(stroke2Width / scale, 0.f)) * .5f) * scale;
+}
+
+bool paintNeedsBodyProtection(const krok::subtitle::native::PaintStyle& paint) {
+    if (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical")
+        return std::any_of(paint.stops.begin(), paint.stops.end(), [](const auto& stop) { return stop.color.alpha < 255; });
+    return paint.mode != "solid" || paint.color.alpha < 255;
+}
 }

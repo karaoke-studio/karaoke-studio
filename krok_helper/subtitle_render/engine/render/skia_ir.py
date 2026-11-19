@@ -244,8 +244,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['scanline_band_schema'] = (
             4 if any(line.get('scanline') and line.get('wipe_reverse') for line in ir['track']['lines']) else 3
         )
-    if write_body_gradient_bounds(track, ir, plan):
+    gradients, outlined_gradients = write_body_gradient_bounds(track, ir, plan)
+    if gradients:
         ir['required_features'].append('p06_body_gradient')
+    if outlined_gradients:
+        # Gradient paint on, or under, a solid or gradient outline stack.
+        ir['required_features'].append('p06_outline_gradient')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         _validate_stroke_flash(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_stroke_flash')

@@ -61,7 +61,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool bodyGradients = features.contains("p06_body_gradient");
-    validateSkiaScene(projected, true, outlineLayers, bodyGradients);
+    const bool outlineGradients = features.contains("p06_outline_gradient");
+    validateSkiaScene(projected, true, outlineLayers, bodyGradients, outlineGradients);
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -220,7 +221,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 : glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs,
                               line.chars[clock].endMs, beforeColor, afterColor, wipePad);
             if (outlineLayers > 0 && !glyph.path.isEmpty()) {
-                const bool bodyAlpha = (beforeColor >> 24) < 255 || (afterColor >> 24) < 255;
+                // The existing GPU protects the body from any translucent fill
+                // (including a translucent gradient stop), and the inner outline
+                // from the outer ring when either is translucent.
+                using ::subtitle::skia::paintNeedsBodyProtection;
+                const bool bodyAlpha = paintNeedsBodyProtection(paint.beforeFillPaint)
+                    || paintNeedsBodyProtection(paint.afterFillPaint);
+                const bool strokeAlpha = paintNeedsBodyProtection(paint.beforeStrokePaint)
+                    || paintNeedsBodyProtection(paint.afterStrokePaint);
                 const auto beforeOutline = argb(paint.beforeStrokePaint.color);
                 const auto afterOutline = argb(paint.afterStrokePaint.color);
                 if (paint.strokeWidth > 0)
@@ -231,7 +239,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     glyph.outerOutline = ::subtitle::skia::SolidOutline{
                         ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth + paint.stroke2Width),
                         argb(paint.beforeStroke2Paint.color), argb(paint.afterStroke2Paint.color),
-                        bodyAlpha || (beforeOutline >> 24) < 255 || (afterOutline >> 24) < 255, paint.strokeWidth + paint.stroke2Width};
+                        bodyAlpha || strokeAlpha, paint.strokeWidth + paint.stroke2Width};
             }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
@@ -318,9 +326,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe || line.scanlineEnabled)
                 throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
         }
-        const bool gradient = style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid";
+        const bool primaryOutline = style.strokeWidth > 0, secondaryOutline = style.stroke2Width > 0;
+        const bool outlineGradient = (primaryOutline && (style.beforeStrokePaint.mode != "solid" || style.afterStrokePaint.mode != "solid"))
+            || (secondaryOutline && (style.beforeStroke2Paint.mode != "solid" || style.afterStroke2Paint.mode != "solid"));
+        const bool gradient = style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid" || outlineGradient;
         if (gradient) {
-            if (!bodyGradients || outlineLayers > 0 || style.vertical || style.rightToLeft || line.wipeReverse
+            if (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)
+                || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
                 || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
                 || !prepared.rubyGroups.empty() || !projected.charStyles.empty())
@@ -331,13 +343,23 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                         return !v.isDouble() || !std::isfinite(v.toDouble()) || std::abs(v.toDouble()) > 1e6;
                     }))
                     throw BackendError("Skia 正文渐变缺少有效的绘制范围");
-                const auto target = SkRect::MakeLTRB(float(rect[0].toDouble() * glyphs.dpr), float(rect[1].toDouble() * glyphs.dpr),
-                                                    float(rect[2].toDouble() * glyphs.dpr), float(rect[3].toDouble() * glyphs.dpr));
-                if (target.isEmpty()) throw BackendError("Skia 正文渐变的绘制范围为空");
-                if (style.beforeFillPaint.mode != "solid")
-                    prepared.beforeGradient = ::subtitle::skia::subtitleGradient(style.beforeFillPaint, target);
-                if (style.afterFillPaint.mode != "solid")
-                    prepared.afterGradient = ::subtitle::skia::subtitleGradient(style.afterFillPaint, target);
+                const auto ink = SkRect::MakeLTRB(float(rect[0].toDouble() * glyphs.dpr), float(rect[1].toDouble() * glyphs.dpr),
+                                                 float(rect[2].toDouble() * glyphs.dpr), float(rect[3].toDouble() * glyphs.dpr));
+                if (ink.isEmpty()) throw BackendError("Skia 正文渐变的绘制范围为空");
+                // Every layer shares the line's visual pad at the layout reference scale.
+                const float pad = ::subtitle::skia::outlineVisualPad(style.strokeWidth, style.stroke2Width,
+                                                                    projected.layoutReferenceScale);
+                using ::subtitle::skia::lineGradient;
+                prepared.beforeGradient = lineGradient(style.beforeFillPaint, ink, pad);
+                prepared.afterGradient = lineGradient(style.afterFillPaint, ink, pad);
+                if (primaryOutline) {
+                    prepared.beforeOutlineGradient = lineGradient(style.beforeStrokePaint, ink, pad);
+                    prepared.afterOutlineGradient = lineGradient(style.afterStrokePaint, ink, pad);
+                }
+                if (secondaryOutline) {
+                    prepared.beforeOuterGradient = lineGradient(style.beforeStroke2Paint, ink, pad);
+                    prepared.afterOuterGradient = lineGradient(style.afterStroke2Paint, ink, pad);
+                }
             }
         } else if (source.contains("body_gradient_bounds")) {
             throw BackendError("Skia 实色正文携带了未声明的渐变范围");
