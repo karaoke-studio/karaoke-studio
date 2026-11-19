@@ -119,6 +119,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int delay = cells.size() > 1 ? 350 / (int(cells.size()) - 1) : 0;
         prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
                                   line.endMs, delay};
+        // scanline_band_schema=1: the line style's solid band; the projection gated the subset.
+        if (line.scanlineEnabled)
+            prepared.scanline = {true, std::max(style.scanlineWidth, 1.f) * .5f, argb(style.scanlineColor),
+                                 std::max(style.strokeWidth, 0.f) + std::max(style.stroke2Width, 0.f) + 4.f,
+                                 std::max(style.stroke2Width, 0.f) * .5f + .5f};
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;

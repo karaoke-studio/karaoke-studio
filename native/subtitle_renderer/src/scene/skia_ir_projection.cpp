@@ -48,6 +48,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
             && feature.toString() != "p07_zero_ruby_no_wipe" && feature.toString() != "p07_line_fade"
             && feature.toString() != "p07_line_motion" && feature.toString() != "p07_character_fade"
+            && feature.toString() != "p07_scanline_band"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
@@ -126,6 +127,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_character_fade")
         && ir.value("skia_layout").toObject().value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_scanline_band")
+        && ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 扫字线布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -267,11 +271,19 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || !supportedAnimation(source.exitAnimation, "slide_out")
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
                 && source.karaokeAnimation != "no_wipe")
-            || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled
+            || source.zoomPulseEnabled || source.strokeFlashEnabled
             || !source.fxBursts.empty())
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
+        // scanline_band_schema=1: forward horizontal solid-color band, no glow, image, ruby or roles.
+        if (source.scanlineEnabled
+            && (!features.contains("p07_scanline_band")
+                || ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1) != 1
+                || resolved.scanlineMode != QStringLiteral("color") || resolved.scanlineShape != QStringLiteral("band")
+                || resolved.scanlineGlowPx != 0 || cfg.vertical || cfg.rightToLeft || source.wipeReverse
+                || source.karaokeAnimation == "no_wipe" || !cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
+            throw BackendError("Skia 扫字线当前仅支持正向横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);
         style.rightToLeft = cfg.rightToLeft;
         style.vertical = cfg.vertical;
@@ -321,6 +333,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         line.exitAnimation = source.exitAnimation.toStdString();
         line.exitDurationMs = source.exitDurationMs;
         line.karaokeAnimation = source.karaokeAnimation.toStdString();
+        line.scanlineEnabled = source.scanlineEnabled;
         line.lane = source.lane;
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
@@ -350,6 +363,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
+            if (source.scanlineEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
+                throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             // vector_guide_schema=1: solid horizontal LTR main text, no roles, ruby or outlines.
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
                 || !cfg.rubies.empty() || &cellStyle != &resolved || features.contains("p06_primary_solid_outline")))

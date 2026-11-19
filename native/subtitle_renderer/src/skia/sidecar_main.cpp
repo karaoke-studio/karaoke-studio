@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
     ready.insert("line_fade_schema", 1);
     ready.insert("line_motion_schema", 1);
     ready.insert("character_fade_schema", 1);
+    ready.insert("scanline_band_schema", 1);
     ready.insert("font_chain_schema", 1);
     ready.insert("mixed_font_schema", 1);
     ready.insert("standalone_mark_schema", 1);
@@ -71,6 +72,7 @@ int main(int argc, char** argv) {
     profiles.append("p07_line_fade");
     profiles.append("p07_line_motion");
     profiles.append("p07_character_fade");
+    profiles.append("p07_scanline_band");
     profiles.append("p05_horizontal_rtl_kana_cells");
     profiles.append("p05_horizontal_rtl_kana_marks");
     profiles.append("p05_reverse_wipe");

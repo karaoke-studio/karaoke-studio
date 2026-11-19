@@ -1976,6 +1976,12 @@ Windows 相关 **170 通过**，含新增 **4 项实际 D2D GPU 对照**（reali
 
 Windows 相关 **150 通过**，含新增 **5 项实际 D2D GPU 对照**（realization 关闭），覆盖普通、双描边、导唱符、反向和升降混用。另验证单字、四字的 stagger 和完整时序。X11/Wayland 专项各 **7 通过、5 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `b75c3686c90f440d20f66aed9331a7ffc4e6434be7d2f8f918685832e27a52cd`。样例 `character-fade-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。证据前缀 `build/p07-character-fade*`。
 
+### 14.61 P07.5 正向横排实色扫字线（2026-11-19）
+
+`scanline_band_schema=1` 接通 D2D 的普通高亮带首个子集：正向、横排从左至右、`color` 模式、`band` 形态、柔化为 0、无粒子特效。绘制集中在 `skia/core/scanline_band.h`，投影只做门控和参数传递。锋面沿用 D2D 的整行 `wipeEdge`：按演唱顺序取首个未完成字的走字坐标；处于停顿间隙时，锋面停在下一字起点减去外描边一半再减 0.5px 处。整行唱完、或锋面尚未越过正文墨迹左缘时不画带。只有闭区间 `[start, end]` 内且时长非零的字参与重绘，所以字间间隙和停顿内不出现高亮带。每个参与字按外描边、描边、正文的顺序，用统一颜色重绘一次；裁剪区为锋面左右各半个线宽的抗锯齿区域，并沿用逐字透明度和整行淡化合成层。时钟复用各单元已解析的时间和分段点，不重新计算时序。反向、右至左、竖排、no_wipe、Utopia、注音、导唱符、行内角色，以及 brighten/role/跟随/柔化/烈焰/水泡/图片/粒子等组合，在 Python 和 native 两侧都会拒绝；伪造的能力声明或样式也会被拒绝，并保留上一场景。
+
+Windows 相关 **84 通过**，含新增 **10 项实际 D2D GPU 对照**（realization 关闭，原始 1px 墨迹/锋面预算，另加高亮带左右边缘 1px 与面积预算）。对照覆盖普通（DPR 1/1.5）、释放停顿、零时长字、共享源区间分段点、窄带、双描边、逐字淡化、整行淡化，以及升入/滑出位移。Skia GPU 与 Raster 的乱序回跳一致，覆盖 4 种情形。X11/Wayland 专项各 **32 通过、10 跳过**（D2D 对照），独立 Windows/Linux Raster 各 **26 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `f65146176021328bab9e58c890e87b3c05140b66183a807ca543b0c506d75878`。样例 `scanline-band-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。Mac CI 已加入专项和规范样例，留待阶段收口时运行。证据前缀 `build/p07-scanline*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

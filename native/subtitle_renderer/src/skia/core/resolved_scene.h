@@ -2,6 +2,7 @@
 #include "include/core/SkPath.h"
 #include "character_fade.h"
 #include "line_animation.h"
+#include "scanline_band.h"
 #include "solid_outline.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
@@ -37,6 +38,7 @@ struct ResolvedLine {
     bool vertical = false;
     LineAnimation animation;
     CharacterFade characterFade;
+    ScanlineBand scanline;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

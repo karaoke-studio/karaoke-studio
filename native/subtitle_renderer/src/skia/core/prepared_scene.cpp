@@ -26,6 +26,13 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.vertical = source.vertical;
         line.animation = source.animation;
         line.characterFade = source.characterFade;
+        line.scanline = source.scanline;
+        const auto& band = source.scanline;
+        if (band.enabled && (!std::isfinite(band.halfWidth) || band.halfWidth < .5f || band.halfWidth > 8192
+                             || !std::isfinite(band.solidPad) || band.solidPad < 4 || band.solidPad > 8192
+                             || !std::isfinite(band.restingPad) || band.restingPad < .5f || band.restingPad > 8192
+                             || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty()))
+            throw std::runtime_error("Skia 扫字线仅支持正向横排实色高亮带");
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
@@ -83,6 +90,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 for (const auto& cell : group) line.paintBounds.join(cell.path.getBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
+        if (line.scanline.enabled) {
+            SkRect ink = SkRect::MakeEmpty();
+            for (const auto& cell : line.cells)
+                if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
+            line.inkLeft = ink.isEmpty() ? 0.f : ink.fLeft;
+        }
         lines_.push_back(std::move(line));
     }
 }
@@ -277,6 +290,25 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         if (line.hasOuterOutline) drawLayer(Layer::OuterOutline);
         if (line.hasOutline) drawLayer(Layer::Outline);
         drawLayer(Layer::Body);
+        // The GPU repaints each sweeping cell's stack once in the band color, after the body.
+        line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, [&](std::size_t index, std::uint32_t color) {
+            const auto& cell = line.cells[index];
+            const float opacity = states[index].opacity;
+            if (opacity <= 0) return;
+            paint.setColor(color);
+            if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+            for (const bool outer : {true, false}) {
+                const auto& stroke = outer ? cell.outerOutline : cell.outline;
+                if (!stroke) continue;
+                SkAutoCanvasRestore keep(&canvas, true);
+                if (stroke->protectBody) {
+                    canvas.clipPath(cell.path, SkClipOp::kDifference, true);
+                    if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+                }
+                canvas.drawPath(stroke->path, paint);
+            }
+            canvas.drawPath(cell.path, paint);
+        });
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
     }
 }
