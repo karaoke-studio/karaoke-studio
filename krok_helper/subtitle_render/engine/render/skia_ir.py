@@ -91,7 +91,7 @@ _TRANSFORMS = {'char_drip', 'spin_flip'}
 
 
 def _character_transforms(track, ir, plan, measured):
-    """character_transform_schema=2: canonical layout-cell and glyph-run pivots, body text only."""
+    """character_transform_schema=3: canonical layout-cell and glyph-run pivots."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
@@ -99,11 +99,10 @@ def _character_transforms(track, ir, plan, measured):
             continue
         line, look = track.lines[item.track_index], item.layout_style
         if (look.vertical or look.right_to_left or line.wipe_reverse or source.get('karaoke_anim') != 'none'
-                or source.get('scanline') or track.rubies or look.lower_ruby_enabled or look.stroke_width_px > 0
-                or (look.stroke2_enabled and look.stroke2_width_px > 0)
+                or source.get('scanline') or track.rubies or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(line).chars)):
-            raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排无描边正文')
+            raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排正文')
         entry = source.get('entry_anim') in _TRANSFORMS and source['entry_duration_ms'] > 0
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
         if not (entry or exit_):
@@ -199,7 +198,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         _character_transforms(track, ir, plan, measured)
         ir['required_features'].append('p07_character_transform')
-        ir['skia_layout']['character_transform_schema'] = 2
+        ir['skia_layout']['character_transform_schema'] = 3
     if any(line.get('scanline') for line in ir['track']['lines']):
         _validate_scanline_band(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_scanline_band')

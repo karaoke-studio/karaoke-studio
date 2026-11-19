@@ -59,7 +59,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     validateSkiaScene(projected, true, outlineLayers);
     const auto layout = ir.value("skia_layout").toObject();
-    const bool allowTransformedWipe = layout.value("character_transform_schema").toDouble() == 2;
+    const auto transformVersion = layout.value("character_transform_schema").toDouble();
+    const bool allowTransformedWipe = transformVersion >= 2;
+    const bool allowAnimatedOutlines = transformVersion >= 3;
     const auto verticalVersion = layout.value("vertical_solid_schema").toDouble(-1);
     const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
     if (layout.value("version").toInt() != 2 || layout.value("metrics_identity").toString().size() != 64
@@ -201,12 +203,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 if (paint.strokeWidth > 0)
                     glyph.outline = ::subtitle::skia::SolidOutline{
                         ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth),
-                        beforeOutline, afterOutline, bodyAlpha};
+                        beforeOutline, afterOutline, bodyAlpha, paint.strokeWidth};
                 if (paint.stroke2Width > 0)
                     glyph.outerOutline = ::subtitle::skia::SolidOutline{
                         ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth + paint.stroke2Width),
                         argb(paint.beforeStroke2Paint.color), argb(paint.afterStroke2Paint.color),
-                        bodyAlpha || (beforeOutline >> 24) < 255 || (afterOutline >> 24) < 255};
+                        bodyAlpha || (beforeOutline >> 24) < 255 || (afterOutline >> 24) < 255, paint.strokeWidth + paint.stroke2Width};
             }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
@@ -214,7 +216,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 glyph.wipePoints.back().position = *end;
                 glyph.adjustedWipeEnd = true;
             }
-            // character_transform_schema=1: canonical layout cell and glyph-run box center.
+            // Canonical layout cell and glyph-run box center.
             if (pivots) {
                 const auto pivot = [&](const char* key) {
                     const auto value = cell.value(QLatin1String(key));
@@ -222,10 +224,21 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                         throw BackendError("Skia 逐字变换缺少有效的版面单元轴心");
                     return float(value.toDouble() * glyphs.dpr);
                 };
-                glyph.pivot = {pivot("layout_left"), pivot("layout_right"), pivot("pivot_y")};
-                if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft
-                    || (transforms && (glyph.outline || glyph.outerOutline)))
-                    throw BackendError("Skia 逐字变换仅支持无描边正文的有效版面单元");
+                glyph.pivot = {pivot("layout_left"), pivot("layout_right"), pivot("pivot_y"), glyph.left, glyph.right};
+                if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft)
+                    throw BackendError("Skia 逐字变换的版面单元轴心无效");
+                if (transforms && (glyph.outline || glyph.outerOutline)) {
+                    const auto opaque = [](const ::subtitle::skia::SolidOutline& stroke) {
+                        return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
+                    };
+                    if (!allowAnimatedOutlines || (glyph.outline && !opaque(*glyph.outline))
+                        || (glyph.outerOutline && !opaque(*glyph.outerOutline)))
+                        throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");
+                    const auto ink = glyph.path.computeTightBounds();
+                    glyph.pivot.inkLeft = ink.fLeft;
+                    glyph.pivot.inkRight = ink.fRight;
+                    glyph.pivot.wipePad = float(int(paint.strokeWidth) / 2);
+                }
             } else if (cell.contains("layout_left") || cell.contains("layout_right") || cell.contains("pivot_y")) {
                 throw BackendError("Skia 版面单元轴心缺少逐字特效能力声明");
             }

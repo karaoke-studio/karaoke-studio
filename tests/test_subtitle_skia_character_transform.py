@@ -42,7 +42,7 @@ def test_ir_carries_canonical_pivots_only_with_the_capability(binary, project, t
     track, style = transform_source(project, 'spin_flip', 'char_drip')
     ir = ir_for(binary, (track, style), dpr=1.5)
     plain = ir_for(binary, (track, replace(style, entry_anim='none', exit_anim='none')), dpr=1.5)
-    assert 'p07_character_transform' in ir['required_features'] and ir['skia_layout']['character_transform_schema'] == 2
+    assert 'p07_character_transform' in ir['required_features'] and ir['skia_layout']['character_transform_schema'] == 3
     assert 'p07_character_transform' not in plain['required_features']
     assert 'p07_character_fade' not in ir['required_features']
     cells, bare = ir['skia_layout']['lines'][0]['cells'], plain['skia_layout']['lines'][0]['cells']
@@ -89,13 +89,11 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
     assert np.array_equal(frames, expected)
 
 
-@pytest.mark.parametrize('case', ['outline', 'outer_outline', 'scanline', 'rtl',
+@pytest.mark.parametrize('case', ['scanline', 'rtl',
                                   'reverse', 'vertical', 'ruby', 'roles', 'guide', 'no_wipe'])
 def test_unverified_combinations_are_rejected(binary, project, case):
     track, style = transform_source(project)
-    if case == 'outline': style = replace(style, stroke_width_px=6)
-    elif case == 'outer_outline': style = replace(two_outlines(project)[1], entry_anim='char_drip', entry_lead_ms=600)
-    elif case == 'scanline': style = band(style)
+    if case == 'scanline': style = band(style)
     elif case == 'rtl': style = replace(style, right_to_left=True)
     elif case == 'reverse': track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
     elif case == 'vertical':
@@ -108,13 +106,13 @@ def test_unverified_combinations_are_rejected(binary, project, case):
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
     elif case == 'guide': track, style = guide_source(project)
     elif case == 'no_wipe': style = replace(style, karaoke_anim='no_wipe')
-    if case in {'outer_outline', 'vertical', 'ruby', 'guide'}:
+    if case in {'vertical', 'ruby', 'guide'}:
         style = replace(style, entry_anim='char_drip', entry_lead_ms=600)
     with pytest.raises(ValueError, match='逐字滴落/翻转'):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 3, 'missing_pivot', 'pivot_type',
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 4, 'missing_pivot', 'pivot_type',
                                       'inverted_cell', 'unclaimed_pivot', 'overlap'])
 def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, transform_source(project))
@@ -242,7 +240,7 @@ def test_transform_wipe_keeps_same_clock_and_supports_out_of_order_seek(binary, 
     track, style = singing_overlap(project, effect, handoff=True)
     ir = ir_for(binary, (track, style), dpr=1.5)
     plain = ir_for(binary, (track, replace(style, entry_anim='none')), dpr=1.5)
-    assert ir['skia_layout']['character_transform_schema'] == 2
+    assert ir['skia_layout']['character_transform_schema'] == 3
     assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
     results = []
     times = [400, 125, 330, 200, 125]
@@ -294,3 +292,85 @@ def test_transform_wipe_front_matches_actual_d2d_gpu(binary, project, effect, ha
                 effect, handoff, dpr, time, 'front shape')
             split += 1
     assert split >= 5
+
+
+
+def outlined_transform(project, effect, layers, *, entry=True, body_alpha=False):
+    if entry:
+        track, motion = singing_overlap(project, effect, handoff=True)
+    else:
+        track, motion = transform_source(project, 'none', effect)
+    _, look = two_outlines(project, body_alpha=body_alpha)
+    return track, replace(look, stroke2_enabled=layers == 2,
+                          entry_anim=motion.entry_anim, entry_lead_ms=motion.entry_lead_ms,
+                          exit_anim=motion.exit_anim, exit_fade_ms=motion.exit_fade_ms)
+
+
+def test_transformed_outline_keeps_width_across_targets_and_seeks(binary, project, tmp_path):
+    track, style = outlined_transform(project, 'spin_flip', 2)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert ir['skia_layout']['character_transform_schema'] == 3
+    assert 'p06_secondary_solid_outline' in ir['required_features']
+    times = [125, 599, 45, 200, 125]
+    clips = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        assert np.array_equal(frames[0], frames[-1])
+        clips.append(frames)
+    for time, gpu, raster in zip(times, *clips, strict=True):
+        assert within_one_pixel(gpu[..., 3] > 60, raster[..., 3] > 60), (time, 'geometry')
+        assert abs(premultiplied(gpu) - premultiplied(raster)).mean() < .16, time
+    (tmp_path / 'character-transform-outline-layout.json').write_text(json.dumps({
+        'schema': ir['skia_layout']['character_transform_schema'],
+        'line': ir['skia_layout']['lines'][0],
+        'intervals': ir['track']['lines'][0]['resolved_intervals'],
+    }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('case', ['v2', 'translucent'])
+def test_unverified_animated_outline_keeps_the_previous_scene(binary, project, case):
+    good = ir_for(binary, outlined_transform(project, 'spin_flip', 2))
+    if case == 'v2':
+        bad = copy.deepcopy(good)
+        bad['skia_layout']['character_transform_schema'] = 2
+    else:
+        bad = ir_for(binary, outlined_transform(project, 'char_drip', 2, body_alpha=True))
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, good)
+        before, _ = collect(process, [125])
+        with pytest.raises(NativeRendererError, match='实色描边'):
+            configure(process, bad)
+        after, _ = collect(process, [125], generation=2)
+    assert np.array_equal(before, after)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect,layers,entry,dpr', [
+    ('char_drip', 1, True, 1), ('char_drip', 2, True, 1.5),
+    ('spin_flip', 1, True, 1.5), ('spin_flip', 2, True, 1), ('spin_flip', 2, False, 1.5),
+])
+def test_transformed_solid_outlines_match_actual_d2d_gpu(binary, project, effect, layers, entry, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = outlined_transform(project, effect, layers, entry=entry)
+    times = [0, 45, 65, 80, 100, 125, 140, 159, 171, 200, 249, 275, 330, 599, 700, 1200]
+    if not entry:
+        times = [700, 2200, 2400, 2480, 2580, 2680, 2780, 2880, 2950, 3000]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False,
+                                   track=track, width=640, height=360, dpr=dpr, realization_enabled=False)
+    shape = (round(360*dpr), round(640*dpr), 4)
+    reference = [np.frombuffer(p, np.uint8).reshape(shape) for p in raw]
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
+        configure(process, ir_for(binary, (track, style), dpr=dpr))
+        candidate, _ = collect(process, times)
+    for time, a, b in zip(times, reference, candidate, strict=True):
+        case = (effect, layers, entry, dpr, time)
+        aa, ab = int(a[..., 3].max()), int(b[..., 3].max())
+        assert abs(aa-ab) <= 3, (case, 'alpha', aa, ab)
+        ma, mb = a[..., 3] > min(127, aa//2), b[..., 3] > min(127, ab//2)
+        assert within_one_pixel(ma, mb), (case, 'ink')
+        pa, pb = premultiplied(a), premultiplied(b)
+        assert abs(pa - pb).mean() < .18, (case, 'RGBA', abs(pa - pb).mean())

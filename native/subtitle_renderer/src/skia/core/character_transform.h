@@ -11,6 +11,7 @@ namespace subtitle::skia {
 // ascent/descent box around the baseline, never ink centers.
 struct CharacterPivot {
     float layoutLeft = 0, layoutRight = 0, centerY = 0;
+    float inkLeft = 0, inkRight = 0, wipePad = 0;
 };
 struct CharacterTransformState {
     float opacity = 1;

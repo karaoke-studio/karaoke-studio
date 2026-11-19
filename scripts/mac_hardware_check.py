@@ -42,6 +42,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_line_motion.py::test_motion_relative_to_static_line",
     "tests/test_subtitle_skia_character_fade.py::test_character_fade_matches_fixed_stagger",
     "tests/test_subtitle_skia_character_transform.py::test_transform_wipe_keeps_same_clock_and_supports_out_of_order_seek",
+    "tests/test_subtitle_skia_character_transform.py::test_transformed_outline_keeps_width_across_targets_and_seeks",
     "tests/test_subtitle_skia_scanline.py::test_gpu_and_raster_draw_the_same_band_under_out_of_order_seek",
     "tests/test_subtitle_skia_scanline.py::test_feather_gpu_and_raster_match_under_repeated_seek",
     "tests/test_subtitle_skia_scanline.py::test_plain_scanline_uses_the_authored_color_sides",

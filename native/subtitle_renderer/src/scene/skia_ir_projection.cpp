@@ -135,7 +135,7 @@ void validateEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 扫字线布局版本无效");
     const auto transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_character_transform")
-        && transformVersion != 1 && transformVersion != 2)
+        && transformVersion != 1 && transformVersion != 2 && transformVersion != 3)
         throw BackendError("Skia 逐字滴落/翻转布局版本无效");
     const auto twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_sing_twinkle")

@@ -19,10 +19,10 @@ inline float transformedWipeRatio(std::span<const krok::subtitle::native::WipePo
         * float(double(time) - previous.timeMs) / float(double(end) - previous.timeMs);
 }
 
-inline float transformedWipeEdge(float originX, float left, float right, float ratio) {
+inline float transformedWipeEdge(float originX, float left, float right, float ratio, float pad) {
     // The existing GPU rounds the transformed ink in line-local coordinates.
-    const float lo = std::floor(left - originX);
-    const float hi = std::ceil(right - originX);
+    const float lo = std::floor(left - originX) - pad;
+    const float hi = std::ceil(right - originX) + pad;
     return originX + lo + std::max(hi - lo, 1.f) * ratio;
 }
 }

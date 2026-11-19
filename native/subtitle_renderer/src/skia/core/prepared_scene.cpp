@@ -206,7 +206,12 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             return line.vertical ? SkRect::MakeLTRB(-1e6f, from, 1e6f, to) : SkRect::MakeLTRB(from, -1e6f, to, 1e6f);
         };
         enum class Phase { Before, After, Wiping };
-        struct State { float progress, edge; Phase phase; CharacterTransformState transform; };
+        struct State {
+            float progress, edge;
+            Phase phase;
+            CharacterTransformState transform;
+            std::optional<SkPath> animatedInk;
+        };
         std::vector<State> states;
         states.reserve(line.cells.size());
         const auto wipeStart = [](const Cell& c) { return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs; };
@@ -239,9 +244,13 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 const int followingEnd = wipeEnd(line.cells[index+1]);
                 wiping = start < tMs && tMs < followingEnd && start != followingEnd;
             }
+            const auto transform = characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
+                                                        int(index), int(line.cells.size()), cell.pivot);
+            std::optional<SkPath> animatedInk;
+            if (transform.transformed && transform.opacity > 0 && (cell.outline || cell.outerOutline))
+                animatedInk = cell.path.makeTransform(transform.matrix);
             states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
-                              characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
-                                                   int(index), int(line.cells.size()), cell.pivot)});
+                              transform, std::move(animatedInk)});
         }
         enum class Layer { OuterOutline, Outline, Body };
         const auto drawCell = [&](std::size_t index, Layer layer) {
@@ -250,7 +259,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             const bool drawOutline = layer != Layer::Body;
             if (drawOutline && !stroke) return;
             const auto& path = drawOutline ? stroke->path : cell.path;
-            const auto& [progress, edge, phase, transform] = states[index];
+            const auto& [progress, edge, phase, transform, animatedInk] = states[index];
             const float opacity = transform.opacity;
             if (opacity <= 0) return;
             // The outline can reach beyond the integer wipe padding, just as
@@ -266,7 +275,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 const float ratio = transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
                                                          wipeStart(clipCell), wipeEnd(clipCell), tMs);
                 clipEdge = transformedWipeEdge(line.cells.front().pivot.layoutLeft,
-                    matrix.mapPoint({clipCell.left, 0}).x(), matrix.mapPoint({clipCell.right, 0}).x(), ratio);
+                    matrix.mapPoint({clipCell.pivot.inkLeft, 0}).x(), matrix.mapPoint({clipCell.pivot.inkRight, 0}).x(),
+                    ratio, clipCell.pivot.wipePad);
             }
             const bool atFront = (line.vertical || drawOutline || animatedClip) && phase == Phase::Wiping;
             const bool before = !atFront && progress == 0;
@@ -280,6 +290,11 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 paint.setColor(drawOutline ? (sung ? stroke->after : stroke->before)
                                            : (sung ? cell.after : cell.before));
                 if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+                if (animatedInk) {
+                    if (drawOutline) drawFixedOutline(canvas, *animatedInk, paint, stroke->width);
+                    else canvas.drawPath(*animatedInk, paint);
+                    return;
+                }
                 if (transform.transformed) canvas.concat(transform.matrix); // Clips stay in line space.
                 canvas.drawPath(path, paint);
             };
