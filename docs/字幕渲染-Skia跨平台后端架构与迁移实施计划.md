@@ -556,6 +556,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 已验收逐字滴落/翻转和不透明实色单描边、双描边的组合，含唱字重叠，见 §14.69。
   - [ ] 逐字变换的半透明描边、注音等组合及其跨平台验收仍待完成。
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
+  - [x] 正向横排无描边正文的字距展开、波浪、散开和收拢，含不同入退场时长和走字重叠，见 §14.76。
 - [ ] P07.3 普通 wipe/no_wipe、反向、共享计时块、空 pause、角色边界、Utopia、ruby Utopia、zoom_pulse、stroke_flash，含完成后的外层释放与下一字符接管。实色正向横排 no_wipe 子集见 §14.35；完整方向/特效组合仍待验收。
 - [ ] P07.4 全部已支持粒子种类与伴生层、sprite 覆盖、双色/跟随字体/复用配色、数量/速度、front/back、geometry/decor、逐字锚点及整行锚点。
   - [x] 正向横排基础正文的实色唱字星光，覆盖单色、双色和仍在行显示窗内的末字尾迹，见 §14.63。
@@ -2106,6 +2107,12 @@ Windows 关联 **181 项通过**，其中 **4 组新增实际 D2D GPU 对照**�
 `scanline_band_schema=4` 支持反向走字的横排高亮带。共享带逻辑沿已解析的演唱顺序从右向左读取字窗，以正文右边界为初始门槛，间歇不画高亮。提亮的唱前/唱后裁剪按真实 D2D 规则各留物理像素偏移，反向时两侧重叠。粒子按逆序绑定实际字格，保留原时钟、尾迹和显式反向标记。正向场景的 v3 IR 持续可读，RTL 文本流、注音、扫字线与唱字粒子同场等仍待验收。
 
 Windows 关联 **144 项通过**，含 **5 组新增实际 D2D GPU 对照**（关闭 WARP 和 realization），覆盖反向硬边、柔化、提亮及星光、音符粒子。X11/Wayland 各 **64 通过、32 项 D2D 跳过**，独立 Windows/Linux Raster 反向用例各通过。四份 native 干净重建且 CTest 各 **3/3**，源码标识 `8e84bee3fdef806ef1eaadbe198c9c93b645e7e001be068e9caaea4acde2e928`。反向扫字线布局样例在 Windows/X11/Wayland 逐字节一致。代表用例已登记后续 Mac CI 和最终实机包。证据前缀 `build/p07-scanline-reverse*`。
+
+### 14.76 P07.2 字距展开、波浪、散开和收拢（2026-11-19）
+
+`character_transform_schema=4` 把正向横排基础正文的 `tracking_in`、`wave_in`、`scatter_out`、`converge_out` 交给共享几何状态函数。Skia 核心从规范字格中心和正文墨迹范围构造绘制矩阵，沿用出入场各自时长和经典逐字过渡的优先级。已有走字前沿随几何变换，字符时钟保持来源值。行内角色、描边、注音、扫字线组合与光晕仍待扩展。
+
+Windows 关联 **131 项通过**，另有字距展开走字重叠用例独立复核通过。最终 10 项聚焦用例包括 **4 组新增实际 D2D GPU 对照**（关闭 WARP 和 realization），覆盖两组完整入退场、字距/波浪与走字的重叠，及两种 DPR。字距展开 45ms 的第一列跨越 alpha 128 阈值，两后端预乘绿色通道最大差约 0.45/255，专项限制为 1/255 并检查轮廓。X11/Wayland 各 **36 通过、21 项 D2D 跳过**，独立 Windows/Linux Raster 各 **3 通过**。四份 native 干净重建且 CTest 各 **3/3**，源码标识 `9e94c472b21d60c5609f5a0992c9e11fc5b4245866eec6d0d1db1c7546f6ff2d`。新几何动画布局样例在 Windows/X11/Wayland 逐字节一致。证据前缀 `build/p07-char-geometry*`。
 
 ## 15. 前期探针清理范围
 

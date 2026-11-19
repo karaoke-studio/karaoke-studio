@@ -124,8 +124,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             return animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
         };
         const bool charEntry = perCharacter(line.entryAnimation), charExit = perCharacter(line.exitAnimation);
-        prepared.animation = {line.entryAnimation == "none" || charEntry ? 0 : line.entryDurationMs,
-                              line.exitAnimation == "none" || charExit ? 0 : line.exitDurationMs,
+        const bool geoEntry = line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in";
+        const bool geoExit = line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out";
+        prepared.animation = {line.entryAnimation == "none" || charEntry || geoEntry ? 0 : line.entryDurationMs,
+                              line.exitAnimation == "none" || charExit || geoExit ? 0 : line.exitDurationMs,
                               line.entryAnimation == "slide_in" ? slide : 0.f,
                               line.entryAnimation == "rise" ? rise : 0.f,
                               line.exitAnimation == "slide_out" ? slide : 0.f,
@@ -133,7 +135,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int delay = cells.size() > 1 ? 350 / (int(cells.size()) - 1) : 0;
         prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
                                   line.endMs, delay, kindOf(line.entryAnimation), kindOf(line.exitAnimation)};
-        const bool transforms = prepared.characterFade.transforms();
+        prepared.characterGeometry = {geoEntry ? line.entryAnimation : "", geoExit ? line.exitAnimation : "",
+                                      geoEntry ? line.entryDurationMs : 0, geoExit ? line.exitDurationMs : 0,
+                                      line.endMs, style.fontSize};
+        const bool geometry = prepared.characterGeometry.active();
+        if (geometry && (style.strokeWidth > 0 || style.stroke2Width > 0))
+            throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
+        const bool transforms = prepared.characterFade.transforms() || geometry;
         prepared.transformedWipe = transforms && allowTransformedWipe;
         const bool pivots = transforms || !line.bursts.empty();
         if (line.scanlineEnabled) {
@@ -254,7 +262,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset, totalCells, totalGroups);
-        if (prepared.characterFade.active() && !prepared.rubyGroups.empty())
+        if ((prepared.characterFade.active() || geometry) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
         // Each burst anchors at its character pivot; the box is
         // the wipe extent by the line's metric ascent + descent (glyph runs, never ink).

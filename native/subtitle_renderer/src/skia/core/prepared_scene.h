@@ -64,6 +64,8 @@ private:
         bool hasOuterOutline = false;
         LineAnimation animation;
         CharacterFade characterFade;
+        CharacterGeometry characterGeometry;
+        std::optional<float> inkCenter;
         bool transformedWipe = false;
         ScanlineBand scanline;
         std::vector<SingParticleBurst> particles;

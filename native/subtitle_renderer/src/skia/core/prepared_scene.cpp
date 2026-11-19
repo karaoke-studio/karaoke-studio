@@ -27,6 +27,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.vertical = source.vertical;
         line.animation = source.animation;
         line.characterFade = source.characterFade;
+        line.characterGeometry = source.characterGeometry;
         line.transformedWipe = source.transformedWipe;
         line.scanline = source.scanline;
         const auto& band = source.scanline;
@@ -104,12 +105,13 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 for (const auto& cell : group) line.paintBounds.join(cell.path.getBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
-        if (line.scanline.enabled) {
+        if (line.scanline.enabled || line.characterGeometry.active()) {
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
             line.inkStart = ink.isEmpty() ? 0.f : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
+            if (!ink.isEmpty()) line.inkCenter = ink.centerX();
         }
         lines_.push_back(std::move(line));
     }
@@ -177,8 +179,10 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         }
         // Fade the composed line, preserving overlaps and translucent strokes.
         // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
-        if (animation.opacity < 1.f && (line.characterFade.transforms() || !line.paintBounds.isEmpty()))
-            canvas.saveLayerAlphaf(line.characterFade.transforms() ? nullptr : &line.paintBounds, animation.opacity);
+        const bool geometry = line.characterGeometry.active();
+        const bool movingCells = line.characterFade.transforms() || geometry;
+        if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty()))
+            canvas.saveLayerAlphaf(movingCells ? nullptr : &line.paintBounds, animation.opacity);
         const auto rawProgress = [&](const Cell& cell) {
             if (line.wipeRightToLeft && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
                 return 0.f;
@@ -247,8 +251,11 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 const int followingEnd = wipeEnd(line.cells[index+1]);
                 wiping = start < tMs && tMs < followingEnd && start != followingEnd;
             }
-            const auto transform = characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
-                                                        int(index), int(line.cells.size()), cell.pivot);
+            const auto transform = !geometry || line.characterFade.side(tMs, line.startMs, line.endMs) != 0
+                ? characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
+                                       int(index), int(line.cells.size()), cell.pivot)
+                : line.characterGeometry.at(tMs, line.startMs, line.endMs,
+                                            int(index), int(line.cells.size()), cell.pivot, line.inkCenter);
             std::optional<SkPath> animatedInk;
             if (transform.transformed && transform.opacity > 0 && (cell.outline || cell.outerOutline))
                 animatedInk = cell.path.makeTransform(transform.matrix);

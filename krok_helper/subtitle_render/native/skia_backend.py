@@ -152,9 +152,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('scanline_band_schema')) is not int or ready['scanline_band_schema'] != 4
                     or 'p07_scanline_band' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持扫字线高亮带，请重新构建')
-            if (type(ready.get('character_transform_schema')) is not int or ready['character_transform_schema'] != 3
+            if (type(ready.get('character_transform_schema')) is not int or ready['character_transform_schema'] != 4
                     or 'p07_character_transform' not in ready.get('profiles', [])):
-                raise NativeRendererError('Skia sidecar 不支持逐字滴落/翻转，请重新构建')
+                raise NativeRendererError('Skia sidecar 不支持当前版本的逐字变换，请重新构建')
             if (type(ready.get('sing_twinkle_schema')) is not int or ready['sing_twinkle_schema'] != 7
                     or 'p07_sing_twinkle' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia 渲染器不支持当前版本的唱字粒子')

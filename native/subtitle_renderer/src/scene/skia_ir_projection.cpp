@@ -135,8 +135,8 @@ void validateEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 扫字线布局版本无效");
     const auto transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_character_transform")
-        && transformVersion != 1 && transformVersion != 2 && transformVersion != 3)
-        throw BackendError("Skia 逐字滴落/翻转布局版本无效");
+        && transformVersion != 1 && transformVersion != 2 && transformVersion != 3 && transformVersion != 4)
+        throw BackendError("Skia 逐字变换布局版本无效");
     const auto twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_sing_twinkle")
         && (twinkleVersion < 1 || twinkleVersion > 7 || std::floor(twinkleVersion) != twinkleVersion))
@@ -272,21 +272,25 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
     const bool allowCharacterTransform = features.contains("p07_character_transform");
+    const bool allowGeometry = allowCharacterTransform
+        && ir.value("skia_layout").toObject().value("character_transform_schema").toInt() >= 4;
     const int twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toInt(1);
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble();
-    const auto transformAnimation = [](const QString& animation) {
-        return animation == "char_drip" || animation == "spin_flip";
+    const auto transformAnimation = [allowGeometry](const QString& animation, bool entry) {
+        return animation == "char_drip" || animation == "spin_flip"
+            || (allowGeometry && (entry ? animation == "tracking_in" || animation == "wave_in"
+                                       : animation == "scatter_out" || animation == "converge_out"));
     };
-    const auto supportedAnimation = [=](const QString& animation, const char* slide) {
+    const auto supportedAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")
-            || (allowMotion && (animation == slide || animation == "rise"))
+            || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"))
             || (allowCharacterFade && animation == "char_fade")
-            || (allowCharacterTransform && transformAnimation(animation));
+            || (allowCharacterTransform && transformAnimation(animation, entry));
     };
     for (const auto& source : cfg.lines) {
         if (source.annotationBaselineY
-            || !supportedAnimation(source.entryAnimation, "slide_in")
-            || !supportedAnimation(source.exitAnimation, "slide_out")
+            || !supportedAnimation(source.entryAnimation, true)
+            || !supportedAnimation(source.exitAnimation, false)
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
                 && source.karaokeAnimation != "no_wipe")
             || source.zoomPulseEnabled || source.strokeFlashEnabled
@@ -388,9 +392,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
-            if ((transformAnimation(source.entryAnimation) || transformAnimation(source.exitAnimation))
+            if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved))
-                throw BackendError("Skia 逐字滴落/翻转暂不支持导唱符或行内角色");
+                throw BackendError("Skia 逐字变换暂不支持导唱符或行内角色");
             // vector_guide_schema=1: solid horizontal LTR main text, no roles, ruby or outlines.
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
                 || !cfg.rubies.empty() || &cellStyle != &resolved || features.contains("p06_primary_solid_outline")))

@@ -1,6 +1,7 @@
 #pragma once
 #include "include/core/SkPath.h"
 #include "character_fade.h"
+#include "character_geometry.h"
 #include "character_transform.h"
 #include "line_animation.h"
 #include "scanline_band.h"
@@ -24,7 +25,7 @@ struct ResolvedCell {
     float top = 0, bottom = 0; // Fixed vertical cell box; wipe axis on vertical lines only.
     std::optional<SolidOutline> outline;
     std::optional<SolidOutline> outerOutline;
-    CharacterPivot pivot; // character_transform_schema=1 only.
+    CharacterPivot pivot;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
@@ -41,9 +42,10 @@ struct ResolvedLine {
     bool vertical = false;
     LineAnimation animation;
     CharacterFade characterFade;
+    CharacterGeometry characterGeometry;
     bool transformedWipe = false;
     ScanlineBand scanline;
-    std::vector<SingParticleBurst> particles; // Front layer, drawn after the text stack.
+    std::vector<SingParticleBurst> particles;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

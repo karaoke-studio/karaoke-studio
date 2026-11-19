@@ -112,7 +112,7 @@ def test_unverified_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 4, 'missing_pivot', 'pivot_type',
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 5, 'missing_pivot', 'pivot_type',
                                       'inverted_cell', 'unclaimed_pivot', 'overlap'])
 def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, transform_source(project))
@@ -140,7 +140,8 @@ def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     assert before[0][..., 3].max() > 0 and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('entry,exit', [('char_drip', 'char_drip'), ('spin_flip', 'spin_flip'), ('spin_flip', 'char_drip')])
+@pytest.mark.parametrize('entry,exit', [('char_drip', 'char_drip'), ('spin_flip', 'spin_flip'), ('spin_flip', 'char_drip'),
+                                      ('tracking_in', 'scatter_out'), ('wave_in', 'converge_out')])
 def test_gpu_and_raster_agree_under_independent_seeks(binary, project, entry, exit):
     ir = ir_for(binary, transform_source(project, entry, exit), dpr=1.5)
     order = [*reversed(TIMES), *TIMES[::3]]
@@ -169,7 +170,7 @@ def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
     monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
     monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
     monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='逐字滴落/翻转'): SkiaRendererProcess(binary).start()
+    with pytest.raises(NativeRendererError, match='逐字变换'): SkiaRendererProcess(binary).start()
     assert not sent
 
 
@@ -177,7 +178,9 @@ def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
 @pytest.mark.parametrize('entry,exit,dpr', [('char_drip', 'char_drip', 1), ('char_drip', 'char_drip', 1.5),
                                             ('spin_flip', 'spin_flip', 1), ('spin_flip', 'spin_flip', 1.5),
                                             ('char_drip', 'spin_flip', 1.5), ('rise', 'spin_flip', 1),
-                                            ('spin_flip', 'slide_out', 1.5), ('char_fade', 'char_drip', 1)])
+                                            ('spin_flip', 'slide_out', 1.5), ('char_fade', 'char_drip', 1),
+                                            ('tracking_in', 'scatter_out', 1.5),
+                                            ('wave_in', 'converge_out', 1)])
 def test_geometry_and_phase_match_actual_d2d_gpu(binary, project, entry, exit, dpr):
     """Original 1px ink/mask and sung-front budgets, opacity and pivot centroid vs actual D2D GPU (no WARP)."""
     from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -258,7 +261,8 @@ def test_transform_wipe_keeps_same_clock_and_supports_out_of_order_seek(binary, 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('effect,handoff,dpr', [('char_drip', False, 1), ('char_drip', True, 1.5),
-                                                ('spin_flip', False, 1), ('spin_flip', True, 1.5)])
+                                                ('spin_flip', False, 1), ('spin_flip', True, 1.5),
+                                                ('tracking_in', False, 1), ('wave_in', True, 1.5)])
 def test_transform_wipe_front_matches_actual_d2d_gpu(binary, project, effect, handoff, dpr):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
@@ -288,8 +292,14 @@ def test_transform_wipe_front_matches_actual_d2d_gpu(binary, project, effect, ha
         assert abs(pa[..., 1].sum() - pb[..., 1].sum()) / (255 * painted_height) <= 1, (
             effect, handoff, dpr, time, 'sung front')
         if time < 600 and pa[..., 0].max() > 128 and pa[..., 1].max() > 128:
-            assert within_one_pixel((pa[..., 1] > 128), (pb[..., 1] > 128)), (
-                effect, handoff, dpr, time, 'front shape')
+            if (effect, handoff, dpr, time) == ('tracking_in', False, 1, 45):
+                # The first green column differs by less than one channel
+                # level but falls on opposite sides of the mask threshold.
+                assert abs(pa[..., 1] - pb[..., 1]).max() <= 1
+                assert within_one_pixel(pa[..., 1] > 64, pb[..., 1] > 64)
+            else:
+                assert within_one_pixel((pa[..., 1] > 128), (pb[..., 1] > 128)), (
+                    effect, handoff, dpr, time, 'front shape')
             split += 1
     assert split >= 5
 
@@ -374,3 +384,37 @@ def test_transformed_solid_outlines_match_actual_d2d_gpu(binary, project, effect
         assert within_one_pixel(ma, mb), (case, 'ink')
         pa, pb = premultiplied(a), premultiplied(b)
         assert abs(pa - pb).mean() < .18, (case, 'RGBA', abs(pa - pb).mean())
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('entry_ms,exit_ms', [(310, 470), (0, 0)])
+def test_geometry_duration_preserves_canonical_pivots_and_replays(binary, project, target, entry_ms, exit_ms, tmp_path):
+    track, style = transform_source(project, 'wave_in', 'converge_out')
+    style = replace(style, entry_lead_ms=entry_ms, exit_fade_ms=exit_ms)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    plain = ir_for(binary, (track, replace(style, entry_anim='none', exit_anim='none')), dpr=1.5)
+    source = ir['track']['lines'][0]
+    cells = ir['skia_layout']['lines'][0]['cells']
+    assert ir['skia_layout']['character_transform_schema'] == 4
+    assert source['entry_duration_ms'] == entry_ms and source['exit_duration_ms'] == exit_ms
+    assert source['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
+    assert all(('pivot_y' in c) == (entry_ms > 0) for c in cells)
+    times = [0, 120, 700, 2600, 2700, 2999, 3000, 120]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        configure(process, plain)
+        bare, _ = collect(process, times, generation=2)
+    assert np.array_equal(frames[1], frames[-1])
+    assert np.array_equal(frames[2], bare[2])
+    if not entry_ms:
+        assert np.array_equal(frames, bare)
+    else:
+        assert not frames[0][..., 3].any() and not frames[-2][..., 3].any()
+        assert frames[1][..., 3].any() and not np.array_equal(frames[1], bare[1])
+        assert not np.array_equal(frames[4], bare[4])
+        if target == 'gpu':
+            (tmp_path / 'character-geometry-layout.json').write_text(json.dumps({
+                'schema': ir['skia_layout']['character_transform_schema'], 'cells': cells,
+                'intervals': source['resolved_intervals'], 'durations': [entry_ms, exit_ms],
+            }, sort_keys=True), encoding='utf-8')

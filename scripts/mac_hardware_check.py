@@ -54,6 +54,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_sing_particles.py::test_singing_energy_layers_replay_in_burst_order",
     "tests/test_subtitle_skia_scanline.py::test_scanline_particles_preserve_emit_clock_and_extend_tail",
     "tests/test_subtitle_skia_scanline.py::test_reverse_scanline_band_and_particle_anchors_follow_singing_order",
+    "tests/test_subtitle_skia_character_transform.py::test_geometry_duration_preserves_canonical_pivots_and_replays",
 )
 
 

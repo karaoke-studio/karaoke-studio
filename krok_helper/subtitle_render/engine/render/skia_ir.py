@@ -86,16 +86,22 @@ def _validate_scanline_band(track, style, lines):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
 
 
-_TRANSFORMS = {'char_drip', 'spin_flip'}
+_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'}
+_TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
-def _character_transforms(track, ir, plan, measured):
-    """character_transform_schema=3: canonical layout-cell and glyph-run pivots."""
+def _character_transforms(track, ir, plan, measured) -> int:
+    """Write canonical cell and glyph pivots and return the required version."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
+    version = 3
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
-        if not {source.get('entry_anim'), source.get('exit_anim')} & _TRANSFORMS:
+        animations = {source.get('entry_anim'), source.get('exit_anim')}
+        if not animations & _TRANSFORMS:
             continue
+        geometry = bool(animations & _GEOMETRY_TRANSFORMS)
+        if geometry:
+            version = 4
         line, look = track.lines[item.track_index], item.layout_style
         if (look.vertical or look.right_to_left or line.wipe_reverse or source.get('karaoke_anim') != 'none'
                 or source.get('scanline') or track.rubies or look.lower_ruby_enabled
@@ -106,8 +112,11 @@ def _character_transforms(track, ir, plan, measured):
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
         if not (entry or exit_):
             continue
+        if geometry and (look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)):
+            raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
         cells, metrics = ir['skia_layout']['lines'][index]['cells'], measured.lines[item.track_index]
         write_horizontal_pivots(cells, metrics)
+    return version
 
 
 def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
@@ -195,9 +204,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p07_character_fade')
         ir['skia_layout']['character_fade_schema'] = 1
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
-        _character_transforms(track, ir, plan, measured)
+        ir['skia_layout']['character_transform_schema'] = _character_transforms(track, ir, plan, measured)
         ir['required_features'].append('p07_character_transform')
-        ir['skia_layout']['character_transform_schema'] = 3
     if any(line.get('scanline') for line in ir['track']['lines']):
         _validate_scanline_band(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_scanline_band')
