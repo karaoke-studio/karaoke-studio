@@ -58,6 +58,7 @@ struct ResolvedLine {
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
     SingingScale singingScale;
+    float rubySingingOrigin = 0;
     UtopiaTransition utopiaTransition;
     bool transformedWipe = false;
     ScanlineBand scanline;

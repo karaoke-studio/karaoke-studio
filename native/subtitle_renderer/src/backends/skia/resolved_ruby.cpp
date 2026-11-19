@@ -156,6 +156,16 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
                 before, after, wipePad);
+            if (line.karaokeAnimation == "utopia") {
+                const auto left = cell.value("utopia_layout_left");
+                if (!left.isDouble() || !std::isfinite(left.toDouble()) || std::abs(left.toDouble()) > 1e6)
+                    throw BackendError("Skia Utopia 注音缺少有效的单元轴心");
+                glyph.pivot.layoutLeft = float(left.toDouble() * glyphs.dpr);
+                glyph.pivot.baseline = float(cell.value("baseline_y").toDouble() * glyphs.dpr);
+                glyph.pivot.wipePad = lower ? float(int(innerWidth) / 2) : float(int(paint.rubyStrokeWidth) / 2);
+            } else if (cell.contains("utopia_layout_left")) {
+                throw BackendError("Skia 注音单元轴心缺少 Utopia 能力声明");
+            }
             if (!glyph.path.isEmpty()) {
                 using namespace ::subtitle::skia;
                 if (primary.width)

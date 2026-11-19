@@ -155,7 +155,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 : utopia && tMs <= wipeEnd(clipCell) ? rawProgress(clipCell)
                 : transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
                                        wipeStart(clipCell), wipeEnd(clipCell), tMs);
-            clipEdge = transformedWipeEdge(line.cells.front().pivot.layoutLeft,
+            const float origin = utopia && !line.rubyGroups.empty()
+                ? line.rubySingingOrigin : line.cells.front().pivot.layoutLeft;
+            clipEdge = transformedWipeEdge(origin,
                 matrix.mapPoint({clipCell.pivot.inkLeft, 0}).x(), matrix.mapPoint({clipCell.pivot.inkRight, 0}).x(),
                 ratio, clipCell.pivot.wipePad);
         }
@@ -266,7 +268,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (line.hasStrokeFlash)
         for (const auto& cell : line.cells)
             drawStrokeFlash(canvas, cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
-    for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
+    for (const auto& group : line.rubyGroups) group.draw(canvas, tMs, line.singingScale, line.rubySingingOrigin);
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
 }

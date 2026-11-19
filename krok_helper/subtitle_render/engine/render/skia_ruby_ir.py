@@ -12,7 +12,7 @@ from .skia_ruby_paint_ir import solid_ruby_outlines
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
-def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None):
+def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None, singing_lines=()):
     geometry, measured = prepared.geometry, prepared.measured
     ruby = geometry.ruby
     if ruby is None:
@@ -34,8 +34,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     run_offset = len(measured.runs)
     lines = []
     has_outlines = False
-    for item, local, timing in zip(prepared.plan.lines, ruby.lines, timings, strict=True):
+    for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
+        singing = line_index in singing_lines
         reverse = item.line.wipe_reverse
         if reverse and (local.rubies or any(curve is not None for curve in timing.main)):
             raise ValueError('Skia 反向走字行不能携带注音组或注音分段时钟（现有 GPU 省略该行注音）')
@@ -70,6 +71,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 if wipe_pad and ink[2] > ink[0] and ink[3] > ink[1]:
                     units[-1]['wipe_left'] -= wipe_pad
                     units[-1]['wipe_right'] += wipe_pad
+                if singing:
+                    units[-1]['utopia_layout_left'] = cell['layout_left'] + position.offset_x
                 if unit_projection:
                     units[-1]['glyph_text'] = clock.glyph_units[unit_index]
             serialized = {'style_cell': style_cell, 'units': units}
@@ -80,7 +83,10 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index],
                                   paint=lower_solid_paint(group.target.style))
             groups.append(serialized)
-        lines.append({'cells': cells, 'ruby_groups': groups})
+        line = {'cells': cells, 'ruby_groups': groups}
+        if singing:
+            line['utopia_origin_x'] = position.offset_x
+        lines.append(line)
     return {'version': 2, 'wipe_schema': 1, 'ruby_schema': 1, 'metrics_identity': ruby.identity,
             **({'ruby_marker_schema': 1} if markers else {}),
             **({'ruby_unit_schema': 1} if unit_projection else {}),

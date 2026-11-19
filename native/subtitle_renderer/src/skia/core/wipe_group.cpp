@@ -1,4 +1,5 @@
 #include "wipe_group.h"
+#include "character_wipe.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include <algorithm>
@@ -6,6 +7,24 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
+namespace {
+void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after) {
+    const auto outline = [&](const SolidOutline& stroke, bool outer) {
+        SkAutoCanvasRestore restore(&canvas, stroke.protectBody);
+        if (stroke.protectBody) {
+            canvas.clipPath(cell.path, SkClipOp::kDifference, true);
+            if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+        }
+        brush.setColor(after ? stroke.after : stroke.before);
+        canvas.drawPath(stroke.path, brush);
+    };
+    if (cell.outerOutline) outline(*cell.outerOutline, true);
+    if (cell.outline) outline(*cell.outline, false);
+    brush.setColor(after ? cell.after : cell.before);
+    canvas.drawPath(cell.path, brush);
+}
+}
+
 PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, bool noWipe, bool vertical)
     : cells_(cells), noWipe_(noWipe), vertical_(vertical) {
     if (cells.empty() || cells.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
@@ -29,26 +48,52 @@ PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, boo
         bounds_.join(cell.path.getBounds());
     }
 }
-void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
+void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
+                                   float originX, bool afterVisible) const {
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    std::vector<std::optional<ResolvedCell>> animated(cells_.size());
+    for (std::size_t index = 0; index < cells_.size(); ++index) {
+        const auto& cell = cells_[index];
+        if (cell.path.isEmpty()) continue;
+        const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+        if (!transform.transformed) continue;
+        auto& visual = animated[index].emplace(cell);
+        visual.path = cell.path.makeTransform(transform.matrix);
+        if (visual.outline) visual.outline->path = prepareOutlinePath(visual.path, visual.outline->width);
+        if (visual.outerOutline)
+            visual.outerOutline->path = prepareOutlinePath(visual.path, visual.outerOutline->width);
+    }
+    for (bool after : {false, true}) {
+        if (after && !afterVisible) break;
+        for (std::size_t index = 0; index < cells_.size(); ++index) {
+            const auto& cell = animated[index] ? *animated[index] : cells_[index];
+            if (cell.path.isEmpty()) continue;
+            const bool before = timeMs <= cell.startMs;
+            const bool complete = !before && timeMs >= cell.endMs;
+            if (after ? before : complete) continue;
+            SkAutoCanvasRestore restore(&canvas, !before && !complete);
+            if (!before && !complete) {
+                const SkRect ink = cell.path.computeTightBounds();
+                const float progress = cell.wipePoints.empty()
+                    ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
+                    : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
+                const float edge = transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad);
+                const auto clip = after ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
+                                        : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
+                canvas.clipRect(clip, SkClipOp::kIntersect, true);
+            }
+            paintRubyCell(canvas, paint, cell, after);
+        }
+    }
+}
+
+void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
     if (bounds_.isEmpty()) return;
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto draw = [&](bool after) {
-        for (const auto& cell : cells_) {
-            const auto outline = [&](const SolidOutline& stroke, bool outer) {
-                SkAutoCanvasRestore restore(&canvas, stroke.protectBody);
-                if (stroke.protectBody) {
-                    canvas.clipPath(cell.path, SkClipOp::kDifference, true);
-                    if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
-                }
-                paint.setColor(after ? stroke.after : stroke.before);
-                canvas.drawPath(stroke.path, paint);
-            };
-            if (cell.outerOutline) outline(*cell.outerOutline, true);
-            if (cell.outline) outline(*cell.outline, false);
-            paint.setColor(after ? cell.after : cell.before);
-            canvas.drawPath(cell.path, paint);
-        }
+        for (const auto& cell : cells_) paintRubyCell(canvas, paint, cell, after);
     };
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs >= c.endMs; });
@@ -64,6 +109,10 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs) const {
         const float high = vertical_ ? cell.bottom : cell.right;
         edge = low + (high - low) * (progress * endpoint);
         if (timeMs <= cell.endMs) break;
+    }
+    if (scale.active) {
+        drawSinging(canvas, timeMs, scale, originX, edge > startEdge);
+        return;
     }
     const auto clip = [&](bool after) {
         const float low = after ? -1e6f : edge;

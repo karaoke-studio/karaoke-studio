@@ -45,6 +45,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;
         line.singingScale = source.singingScale;
+        line.rubySingingOrigin = source.rubySingingOrigin;
         line.utopiaTransition = source.utopiaTransition;
         line.transformedWipe = source.transformedWipe;
         line.scanline = source.scanline;

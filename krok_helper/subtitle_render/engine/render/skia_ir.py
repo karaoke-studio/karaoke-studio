@@ -78,8 +78,8 @@ def _uses_decoration(style, kind):
     )
 
 
-def _write_utopia_pivots(track, ir, plan, measured):
-    singing, transition = False, False
+def _write_utopia_pivots(ir, plan, measured):
+    singing, transition, singing_ruby = False, False, False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         source = ir['track']['lines'][item.track_index]
         scales = source.get('karaoke_anim') == 'utopia'
@@ -87,7 +87,9 @@ def _write_utopia_pivots(track, ir, plan, measured):
         if not scales and 'utopia' not in animations:
             continue
         style = item.layout_style
-        if (style.vertical or style.right_to_left or item.line.wipe_reverse or track.rubies or style.lower_ruby_enabled
+        annotated = bool(final.get('ruby_groups'))
+        if (style.vertical or style.right_to_left or item.line.wipe_reverse
+                or (annotated and (source.get('zoom_pulse') or animations != {'none'}))
                 or not animations <= {'none', 'utopia'} or source.get('karaoke_anim') not in {'none', 'utopia'}
                 or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
@@ -95,12 +97,15 @@ def _write_utopia_pivots(track, ir, plan, measured):
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
         singing = singing or scales
         transition = transition or 'utopia' in animations
+        singing_ruby = singing_ruby or (scales and annotated)
     if singing:
         ir['required_features'].append('p07_singing_scale')
         ir['skia_layout']['singing_scale_schema'] = 1
     if transition:
         ir['required_features'].append('p07_utopia_transition')
         ir['skia_layout']['utopia_transition_schema'] = 1
+    if singing_ruby:
+        ir['required_features'].append('p07_ruby_singing_scale')
 
 
 def _validate_scanline_band(track, style, lines):
@@ -316,8 +321,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         sources, indices = lower_sources(prepared[0])
+        singing_lines = {
+            index for index, line in enumerate(ir['track']['lines'])
+            if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
+            and line.get('entry_anim') == line.get('exit_anim') == 'none'
+        }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
-            dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None)
+            dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
+            singing_lines=singing_lines)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
@@ -360,6 +371,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             animates_line = True
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
-    _write_utopia_pivots(track, ir, plan, measured)
+    _write_utopia_pivots(ir, plan, measured)
     project_reverse_wipe(ir)
     return ir

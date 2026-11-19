@@ -322,3 +322,60 @@ def test_outlined_upper_and_lower_ruby_match_actual_d2d_and_gpu_raster(binary, s
     sample = ('lower', semantics, layers, dpr)
     assert_annotated_parity(LOWER_TIMES, refs, gpu, sample, 3)
     assert_annotated_parity(LOWER_TIMES, gpu, raster, (*sample, 'raster'), 3)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_utopia_singing_preserves_units_and_replay(binary, reading, target, tmp_path):
+    track, style = upper_source(reading, 2)
+    style = annotated_paint(style, 2, True)
+    ir = upper_ir(binary, (track, replace(style, karaoke_anim='utopia')), 1.5)
+    static = upper_ir(binary, (track, style), 1.5)
+    assert {'p07_singing_scale', 'p07_ruby_singing_scale'} <= set(ir['required_features'])
+    line = ir['skia_layout']['lines'][0]
+    group, = line['ruby_groups']
+    assert all('utopia_layout_left' in unit for unit in group['units'])
+    assert [u['interval_ms'] for u in group['units']] == [
+        u['interval_ms'] for u in static['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    ]
+    bad = copy.deepcopy(ir)
+    del bad['skia_layout']['lines'][0]['ruby_groups'][0]['units'][0]['utopia_layout_left']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [299, 550, 1400, 2300, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        again, _ = collect(process, [550], generation=2)
+        configure(process, static)
+        still, _ = collect(process, [299, 550, 1400, 2300], generation=3)
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
+    assert np.array_equal(frames[-2], still[-1])
+    assert not np.array_equal(frames[1], still[1])
+    if target == 'gpu':
+        (tmp_path / 'ruby-singing-scale-layout.json').write_text(json.dumps(line, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case,dpr', [('upper', 1), ('upper', 1.5), ('outlined', 1), ('outlined', 1.5), ('lower', 1.5)])
+def test_ruby_utopia_singing_matches_actual_d2d_and_gpu_raster(binary, reading, source, case, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    if case == 'lower':
+        track, style, resolve = source
+        style = replace(annotated_paint(outlined(style, 2), 2), karaoke_anim='utopia')
+        width, height, times = 900, 600, LOWER_TIMES
+        ir = lower_ir(binary, (track, style, resolve), dpr=dpr)
+    else:
+        track, style = upper_source(reading, 2)
+        if case == 'outlined':
+            style = annotated_paint(style, 2, True)
+        style = replace(style, karaoke_anim='utopia')
+        width, height, times = 640, 360, UPPER_TIMES
+        ir = upper_ir(binary, (track, style), dpr)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=width, height=height, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(height*dpr), round(width*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    count = 3 if case == 'lower' else 2
+    assert_annotated_parity(times, refs, gpu, (case, dpr), count)
+    assert_annotated_parity(times, gpu, raster, (case, dpr, 'raster'), count)

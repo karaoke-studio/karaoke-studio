@@ -150,6 +150,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia sidecar 不支持整行注音动画，请重新构建')
             if 'p07_singing_scale' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia sidecar 不支持唱字放大，请重新构建')
+            if 'p07_ruby_singing_scale' not in ready.get('profiles', []):
+                raise NativeRendererError('Skia sidecar 不支持 Utopia 注音唱字，请重新构建')
             if 'p07_utopia_transition' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia sidecar 不支持 Utopia 出入场，请重新构建')
             if (type(ready.get('character_fade_schema')) is not int or ready['character_fade_schema'] != 1

@@ -144,13 +144,21 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingScale = line.karaokeAnimation == "utopia";
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
+        const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
             || line.wipeReverse || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || (!utopiaEntry && line.entryAnimation != "none") || (!utopiaExit && line.exitAnimation != "none")
-            || !source.value("ruby_groups").toArray().isEmpty()
+            || (annotated && (!features.contains("p07_ruby_singing_scale")
+                || line.zoomPulseEnabled || utopiaEntry || utopiaExit))
             || !projected.charStyles.empty()))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
+        if (singingScale && annotated) {
+            const auto origin = source.value("utopia_origin_x");
+            if (!origin.isDouble() || !std::isfinite(origin.toDouble()) || std::abs(origin.toDouble()) > 1e6)
+                throw BackendError("Skia Utopia 注音缺少有效的行原点");
+            prepared.rubySingingOrigin = float(origin.toDouble() * glyphs.dpr);
+        }
         prepared.utopiaTransition = {utopiaEntry, utopiaExit, style.tailMs, float(projected.height) / 15.f};
         prepared.noise = {noiseEntry ? line.entryDurationMs : 0, noiseExit ? line.exitDurationMs : 0,
                           line.endMs, style.fontSize};

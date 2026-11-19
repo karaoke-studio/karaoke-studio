@@ -75,6 +75,7 @@ private:
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;
         SingingScale singingScale;
+        float rubySingingOrigin = 0;
         UtopiaTransition utopiaTransition;
         std::vector<int> followingDone;
         std::optional<float> inkCenter;
