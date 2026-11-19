@@ -139,7 +139,7 @@ void validateEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 逐字滴落/翻转布局版本无效");
     const auto twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_sing_twinkle")
-        && twinkleVersion != 1 && twinkleVersion != 2 && twinkleVersion != 3 && twinkleVersion != 4)
+        && (twinkleVersion < 1 || twinkleVersion > 5 || std::floor(twinkleVersion) != twinkleVersion))
         throw BackendError("Skia 唱字粒子布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)

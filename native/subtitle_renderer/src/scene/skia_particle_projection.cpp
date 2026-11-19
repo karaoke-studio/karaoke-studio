@@ -22,12 +22,16 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");
         const bool ripple = version >= 4 && fx.kind == "ripple";
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic");
+        const bool falling = version >= 5 && (fx.kind == "petal" || fx.kind == "feather"
+                                               || fx.kind == "snow" || fx.kind == "snow_solid");
         QString spriteName = QStringLiteral("star4");
         if (ripple) spriteName = QStringLiteral("ring");
         if (symbol) spriteName = fx.kind == "note" && fx.sprite == "note_dot" ? fx.sprite : fx.kind;
+        if (falling) spriteName = fx.kind;
         const auto start = std::int64_t(fx.startMs) + offset, end = std::int64_t(fx.endMs) + offset;
         const bool oldWindow = fx.startMs >= *source.displayStartMs && fx.endMs <= *source.displayEndMs;
-        if (!(star || symbol || ripple) || fx.anchor != "char" || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
+        if (!(star || symbol || ripple || falling) || fx.anchor != "char"
+            || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || (!fx.sprite.isEmpty() && fx.sprite != spriteName)
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10
@@ -41,7 +45,9 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
             [&](const auto& entry) { return entry.first == spriteId; });
         if (!loaded) {
             const auto sprite = cfg.fxSprites.constFind(spriteName);
-            if (sprite == cfg.fxSprites.constEnd() || sprite->commands.empty() || sprite->commands.size() > 64
+            // The hollow snowflake has a branched contour and several holes.
+            const std::size_t commandLimit = spriteName == "snow" ? 192 : 64;
+            if (sprite == cfg.fxSprites.constEnd() || sprite->commands.empty() || sprite->commands.size() > commandLimit
                 || (star && sprite->commands.size() != 6))
                 throw BackendError("Skia 唱字粒子缺少有效的轮廓");
             scene.fxSprites.emplace_back(spriteId, *sprite);

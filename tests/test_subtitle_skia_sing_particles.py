@@ -52,12 +52,17 @@ def assert_particle_region(reference, candidate, sample, *, check_contour=True):
     if union.sum() >= low_alpha['minimum_union_for_iou']:
         iou = (ma & mb).sum() / union.sum()
         if iou < rules['min_alpha_iou']:
-            # At the 1x handoff the fading old stars and newly born tips straddle
-            # alpha 16. Check the mismatched pixels directly for this one frame.
-            assert sample in {('plain', 1, 1500), ('twinkle_classic', 0, False, 750)}, (
+            # Dim tips can straddle the mask threshold. Bound the mismatched
+            # pixels directly on the identified handoff and first snow frame.
+            edge_limit = {
+                ('plain', 1, 1500): 24,
+                ('twinkle_classic', 0, False, 750): 24,
+                ('snow', 0, False, 550): 26,
+            }.get(sample)
+            assert edge_limit is not None, (
                 sample, 'particle IoU', iou, int(union.sum()))
             edge = ma ^ mb
-            assert np.maximum(ca[edge], cb[edge]).max() <= 24
+            assert np.maximum(ca[edge], cb[edge]).max() <= edge_limit
             assert np.abs(ca[edge] - cb[edge]).max() <= 11
     if union.any():
         assert ma.any() and mb.any(), sample
@@ -104,7 +109,7 @@ def test_singing_twinkle_projects_existing_bursts_and_replays_tail(binary, proje
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('changes', [{'sing_fx':'petal'}, {'sing_fx':'flame'},
+@pytest.mark.parametrize('changes', [{'sing_fx':'lightning'}, {'sing_fx':'flame'},
                                      {'entry_anim':'rise', 'entry_lead_ms':400}])
 def test_unverified_particle_styles_are_rejected(binary, project, changes):
     track, style = twinkle_source(project)
@@ -472,3 +477,72 @@ def assert_ripple_contours(d2d, gpu, sample):
         difference = abs(reference[union] - candidate[union])
         assert difference.mean() <= budget['max_union_channel_mae'], sample
         assert np.percentile(difference, 95) <= budget['max_union_p95'], sample
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind', ['petal', 'feather', 'snow', 'snow_solid'])
+def test_singing_falling_spritemap_replays_each_shape(binary, project, target, kind, tmp_path):
+    track, style = star_tempo(project, kind, -250, crop=True)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    line = ir['track']['lines'][0]
+    bursts = line['fx_bursts']
+    assert ir['skia_layout']['sing_twinkle_schema'] == 5
+    assert all(b['kind'] == kind and b['front'] and b['anchor'] == 'char' for b in bursts)
+    assert {b['start_ms'] for b in bursts} == {200, 600, 900, 1400}
+    shape = ir['fx_sprites'][kind]
+    closed_figures = sum(cmd[0] == 'Z' for cmd in shape['path_commands'])
+    assert closed_figures >= 2 if kind == 'snow' else closed_figures == 1
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start - 1, 500, 750, 1100, 1550, end - 1, end, 750]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+    assert not frames[0][..., 3].any() and not frames[-2][..., 3].any()
+    assert np.array_equal(frames[2], frames[-1])
+    assert sum(blue_coverage(frame).max() > 40 for frame in frames[1:-2]) >= 3
+    if target == 'gpu' and kind == 'snow':
+        # The authored snowflake uses sin/cos. Ignore double-precision libm
+        # noise in the JSON snapshot beyond the precision of the renderer.
+        canonical_shape = {
+            **shape, 'path_commands': [
+                [verb, *(round(float(value), 9) or 0.0 for value in coordinates)]
+                for verb, *coordinates in shape['path_commands']
+            ],
+        }
+        (tmp_path / 'singing-falling-layout.json').write_text(json.dumps({
+            'schema': ir['skia_layout']['sing_twinkle_schema'], 'bursts': bursts, 'shape': canonical_shape,
+            'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind,speed,crop', [('petal', 0, False), ('feather', -250, True),
+                                             ('snow', 0, False), ('snow_solid', 250, False)])
+def test_singing_falling_matches_actual_d2d_and_gpu_raster(binary, project, kind, speed, crop):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = star_tempo(project, kind, speed, crop)
+    times = [199, 450, 550, 750, 1100, 1500, 1820, 1999, 2000, 2200, 2600, 3000]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=640, height=360, dpr=1.5, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(540, 960, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    frames = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            images, _ = collect(process, times)
+        frames.append(images)
+    assert sum(blue_coverage(frame).max() > 40 for frame in reference) >= 3
+    for time, d2d, gpu, raster in zip(times, reference, *frames, strict=True):
+        assert_particle_region(d2d, gpu, (kind, speed, crop, time), check_contour=False)
+        if kind == 'snow' and time == 450:
+            a, b = blue_coverage(gpu), blue_coverage(raster)
+            # At first emergence the dim branches have fewer than 64 occupied
+            # pixels and a one-level bias accounts for more than 3% coverage.
+            assert 0 < max(a.max(), b.max()) <= 30
+            assert (np.maximum(a, b) > 16).sum() < 64
+            assert abs(a-b).max() <= 2
+            continue
+        assert_particle_region(gpu, raster, (kind, speed, crop, time, 'raster'), check_contour=False)

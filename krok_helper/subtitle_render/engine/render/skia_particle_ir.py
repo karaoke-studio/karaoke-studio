@@ -2,6 +2,10 @@
 from ..layout.line.skia_geometry import write_horizontal_pivots
 
 
+_FALLING_PARTICLES = {'petal', 'feather', 'snow', 'snow_solid'}
+_SINGING_PARTICLES = {'twinkle', 'twinkle_classic', 'note', 'heart', 'ripple'} | _FALLING_PARTICLES
+
+
 def write_singing_particles(track, ir, plan, measured) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
@@ -18,13 +22,16 @@ def write_singing_particles(track, ir, plan, measured) -> int:
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 唱字粒子仅支持正向横排基础正文')
         for burst in bursts:
-            ripple = burst['kind'] == 'ripple'
-            if (burst['kind'] not in {'twinkle', 'twinkle_classic', 'note', 'heart', 'ripple'}
+            kind = burst['kind']
+            ripple = kind == 'ripple'
+            if (kind not in _SINGING_PARTICLES
                     or burst.get('front', True) != (not ripple)
                     or 'paint_id' in burst or 'char_color_ids' in burst):
-                raise ValueError('Skia 唱字粒子当前仅支持实色星光、音符、爱心和水波纹')
+                raise ValueError('Skia 暂不支持此唱字粒子类型或配色方式')
             if ripple:
-                version = 4
+                version = max(version, 4)
+            if kind in _FALLING_PARTICLES:
+                version = 5
         metrics = measured.lines[item.track_index]
         write_horizontal_pivots(final['cells'], metrics)
         final['particle_box_height'] = (
