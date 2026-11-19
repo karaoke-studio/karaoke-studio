@@ -1,6 +1,7 @@
 #pragma once
 #include "include/core/SkPath.h"
 #include "character_fade.h"
+#include "character_transform.h"
 #include "line_animation.h"
 #include "scanline_band.h"
 #include "solid_outline.h"
@@ -22,6 +23,7 @@ struct ResolvedCell {
     float top = 0, bottom = 0; // Fixed vertical cell box; wipe axis on vertical lines only.
     std::optional<SolidOutline> outline;
     std::optional<SolidOutline> outerOutline;
+    CharacterPivot pivot; // character_transform_schema=1 only.
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

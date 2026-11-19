@@ -1982,6 +1982,12 @@ Windows 相关 **150 通过**，含新增 **5 项实际 D2D GPU 对照**（reali
 
 Windows 相关 **84 通过**，含新增 **10 项实际 D2D GPU 对照**（realization 关闭，原始 1px 墨迹/锋面预算，另加高亮带左右边缘 1px 与面积预算）。对照覆盖普通（DPR 1/1.5）、释放停顿、零时长字、共享源区间分段点、窄带、双描边、逐字淡化、整行淡化，以及升入/滑出位移。Skia GPU 与 Raster 的乱序回跳一致，覆盖 4 种情形。X11/Wayland 专项各 **32 通过、10 跳过**（D2D 对照），独立 Windows/Linux Raster 各 **26 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `f65146176021328bab9e58c890e87b3c05140b66183a807ca543b0c506d75878`。样例 `scanline-band-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。Mac CI 已加入专项和规范样例，留待阶段收口时运行。证据前缀 `build/p07-scanline*`。
 
+### 14.62 P07.1 逐字滴落与翻转（2026-11-19）
+
+`character_transform_schema=1` 接通 `char_drip` 和 `spin_flip`，范围限于正向、横排从左至右、无描边的正文。时钟复用 `CharacterFade`：350ms 错开、250ms 渐变，退场优先于入场。`char_drip` 在进度大于 0 时即完全不透明，按 `-侧向 × tan(min(90°×(1-p), 89°))` 绕版面单元右缘做纵向错切。`spin_flip` 的透明度等于进度，并绕单元中心做“平移、纵向错切、缩放、反平移”变换。轴心来自规范布局：Python 以 `origin_x - offset` 和 `width` 给出版面单元左右缘（`layout_left`/`layout_right`），以字形运行（请求字体槽）的 ascent/descent 加基线给出 `pivot_y`，不使用墨迹中心。矩阵只作用于路径，走字裁剪仍在行坐标中进行。变换期间整行淡化层不设边界。门控：变换期间不得有字在走字（入场须在各字开始前完成，退场须在各字结束后开始，否则 D2D 改用逐字形锋面）。描边、扫字线、注音、导唱符、行内角色、右至左、竖排、反向和 no_wipe 在 Python 和 native 两侧都会拒绝；伪造的能力声明、轴心或时序也会被拒绝，并保留上一场景。
+
+Windows 相关 **109 通过**，含新增 **8 项实际 D2D GPU 对照**（不使用 WARP，realization 关闭）。对照覆盖滴落、翻转（各 DPR 1/1.5）、滴落接翻转、升入接翻转、翻转接滑出、淡化接滴落。两侧都能分辨原始 1px 墨迹时（峰值 alpha>128），沿用 alpha>127 的 1px 墨迹/掩码预算，另有锋面预算、峰值 alpha ±2 的相位检查和覆盖加权质心 ≤0.5px 的轴心检查。每例至少 8 个动画帧达到原始几何预算。缩小到 12% 以下的翻转笔画不足 1px，此时覆盖率反映的是抗锯齿而不是几何，因此只做相位和质心检查。Skia GPU 与 Raster 在倒序、重复的独立定位下一致，覆盖 3 种情形。X11/Wayland 专项各 **27 通过、8 跳过**（D2D 对照），独立 Windows/Linux Raster 各 **23 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `7551c5562c0e7a1316b6de238993b11a5af14d72143b6fedd776c821d4b32ec3`。样例 `character-transform-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。复核补齐零时长路径，完整 Windows 专项 36 项通过，Wayland 的拒绝与零时长用例 12 项通过。Mac CI 已纳入专项和规范样例，留待阶段收口时运行。证据前缀 `build/p07-transform*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

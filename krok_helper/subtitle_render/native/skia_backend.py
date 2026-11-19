@@ -152,6 +152,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('scanline_band_schema')) is not int or ready['scanline_band_schema'] != 1
                     or 'p07_scanline_band' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持扫字线高亮带，请重新构建')
+            if (type(ready.get('character_transform_schema')) is not int or ready['character_transform_schema'] != 1
+                    or 'p07_character_transform' not in ready.get('profiles', [])):
+                raise NativeRendererError('Skia sidecar 不支持逐字滴落/翻转，请重新构建')
             if "raster" not in ready.get("execution_targets", []):
                 raise NativeRendererError("Skia sidecar 未声明编译执行目标")
             self._send({"cmd": "select_backend", "selection_version": 1, "backend": "skia",

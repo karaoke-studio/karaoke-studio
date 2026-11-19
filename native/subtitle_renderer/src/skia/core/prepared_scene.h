@@ -50,6 +50,7 @@ private:
         float top = 0, bottom = 0;
         std::optional<SolidOutline> outline;
         std::optional<SolidOutline> outerOutline;
+        CharacterPivot pivot;
     };
     struct Line {
         std::vector<Cell> cells;

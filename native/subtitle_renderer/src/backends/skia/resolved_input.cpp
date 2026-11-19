@@ -109,7 +109,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
         const float slide = std::max(style.fontSize * .9f, 36.f) * (line.lane == 0 ? -1.f : 1.f);
         const float rise = std::max(style.fontSize * .35f, 18.f);
-        const bool charEntry = line.entryAnimation == "char_fade", charExit = line.exitAnimation == "char_fade";
+        using Kind = ::subtitle::skia::CharacterFade::Kind;
+        const auto kindOf = [](const std::string& animation) {
+            return animation == "char_drip" ? Kind::Drip : animation == "spin_flip" ? Kind::Spin : Kind::Fade;
+        };
+        const auto perCharacter = [](const std::string& animation) {
+            return animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
+        };
+        const bool charEntry = perCharacter(line.entryAnimation), charExit = perCharacter(line.exitAnimation);
         prepared.animation = {line.entryAnimation == "none" || charEntry ? 0 : line.entryDurationMs,
                               line.exitAnimation == "none" || charExit ? 0 : line.exitDurationMs,
                               line.entryAnimation == "slide_in" ? slide : 0.f,
@@ -118,7 +125,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                               line.exitAnimation == "rise" ? -rise : 0.f};
         const int delay = cells.size() > 1 ? 350 / (int(cells.size()) - 1) : 0;
         prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
-                                  line.endMs, delay};
+                                  line.endMs, delay, kindOf(line.entryAnimation), kindOf(line.exitAnimation)};
+        const bool transforms = prepared.characterFade.transforms();
         // scanline_band_schema=1: the line style's solid band; the projection gated the subset.
         if (line.scanlineEnabled)
             prepared.scanline = {true, std::max(style.scanlineWidth, 1.f) * .5f, argb(style.scanlineColor),
@@ -194,6 +202,20 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 glyph.wipePoints.back().position = *end;
                 glyph.adjustedWipeEnd = true;
             }
+            // character_transform_schema=1: canonical layout cell and glyph-run box center.
+            if (transforms) {
+                const auto pivot = [&](const char* key) {
+                    const auto value = cell.value(QLatin1String(key));
+                    if (!value.isDouble() || !std::isfinite(value.toDouble()) || std::abs(value.toDouble()) > 1e6)
+                        throw BackendError("Skia 逐字变换缺少有效的版面单元轴心");
+                    return float(value.toDouble() * glyphs.dpr);
+                };
+                glyph.pivot = {pivot("layout_left"), pivot("layout_right"), pivot("pivot_y")};
+                if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft || glyph.outline || glyph.outerOutline)
+                    throw BackendError("Skia 逐字变换仅支持无描边正文的有效版面单元");
+            } else if (cell.contains("layout_left") || cell.contains("layout_right") || cell.contains("pivot_y")) {
+                throw BackendError("Skia 版面单元轴心缺少逐字变换能力声明");
+            }
             if (style.vertical) {
                 applyVerticalGeometry(glyph, cell, line.chars[j].text, verticalVersion, japaneseGlyphs, glyphs.dpr);
             } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("rotation_pivot_x")) {
@@ -206,6 +228,21 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset, totalCells, totalGroups);
         if (prepared.characterFade.active() && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
+        if (transforms) {
+            // Transformed cells are never wiping: entry finishes before each cell starts,
+            // exit begins after every cell ends. Overlap uses a per-glyph front (unverified).
+            const auto& fade = prepared.characterFade;
+            for (std::size_t i = 0; i < prepared.cells.size(); ++i) {
+                const auto& c = prepared.cells[i];
+                const int start = c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs;
+                const int end = c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs;
+                if ((fade.entry && fade.entryKind != Kind::Fade && start < prepared.startMs + fade.delay * int(i) + 250)
+                    || (fade.exit && fade.exitKind != Kind::Fade && end > std::max(line.endMs, prepared.endMs - 600)))
+                    throw BackendError("Skia 逐字滴落/翻转期间暂不支持走字");
+            }
+            if (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe || line.scanlineEnabled)
+                throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
+        }
         if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
         out.lines.push_back(std::move(prepared));
     }

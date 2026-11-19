@@ -48,7 +48,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p05_standalone_marks" && feature.toString() != "p07_no_wipe"
             && feature.toString() != "p07_zero_ruby_no_wipe" && feature.toString() != "p07_line_fade"
             && feature.toString() != "p07_line_motion" && feature.toString() != "p07_character_fade"
-            && feature.toString() != "p07_scanline_band"
+            && feature.toString() != "p07_scanline_band" && feature.toString() != "p07_character_transform"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
@@ -130,6 +130,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_scanline_band")
         && ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1) != 1)
         throw BackendError("Skia 扫字线布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_character_transform")
+        && ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 逐字滴落/翻转布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -260,10 +263,15 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowFade = features.contains("p07_line_fade");
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
-    const auto supportedAnimation = [allowFade, allowMotion, allowCharacterFade](const QString& animation, const char* slide) {
+    const bool allowCharacterTransform = features.contains("p07_character_transform");
+    const auto transformAnimation = [](const QString& animation) {
+        return animation == "char_drip" || animation == "spin_flip";
+    };
+    const auto supportedAnimation = [=](const QString& animation, const char* slide) {
         return animation == "none" || (allowFade && animation == "fade")
             || (allowMotion && (animation == slide || animation == "rise"))
-            || (allowCharacterFade && animation == "char_fade");
+            || (allowCharacterFade && animation == "char_fade")
+            || (allowCharacterTransform && transformAnimation(animation));
     };
     for (const auto& source : cfg.lines) {
         if (source.annotationBaselineY
@@ -365,6 +373,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (source.scanlineEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
+            if ((transformAnimation(source.entryAnimation) || transformAnimation(source.exitAnimation))
+                && (cell.vectorGlyph || &cellStyle != &resolved))
+                throw BackendError("Skia 逐字滴落/翻转暂不支持导唱符或行内角色");
             // vector_guide_schema=1: solid horizontal LTR main text, no roles, ruby or outlines.
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
                 || !cfg.rubies.empty() || &cellStyle != &resolved || features.contains("p06_primary_solid_outline")))
