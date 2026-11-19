@@ -21,14 +21,18 @@ struct CharacterGeometry {
         if (!exiting && (entryMs <= 0 || time > displayStart + std::clamp(entryMs, 120, 3000)))
             return {};
         const float x = (pivot.layoutLeft + pivot.layoutRight) * .5f;
+        const auto& effect = exiting ? exit : entry;
         const auto value = krok::subtitle::native::effects::geoCharState(
-            exiting ? exit : entry, fontPx, index, count, time,
+            effect, fontPx, index, count, time,
             exiting ? exitStart : displayStart, exiting ? exitMs : entryMs,
             exiting, x, lineCenter.value_or(0.f), lineCenter.has_value());
         CharacterTransformState state;
         state.opacity = value.opacity;
-        state.transformed = value.dx != 0.f || value.dy != 0.f || value.rotation != 0.f
-            || value.scaleX != 1.f || value.scaleY != 1.f;
+        state.glowAlpha = value.glowAlpha;
+        state.glowRadiusEm = value.glowRadiusEm;
+        state.glowEcho = effect == "glow_in" || effect == "glow_out";
+        state.transformed = state.opacity > 0 && (value.dx != 0.f || value.dy != 0.f || value.rotation != 0.f
+            || value.scaleX != 1.f || value.scaleY != 1.f);
         if (state.transformed) {
             state.matrix.setTranslate(x + value.dx, pivot.centerY + value.dy);
             state.matrix.preRotate(value.rotation);

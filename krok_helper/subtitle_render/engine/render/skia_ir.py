@@ -86,7 +86,8 @@ def _validate_scanline_band(track, style, lines):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
 
 
-_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'}
+_HALO_TRANSFORMS = {'stretch_in', 'stretch_out', 'glow_in', 'glow_out'}
+_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'} | _HALO_TRANSFORMS
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
@@ -101,7 +102,7 @@ def _character_transforms(track, ir, plan, measured) -> int:
             continue
         geometry = bool(animations & _GEOMETRY_TRANSFORMS)
         if geometry:
-            version = 4
+            version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
         line, look = track.lines[item.track_index], item.layout_style
         if (look.vertical or look.right_to_left or line.wipe_reverse or source.get('karaoke_anim') != 'none'
                 or source.get('scanline') or track.rubies or look.lower_ruby_enabled

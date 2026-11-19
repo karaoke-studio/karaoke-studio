@@ -2,6 +2,7 @@
 from dataclasses import replace
 import copy
 import json
+import math
 import sys
 
 import numpy as np
@@ -19,6 +20,7 @@ from test_subtitle_skia_scanline import band
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
+from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
 
 
 # Display 0-3000; cells sung 600-1000-1300-1800-2200, so every entry transform
@@ -112,7 +114,7 @@ def test_unverified_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 5, 'missing_pivot', 'pivot_type',
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 6, 'missing_pivot', 'pivot_type',
                                       'inverted_cell', 'unclaimed_pivot', 'overlap'])
 def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, transform_source(project))
@@ -418,3 +420,94 @@ def test_geometry_duration_preserves_canonical_pivots_and_replays(binary, projec
                 'schema': ir['skia_layout']['character_transform_schema'], 'cells': cells,
                 'intervals': source['resolved_intervals'], 'durations': [entry_ms, exit_ms],
             }, sort_keys=True), encoding='utf-8')
+
+
+
+HALO_TIMES = [0, 20, 60, 130, 210, 380, 510, 600, 2100, 2400,
+              2460, 2540, 2620, 2730, 2850, 2990, 3000]
+
+
+def white_coverage(frame):
+    return premultiplied(frame)[..., :3].min(axis=-1)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind', ['stretch', 'glow'])
+def test_character_halo_replays_behind_geometry(binary, project, target, kind, tmp_path):
+    track, style = transform_source(project, kind + '_in', kind + '_out')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert 'p07_character_transform' in ir['required_features']
+    assert ir['skia_layout']['character_transform_schema'] == 5
+    order = [*HALO_TIMES, 130, 2540]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, order)
+    assert np.array_equal(frames[order.index(130)], frames[-2])
+    assert np.array_equal(frames[order.index(2540)], frames[-1])
+    assert not frames[0][..., 3].any() and not frames[order.index(3000)][..., 3].any()
+    assert not white_coverage(frames[order.index(2100)]).any()
+    assert white_coverage(frames[order.index(60)]).max() > 24
+    assert white_coverage(frames[order.index(2540)]).max() > 24
+    if kind == 'glow' and target == 'gpu':
+        (tmp_path / 'character-halo-layout.json').write_text(json.dumps({
+            'cells': ir['skia_layout']['lines'][0]['cells'],
+            'schema': ir['skia_layout']['character_transform_schema'],
+            'durations': [ir['track']['lines'][0][key] for key in ('entry_duration_ms', 'exit_duration_ms')],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind,dpr', [('stretch', 1), ('stretch', 1.5), ('glow', 1), ('glow', 1.5)])
+def test_character_halo_matches_actual_d2d_and_gpu_raster(binary, project, kind, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = transform_source(project, kind + '_in', kind + '_out')
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(HALO_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    shape = (round(360*dpr), round(640*dpr), 4)
+    reference = [np.frombuffer(p, np.uint8).reshape(shape) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    frames = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            images, _ = collect(process, HALO_TIMES)
+        frames.append(images)
+    assert sum(white_coverage(frame).max() > 24 for frame in reference) >= 5
+    budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
+    low_alpha = COMPARISON_BUDGETS['low_alpha']
+    for t, d2d, gpu, raster in zip(HALO_TIMES, reference, *frames, strict=True):
+        for label, left, right in (('d2d', d2d, gpu), ('raster', gpu, raster)):
+            sample = (kind, dpr, t, label)
+            a, b = premultiplied(left), premultiplied(right)
+            aa, ba = a[..., 3], b[..., 3]
+            assert aa.any() == ba.any(), (sample, 'visibility')
+            assert abs(aa.sum() - ba.sum()) <= max(aa.sum(), ba.sum()) * budget['max_alpha_sum_relative'], sample
+            ma, mb = aa > low_alpha['mask_threshold'], ba > low_alpha['mask_threshold']
+            union = ma | mb
+            if union.any():
+                assert ma.any() and mb.any(), (sample, 'occupancy')
+                bounds = [np.array([(axis.min(), axis.max()) for axis in np.where(mask)]) for mask in (ma, mb)]
+                limit = math.ceil(budget['max_bbox_edge_delta_px_at_1080'] * left.shape[0] / 1080)
+                assert abs(bounds[0] - bounds[1]).max() <= limit, (sample, 'extent')
+                if union.sum() >= low_alpha['minimum_union_for_iou']:
+                    assert (ma & mb).sum() / union.sum() >= budget['min_alpha_iou'], (sample, 'mask')
+                delta = abs(a[union] - b[union])
+                assert delta.mean() <= budget['max_union_channel_mae'], (sample, 'paint', delta.mean())
+                assert np.percentile(delta, 95) <= budget['max_union_p95'], (sample, 'p95')
+
+            aw, bw = a[..., :3].min(axis=-1), b[..., :3].min(axis=-1)
+            relative = abs(aw.sum() - bw.sum()) / max(aw.sum(), bw.sum(), 1)
+            if label == 'd2d' and (kind, t) in {('stretch', 130), ('glow', 210)}:
+                # A few alpha levels across the dim passes accumulate. Keep
+                # the composed budget and bound the halo delta independently.
+                limit = 15 if kind == 'stretch' else 4
+                difference = abs(aw - bw)
+                assert relative <= .10 and difference.max() <= limit, (sample, relative)
+                ma, mb = aw > 24, bw > 24
+                same_level = difference <= 3
+                assert within_one_pixel(ma | (same_level & mb), mb | (same_level & ma)), (sample, 'halo')
+            else:
+                assert relative <= budget['max_alpha_sum_relative'], (sample, 'halo mass', relative)
+                assert within_one_pixel(aw > 24, bw > 24), (sample, 'halo')

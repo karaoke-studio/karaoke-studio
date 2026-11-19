@@ -557,6 +557,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [ ] 逐字变换的半透明描边、注音等组合及其跨平台验收仍待完成。
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
   - [x] 正向横排无描边正文的字距展开、波浪、散开和收拢，含不同入退场时长和走字重叠，见 §14.76。
+  - [x] 正向横排无描边正文的拉伸、辉光及其入退场背层，见 §14.78。
 - [ ] P07.3 普通 wipe/no_wipe、反向、共享计时块、空 pause、角色边界、Utopia、ruby Utopia、zoom_pulse、stroke_flash，含完成后的外层释放与下一字符接管。实色正向横排 no_wipe 子集见 §14.35；完整方向/特效组合仍待验收。
 - [ ] P07.4 全部已支持粒子种类与伴生层、sprite 覆盖、双色/跟随字体/复用配色、数量/速度、front/back、geometry/decor、逐字锚点及整行锚点。
   - [x] 正向横排基础正文的实色唱字星光，覆盖单色、双色和仍在行显示窗内的末字尾迹，见 §14.63。
@@ -2119,6 +2120,12 @@ Windows 关联 **131 项通过**，另有字距展开走字重叠用例独立复
 提交 `27879a8c` 的双架构 Mac CI **5/5 成功**。Apple Silicon 与 Intel 各 **1390 项产品测试通过、940 项跳过**，干净环境包的新增特效代表套件各 **57 项通过**。两份包均为 `render_feature_suite=1`、`functional_passed=true`、`hardware_gate_passed=false`。直接下载核对的 **55 份规范布局样例全部字节一致**，其中水波纹、镂空雪花、闪电和火焰样例也与本地 X11 对应证据一致。[Mac CI 44461715911](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44461715911)
 
 成功的托管包检查仅上传报告与日志，两份 Actions 结果资产分别为 65,844 和 66,021 字节。失败及最终真机包仍保留原完整证据范围。本轮覆盖截至唱字闪电和火焰的版本，正反向扫字粒子和后续几何动画在此提交之后。最终候选包仍集中安排一次 Mac 真机验证。
+
+### 14.78 P07.2 拉伸与辉光入退场（2026-11-19）
+
+`character_transform_schema=5` 在正向横排基础正文绘制 `stretch_in/out` 和 `glow_in/out`。主体缩放、透明度、逐字错峰和整行辉光时钟复用共享几何函数。拉伸在背层用既有多级描边，辉光用横向衰减回声，均取当帧变换后的字形。绘制模块单独持有光晕配方并由 Vulkan、Metal、Raster 共用。
+
+Windows 关联 **138 项通过**，另有 **2 项在分解光晕断言后独立复核通过**。最终 **8 项聚焦用例通过**，含 **4 组真实 D2D GPU 对照**（关闭 WARP 和 realization），覆盖 DPR 1/1.5、前后层和随机回跳。合成帧符合 P00 装饰文字预算。两处弱光晕的独立覆盖量差为约 7.3% 和 9.8%，像素误差分别限定为 15/255 与 4/255，暗部阈值附近另核对轮廓。X11/Wayland 各 **40 通过、25 项 D2D 跳过**，独立 Windows/Linux Raster 各 **5 通过**。四份 native 干净重建且 CTest 各 **3/3**，源码标识 `05cc909a8bb1be593dd6c70cf40be89de61241425fa9e8218f744c6075e235a8`。Windows/X11/Wayland 辉光布局样例逐字节一致，已登记后续 Mac CI 与最终实机包。证据前缀 `build/p07-char-halo*`。
 
 ## 15. 前期探针清理范围
 

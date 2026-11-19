@@ -135,7 +135,7 @@ void validateEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 扫字线布局版本无效");
     const auto transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_character_transform")
-        && transformVersion != 1 && transformVersion != 2 && transformVersion != 3 && transformVersion != 4)
+        && (transformVersion < 1 || transformVersion > 5 || std::floor(transformVersion) != transformVersion))
         throw BackendError("Skia 逐字变换布局版本无效");
     const auto twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_sing_twinkle")
@@ -272,14 +272,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
     const bool allowCharacterTransform = features.contains("p07_character_transform");
-    const bool allowGeometry = allowCharacterTransform
-        && ir.value("skia_layout").toObject().value("character_transform_schema").toInt() >= 4;
+    const int transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toInt();
+    const bool allowGeometry = allowCharacterTransform && transformVersion >= 4;
+    const bool allowHalo = allowGeometry && transformVersion >= 5;
     const int twinkleVersion = ir.value("skia_layout").toObject().value("sing_twinkle_schema").toInt(1);
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble();
-    const auto transformAnimation = [allowGeometry](const QString& animation, bool entry) {
+    const auto transformAnimation = [=](const QString& animation, bool entry) {
         return animation == "char_drip" || animation == "spin_flip"
             || (allowGeometry && (entry ? animation == "tracking_in" || animation == "wave_in"
-                                       : animation == "scatter_out" || animation == "converge_out"));
+                                       : animation == "scatter_out" || animation == "converge_out"))
+            || (allowHalo && (entry ? animation == "stretch_in" || animation == "glow_in"
+                                    : animation == "stretch_out" || animation == "glow_out"));
     };
     const auto supportedAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")

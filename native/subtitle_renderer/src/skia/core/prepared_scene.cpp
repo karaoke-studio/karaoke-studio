@@ -1,4 +1,5 @@
 #include "core/prepared_scene.h"
+#include "character_halo.h"
 #include "character_wipe.h"
 #include "../../effects/wipe_clock.h"
 #include "include/core/SkCanvas.h"
@@ -257,7 +258,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 : line.characterGeometry.at(tMs, line.startMs, line.endMs,
                                             int(index), int(line.cells.size()), cell.pivot, line.inkCenter);
             std::optional<SkPath> animatedInk;
-            if (transform.transformed && transform.opacity > 0 && (cell.outline || cell.outerOutline))
+            if (transform.transformed && transform.opacity > 0
+                && (cell.outline || cell.outerOutline || transform.glowAlpha > 0))
                 animatedInk = cell.path.makeTransform(transform.matrix);
             states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
                               transform, std::move(animatedInk)});
@@ -340,6 +342,12 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 if (states[index].phase == Phase::Wiping) drawCell(index, layer);
         };
         if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false);
+        if (geometry)
+            for (std::size_t i = 0; i < line.cells.size(); ++i) {
+                const auto& state = states[i];
+                drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
+                                  state.transform, line.characterGeometry.fontPx);
+            }
         if (line.hasOuterOutline) drawLayer(Layer::OuterOutline);
         if (line.hasOutline) drawLayer(Layer::Outline);
         drawLayer(Layer::Body);

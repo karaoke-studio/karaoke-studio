@@ -17,6 +17,8 @@ struct CharacterTransformState {
     float opacity = 1;
     SkMatrix matrix = SkMatrix::I();
     bool transformed = false;
+    float glowAlpha = 0, glowRadiusEm = 0;
+    bool glowEcho = false;
 };
 
 inline CharacterTransformState characterTransformAt(const CharacterFade& fade, int time, int displayStart,
