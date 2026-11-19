@@ -67,7 +67,7 @@ private:
         bool transformedWipe = false;
         ScanlineBand scanline;
         std::vector<SingParticleBurst> particles;
-        float inkLeft = 0, inkTop = 0; // Body ink union left: the GPU band needs a sung front past it.
+        float inkStart = 0, inkTop = 0; // The band appears after the front enters body ink.
         SkRect paintBounds = SkRect::MakeEmpty();
     };
     int width_, height_;

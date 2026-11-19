@@ -35,6 +35,11 @@ def band(style, width=30):
                    scanline_shape='band', scanline_effect='none')
 
 
+def reverse_band(track, style):
+    return (replace(track, lines=[replace(track.lines[0], wipe_reverse=True)]),
+            replace(style, scanline_reverse_enabled=True))
+
+
 def scanline_source(project, kind='plain'):
     if kind == 'outlines':
         track, style = two_outlines(project)
@@ -48,7 +53,10 @@ def scanline_source(project, kind='plain'):
         style = replace(style, entry_anim='rise', entry_lead_ms=600, exit_anim='slide_out', exit_fade_ms=600)
     if kind == 'fade':
         style = replace(style, entry_anim='fade', entry_lead_ms=400, exit_anim='fade', exit_fade_ms=600)
-    return track, band(style, 18 if kind == 'narrow' else 30)
+    style = band(style, 18 if kind == 'narrow' else 30)
+    if kind == 'reverse':
+        return reverse_band(track, style)
+    return track, style
 
 
 def band_mask(frame):
@@ -108,16 +116,14 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse', 'rtl', 'vertical',
+@pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical',
                                   'ruby', 'roles', 'guide', 'utopia', 'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'flame': style = replace(style, scanline_shape='flame')
     elif case == 'image': style = replace(style, scanline_shape='image')
     elif case == 'combined_particles': style = replace(style, scanline_effect='sakura', sing_fx='twinkle')
-    elif case == 'reverse':
-        track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
-        style = replace(style, scanline_reverse_enabled=True)
+    elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
     elif case == 'rtl': track, style = rtl_source(project); style = band(style)
     elif case == 'vertical': track, style = vertical_ruby_source(project); track = replace(track, rubies=[]); style = band(style)
     elif case == 'ruby': track, style = vertical_ruby_source(project); style = band(replace(style, vertical=False))
@@ -132,7 +138,7 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 4, 'legacy_mode', 'legacy_glow', 'shape', 'reverse'])
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 5, 'legacy_mode', 'legacy_glow', 'shape', 'reverse'])
 def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, scanline_source(project))
     bad = copy.deepcopy(ir)
@@ -197,7 +203,7 @@ def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('kind,dpr', [('plain', 1), ('plain', 1.5), ('pause', 1), ('zero', 1.5), ('shared', 1),
                                       ('narrow', 1.5), ('outlines', 1.5), ('char_fade', 1), ('fade', 1.5),
-                                      ('motion', 1.5)])
+                                      ('motion', 1.5), ('reverse', 1.5)])
 def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
     """Original 1px ink, sung-front and band-edge budgets against actual D2D GPU."""
     from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -321,7 +327,7 @@ def test_feather_gpu_and_raster_match_under_repeated_seek(binary, project):
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('kind,glow,dpr', [('plain', 8, 1), ('plain', 15, 1.5), ('pause', 40, 1.5),
-                                         ('outlines', 8, 1.5), ('char_fade', 8, 1), ('motion', 8, 1.5)])
+                                         ('outlines', 8, 1.5), ('char_fade', 8, 1), ('motion', 8, 1.5), ('reverse', 8, 1.5)])
 def test_feather_profile_matches_actual_d2d_gpu(binary, project, kind, glow, dpr):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
@@ -421,7 +427,7 @@ def test_gradient_role_scanline_is_explicitly_rejected(binary, project):
 @pytest.mark.parametrize('mode,kind,softness,dpr', [
     ('follow_before', 'plain', 0, 1), ('follow_after', 'outlines', 8, 1.5),
     ('role', 'plain', 8, 1), ('role', 'outlines', 0, 1.5),
-    ('brighten', 'plain', 0, 1), ('brighten', 'outlines', 8, 1.5), ('brighten', 'tiny', 0, 1),
+    ('brighten', 'plain', 0, 1), ('brighten', 'outlines', 8, 1.5), ('brighten', 'tiny', 0, 1), ('brighten', 'reverse', 6, 1.5),
 ])
 def test_scanline_color_modes_match_actual_d2d_gpu(binary, project, mode, kind, softness, dpr):
     from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -530,11 +536,16 @@ def test_invalid_scanline_particle_keeps_raster_scene(binary, project, change):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('kind,speed', [('star', 0), ('star', -250), ('sakura', 140), ('note', 0)])
-def test_scanline_particle_tail_matches_actual_d2d_and_gpu_raster(binary, project, kind, speed):
+@pytest.mark.parametrize('kind,speed,reverse', [
+    ('star', 0, False), ('star', -250, False), ('sakura', 140, False), ('note', 0, False),
+    ('star', -250, True), ('note', 0, True),
+])
+def test_scanline_particle_tail_matches_actual_d2d_and_gpu_raster(binary, project, kind, speed, reverse):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     track, style = particle_band(project, kind, speed)
+    if reverse:
+        track, style = reverse_band(track, style)
     times = [199, 300, 401, 500, 599, 750, 950, 1400, 1600, 1850, 2000, 2200, 3000]
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
@@ -549,5 +560,41 @@ def test_scanline_particle_tail_matches_actual_d2d_and_gpu_raster(binary, projec
         results.append(frames)
     assert sum(blue_coverage(frame).max() > 30 for frame in reference) >= 4
     for time, d2d, gpu, raster in zip(times, reference, *results, strict=True):
-        assert_particle_region(d2d, gpu, ('scanline', kind, speed, time), check_contour=False)
-        assert_particle_region(gpu, raster, ('scanline', kind, speed, time, 'raster'), check_contour=False)
+        assert_particle_region(d2d, gpu, ('scanline', kind, speed, reverse, time), check_contour=False)
+        assert_particle_region(gpu, raster, ('scanline', kind, speed, reverse, time, 'raster'), check_contour=False)
+
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_reverse_scanline_band_and_particle_anchors_follow_singing_order(binary, project, target, tmp_path):
+    track, style = particle_band(project, 'star', -200)
+    track, style = reverse_band(track, replace(style, scanline_color=BAND))
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    plain = ir_for(binary, (track, replace(style, scanline_effect='none')), dpr=1.5)
+    line = ir['skia_layout']['lines'][0]
+    bursts = ir['track']['lines'][0]['fx_bursts']
+    assert ir['skia_layout']['scanline_band_schema'] == 4
+    assert all(b['reverse'] and b['front'] and 'time_scale' not in b for b in bursts)
+    assert [c['clock_index'] for c in line['cells']] == [3, 2, 1, 0]
+    times = [199, 300, 500, 750, 1650, 1820, 2200, 3000, 500]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        configure(process, plain)
+        bands, _ = collect(process, times, generation=2)
+    assert np.array_equal(frames[2], frames[-1])
+    assert not blue_coverage(frames[0]).any() and not frames[-2][..., 3].any()
+    # At the pause the first burst still belongs to the rightmost cell,
+    # while the band only appears within the closed singing windows.
+    assert np.array_equal(frames[0], bands[0])
+    assert not band_mask(bands[2]).any()
+    first_particle = np.where(blue_coverage(frames[2]) > 24)[1]
+    assert first_particle.size and first_particle.mean() > 480
+    columns = [np.where(band_mask(bands[i]))[1] for i in (1, 3, 4)]
+    assert all(xs.size for xs in columns)
+    moving_bands = [xs.mean() for xs in columns]
+    assert moving_bands == sorted(moving_bands, reverse=True)
+    if target == 'gpu':
+        (tmp_path / 'scanline-reverse-layout.json').write_text(json.dumps({
+            'bursts': bursts, 'line': line, 'schema': ir['skia_layout']['scanline_band_schema'],
+        }, sort_keys=True), encoding='utf-8')

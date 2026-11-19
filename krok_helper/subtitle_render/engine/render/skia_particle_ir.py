@@ -17,7 +17,7 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         if not bursts:
             continue
         look = item.layout_style
-        if (look.vertical or look.right_to_left or item.line.wipe_reverse
+        if (look.vertical or look.right_to_left or (item.line.wipe_reverse and not source.get('scanline'))
                 or source.get('karaoke_anim') != 'none' or source.get('entry_anim') != 'none'
                 or source.get('exit_anim') != 'none' or track.rubies or look.lower_ruby_enabled
                 or look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)

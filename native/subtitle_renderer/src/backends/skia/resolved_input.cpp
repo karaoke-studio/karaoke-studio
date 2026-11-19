@@ -146,7 +146,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             prepared.scanline = {true, halfWidth, {mode, argb(color), style.scanlineBrightness},
                                  std::max(style.strokeWidth, 0.f) + std::max(style.stroke2Width, 0.f) + 4.f,
                                  std::max(style.stroke2Width, 0.f) * .5f + .5f,
-                                 std::min(style.scanlineGlowRadius, halfWidth)};
+                                 std::min(style.scanlineGlowRadius, halfWidth), line.wipeReverse};
         }
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;
@@ -261,20 +261,21 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (!line.bursts.empty()) {
             const auto box = source.value("particle_box_height");
             if (!box.isDouble() || !std::isfinite(box.toDouble()) || box.toDouble() < 0 || box.toDouble() > 1e5
-                || !prepared.rubyGroups.empty() || style.vertical || style.rightToLeft || line.wipeReverse)
-                throw BackendError("Skia 唱字星光缺少有效的行盒高度");
+                || !prepared.rubyGroups.empty() || style.vertical || style.rightToLeft)
+                throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
                 const auto sprite = particleSprites.find(burst.sprite);
                 if (sprite == particleSprites.end() || sprite->second.isEmpty()
                     || burst.charIndex < 0 || burst.charIndex >= int(prepared.cells.size()))
-                    throw BackendError("Skia 唱字星光缺少粒子轮廓或锚点");
-                const auto& anchor = prepared.cells[std::size_t(burst.charIndex)];
+                    throw BackendError("Skia 字幕粒子缺少有效的轮廓或锚点");
+                const auto index = std::size_t(burst.charIndex);
+                const auto& anchor = prepared.cells[line.wipeReverse ? prepared.cells.size() - 1 - index : index];
                 prepared.particles.push_back({burst, sprite->second, argb(burst.color),
                     (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f, anchor.pivot.centerY,
                     std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr)});
             }
         } else if (source.contains("particle_box_height")) {
-            throw BackendError("Skia 行盒高度缺少唱字星光能力声明");
+            throw BackendError("Skia 粒子行盒高度缺少能力声明");
         }
         if (transforms) {
             // Transformed cells are never wiping: entry finishes before each cell starts,

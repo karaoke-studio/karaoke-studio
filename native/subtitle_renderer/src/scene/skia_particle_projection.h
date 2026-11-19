@@ -4,6 +4,6 @@
 #include "../protocol/render_config.h"
 
 namespace krok::subtitle::native::scene {
-void projectSkiaSingParticles(const protocol::RenderConfig&, const protocol::TimingLine&,
-                              const protocol::ResolvedStyle&, int timingOffset, int version, RenderScene&, TextLine&);
+void projectSkiaParticles(const protocol::RenderConfig&, const protocol::TimingLine&,
+                          const protocol::ResolvedStyle&, int timingOffset, int version, RenderScene&, TextLine&);
 }

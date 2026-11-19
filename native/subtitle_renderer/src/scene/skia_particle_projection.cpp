@@ -6,12 +6,12 @@
 #include <cstdint>
 
 namespace krok::subtitle::native::scene {
-void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
-                              const protocol::ResolvedStyle& style, int offset, int version, RenderScene& scene, TextLine& line) {
+void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
+                          const protocol::ResolvedStyle& style, int offset, int version, RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
-    if (cfg.vertical || cfg.rightToLeft || source.wipeReverse
+    if (cfg.vertical || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
         || source.entryAnimation != "none" || source.exitAnimation != "none" || !cfg.rubies.empty()
         || style.strokeWidthPx > 0 || style.stroke2WidthPx > 0 || !source.displayStartMs || !source.displayEndMs
@@ -55,7 +55,7 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10
             || !emitWindowValid || !std::isfinite(fx.emitX) || std::abs(fx.emitX) > (flame ? .5 : 0.)
-            || fx.reverse || fx.front == back
+            || fx.reverse != (scanline && source.wipeReverse) || fx.front == back
             || fx.count < 1 || fx.count > 256 || !std::isfinite(fx.sizePx) || fx.sizePx <= 0 || fx.sizePx > 4096
             || !std::isfinite(fx.travelPx) || fx.travelPx < 0 || fx.travelPx > 1e5
             || end <= start || std::abs(start) > 172800000 || std::abs(end) > 172800000)
@@ -89,6 +89,7 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         burst.emitMs = fx.emitMs;
         burst.sweep = fx.sweep;
         burst.front = fx.front;
+        burst.reverse = fx.reverse;
         burst.color = projectColor(fx.color, QStringLiteral("#FFFFFF"));
         line.bursts.push_back(std::move(burst));
     }

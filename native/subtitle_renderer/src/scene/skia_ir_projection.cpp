@@ -131,7 +131,7 @@ void validateEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 逐字淡化布局版本无效");
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_scanline_band")
-        && scanlineVersion != 1 && scanlineVersion != 2 && scanlineVersion != 3)
+        && scanlineVersion != 1 && scanlineVersion != 2 && scanlineVersion != 3 && scanlineVersion != 4)
         throw BackendError("Skia 扫字线布局版本无效");
     const auto transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_character_transform")
@@ -294,14 +294,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
-        // Forward horizontal solid-color band, without image, ruby or roles.
+        // Horizontal solid-color band, without image, ruby or roles.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
                 || (resolved.scanlineMode != "color" && scanlineVersion < 3)
                 || resolved.scanlineShape != "band" || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
-                || cfg.vertical || cfg.rightToLeft || source.wipeReverse
+                || cfg.vertical || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
                 || source.karaokeAnimation == "no_wipe" || !cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
-            throw BackendError("Skia 扫字线当前仅支持正向横排实色高亮带");
+            throw BackendError("Skia 扫字线当前仅支持横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid")
             throw BackendError("Skia 扫字线的角色取色暂仅支持实色");
@@ -358,7 +358,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;
-        projectSkiaSingParticles(cfg, source, resolved, offset, twinkleVersion, out, line);
+        projectSkiaParticles(cfg, source, resolved, offset, twinkleVersion, out, line);
         if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});

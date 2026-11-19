@@ -35,14 +35,17 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                              || !std::isfinite(band.restingPad) || band.restingPad < .5f || band.restingPad > 8192
                              || !std::isfinite(band.softness) || band.softness < 0 || band.softness > band.halfWidth
                              || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
-                             || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty()))
-            throw std::runtime_error("Skia 扫字线仅支持正向横排实色高亮带");
-        if (source.particles.size() > 4096) throw std::runtime_error("Skia 唱字粒子数量超限");
+                             || source.vertical || band.rightToLeft != source.wipeRightToLeft
+                             || source.noWipe || !source.rubyGroups.empty()))
+            throw std::runtime_error("Skia 扫字线仅支持横排实色高亮带");
+        if (source.particles.size() > 4096) throw std::runtime_error("Skia 字幕粒子数量超限");
         for (const auto& item : source.particles)
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
-                || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty())
-                throw std::runtime_error("Skia 唱字粒子仅支持正向横排正文");
+                || source.vertical || source.noWipe || !source.rubyGroups.empty()
+                || item.burst.reverse != source.wipeRightToLeft
+                || (source.wipeRightToLeft && (!band.enabled || item.burst.kind != "scanline")))
+                throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
         line.particles = source.particles;
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
@@ -105,7 +108,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
-            line.inkLeft = ink.isEmpty() ? 0.f : ink.fLeft;
+            line.inkStart = ink.isEmpty() ? 0.f : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
         }
         lines_.push_back(std::move(line));
@@ -334,7 +337,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         if (line.hasOutline) drawLayer(Layer::Outline);
         drawLayer(Layer::Body);
         // The GPU repaints the sweeping cells after the body.
-        line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, line.inkTop, [&](std::size_t index, bool sung) {
+        line.scanline.draw(canvas, line.cells, tMs, line.inkStart, line.inkTop, [&](std::size_t index, bool sung) {
             const auto& cell = line.cells[index];
             const float opacity = states[index].transform.opacity;
             if (opacity <= 0) return;
