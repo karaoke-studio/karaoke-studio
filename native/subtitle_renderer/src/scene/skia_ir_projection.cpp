@@ -116,12 +116,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (allowCharacterTransform && transformAnimation(animation, entry));
     };
     for (const auto& source : cfg.lines) {
+        const bool singingScale = source.karaokeAnimation == "utopia" && features.contains("p07_singing_scale");
         if (source.annotationBaselineY
             || !supportedAnimation(source.entryAnimation, true)
             || !supportedAnimation(source.exitAnimation, false)
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
-                && source.karaokeAnimation != "no_wipe")
-            || source.zoomPulseEnabled
+                && source.karaokeAnimation != "no_wipe" && !singingScale)
+            || (source.zoomPulseEnabled && !singingScale)
             || (!source.fxBursts.empty() && !features.contains("p07_sing_twinkle")))
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
@@ -198,6 +199,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         line.exitAnimation = source.exitAnimation.toStdString();
         line.exitDurationMs = source.exitDurationMs;
         line.karaokeAnimation = source.karaokeAnimation.toStdString();
+        line.zoomPulseEnabled = source.zoomPulseEnabled;
         line.scanlineEnabled = source.scanlineEnabled;
         line.strokeFlashEnabled = source.strokeFlashEnabled;
         line.lane = source.lane;

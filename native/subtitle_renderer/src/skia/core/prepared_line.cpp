@@ -32,7 +32,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Fade the composed line, preserving overlaps and translucent strokes.
     // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
     const bool geometry = line.characterGeometry.active();
-    const bool movingCells = line.characterFade.transforms() || geometry;
+    const bool singingScale = line.singingScale.active;
+    const bool movingCells = line.characterFade.transforms() || geometry || singingScale;
     if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty()))
         canvas.saveLayerAlphaf(movingCells ? nullptr : &line.paintBounds, animation.opacity);
     const auto rawProgress = [&](const Cell& cell) {
@@ -101,11 +102,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const int followingEnd = wipeEnd(line.cells[index+1]);
             wiping = start < tMs && tMs < followingEnd && start != followingEnd;
         }
-        const auto transform = !geometry || line.characterFade.side(tMs, line.startMs, line.endMs) != 0
-            ? characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
-                                   int(index), int(line.cells.size()), cell.pivot)
-            : line.characterGeometry.at(tMs, line.startMs, line.endMs,
-                                        int(index), int(line.cells.size()), cell.pivot, line.inkCenter);
+        const auto transform = [&] {
+            if (singingScale) return line.singingScale.at(tMs, start, end, cell.pivot);
+            if (geometry && line.characterFade.side(tMs, line.startMs, line.endMs) == 0)
+                return line.characterGeometry.at(tMs, line.startMs, line.endMs,
+                                                 int(index), int(line.cells.size()), cell.pivot, line.inkCenter);
+            return characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
+                                        int(index), int(line.cells.size()), cell.pivot);
+        }();
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
             && (cell.outline || cell.outerOutline || transform.glowAlpha > 0))
@@ -134,7 +138,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (opacity <= 0) return;
         // The outline can reach beyond the integer wipe padding, just as
         // the vertical glyph can reach beyond its fixed cell.
-        const bool animatedClip = line.transformedWipe && transform.transformed && phase == Phase::Wiping;
+        const bool animatedClip = (singingScale || (line.transformedWipe && transform.transformed))
+            && phase == Phase::Wiping;
         float clipEdge = edge;
         if (animatedClip) {
             auto owner = index;
@@ -142,8 +147,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 owner = index + 1;
             const auto& clipCell = line.cells[owner];
             const auto& matrix = states[owner].transform.matrix;
-            const float ratio = transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
-                                                     wipeStart(clipCell), wipeEnd(clipCell), tMs);
+            const float ratio = singingScale && tMs <= wipeEnd(clipCell)
+                ? rawProgress(clipCell)
+                : transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
+                                       wipeStart(clipCell), wipeEnd(clipCell), tMs);
             clipEdge = transformedWipeEdge(line.cells.front().pivot.layoutLeft,
                 matrix.mapPoint({clipCell.pivot.inkLeft, 0}).x(), matrix.mapPoint({clipCell.pivot.inkRight, 0}).x(),
                 ratio, clipCell.pivot.wipePad);

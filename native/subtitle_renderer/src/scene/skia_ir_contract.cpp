@@ -53,6 +53,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_line_fade",
         "p07_line_motion",
         "p07_ruby_line_animation",
+        "p07_singing_scale",
         "p07_character_fade",
         "p07_scanline_band",
         "p07_character_transform",
@@ -174,6 +175,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (features.contains("p07_line_fade") || features.contains("p07_line_motion"));
     if (features.contains("p07_ruby_line_animation") != rubyLineAnimation)
         throw BackendError("Skia 横排注音与整行动画的能力声明不匹配");
+    if (features.contains("p07_singing_scale") && layout.value("singing_scale_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 唱字放大布局版本无效");
     if (features.contains("p07_character_fade")
         && layout.value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");

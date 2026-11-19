@@ -74,6 +74,7 @@ private:
         NoiseTransition noise;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;
+        SingingScale singingScale;
         std::optional<float> inkCenter;
         bool transformedWipe = false;
         ScanlineBand scanline;

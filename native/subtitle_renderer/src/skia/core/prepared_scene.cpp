@@ -44,6 +44,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.noise = source.noise;
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;
+        line.singingScale = source.singingScale;
         line.transformedWipe = source.transformedWipe;
         line.scanline = source.scanline;
         const auto& band = source.scanline;

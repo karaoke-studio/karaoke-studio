@@ -141,6 +141,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
             || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out";
         const bool noiseEntry = line.entryAnimation == "noise", noiseExit = line.exitAnimation == "noise";
+        const bool singingScale = line.karaokeAnimation == "utopia";
+        if (singingScale && (!features.contains("p07_singing_scale") || style.vertical || style.rightToLeft
+            || line.wipeReverse || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
+            || line.entryAnimation != "none" || line.exitAnimation != "none" || !source.value("ruby_groups").toArray().isEmpty()
+            || !projected.charStyles.empty()))
+            throw BackendError("Skia 唱字放大当前仅支持正向横排实色正文");
+        prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
         prepared.noise = {noiseEntry ? line.entryDurationMs : 0, noiseExit ? line.exitDurationMs : 0,
                           line.endMs, style.fontSize};
         prepared.animation = {line.entryAnimation == "none" || charEntry || geoEntry || noiseEntry ? 0 : line.entryDurationMs,
@@ -162,7 +169,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
         const bool transforms = prepared.characterFade.transforms() || geometry;
         prepared.transformedWipe = transforms && allowTransformedWipe;
-        const bool pivots = transforms || !line.bursts.empty();
+        const bool pivots = transforms || singingScale || !line.bursts.empty();
         if (line.scanlineEnabled) {
             const float halfWidth = std::max(style.scanlineWidth, 1.f) * .5f;
             using Mode = ::subtitle::skia::ScanlineColorMode;
@@ -263,11 +270,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 glyph.pivot = {pivot("layout_left"), pivot("layout_right"), pivot("pivot_y"), glyph.left, glyph.right};
                 if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft)
                     throw BackendError("Skia 逐字变换的版面单元轴心无效");
-                if (transforms && (glyph.outline || glyph.outerOutline)) {
+                if (singingScale) glyph.pivot.baseline = pivot("baseline_y");
+                if ((transforms || singingScale) && (glyph.outline || glyph.outerOutline)) {
                     const auto opaque = [](const ::subtitle::skia::SolidOutline& stroke) {
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
                     };
-                    if (!allowAnimatedOutlines || (glyph.outline && !opaque(*glyph.outline))
+                    if ((!singingScale && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
                         || (glyph.outerOutline && !opaque(*glyph.outerOutline)))
                         throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");
                     const auto ink = glyph.path.computeTightBounds();
@@ -349,13 +357,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.scanlineEnabled
                 || !line.bursts.empty() || line.strokeFlashEnabled || !prepared.rubyGroups.empty()
-                || !projected.charStyles.empty() || gradient || image
+                || !projected.charStyles.empty() || gradient || image || singingScale
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
-                || style.vertical || style.rightToLeft || line.wipeReverse
+                || style.vertical || style.rightToLeft || line.wipeReverse || singingScale
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
                 || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
                 || !prepared.rubyGroups.empty() || !projected.charStyles.empty())

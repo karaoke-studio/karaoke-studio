@@ -78,6 +78,25 @@ def _uses_decoration(style, kind):
     )
 
 
+def _write_singing_scale_pivots(track, ir, plan, measured):
+    enabled = False
+    for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
+        source = ir['track']['lines'][item.track_index]
+        if source.get('karaoke_anim') != 'utopia':
+            continue
+        style = item.layout_style
+        if (style.vertical or style.right_to_left or item.line.wipe_reverse or track.rubies or style.lower_ruby_enabled
+                or source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
+                or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
+                or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
+            raise ValueError('Skia 唱字放大当前仅支持正向横排实色正文')
+        write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
+        enabled = True
+    if enabled:
+        ir['required_features'].append('p07_singing_scale')
+        ir['skia_layout']['singing_scale_schema'] = 1
+
+
 def _validate_scanline_band(track, style, lines):
     """Validate the horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
@@ -335,5 +354,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             animates_line = True
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
+    _write_singing_scale_pivots(track, ir, plan, measured)
     project_reverse_wipe(ir)
     return ir

@@ -12,6 +12,7 @@ namespace subtitle::skia {
 struct CharacterPivot {
     float layoutLeft = 0, layoutRight = 0, centerY = 0;
     float inkLeft = 0, inkRight = 0, wipePad = 0;
+    float baseline = 0;
 };
 struct CharacterTransformState {
     float opacity = 1;

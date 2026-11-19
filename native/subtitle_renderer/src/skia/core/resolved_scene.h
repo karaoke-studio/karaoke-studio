@@ -12,6 +12,7 @@
 #include "image_fill.h"
 #include "static_shadow.h"
 #include "static_glow.h"
+#include "singing_scale.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
 #include <optional>
@@ -55,6 +56,7 @@ struct ResolvedLine {
     NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
+    SingingScale singingScale;
     bool transformedWipe = false;
     ScanlineBand scanline;
     std::vector<SingParticleBurst> particles;
