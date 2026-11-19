@@ -34,8 +34,18 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool geometry = line.characterGeometry.active();
     const bool utopia = line.singingScale.active || line.utopiaTransition.active();
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
-    if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty()))
-        canvas.saveLayerAlphaf(movingCells ? nullptr : &line.paintBounds, animation.opacity);
+    if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty())) {
+        const auto* bounds = movingCells ? nullptr : &line.paintBounds;
+        if (!line.glow.empty() || !line.rubyGlow.empty()) {
+            // Keep the halo coverage and the line opacity at float precision
+            // until the composed line is written to the 8-bit output.
+            SkPaint fade;
+            fade.setAlphaf(animation.opacity);
+            canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, &fade, SkCanvas::kF16ColorType));
+        } else {
+            canvas.saveLayerAlphaf(bounds, animation.opacity);
+        }
+    }
     const auto rawProgress = [&](const Cell& cell) {
         if (line.wipeRightToLeft && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
             return 0.f;

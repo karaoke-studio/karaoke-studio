@@ -70,6 +70,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_outline_ruby.py::test_annotated_solid_outlines_preserve_final_wipe_and_replay",
     "tests/test_subtitle_skia_outline_ruby.py::test_outlined_lower_ruby_replays_all_three_bands",
     "tests/test_subtitle_skia_line_motion.py::test_line_animation_keeps_ruby_layout_and_replays",
+    "tests/test_subtitle_skia_line_motion.py::test_glowing_ruby_fade_preserves_first_nonzero_alpha_on_both_targets",
     "tests/test_subtitle_skia_static_shadow.py::test_shadow_palette_keeps_geometry_and_replays",
     "tests/test_subtitle_skia_static_glow.py::test_static_glow_palette_preserves_geometry_and_replay",
     "tests/test_subtitle_skia_singing_scale.py::test_singing_scale_preserves_clocks_and_replays",

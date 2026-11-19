@@ -189,8 +189,10 @@ def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case_id', ['exit_fade', 'exit_slide_out', 'exit_rise'])
-def test_p00_glowing_ruby_exit_matches_actual_gpu(binary, application, case_id, tmp_path):
+@pytest.mark.parametrize('case_id', [
+    'entry_fade', 'entry_slide_in', 'entry_rise', 'exit_fade', 'exit_slide_out', 'exit_rise',
+])
+def test_p00_glowing_ruby_line_motion_matches_actual_gpu(binary, application, case_id, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
     from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -223,6 +225,25 @@ def test_p00_glowing_ruby_exit_matches_actual_gpu(binary, application, case_id, 
                 assert not mb.any(), (case_id, time, label, 'unexpected mask')
                 mass_a, mass_b = int(a[..., 3].sum()), int(b[..., 3].sum())
                 assert abs(mass_a - mass_b) <= max(mass_a, mass_b) * budget['max_alpha_sum_relative']
+
+
+def test_glowing_ruby_fade_preserves_first_nonzero_alpha_on_both_targets(binary, reading):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, entry_anim='fade', entry_lead_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    line = ir['track']['lines'][0]
+    start, duration = line['display_start_ms'], line['entry_duration_ms']
+    opacity = 1 - (1 - 1 / duration) ** 2
+    expected_peak = round(opacity * 255)
+    gpu, raster = render_skia(binary, ir, [start, start + 1, start + 200, start + 1])
+    for frames in (gpu, raster):
+        assert not frames[0].any()
+        assert frames[1][..., 3].max() == expected_peak > 0
+        assert frames[2][..., 3].max() > expected_peak
+        assert np.array_equal(frames[1], frames[-1])
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
