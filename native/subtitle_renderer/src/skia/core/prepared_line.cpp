@@ -131,6 +131,20 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         for (std::size_t index = 0; index < line.cells.size(); ++index)
             if (states[index].phase == Phase::Wiping) paintCell(index, Phase::Wiping);
     };
+    const auto transformedEdge = [&](std::size_t index) {
+        auto owner = index;
+        if (tMs > wipeEnd(line.cells[index]) && index + 1 < line.cells.size() && !line.cells[index + 1].path.isEmpty())
+            owner = index + 1;
+        const auto& cell = line.cells[owner];
+        const auto& transform = states[owner].transform;
+        const float ratio = transform.utopiaExit ? 1.f
+            : utopia && tMs <= wipeEnd(cell) ? rawProgress(cell)
+            : transformedWipeRatio(cell.wipePoints, cell.adjustedWipeEnd, wipeStart(cell), wipeEnd(cell), tMs);
+        const float origin = utopia && !line.rubyGroups.empty()
+            ? line.rubySingingOrigin : line.cells.front().pivot.layoutLeft;
+        return transformedWipeEdge(origin, transform.matrix.mapPoint({cell.pivot.inkLeft, 0}).x(),
+            transform.matrix.mapPoint({cell.pivot.inkRight, 0}).x(), ratio, cell.pivot.wipePad);
+    };
     const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {
         const auto& cell = line.cells[index];
         const auto& stroke = layer == Layer::OuterOutline ? cell.outerOutline : cell.outline;
@@ -144,23 +158,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         // the vertical glyph can reach beyond its fixed cell.
         const bool animatedClip = (utopia || (line.transformedWipe && transform.transformed))
             && phase == Phase::Wiping;
-        float clipEdge = edge;
-        if (animatedClip) {
-            auto owner = index;
-            if (tMs > wipeEnd(cell) && index + 1 < line.cells.size() && !line.cells[index + 1].path.isEmpty())
-                owner = index + 1;
-            const auto& clipCell = line.cells[owner];
-            const auto& matrix = states[owner].transform.matrix;
-            const float ratio = states[owner].transform.utopiaExit ? 1.f
-                : utopia && tMs <= wipeEnd(clipCell) ? rawProgress(clipCell)
-                : transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
-                                       wipeStart(clipCell), wipeEnd(clipCell), tMs);
-            const float origin = utopia && !line.rubyGroups.empty()
-                ? line.rubySingingOrigin : line.cells.front().pivot.layoutLeft;
-            clipEdge = transformedWipeEdge(origin,
-                matrix.mapPoint({clipCell.pivot.inkLeft, 0}).x(), matrix.mapPoint({clipCell.pivot.inkRight, 0}).x(),
-                ratio, clipCell.pivot.wipePad);
-        }
+        const float clipEdge = animatedClip ? transformedEdge(index) : edge;
         const bool atFront = (line.vertical || drawOutline || animatedClip) && phase == Phase::Wiping;
         const bool before = !atFront && progress == 0;
         const bool after = !atFront && progress == 1;
@@ -236,7 +234,20 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         });
         layer.composite(canvas, source);
     }
-    line.shadow.draw(canvas, line.cells, tMs, line.decorationInk);
+    if (utopia && line.shadow.visible()) {
+        const float edge = lineWipeFront(line.cells, tMs, line.decorationInk.left(),
+                                        line.shadow.secondaryWidth / 2 + .5f, false);
+        line.shadow.drawAnimated(canvas, line.cells, line.decorationInk, edge, lineWipeComplete(line.cells, tMs),
+            line.shadow.outlineWidth + line.shadow.secondaryWidth + 4.f, [&](std::size_t index) {
+                const auto& state = states[index];
+                return StaticShadow::WipePose{state.transform, state.phase == Phase::Before,
+                    state.phase == Phase::Wiping ? std::optional<float>(transformedEdge(index)) : std::nullopt};
+            });
+    } else {
+        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk);
+    }
+    for (const auto& group : line.rubyGroups)
+        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin);
     if (line.hasOuterOutline)
         drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
     if (line.hasOutline)

@@ -182,6 +182,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                 raise NativeRendererError('Skia 渲染器不支持注音描边，请重新构建')
             if 'p06_static_shadow' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia 渲染器不支持静态字幕阴影，请重新构建')
+            if 'p06_ruby_shadow' not in ready.get('profiles', []):
+                raise NativeRendererError('Skia 渲染器不支持注音阴影，请重新构建')
             if 'p06_static_glow' not in ready.get('profiles', []):
                 raise NativeRendererError('Skia 渲染器不支持静态字幕光晕，请重新构建')
             if "raster" not in ready.get("execution_targets", []):

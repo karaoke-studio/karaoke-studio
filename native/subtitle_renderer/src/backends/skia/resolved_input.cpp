@@ -363,13 +363,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
-        const bool hasDecoration = prepared.shadow.before.enabled || prepared.shadow.after.enabled
-            || prepared.glow.before.radius || prepared.glow.after.radius;
+        const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
+        const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
         if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.scanlineEnabled
-                || !line.bursts.empty() || line.strokeFlashEnabled || !prepared.rubyGroups.empty()
-                || !projected.charStyles.empty() || gradient || image || utopia
+                || !line.bursts.empty() || line.strokeFlashEnabled
+                || !projected.charStyles.empty() || gradient || image || (hasGlow && (utopia || annotated))
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {

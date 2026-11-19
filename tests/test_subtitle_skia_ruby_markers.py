@@ -199,14 +199,33 @@ def test_marker_requires_versioned_capability_and_keeps_previous_scene(binary,ma
     assert np.array_equal(before[0],after[0])
 
 
-@pytest.mark.parametrize('effect',['utopia','zoom_pulse'])
-def test_marker_support_does_not_enable_unimplemented_motion(binary,marker_source,effect):
+@pytest.mark.parametrize('target',['gpu','raster'])
+def test_marker_retains_clocks_during_utopia(binary,marker_source,target):
+    track,style,resolve=source_with_marker(marker_source,'^')
+    moving=replace(style,karaoke_anim='utopia')
+    base=ir_for(binary,(track,style,resolve))
+    ir=ir_for(binary,(track,moving,resolve))
+    line=ir['skia_layout']['lines'][0]
+    assert 'p05_ruby_markers' in ir['required_features']
+    assert all('wipe_points' not in cell for cell in line['cells'])
+    assert ir['track']['lines'][0]['resolved_intervals']==base['track']['lines'][0]['resolved_intervals']
+    assert [[unit['interval_ms'] for unit in group['units']] for group in line['ruby_groups']]==[
+        [unit['interval_ms'] for unit in group['units']]
+        for group in base['skia_layout']['lines'][0]['ruby_groups']]
+    with SkiaRendererProcess(binary,selection=selection(target)) as process:
+        process.configure(track,moving,width=900,height=600,fps=60)
+        frames,_=collect(process,[450,950,450])
+    assert np.array_equal(frames[0],frames[2])
+    assert not np.array_equal(frames[0],frames[1])
+
+
+def test_marker_with_zoom_pulse_keeps_previous_scene(binary,marker_source):
     track,style,_=source_with_marker(marker_source,'^')
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(track,style,width=900,height=600,fps=60)
         before,_=collect(process,[450])
         with pytest.raises(NativeRendererError):
-            process.configure(track,replace(style,karaoke_anim=effect),width=900,height=600,fps=60)
+            process.configure(track,replace(style,karaoke_anim='zoom_pulse'),width=900,height=600,fps=60)
         after,_=collect(process,[450],generation=2)
     assert np.array_equal(before[0],after[0])
 

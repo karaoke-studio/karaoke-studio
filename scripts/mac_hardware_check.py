@@ -74,6 +74,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_singing_scale.py::test_singing_scale_preserves_clocks_and_replays",
     "tests/test_subtitle_skia_singing_scale.py::test_utopia_transition_releases_following_glyph_and_replays",
     "tests/test_subtitle_skia_outline_ruby.py::test_ruby_utopia_singing_preserves_units_and_replay",
+    "tests/test_subtitle_skia_static_shadow.py::test_ruby_shadow_keeps_clocks_and_seeks",
 )
 
 

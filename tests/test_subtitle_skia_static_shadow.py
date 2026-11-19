@@ -11,6 +11,9 @@ import pytest
 from test_subtitle_skia_line_fade import application, binary, project, ir_for, collect, configure, selection, premultiplied
 from test_subtitle_skia_secondary_outline import two_outlines
 from test_subtitle_skia_primary_outline import within_one_pixel
+from test_subtitle_skia_outline_ruby import (
+    annotated, mixed, pages, reading, upper_source, upper_ir, annotated_paint, render_skia, UPPER_TIMES,
+)
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -98,3 +101,66 @@ def test_static_shadow_matches_actual_d2d_and_gpu_raster(binary, project, case, 
             diff = abs(premultiplied(first)[union] - premultiplied(second)[union])
             assert diff.mean() <= tolerance['max_union_channel_mae'], (case, t, name, diff.mean())
             assert np.percentile(diff, 95) <= tolerance['max_union_p95'], (case, t, name)
+
+
+def shaded_ruby(reading, utopia, separate):
+    track, style = upper_source(reading, 2)
+    style = annotated_paint(style, 2, True)
+    return track, replace(style, decoration_kind='shadow', shadow_offset_x=11, shadow_offset_y=6,
+                          ruby_decoration_kind='shadow' if separate else None,
+                          ruby_shadow_offset_x=-9 if separate else None,
+                          ruby_shadow_offset_y=2 if separate else None,
+                          karaoke_anim='utopia' if utopia else 'none')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('utopia', [False, True])
+def test_ruby_shadow_keeps_clocks_and_seeks(binary, reading, target, utopia, tmp_path):
+    track, style = shaded_ruby(reading, utopia, False)
+    ir = upper_ir(binary, (track, style), 1.5)
+    plain = upper_ir(binary, (track, replace(style, decoration_kind='none')), 1.5)
+    assert {'p06_static_shadow', 'p06_ruby_shadow'} <= set(ir['required_features'])
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_ruby_shadow')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [299, 550, 2300, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        again, _ = collect(process, [550], generation=2)
+        configure(process, plain)
+        still, _ = collect(process, [299, 550, 2300], generation=3)
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
+    assert all(np.count_nonzero(a[..., 3] > 16) > np.count_nonzero(b[..., 3] > 16)
+               for a, b in zip(frames[:3], still, strict=True))
+    if target == 'gpu' and utopia:
+        (tmp_path / 'ruby-shadow-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('utopia,separate,dpr', [(False, False, 1), (False, True, 1.5), (True, False, 1), (True, True, 1.5)])
+def test_ruby_shadow_matches_actual_d2d_and_gpu_raster(binary, reading, utopia, separate, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = shaded_ruby(reading, utopia, separate)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
+    budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
+    for t, ref, gpu_frame, raster_frame in zip(UPPER_TIMES, refs, gpu, raster, strict=True):
+        for label, a, b in (('D2D', ref, gpu_frame), ('Raster', gpu_frame, raster_frame)):
+            left, right = a[..., 3] > 16, b[..., 3] > 16
+            union = left | right
+            assert union.any()
+            where = (utopia, separate, dpr, label, t)
+            assert within_one_pixel(left, right), (*where, 'outline')
+            iou = (left & right).sum() / union.sum()
+            assert iou >= budget['min_alpha_iou'], (*where, iou)
+            diff = abs(premultiplied(a)[union] - premultiplied(b)[union])
+            assert diff.mean() <= budget['max_union_channel_mae'], (*where, diff.mean())
+            assert np.percentile(diff, 95) <= budget['max_union_p95'], where

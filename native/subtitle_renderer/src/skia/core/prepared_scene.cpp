@@ -127,11 +127,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             }
         }
         for (const auto& group : source.rubyGroups) {
-            totalCells += group.size();
+            totalCells += group.cells.size();
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
             line.rubyGroups.emplace_back(group, source.noWipe, source.vertical);
             if (line.animation.active())
-                for (const auto& cell : group) includeCellPaint(line.paintBounds, cell);
+                for (const auto& cell : group.cells) includeCellPaint(line.paintBounds, cell);
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
         if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {

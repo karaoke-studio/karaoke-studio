@@ -1,8 +1,8 @@
 """Materialize lower-reading provenance and solid paint at the IR boundary."""
 from krok_helper.subtitle_render.domain.gradient_path import rgba
-from krok_helper.subtitle_render.domain.models import materialize_ruby_decoration_changes
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
+from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
 def lower_sources(prepared):
@@ -22,10 +22,7 @@ def lower_sources(prepared):
 
 def lower_solid_paint(style):
     """Only the accepted solid subset reaches the shared drawing core."""
-    decoration = materialize_ruby_decoration_changes(style)
-    after = style.ruby_decoration_kind or decoration.get('ruby_decoration_kind', style.decoration_kind)
-    before = after if style.decoration_before_sync else (
-        style.ruby_decoration_kind_before or decoration.get('ruby_decoration_kind_before', after))
+    before, after = ruby_decoration_kinds(style)
     colors = effective_ruby_karaoke_colors(style)
     if (before != 'none' or after != 'none'
             or colors.before.text.mode != 'solid' or colors.after.text.mode != 'solid'):

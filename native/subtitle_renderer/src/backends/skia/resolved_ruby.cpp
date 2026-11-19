@@ -71,7 +71,7 @@ static bool verticalRubyScalar(const QString& text) {
     if (scalars.size() != 1) return false;
     return verticalUprightScalar(scalars.front());
 }
-std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
+std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
         const RenderScene& scene, int lineIndex, int offset, std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
@@ -79,10 +79,13 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         || ir.value("skia_layout").toObject().value("ruby_schema").toDouble(-1) != 1
         || !source.value("ruby_groups").isArray())
         throw BackendError("Skia 注音最终布局缺少版本或能力声明");
-    std::vector<std::vector<::subtitle::skia::ResolvedCell>> groups;
+    std::vector<::subtitle::skia::ResolvedRubyGroup> groups;
     const auto& line = scene.lines[lineIndex];
     const bool vertical = scene.lineStyles[lineIndex].vertical;
     const bool allowOutlines = ir.value("required_features").toArray().contains("p06_ruby_solid_outline");
+    const bool allowShadow = ir.value("required_features").toArray().contains("p06_ruby_shadow")
+        && !vertical && line.karaokeAnimation != "no_wipe"
+        && line.entryAnimation == "none" && line.exitAnimation == "none";
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
         throw BackendError("Skia 注音组总数超限");
@@ -94,9 +97,19 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
         const auto& paint = line.chars[index].styleIndex >= 0
             ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
-        if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"
-            || paint.rubyDecorationKindForState(false) != "none" || paint.rubyDecorationKindForState(true) != "none"))
-            throw BackendError("Skia 注音最终绘制当前仅支持实色和无装饰");
+        const auto shadowState = [&](bool after) -> ::subtitle::skia::ShadowState {
+            const auto kind = paint.rubyDecorationKindForState(after);
+            if (lower || kind == "none") return {};
+            const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
+            const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
+            if (!allowShadow || kind != "shadow" || decor.mode != "solid" || !std::isfinite(x) || !std::isfinite(y))
+                throw BackendError("Skia 当前仅支持横排上注音的实色阴影");
+            return {true, x, y, argb(decor.color)};
+        };
+        const ::subtitle::skia::StaticShadow shadow{
+            shadowState(false), shadowState(true), paint.rubyStrokeWidth, paint.rubyStroke2Width};
+        if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"))
+            throw BackendError("Skia 注音最终绘制当前仅支持实色");
         const auto fill = object.value("paint").toObject();
         const auto before = lower ? rgbaPaint(fill.value("before")) : argb(paint.rubyBeforeFillPaint.color);
         const auto after = lower ? rgbaPaint(fill.value("after")) : argb(paint.rubyAfterFillPaint.color);
@@ -202,7 +215,7 @@ std::vector<std::vector<::subtitle::skia::ResolvedCell>> resolvedSkiaRubyGroups(
             }
             cells.push_back(std::move(glyph));
         }
-        groups.push_back(std::move(cells));
+        groups.push_back({std::move(cells), shadow});
     }
     return groups;
 }

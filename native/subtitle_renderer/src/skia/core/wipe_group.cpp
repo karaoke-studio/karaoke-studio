@@ -25,16 +25,16 @@ void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, b
 }
 }
 
-PreparedWipeGroup::PreparedWipeGroup(const std::vector<ResolvedCell>& cells, bool noWipe, bool vertical)
-    : cells_(cells), noWipe_(noWipe), vertical_(vertical) {
-    if (cells.empty() || cells.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
+PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical)
+    : cells_(group.cells), shadow_(group.shadow), noWipe_(noWipe), vertical_(vertical) {
+    if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
     for (const auto& cell : cells_) {
         if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
             || cell.right < cell.left || cell.startMs < previousEnd || cell.endMs < cell.startMs
             || cell.endMs > 172800000
-            || cell.before != cells.front().before || cell.after != cells.front().after)
+            || cell.before != cells_.front().before || cell.after != cells_.front().after)
             throw std::runtime_error("Skia 注音组几何、时钟或配色无效");
         if (vertical_ && (!std::isfinite(cell.top) || !std::isfinite(cell.bottom) || cell.bottom <= cell.top))
             throw std::runtime_error("Skia 竖排注音走字范围无效");
@@ -88,16 +88,33 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
     }
 }
 
-void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
-    if (bounds_.isEmpty()) return;
-    SkPaint paint;
-    paint.setAntiAlias(true);
-    const auto draw = [&](bool after) {
-        for (const auto& cell : cells_) paintRubyCell(canvas, paint, cell, after);
-    };
-    const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
-    const bool complete = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs >= c.endMs; });
-    const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
+void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
+    if (!shadow_.visible() || bounds_.isEmpty()) return;
+    const float edge = frontAt(timeMs, bounds_.left());
+    const bool complete = lineWipeComplete(cells_, timeMs);
+    const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
+    if (!scale.active) {
+        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad);
+        return;
+    }
+    shadow_.drawAnimated(canvas, cells_, bounds_, edge, complete, pad, [&](std::size_t index) {
+        const auto& cell = cells_[index];
+        const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+        const bool before = timeMs <= cell.startMs;
+        std::optional<float> clip;
+        if (!before && timeMs < cell.endMs) {
+            const float progress = cell.wipePoints.empty()
+                ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
+                : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
+            const auto ink = cell.path.computeTightBounds();
+            clip = transformedWipeEdge(originX, transform.matrix.mapPoint({ink.left(), 0}).x(),
+                transform.matrix.mapPoint({ink.right(), 0}).x(), progress, cell.pivot.wipePad);
+        }
+        return StaticShadow::WipePose{transform, before, clip};
+    });
+}
+
+float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {
     float edge = startEdge;
     for (const auto& cell : cells_) {
         if (timeMs < cell.startMs) break;
@@ -110,10 +127,24 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
         edge = low + (high - low) * (progress * endpoint);
         if (timeMs <= cell.endMs) break;
     }
+    return edge;
+}
+
+void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
+    if (bounds_.isEmpty()) return;
+    const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
+    const float edge = frontAt(timeMs, startEdge);
     if (scale.active) {
         drawSinging(canvas, timeMs, scale, originX, edge > startEdge);
         return;
     }
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    const auto draw = [&](bool after) {
+        for (const auto& cell : cells_) paintRubyCell(canvas, paint, cell, after);
+    };
+    const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
+    const bool complete = lineWipeComplete(cells_, timeMs);
     const auto clip = [&](bool after) {
         const float low = after ? -1e6f : edge;
         const float high = after ? edge : 1e6f;

@@ -35,6 +35,10 @@ struct ResolvedCell {
     CharacterPivot pivot;
     float strokeFlashWidth = 0;
 };
+struct ResolvedRubyGroup {
+    std::vector<ResolvedCell> cells;
+    StaticShadow shadow;
+};
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
     int startMs = 0, endMs = 0;
@@ -42,7 +46,7 @@ struct ResolvedLine {
     std::vector<Translation> translations;
     // One continuous wipe front clips every path in the group. Unit clocks
     // are final values; neither grouping nor timing is resolved while drawing.
-    std::vector<std::vector<ResolvedCell>> rubyGroups;
+    std::vector<ResolvedRubyGroup> rubyGroups;
     bool noWipe = false; // Whole-cell color switches at the final clock endpoint.
     bool wipeRightToLeft = false; // Physical wipe direction, never authored clock ownership or text shaping.
     // vertical_solid_schema=1: the front runs along y over each cell's top/bottom;
