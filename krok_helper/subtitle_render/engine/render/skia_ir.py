@@ -16,7 +16,7 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
-from .skia_particle_ir import FALLING_PARTICLES, write_particle_anchors
+from .skia_particle_ir import FALLING_PARTICLES, PARTICLE_TRANSITIONS, write_particle_anchors
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
@@ -99,7 +99,7 @@ def _validate_stroke_flash(track, style, lines):
 
 
 _HALO_TRANSFORMS = {'stretch_in', 'stretch_out', 'glow_in', 'glow_out'}
-_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'} | _HALO_TRANSFORMS | FALLING_PARTICLES
+_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'} | _HALO_TRANSFORMS | PARTICLE_TRANSITIONS.keys()
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
@@ -113,8 +113,8 @@ def _character_transforms(track, ir, plan, measured) -> int:
         if not animations & _TRANSFORMS:
             continue
         geometry = bool(animations & _GEOMETRY_TRANSFORMS)
-        if animations & FALLING_PARTICLES:
-            version = 6
+        if animations & PARTICLE_TRANSITIONS.keys():
+            version = max(version, 7 if animations & (PARTICLE_TRANSITIONS.keys() - FALLING_PARTICLES) else 6)
         elif geometry:
             version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
         line, look = track.lines[item.track_index], item.layout_style

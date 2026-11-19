@@ -3,9 +3,14 @@ from ..layout.line.skia_geometry import write_horizontal_pivots
 
 
 FALLING_PARTICLES = frozenset({'petal', 'feather', 'snow', 'snow_solid'})
+PARTICLE_TRANSITIONS = {
+    **{kind: kind for kind in FALLING_PARTICLES | {'note', 'heart', 'ripple', 'sparkle'}},
+    'assemble_in': 'assemble',
+    'dissolve_out': 'dissolve',
+}
 _ENERGY_PARTICLES = {'lightning', 'lightning_glow', 'flame', 'flame_alt', 'flame_glow', 'smoke', 'ember', 'spark'}
 _BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke'}
-_PARTICLES = {'twinkle', 'twinkle_classic', 'note', 'heart', 'ripple', 'scanline'} | FALLING_PARTICLES | _ENERGY_PARTICLES
+_PARTICLES = {'twinkle', 'twinkle_classic', 'scanline'} | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES
 
 
 def write_particle_anchors(track, ir, plan, measured) -> int:
@@ -19,12 +24,15 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         look = item.layout_style
         band = bool(source.get('scanline'))
         entry, exit_ = source.get('entry_anim'), source.get('exit_anim')
-        animated = entry in FALLING_PARTICLES or exit_ in FALLING_PARTICLES
+        entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
+        animated = bool(entry_kind or exit_kind)
+        entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
+        exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
         if (look.vertical or look.right_to_left or (item.line.wipe_reverse and not band)
                 or source.get('karaoke_anim') != 'none'
-                or (entry != 'none' and entry not in FALLING_PARTICLES)
-                or (exit_ != 'none' and exit_ not in FALLING_PARTICLES)
-                or (animated and (len(plan.lines) != 1 or band))
+                or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
+                or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
+                or (animated and (len(plan.lines) != 1 or band or look.sing_fx != 'none'))
                 or track.rubies or look.lower_ruby_enabled
                 or look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
@@ -39,7 +47,7 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if animated:
                 sweep = burst['sweep']
-                if (sweep != 1 or kind != entry) and (sweep != -1 or kind != exit_):
+                if (sweep, kind) not in {(entry_sweep, entry_kind), (exit_sweep, exit_kind)}:
                     raise ValueError('Skia 粒子出入场暂不支持与唱字粒子同场')
             if kind == 'ripple':
                 version = max(version, 4)
@@ -52,7 +60,8 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
             elif band:
                 version = 8
         if animated:
-            version = 9
+            falling_only = all(not kind or kind in FALLING_PARTICLES for kind in (entry_kind, exit_kind))
+            version = 9 if falling_only else 10
         metrics = measured.lines[item.track_index]
         write_horizontal_pivots(final['cells'], metrics)
         final['particle_box_height'] = (

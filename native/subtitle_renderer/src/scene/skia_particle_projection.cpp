@@ -10,14 +10,20 @@ namespace krok::subtitle::native::scene {
 void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
                           const protocol::ResolvedStyle& style, int offset, int version, RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
-    const bool entry = version >= 9 && isSkiaFallingParticle(source.entryAnimation);
-    const bool exit = version >= 9 && isSkiaFallingParticle(source.exitAnimation);
-    const bool animated = entry || exit;
+    const auto animationKind = [version](const QString& animation, bool entry) {
+        if (version >= 10) return skiaParticleKindForTransition(animation, entry);
+        return version >= 9 && isSkiaFallingParticle(animation) ? animation : QString{};
+    };
+    const auto entry = animationKind(source.entryAnimation, true);
+    const auto exit = animationKind(source.exitAnimation, false);
+    const bool animated = !entry.isEmpty() || !exit.isEmpty();
+    const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
+    const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if (cfg.vertical || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
-        || (source.entryAnimation != "none" && !entry) || (source.exitAnimation != "none" && !exit)
+        || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
         || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled)) || !cfg.rubies.empty()
         || style.strokeWidthPx > 0 || style.stroke2WidthPx > 0 || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
@@ -26,11 +32,12 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     for (const auto& fx : source.fxBursts) {
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");
         const bool ripple = version >= 4 && fx.kind == "ripple";
-        const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic");
+        const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic")
+            || (version >= 10 && animated && fx.kind == "sparkle");
+        const bool assembly = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
         const bool validSweep = animated
-            ? (entry && fx.sweep == 1 && fx.kind == source.entryAnimation)
-                || (exit && fx.sweep == -1 && fx.kind == source.exitAnimation)
+            ? (fx.sweep == entrySweep && fx.kind == entry) || (fx.sweep == exitSweep && fx.kind == exit)
             : !falling || fx.sweep == 0;
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
@@ -40,6 +47,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         QString defaultSprite = QStringLiteral("star4");
         if (symbol || falling || flame) defaultSprite = fx.kind;
         if (ripple) defaultSprite = QStringLiteral("ring");
+        if (assembly) defaultSprite = QStringLiteral("pixel");
         if (lightning) defaultSprite = QStringLiteral("bolt");
         if (fx.kind == "flame_glow") defaultSprite = QStringLiteral("flame");
         if (fx.kind == "ember" || fx.kind == "spark") defaultSprite = QStringLiteral("dot");
@@ -58,7 +66,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
-        if (!(star || symbol || ripple || falling || lightning || flame || scanline) || fx.anchor != "char"
+        if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly) || fx.anchor != "char"
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite

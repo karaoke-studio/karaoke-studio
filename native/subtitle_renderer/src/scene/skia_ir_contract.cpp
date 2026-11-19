@@ -62,6 +62,15 @@ bool isSkiaFallingParticle(const QString& kind) {
     return kind == "petal" || kind == "feather" || kind == "snow" || kind == "snow_solid";
 }
 
+QString skiaParticleKindForTransition(const QString& animation, bool entry) {
+    if (isSkiaFallingParticle(animation) || animation == "note" || animation == "heart"
+        || animation == "ripple" || animation == "sparkle")
+        return animation;
+    if (entry && animation == "assemble_in") return QStringLiteral("assemble");
+    if (!entry && animation == "dissolve_out") return QStringLiteral("dissolve");
+    return {};
+}
+
 void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     const auto features = ir.value("required_features").toArray();

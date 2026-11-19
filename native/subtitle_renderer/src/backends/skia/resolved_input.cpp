@@ -126,8 +126,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             return animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
         };
         const bool charEntry = perCharacter(line.entryAnimation), charExit = perCharacter(line.exitAnimation);
-        const bool particleEntry = scene::isSkiaFallingParticle(QString::fromStdString(line.entryAnimation));
-        const bool particleExit = scene::isSkiaFallingParticle(QString::fromStdString(line.exitAnimation));
+        const auto entryParticleKind = scene::skiaParticleKindForTransition(QString::fromStdString(line.entryAnimation), true);
+        const auto exitParticleKind = scene::skiaParticleKindForTransition(QString::fromStdString(line.exitAnimation), false);
+        const bool particleEntry = !entryParticleKind.isEmpty(), particleExit = !exitParticleKind.isEmpty();
         const bool geoEntry = particleEntry || line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in"
             || line.entryAnimation == "stretch_in" || line.entryAnimation == "glow_in";
         const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
@@ -145,7 +146,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                       geoEntry ? line.entryDurationMs : 0, geoExit ? line.exitDurationMs : 0,
                                       line.endMs, style.fontSize};
         const bool geometry = prepared.characterGeometry.active();
-        prepared.particleVisibility = {particleEntry ? effects::fallEntryLeadMs(line.entryAnimation) : 0, particleExit};
+        prepared.particleVisibility = {particleEntry ? effects::fallEntryLeadMs(line.entryAnimation) : 0,
+                                       particleExit && exitParticleKind != "dissolve"};
         if (geometry && (style.strokeWidth > 0 || style.stroke2Width > 0))
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
         const bool transforms = prepared.characterFade.transforms() || geometry;
@@ -289,7 +291,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 const auto& anchor = prepared.cells[line.wipeReverse ? prepared.cells.size() - 1 - index : index];
                 prepared.particles.push_back({burst, sprite->second, argb(burst.color),
                     (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f, anchor.pivot.centerY,
-                    std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr)});
+                    std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr),
+                    burst.kind == "ripple" ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});
             }
         } else if (source.contains("particle_box_height")) {
             throw BackendError("Skia 粒子行盒高度缺少能力声明");

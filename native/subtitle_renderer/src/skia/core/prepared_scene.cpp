@@ -171,7 +171,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     paint.setAntiAlias(true);
     for (const auto& line : lines_) {
         const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
-        if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs, line.endMs))
+        if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs))
             continue;
         const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                            : LineAnimation::State{1.f, 0.f, 0.f};
