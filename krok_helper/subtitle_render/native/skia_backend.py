@@ -146,6 +146,8 @@ class SkiaRendererProcess(SkiaSidecarProcess):
             if (type(ready.get('line_motion_schema')) is not int or ready['line_motion_schema'] != 1
                     or 'p07_line_motion' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持出入场位移，请重新构建')
+            if 'p07_ruby_line_animation' not in ready.get('profiles', []):
+                raise NativeRendererError('Skia sidecar 不支持整行注音动画，请重新构建')
             if (type(ready.get('character_fade_schema')) is not int or ready['character_fade_schema'] != 1
                     or 'p07_character_fade' not in ready.get('profiles', [])):
                 raise NativeRendererError('Skia sidecar 不支持逐字淡化，请重新构建')

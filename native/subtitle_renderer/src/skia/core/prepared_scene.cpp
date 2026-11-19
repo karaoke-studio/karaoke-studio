@@ -13,6 +13,14 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
+namespace {
+void includeCellPaint(SkRect& bounds, const ResolvedCell& cell) {
+    bounds.join(cell.path.getBounds());
+    if (cell.outline) bounds.join(cell.outline->path.getBounds());
+    if (cell.outerOutline) bounds.join(cell.outerOutline->path.getBounds());
+}
+}
+
 PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.width), height_(input.height) {
     if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
         throw std::runtime_error("Skia: invalid resolved canvas size");
@@ -97,11 +105,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (cell.outline) line.hasOutline = true;
             if (cell.outerOutline) line.hasOuterOutline = true;
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
-            if (line.animation.active()) {
-                line.paintBounds.join(cell.path.getBounds());
-                if (cell.outline) line.paintBounds.join(cell.outline->path.getBounds());
-                if (cell.outerOutline) line.paintBounds.join(cell.outerOutline->path.getBounds());
-            }
+            if (line.animation.active()) includeCellPaint(line.paintBounds, cell);
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth});
@@ -111,7 +115,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
             line.rubyGroups.emplace_back(group, source.noWipe, source.vertical);
             if (line.animation.active())
-                for (const auto& cell : group) line.paintBounds.join(cell.path.getBounds());
+                for (const auto& cell : group) includeCellPaint(line.paintBounds, cell);
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
         if (line.scanline.enabled || line.characterGeometry.active()) {

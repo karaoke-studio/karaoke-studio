@@ -11,6 +11,9 @@ from test_subtitle_skia_line_fade import (
     application, binary, project, fade_project, ir_for, collect, configure, selection,
     premultiplied,
 )
+from test_subtitle_skia_outline_ruby import (
+    annotated, annotated_paint, lower_ir, mixed, outlined, pages, prepared_source, reading, source, upper_ir, upper_source,
+)
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -128,3 +131,94 @@ def test_line_motion_matches_actual_gpu(binary, project, entry, exit, dpr, two_l
             delta = abs(premultiplied(expected) - premultiplied(actual))
             assert delta.mean() < .16, (target, t, delta.mean())
             assert np.mean(delta.max(axis=-1) > 16) < .003, (target, t)
+
+
+RUBY_ANIMATIONS = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
+
+
+def animated_ruby(track, style, entry, exit_):
+    return track, replace(annotated_paint(style, 2, True), entry_anim=entry, exit_anim=exit_,
+                          entry_lead_ms=400, exit_fade_ms=600)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('entry,exit_', RUBY_ANIMATIONS)
+def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, entry, exit_, tmp_path):
+    track, style = upper_source(reading, 2)
+    ir = upper_ir(binary, animated_ruby(track, style, entry, exit_), 1.5)
+    static = upper_ir(binary, animated_ruby(track, style, 'none', 'none'), 1.5)
+    assert 'p07_ruby_line_animation' in ir['required_features']
+    assert ir['skia_layout']['lines'] == static['skia_layout']['lines']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_ruby_line_animation')
+    line = ir['track']['lines'][0]
+    first = line['display_start_ms'] + 100
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [first, 900, line['display_end_ms'] - 300, first])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [first], generation=2)
+        configure(process, static)
+        normal, _ = collect(process, [first, 900], generation=3)
+    assert np.array_equal(frames[0], frames[-1]) and np.array_equal(frames[0], after[0])
+    assert np.array_equal(frames[1], normal[1])
+    assert not np.array_equal(frames[0], normal[0])
+    if target == 'gpu' and entry == 'fade':
+        (tmp_path / 'ruby-line-animation-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
+            'durations': [line['entry_duration_ms'], line['exit_duration_ms']],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,exit_', RUBY_ANIMATIONS)
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_, dpr):
+    track, style = animated_ruby(*upper_source(reading, 2), entry, exit_)
+    ir = upper_ir(binary, (track, style), dpr)
+    compare_animated_ruby(binary, track, style, ir, 640, 360, dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_line_motion_with_lower_romanization_matches_actual_gpu(binary, source):
+    track, style, resolve = source
+    track, style = animated_ruby(track, outlined(style, 2), 'rise', 'rise')
+    ir = lower_ir(binary, (track, style, resolve), dpr=1.5)
+    compare_animated_ruby(binary, track, style, ir, 900, 600, 1.5)
+
+
+def compare_animated_ruby(binary, track, style, ir, width, height, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
+
+    line = ir['track']['lines'][0]
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = sorted({start, start+17, start+100, start+200, start+320, 900,
+                    end-601, end-300, end-100, end-17, end})
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=width, height=height, dpr=dpr, realization_enabled=False)
+    shape = (round(height*dpr), round(width*dpr), 4)
+    refs = [np.frombuffer(p, np.uint8).reshape(shape) for p in raw]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        results.append(frames)
+    budget = COMPARISON_BUDGETS['image_categories']['text']
+    for t, d2d, vulkan, raster in zip(times, refs, *results, strict=True):
+        for oracle, compared in ((d2d, vulkan), (vulkan, raster)):
+            assert abs(int(oracle[..., 3].max()) - int(compared[..., 3].max())) <= 2, t
+            if oracle[..., 3].max() < 16:
+                continue
+            a, b = bounds(oracle), bounds(compared)
+            assert a.size == b.size and abs(a-b).max() <= 1, (t, a, b)
+            mass_a, mass_b = (int(frame[..., 3].sum()) for frame in (oracle, compared))
+            assert abs(mass_a - mass_b) <= max(mass_a, mass_b) * .02, (t, mass_a, mass_b)
+            mask = (oracle[..., 3] > 16) | (compared[..., 3] > 16)
+            diff = abs(premultiplied(oracle)[mask] - premultiplied(compared)[mask])
+            if diff.size:
+                assert diff.mean() <= budget['max_union_channel_mae'], (t, diff.mean())
+                assert np.percentile(diff, 95) <= budget['max_union_p95'], t

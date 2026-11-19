@@ -159,7 +159,7 @@ def test_raw_annotations_without_complete_final_layout_are_rejected_and_keep_sce
 
 
 @pytest.mark.parametrize('change', [
-    {'entry_anim': 'fade'}, {'karaoke_anim': 'utopia'},
+    {'entry_anim': 'noise'}, {'karaoke_anim': 'utopia'},
     {'right_to_left': True}, {'vertical': True}, {'scanline_enabled': True}])
 def test_unsupported_upper_ruby_combinations_fail_and_keep_previous_scene(binary, reading, change):
     track, style = reading

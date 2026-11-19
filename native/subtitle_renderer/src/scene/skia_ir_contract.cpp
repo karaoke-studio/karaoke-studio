@@ -50,6 +50,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_solid_outline",
         "p07_line_fade",
         "p07_line_motion",
+        "p07_ruby_line_animation",
         "p07_character_fade",
         "p07_scanline_band",
         "p07_character_transform",
@@ -167,6 +168,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_line_motion")
         && layout.value("line_motion_schema").toDouble(-1) != 1)
         throw BackendError("Skia 出入场位移布局版本无效");
+    const bool rubyLineAnimation = features.contains("p05_resolved_ruby") && !features.contains("p05_vertical_ruby")
+        && (features.contains("p07_line_fade") || features.contains("p07_line_motion"));
+    if (features.contains("p07_ruby_line_animation") != rubyLineAnimation)
+        throw BackendError("Skia 横排注音与整行动画的能力声明不匹配");
     if (features.contains("p07_character_fade")
         && layout.value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");

@@ -224,11 +224,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(line.get('entry_anim') == 'fade' or line.get('exit_anim') == 'fade'
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_line_fade')
-        ir['skia_layout']['line_fade_schema'] = 1
     if any(line.get('entry_anim') in {'slide_in', 'rise'} or line.get('exit_anim') in {'slide_out', 'rise'}
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_line_motion')
-        ir['skia_layout']['line_motion_schema'] = 1
     if any(line.get('entry_anim') == 'char_fade' or line.get('exit_anim') == 'char_fade'
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_character_fade')
@@ -321,5 +319,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p06_outline_ruby')
     if secondary_outline:
         ir['skia_layout']['secondary_solid_outline_schema'] = 1
+    animates_line = False
+    for feature, schema in (('p07_line_fade', 'line_fade_schema'), ('p07_line_motion', 'line_motion_schema')):
+        if feature in ir['required_features']:
+            ir['skia_layout'][schema] = 1
+            animates_line = True
+    if geometry.ruby is not None and animates_line:
+        ir['required_features'].append('p07_ruby_line_animation')
     project_reverse_wipe(ir)
     return ir
