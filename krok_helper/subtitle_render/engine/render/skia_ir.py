@@ -72,6 +72,12 @@ def _validate_style(style):
             raise ValueError('Skia 当前最多支持 32 行网格')
 
 
+def _uses_shadow(style):
+    return style.decoration_kind == 'shadow' or (
+        not style.decoration_before_sync and style.decoration_kind_before == 'shadow'
+    )
+
+
 def _validate_scanline_band(track, style, lines):
     """Validate the horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
@@ -249,6 +255,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if outlined_gradients:
         # Gradient paint on, or under, a solid or gradient outline stack.
         ir['required_features'].append('p06_outline_gradient')
+    if any(_uses_shadow(item.layout_style) for item in plan.lines):
+        ir['required_features'].append('p06_static_shadow')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         _validate_stroke_flash(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_stroke_flash')

@@ -2,7 +2,7 @@
 
 #include "scanline_feather.h"
 #include "scanline_paint.h"
-#include "../../effects/wipe_clock.h"
+#include "wipe_front.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkRect.h"
 #include <algorithm>
@@ -25,20 +25,6 @@ struct ScanlineBand {
     float softness = 0;            // Physical pixels, limited to the band half-width.
     bool rightToLeft = false;
 
-    template <class Cell> static int wipeStart(const Cell& c) {
-        return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs;
-    }
-    template <class Cell> static int wipeEnd(const Cell& c) {
-        return c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs;
-    }
-    // The GPU front coordinate of one cell; a zero-length cell divides by one.
-    template <class Cell> float coordinate(const Cell& c, int t) const {
-        const float position = c.wipePoints.empty()
-            ? std::clamp(float(t - c.startMs) / float(std::max(c.endMs - c.startMs, 1)), 0.f, 1.f)
-            : krok::subtitle::native::effects::wipePositionAt(c.wipePoints, t);
-        return rightToLeft ? c.right - (c.right - c.left) * position
-                           : c.left + (c.right - c.left) * position;
-    }
     template <class Cell> static bool sweeping(const Cell& c, int t) {
         const int start = wipeStart(c), end = wipeEnd(c);
         return start != end && start <= t && t <= end;
@@ -46,21 +32,9 @@ struct ScanlineBand {
     // The GPU's wipeEdge, or nothing once the line is complete or nothing is sung.
     template <class Cell>
     std::optional<float> frontAt(const std::vector<Cell>& cells, int t, float inkStart) const {
-        if (!enabled || !paint.visible() || cells.empty()
-            || std::all_of(cells.begin(), cells.end(), [t](const Cell& c) { return t >= wipeEnd(c); }))
+        if (!enabled || !paint.visible() || cells.empty() || lineWipeComplete(cells, t))
             return std::nullopt;
-        float edge = inkStart;
-        for (std::size_t i = 0; i < cells.size(); ++i) {
-            if (t < wipeStart(cells[i])) {
-                if (i > 0) {
-                    const float start = coordinate(cells[i], t);
-                    edge = rightToLeft ? std::min(edge, start + restingPad) : std::max(edge, start - restingPad);
-                }
-                break;
-            }
-            edge = coordinate(cells[i], t);
-            if (t <= wipeEnd(cells[i])) break;
-        }
+        const float edge = lineWipeFront(cells, t, inkStart, restingPad, rightToLeft);
         if (rightToLeft ? edge >= inkStart : edge <= inkStart) return std::nullopt;
         return edge;
     }

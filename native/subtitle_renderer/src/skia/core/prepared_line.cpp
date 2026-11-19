@@ -2,6 +2,7 @@
 #include "character_halo.h"
 #include "character_wipe.h"
 #include "stroke_flash.h"
+#include "wipe_front.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include <algorithm>
@@ -72,8 +73,6 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     std::vector<State> states;
     states.reserve(line.cells.size());
-    const auto wipeStart = [](const Cell& c) { return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs; };
-    const auto wipeEnd = [](const Cell& c) { return c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs; };
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
         const auto& cell = line.cells[index];
         float progress = rawProgress(cell);
@@ -203,6 +202,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
                               state.transform, line.characterGeometry.fontPx);
         }
+    line.shadow.draw(canvas, line.cells, tMs, line.shadowInk);
     if (line.hasOuterOutline)
         drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
     if (line.hasOutline)

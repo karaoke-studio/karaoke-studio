@@ -26,7 +26,7 @@ std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
 void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool bodyGradients, bool outlineGradients,
-                    bool imageFills) {
+                    bool imageFills, bool staticShadow) {
     const auto gradient = [](const PaintStyle& paint) {
         return !paint.stops.empty()
             && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical");
@@ -36,6 +36,12 @@ void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool 
     };
     const auto supportedOutline = [&](const PaintStyle& paint) {
         return paint.mode == "solid" || (outlineGradients && gradient(paint)) || (imageFills && paint.mode == "image");
+    };
+    const auto supportedDecoration = [&](bool after) {
+        const auto kind = s.decorationKindForState(after);
+        const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
+        return kind == "none" || (staticShadow && kind == "shadow" && paint.mode == "solid"
+            && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after)));
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
         || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
@@ -53,7 +59,7 @@ void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool 
         || (outlineLayers == 2 && (s.stroke2Width < 0 || !std::isfinite(s.stroke2Width)
             || s.stroke2Width != s.latinStroke2Width
             || !supportedOutline(s.beforeStroke2Paint) || !supportedOutline(s.afterStroke2Paint)))
-        || s.decorationKindForState(false) != "none" || s.decorationKindForState(true) != "none"
+        || !supportedDecoration(false) || !supportedDecoration(true)
         || !supportedBodyFill(s.beforeFillPaint) || !supportedBodyFill(s.afterFillPaint)
         // Canonical fonts come exclusively from the validated layout resource
         // table. D2D compatibility hints may be absent on inherited role slots.
@@ -70,17 +76,17 @@ void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool 
 }
 }
 void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLayers, bool bodyGradients,
-                       bool outlineGradients, bool imageFills) {
+                       bool outlineGradients, bool imageFills, bool staticShadow) {
     if (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
         || scene.viewportOffsetY != 0 || scene.lineBand.enabled || (!canonical && !scene.charStyles.empty())
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
     if (outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");
-    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, outlineLayers, false, false, false);
+    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, outlineLayers, false, false, false, false);
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
-        supportedStyle(style, canonical, outlineLayers, bodyGradients, outlineGradients, imageFills);
+        supportedStyle(style, canonical, outlineLayers, bodyGradients, outlineGradients, imageFills, staticShadow);
         if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
             || !line.rubies.empty() || (!canonical && !line.bursts.empty()) || (!canonical && !line.placementWindows.empty())
             || line.fadeInMs || line.fadeOutMs
@@ -101,6 +107,16 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLaye
         }
     }
 }
+
+::subtitle::skia::StaticShadow skiaStaticShadow(const TextStyle& style) {
+    const auto state = [&](bool after) {
+        const auto& paint = after ? style.afterDecorPaint : style.beforeDecorPaint;
+        return ::subtitle::skia::ShadowState{style.decorationKindForState(after) == "shadow",
+            style.shadowOffsetXForState(after), style.shadowOffsetYForState(after), argb(paint.color)};
+    };
+    return {state(false), state(true), style.strokeWidth, style.stroke2Width};
+}
+
 ::subtitle::skia::SubtitleInput skiaSceneInput(const RenderScene& scene) {
     validateSkiaScene(scene);
     ::subtitle::skia::SubtitleInput input{scene.width, scene.height, {}};

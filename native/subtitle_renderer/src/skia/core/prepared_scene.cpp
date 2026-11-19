@@ -39,6 +39,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.beforeOuterGradient = source.beforeOuterGradient;
         line.afterOuterGradient = source.afterOuterGradient;
         line.images = source.images;
+        line.shadow = source.shadow;
         line.noise = source.noise;
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;
@@ -118,13 +119,14 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 for (const auto& cell : group) includeCellPaint(line.paintBounds, cell);
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
-        if (line.scanline.enabled || line.characterGeometry.active()) {
+        if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
             line.inkStart = ink.isEmpty() ? 0.f : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
             if (!ink.isEmpty()) line.inkCenter = ink.centerX();
+            if (line.shadow.visible()) line.shadowInk = ink;
         }
         lines_.push_back(std::move(line));
     }

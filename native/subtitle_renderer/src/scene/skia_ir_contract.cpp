@@ -48,6 +48,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_image_fill",
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
+        "p06_static_shadow",
         "p07_line_fade",
         "p07_line_motion",
         "p07_ruby_line_animation",

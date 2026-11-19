@@ -69,6 +69,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_outline_ruby.py::test_annotated_solid_outlines_preserve_final_wipe_and_replay",
     "tests/test_subtitle_skia_outline_ruby.py::test_outlined_lower_ruby_replays_all_three_bands",
     "tests/test_subtitle_skia_line_motion.py::test_line_animation_keeps_ruby_layout_and_replays",
+    "tests/test_subtitle_skia_static_shadow.py::test_shadow_palette_keeps_geometry_and_replays",
 )
 
 
