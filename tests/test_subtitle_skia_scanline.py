@@ -122,7 +122,8 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'flame': style = replace(style, scanline_shape='flame')
     elif case == 'image': style = replace(style, scanline_shape='image')
-    elif case == 'combined_particles': style = replace(style, scanline_effect='sakura', sing_fx='twinkle')
+    elif case == 'combined_particles':
+        track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
     elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
     elif case == 'rtl': track, style = rtl_source(project); style = band(style)
     elif case == 'vertical': track, style = vertical_ruby_source(project); track = replace(track, rubies=[]); style = band(style)
@@ -598,3 +599,83 @@ def test_reverse_scanline_band_and_particle_anchors_follow_singing_order(binary,
         (tmp_path / 'scanline-reverse-layout.json').write_text(json.dumps({
             'bursts': bursts, 'line': line, 'schema': ir['skia_layout']['scanline_band_schema'],
         }, sort_keys=True), encoding='utf-8')
+
+
+
+def combined_particles(project, singing, scan):
+    track, style = particle_band(project, scan, -180)
+    return track, replace(style, sing_fx=singing, fx_particle_color='#0000FF',
+                          fx_particle_color2='#0000FF', fx_particle_speed_pct=140)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind', ['ripple', 'note'])
+def test_combined_particle_layers_keep_both_clocks(binary, project, target, kind, tmp_path):
+    track, style = combined_particles(project, kind, 'star')
+    combined = ir_for(binary, (track, style), dpr=1.5)
+    singing = ir_for(binary, (track, replace(style, scanline_effect='none')), dpr=1.5)
+    scan = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
+    assert combined['skia_layout']['sing_twinkle_schema'] == 8
+    assert {'p07_sing_twinkle', 'p07_scanline_band'} <= set(combined['required_features'])
+    bursts = combined['track']['lines'][0]['fx_bursts']
+    assert {b['kind'] for b in bursts} == {kind, 'scanline'}
+    for ir, expected_kind in ((singing, kind), (scan, 'scanline')):
+        expected = ir['track']['lines'][0]['fx_bursts']
+        actual = [b for b in bursts if b['kind'] == expected_kind]
+        assert len(actual) == len(expected)
+        for after, before in zip(actual, expected, strict=True):
+            assert {k: v for k, v in after.items() if k != 'color_id'} == {
+                k: v for k, v in before.items() if k != 'color_id'}
+            assert combined['fx_color_table'][after['color_id']] == ir['fx_color_table'][before['color_id']]
+    times = [240, 500, 620, 750, 1200, 1600, 1900, 2350, 3000, 750]
+    variants = []
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        for index, ir in enumerate((combined, singing, scan), start=1):
+            configure(process, ir)
+            frames, _ = collect(process, times, generation=index)
+            assert np.array_equal(frames[3], frames[-1])
+            variants.append(frames)
+    for single in variants[1:]:
+        assert sum(not np.array_equal(a, b) for a, b in zip(variants[0][:-2], single[:-2], strict=True)) >= 3
+    assert all(not frames[-2][..., 3].any() for frames in variants)
+    if kind == 'ripple' and target == 'gpu':
+        (tmp_path / 'particle-layers-layout.json').write_text(json.dumps({
+            'schema': combined['skia_layout']['sing_twinkle_schema'],
+            'bursts': bursts, 'line': combined['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+def test_invalid_combined_particle_version_keeps_raster_scene(binary, project):
+    ir = ir_for(binary, combined_particles(project, 'ripple', 'star'))
+    bad = copy.deepcopy(ir)
+    bad['skia_layout']['sing_twinkle_schema'] = 7
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [620])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [620], generation=2)
+    assert np.array_equal(before, after)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('singing,scan', [('note', 'star'), ('twinkle_classic', 'feather')])
+def test_combined_particle_layers_match_actual_d2d_and_gpu_raster(binary, project, singing, scan):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = combined_particles(project, singing, scan)
+    times = [199, 300, 401, 500, 620, 750, 1100, 1600, 1850, 2000, 2200, 3000]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=640, height=360, dpr=1.5, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(540, 960, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        results.append(frames)
+    for time, d2d, gpu, raster in zip(times, refs, *results, strict=True):
+        assert_particle_region(d2d, gpu, ('combined', singing, scan, time), check_contour=False)
+        assert_particle_region(gpu, raster, ('combined', singing, scan, time, 'raster'), check_contour=False)

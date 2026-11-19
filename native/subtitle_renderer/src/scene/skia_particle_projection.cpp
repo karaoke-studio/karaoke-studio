@@ -48,9 +48,11 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool oldWindow = fx.startMs >= *source.displayStartMs && fx.endMs <= *source.displayEndMs;
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
+        const bool validBand = scanline ? source.scanlineEnabled
+            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
         if (!(star || symbol || ripple || falling || lightning || flame || scanline) || fx.anchor != "char"
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
-            || source.scanlineEnabled != scanline
+            || !validBand
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10

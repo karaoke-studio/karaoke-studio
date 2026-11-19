@@ -17,7 +17,8 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         if not bursts:
             continue
         look = item.layout_style
-        if (look.vertical or look.right_to_left or (item.line.wipe_reverse and not source.get('scanline'))
+        band = bool(source.get('scanline'))
+        if (look.vertical or look.right_to_left or (item.line.wipe_reverse and not band)
                 or source.get('karaoke_anim') != 'none' or source.get('entry_anim') != 'none'
                 or source.get('exit_anim') != 'none' or track.rubies or look.lower_ruby_enabled
                 or look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
@@ -26,7 +27,8 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         for burst in bursts:
             kind = burst['kind']
             if (kind not in _PARTICLES
-                    or bool(source.get('scanline')) != (kind == 'scanline')
+                    or (kind == 'scanline' and not band)
+                    or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
                     or 'paint_id' in burst or 'char_color_ids' in burst):
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
@@ -37,7 +39,9 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
             if kind in _ENERGY_PARTICLES:
                 version = max(version, 6)
             if kind == 'scanline':
-                version = 7
+                version = max(version, 7)
+            elif band:
+                version = 8
         metrics = measured.lines[item.track_index]
         write_horizontal_pivots(final['cells'], metrics)
         final['particle_box_height'] = (

@@ -57,6 +57,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_character_transform.py::test_geometry_duration_preserves_canonical_pivots_and_replays",
     "tests/test_subtitle_skia_character_transform.py::test_character_halo_replays_behind_geometry",
     "tests/test_subtitle_skia_stroke_flash.py::test_flash_follows_each_cell_clock_and_replays",
+    "tests/test_subtitle_skia_scanline.py::test_combined_particle_layers_keep_both_clocks",
 )
 
 
