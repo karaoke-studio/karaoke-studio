@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PyQt6.QtWidgets import QApplication
 
 from krok_helper.audio_processing.separation.page import AudioSeparationPage
@@ -715,21 +716,77 @@ def test_managed_old_version_enters_upgrade_state_without_losing_location(tmp_pa
         backend.shutdown()
 
 
-def test_saved_external_2x_version_can_start_without_upgrade(tmp_path) -> None:
+@pytest.mark.parametrize("version", ["2.0.17", "2.3.5", "2.3.6", "3.0.0"])
+def test_saved_external_version_does_not_require_user_managed_upgrade(tmp_path, version) -> None:
     executable = tmp_path / "python.exe"
     executable.write_bytes(b"external-python")
     backend = RealSeparationBackend(
         {
             "external_executable": str(executable),
-            "probed_pymss_version": "2.0.17",
-            "expected_pymss_version": "2.0.17",
+            "probed_pymss_version": version,
+            "expected_pymss_version": version,
         }
     )
     try:
         assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
-        assert backend.snapshot().pymss_version == "2.0.17"
+        assert backend.snapshot().pymss_version == version
         assert not backend.snapshot().error
         assert not backend.snapshot().install_dir
+    finally:
+        backend.shutdown()
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+@pytest.mark.parametrize("version", ["2.0.17", "2.3.5", "2.3.6", "3.0.0"])
+@pytest.mark.parametrize("capable", [True, False])
+def test_external_environment_uses_capabilities_instead_of_version_allowlist(
+    tmp_path, monkeypatch, platform, version, capable
+) -> None:
+    executable = tmp_path / "python.exe"
+    executable.write_bytes(b"external-python")
+    capability_calls = []
+    services = []
+
+    class Client(_FakeClient):
+        def capability_checks(self):
+            capability_calls.append(True)
+            return [("推理与模型目录", capable, "正常" if capable else "缺少接口")]
+
+    class Factory:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            service = _FakeService(Client())
+            services.append(service)
+            return service
+
+    monkeypatch.setattr(real_backend_module.sys, "platform", platform)
+    monkeypatch.setattr(
+        real_backend_module.subprocess, "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=version, stderr="", returncode=0),
+    )
+    monkeypatch.setattr(real_backend_module, "prepare_ai_python", lambda *_: str(executable))
+    settings = {}
+    backend = RealSeparationBackend(settings, service_factory=Factory)
+    results = []
+    backend.existingCheckFinished.connect(results.append)
+    try:
+        backend.start_existing_check(executable=str(executable))
+        _wait_until(lambda: bool(results))
+        assert capability_calls == [True]
+        assert not services[0].running
+        assert all(ok for _, ok, _ in results[0]) is capable
+        if not capable:
+            with pytest.raises(RuntimeError, match="尚未通过能力检测"):
+                backend.connect_existing(executable=str(executable))
+            assert "external_executable" not in settings
+            return
+
+        backend.connect_existing(executable=str(executable))
+        assert backend.snapshot().pymss_version == version
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+        assert backend.snapshot().pymss_version == version
+        assert settings["probed_pymss_version"] == version
     finally:
         backend.shutdown()
 

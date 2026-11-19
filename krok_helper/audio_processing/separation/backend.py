@@ -741,7 +741,6 @@ class MockSeparationBackend(SeparationBackend):
             ("支持 serve 命令", ok, detail),
             ("/health 协议兼容", ok, detail),
             ("模型管理与分离端点存在", ok, detail),
-            ("版本在兼容范围内", ok, detail),
         ]
         self.existingCheckStarted.emit()
         self._delay(200, lambda: self.existingCheckFinished.emit(results))

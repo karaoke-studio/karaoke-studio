@@ -556,8 +556,8 @@ class PyMSSBridgeEngine:
         models = int(info.get("models") or 0)
         torch_version = str(info.get("torch") or "")
         device = "CUDA 可用" if info.get("cuda") else ("Apple MPS 可用" if info.get("mps") else "仅 CPU")
-        # 版本不在这里查：调用方（_probe_executable）已经用解释器直接问过并核对了
-        # 兼容范围；pymss 包本身没有 __version__，在这里再查一次只会假失败。
+        # 版本由调用方用解释器直接获取，仅用于记录；兼容性由实际接口能力决定。
+        # pymss 包本身没有 __version__，在这里再查一次只会假失败。
         return [
             ("PyMSS 推理进程", True, "已就绪（不经 HTTP 服务）"),
             ("推理与模型目录", models > 0, f"可用模型 {models} 个" if models else "无法列出模型目录"),

@@ -299,13 +299,7 @@ class RealSeparationBackend(SeparationBackend):
                 or ""
             )
             self._snap.pymss_version = recorded
-            if recorded and not self._external_version_supported(recorded):
-                self._snap.state = ServiceState.EXTERNAL_VERSION_INCOMPATIBLE
-                self._snap.error = (
-                    f"外部环境为 PyMSS {recorded}，请重新检测兼容性。"
-                )
-            else:
-                self._snap.state = ServiceState.INSTALLED_STOPPED
+            self._snap.state = ServiceState.INSTALLED_STOPPED
         self._rebuild_dependencies()
 
     def _heal_stale_install_dir(self, recorded: str) -> bool:
@@ -1484,14 +1478,6 @@ class RealSeparationBackend(SeparationBackend):
             "output_format": output_format,
         }
 
-    @staticmethod
-    def _external_version_supported(version: str) -> bool:
-        # Managed runtime manifests remain pinned. Linux external environments
-        # have no version gate; Windows/macOS accept 2.x with capability checks.
-        if sys.platform.startswith("linux"):
-            return True
-        return re.fullmatch(r"2\.[0-9]+\.[0-9]+", version) is not None
-
     def external_ai_python(self) -> str | None:
         selected = str(self._settings.get("external_executable", "")).strip()
         if sys.platform != "darwin" or not selected:
@@ -1535,10 +1521,6 @@ class RealSeparationBackend(SeparationBackend):
         version = match.group(1) if match else ""
         if completed.returncode != 0 or not version:
             raise _ExternalVersionMismatch("无法获取外部 PyMSS 环境版本，请重新检测环境。")
-        if not self._external_version_supported(version):
-            raise _ExternalVersionMismatch(
-                f"外部环境为 PyMSS {version}，当前支持 PyMSS 2.x，请选择兼容环境。"
-            )
         return version
 
     def _probe_executable(self, executable: str, *, model_dir: str = "") -> tuple[list[tuple[str, bool, str]], str]:
@@ -1560,7 +1542,6 @@ class RealSeparationBackend(SeparationBackend):
         version = match.group(1) if match else ""
         checks = [
             ("获取 PyMSS 版本", completed.returncode == 0 and bool(version), version or output),
-            ("版本在兼容范围内", self._external_version_supported(version), version or "无法识别版本"),
         ]
         if not all(ok for _name, ok, _detail in checks):
             return checks, version

@@ -104,18 +104,6 @@ def test_overlay_invalidated_when_studio_changes(tmp_path):
     assert runtime.prepared_ai_python(python, work) is None
 
 
-@pytest.mark.parametrize('platform,version,expected', [
-    ('darwin', '2.3.5', True), ('win32', '2.3.5', True),
-    ('darwin', '2.0.18', True), ('darwin', '2.3.6', True),
-    ('win32', '3.0.0', False), ('darwin', '3.0.0', False),
-    ('linux', '2.3.6', True), ('linux', '3.0.0', True),
-])
-def test_external_version_allowlist(monkeypatch, platform, version, expected):
-    from krok_helper.audio_processing.separation import real_backend
-    monkeypatch.setattr(real_backend.sys, 'platform', platform)
-    assert RealSeparationBackend._external_version_supported(version) is expected
-
-
 def test_host_exposes_overlay_without_starting_or_installing(tmp_path):
     class Backend:
         def external_ai_python(self):
