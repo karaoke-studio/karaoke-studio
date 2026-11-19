@@ -7,6 +7,7 @@
 
 比例尺：默认视口 15 秒。Ctrl+滚轮以光标为中心缩放；滚轮水平平移；底部
 缩放条两端圆形把手拖动改变视口范围，拖中段平移（对标 Sayatoo 同款控件）。
+Mac 触控板支持双指水平平移与捏合缩放，手势操作后暂停跟随播放头 6 秒。
 
 音频源自动取自视频文件（``load_video`` 同时喂给 ``TransportBar``），所以这里
 不做独立的"拖入音频"入口。波形图功能已弃用——不做峰值波形展示。
@@ -15,9 +16,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import math
+import sys
+import time
 from typing import Optional, Sequence
 
 from PyQt6.QtCore import (
+    QEvent,
     QPoint,
     QPointF,
     QRect,
@@ -30,6 +35,7 @@ from PyQt6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QInputDevice,
     QPainter,
     QPen,
     QPixmap,
@@ -361,6 +367,10 @@ class TrackTimelineView(QWidget):
         self._desired_span_ms = float(_DEFAULT_VIEW_SPAN_MS)
         """用户期望的比例尺；生效值随总时长夹取（时长后到位时恢复期望值）。"""
         self._drag: Optional[tuple] = None
+        self._scroll_axis: Optional[str] = None
+        self._scroll_active = False
+        self._pinch_active = False
+        self._manual_view_until = 0.0
         # 前黑展示层偏移：0 = 源坐标直显。
         self._timing_display_offset_ms: int = 0
         """进行中的拖动：("scrub",) / ("pan", 抓取点相对视口起点的毫秒差) /
@@ -373,6 +383,8 @@ class TrackTimelineView(QWidget):
         self._lanes_pixmap: Optional[QPixmap] = None
         self._pixmap_key: Optional[tuple] = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        if sys.platform == "darwin":
+            self.setToolTip("双指左右移动时间轴，捏合缩放；手动操作后暂停跟随播放头 6 秒。")
         # 裸 QWidget 不设此属性时 QSS 背景/边框不会绘制
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # themed 回调在主题切换时重设 QSS → 顺带触发重绘；缓存 key 含主题色所以会失效重画
@@ -403,6 +415,7 @@ class TrackTimelineView(QWidget):
         self._hide_margin_editor()
         self._view_start_ms = 0.0
         self._desired_span_ms = float(_DEFAULT_VIEW_SPAN_MS)
+        self._reset_navigation()
         self._clamp_view()
         self._lanes_pixmap = None
         self.update()
@@ -605,13 +618,19 @@ class TrackTimelineView(QWidget):
     def _zoom_about(self, anchor_ms: float, factor: float) -> None:
         """以 ``anchor_ms`` 为不动点缩放视口（factor < 1 放大）。"""
         old_span = self._view_span_ms
-        new_span = old_span * factor
+        new_span = min(
+            max(old_span * factor, float(_MIN_VIEW_SPAN_MS)),
+            float(max(self._timeline_duration_ms(), _MIN_VIEW_SPAN_MS)),
+        )
         ratio = (anchor_ms - self._view_start_ms) / old_span
         self._set_view(anchor_ms - ratio * new_span, new_span)
 
     def _follow_playhead(self, ms: int) -> bool:
         """播放头越出视口时自动翻页（拖动中不打架）。"""
         if not self._lanes or self._drag is not None:
+            return False
+        if (self._pinch_active or self._scroll_active
+                or time.monotonic() < self._manual_view_until):
             return False
         start, span = self._view_start_ms, self._view_span_ms
         if start <= ms <= start + span:
@@ -1709,6 +1728,13 @@ class TrackTimelineView(QWidget):
         if not self._lanes:
             super().wheelEvent(event)
             return
+        if sys.platform == "darwin" and (
+            not event.pixelDelta().isNull()
+            or event.phase() != Qt.ScrollPhase.NoScrollPhase
+            or event.pointingDevice().type() == QInputDevice.DeviceType.TouchPad
+        ):
+            self._trackpad_scroll(event)
+            return
         delta = event.angleDelta().y() or event.angleDelta().x()
         if delta == 0:
             super().wheelEvent(event)
@@ -1720,6 +1746,63 @@ class TrackTimelineView(QWidget):
         else:
             self._pan_by(-notches * self._view_span_ms * 0.15)
         event.accept()
+
+    def _reset_navigation(self) -> None:
+        self._scroll_axis = None
+        self._scroll_active = False
+        self._pinch_active = False
+        self._manual_view_until = 0.0
+
+    def _trackpad_scroll(self, event) -> None:
+        phase = event.phase()
+        if phase == Qt.ScrollPhase.ScrollBegin:
+            self._scroll_axis = None
+        delta = event.pixelDelta()
+        if delta.isNull():
+            delta = event.angleDelta()
+            dx, dy = delta.x() / 3.0, delta.y() / 3.0
+        else:
+            dx, dy = float(delta.x()), float(delta.y())
+        if self._scroll_axis is None or phase == Qt.ScrollPhase.NoScrollPhase:
+            if dx or dy:
+                self._scroll_axis = "horizontal" if abs(dx) > abs(dy) else "vertical"
+        horizontal = self._scroll_axis == "horizontal"
+        self._scroll_active = horizontal and phase not in (
+            Qt.ScrollPhase.ScrollEnd, Qt.ScrollPhase.NoScrollPhase,
+        )
+        if horizontal:
+            # Qt already applies the user's natural-scroll preference.
+            self._manual_view_until = time.monotonic() + 6.0
+            self._pan_by(-dx * self._view_span_ms / self._plot_width())
+            event.accept()
+        else:
+            event.ignore()
+        if phase in (Qt.ScrollPhase.ScrollEnd, Qt.ScrollPhase.NoScrollPhase):
+            self._scroll_axis = None
+
+    def event(self, event) -> bool:
+        if (event.type() == QEvent.Type.NativeGesture
+                and sys.platform == "darwin" and self._lanes):
+            kind = event.gestureType()
+            if kind == Qt.NativeGestureType.BeginNativeGesture:
+                self._pinch_active = True
+            elif kind == Qt.NativeGestureType.EndNativeGesture:
+                if self._pinch_active:
+                    self._manual_view_until = time.monotonic() + 6.0
+                self._pinch_active = False
+            elif kind == Qt.NativeGestureType.ZoomNativeGesture:
+                factor = 1.0 + event.value()
+                if math.isfinite(factor) and factor > 0.0:
+                    self._manual_view_until = time.monotonic() + 6.0
+                    x = self.mapFromGlobal(event.globalPosition()).x()
+                    self._zoom_about(self._ms_for_x(x), 1.0 / factor)
+            else:
+                return super().event(event)
+            event.accept()
+            return True
+        elif event.type() in (QEvent.Type.WindowDeactivate, QEvent.Type.Hide):
+            self._reset_navigation()
+        return super().event(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802 — Qt override
         self.unsetCursor()
