@@ -81,7 +81,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool validBand = scanline ? source.scanlineEnabled
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly || impact) || fx.anchor != "char"
-            || (rubyParticles && !star && !ripple)
+            || (rubyParticles && version == 12 && !star && !ripple)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite

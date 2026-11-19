@@ -94,7 +94,7 @@ def _write_utopia_pivots(ir, plan, measured):
                 # A band rides only ordinary singing (scanline_band_schema=5).
                 or (source.get('scanline') and (source.get('zoom_pulse') or animations != {'none'}))
                 or source.get('stroke_flash')
-                or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema') != 12)
+                or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])

@@ -59,7 +59,6 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         for burst in bursts:
             kind = burst['kind']
             if (kind not in _PARTICLES
-                    or (annotated and kind not in {'twinkle', 'twinkle_classic', 'ripple'})
                     or (kind == 'scanline' and not band)
                     or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
@@ -93,4 +92,4 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
             max(float(run['ascent']) for run in metrics.slot_metrics)
             + max(float(run['descent']) for run in metrics.slot_metrics)
         )
-    return 12 if track.rubies else version
+    return 13 if track.rubies else version

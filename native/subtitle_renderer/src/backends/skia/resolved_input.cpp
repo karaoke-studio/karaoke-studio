@@ -145,7 +145,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
-        const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) == 12;
+        const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
             || line.wipeReverse || line.strokeFlashEnabled
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))

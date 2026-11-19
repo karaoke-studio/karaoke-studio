@@ -6,7 +6,7 @@
 namespace krok::subtitle::native::scene {
 inline constexpr int kScanlineBandSchema = 6;
 inline constexpr int kCharacterTransformSchema = 8;
-inline constexpr int kSingingParticleSchema = 12;
+inline constexpr int kSingingParticleSchema = 13;
 
 const QJsonArray& skiaIrProfiles();
 bool isSkiaFallingParticle(const QString& kind);

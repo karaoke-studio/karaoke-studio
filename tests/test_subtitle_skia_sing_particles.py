@@ -49,7 +49,7 @@ def outlined_ruby_particles(reading, kind):
 def test_upper_ruby_particles_keep_clocks_and_replay(binary, reading, target, kind, front, tmp_path):
     source = outlined_ruby_particles(reading, kind)
     ir = upper_ir(binary, source, 1)
-    assert ir['skia_layout']['sing_twinkle_schema'] == 12
+    assert ir['skia_layout']['sing_twinkle_schema'] == 13
     line = ir['skia_layout']['lines'][0]
     assert line['particle_box_height'] > 0 and line['ruby_groups']
     bursts = ir['track']['lines'][0]['fx_bursts']
@@ -95,7 +95,10 @@ def test_upper_ruby_particles_match_actual_d2d_and_gpu_raster(binary, reading, k
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case_id', ['sing_twinkle', 'sing_twinkle_classic', 'sing_ripple'])
+@pytest.mark.parametrize('case_id', [
+    'sing_twinkle', 'sing_twinkle_classic', 'sing_ripple', 'sing_note', 'sing_heart',
+    'sing_petal', 'sing_snow', 'sing_snow_solid', 'sing_flame', 'sing_feather', 'sing_lightning',
+])
 def test_p00_ruby_particles_match_actual_d2d_and_gpu_raster(binary, application, case_id, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames

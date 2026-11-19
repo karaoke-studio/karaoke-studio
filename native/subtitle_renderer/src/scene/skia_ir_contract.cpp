@@ -208,7 +208,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_sing_twinkle")
         && (twinkleVersion < 1 || twinkleVersion > kSingingParticleSchema || std::floor(twinkleVersion) != twinkleVersion))
         throw BackendError("Skia 唱字粒子布局版本无效");
-    if (twinkleVersion == 12
+    if (twinkleVersion >= 12
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_resolved_ruby")
             || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 注音粒子缺少上注音或唱字粒子能力声明");
