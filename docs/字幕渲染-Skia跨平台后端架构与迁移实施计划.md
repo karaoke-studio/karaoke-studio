@@ -2197,6 +2197,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 正向横排基础正文可对正文、第一道和第二道描边分别设置唱前/唱后实色、横向、纵向或分层渐变。横向取整行字形墨迹范围，最小宽度 1px。纵向与分层在墨迹顶部和底部各加按布局参考比例计算的描边外扩。正文有半透明色阶时，两道描边裁去正文内部。第一道描边半透明时，外描边也裁去内描边。Skia GPU 与 Raster 共用准备结果和 shader。
 - Windows 相关回归 120 项通过。新增的 7 组实测使用真实 D2D GPU（关闭 WARP 和 realization），比较 D2D GPU 与 Vulkan、Vulkan 与 Raster，覆盖单道渐变、外描边渐变、纵向正文加实色双描边、三层渐变组合、半透明色阶及 DPR 1/1.5。WSL X11 和 Wayland 各 23 项通过，12 项 Windows 专用对照按平台跳过。Windows 和 Linux 的 Raster-only 各 15 项通过，四个构建的 CTest 各 3/3。正文和描边渐变规范样例在 Windows、X11 和 Wayland 上逐字节一致。
 - 新能力通过 `p06_outline_gradient` 协商。能力或绘制范围缺失时拒绝 configure 并保留上一个场景。独立复跑渐变、native 架构和 Mac 验包脚本测试共 47 项通过。三层渐变还通过 Windows G5 产品预览和 640×360 MP4 导出冒烟，Vulkan 与 Raster 各通过两项。Windows Qt Quick 的基础 Vulkan 纹理交接和四种窗口生命周期也通过同步验证层测试。角色、注音、图片、装饰及动画组合仍需实现。规范样例和专项用例已列入双架构 [Mac CI 44481840921](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44481840921)。
+- 首轮该 CI 的两种架构各 1484 项通过、987 项跳过，均在 Raster 的两项描边渐变用例失败。原断言要求实色与不透明渐变的 alpha 非零掩码完全相同。专项测试改为逐像素比较八位 alpha 值，只容许 1 级覆盖率差，规范几何相等与 Windows D2D 对照预算继续生效。Windows 渐变套件复跑 35 项通过，Mac 待重验。
 
 ### 14.89 P00 组合场景配置预检（2026-11-19）
 
@@ -2210,6 +2211,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 回归 142 项通过，含 7 组真实 D2D GPU 对照（关闭 WARP 与 realization），比较 D2D/Vulkan 与 Vulkan/Raster。用例覆盖混合实色与渐变、半透明 PNG、DPR 1/1.5、137% 与 61% 采样缩放、缺失文件和重配。X11 与 Wayland 各 15 项通过及 7 项 Windows 专用跳过；Windows 与 Linux 独立 Raster 各 11 项通过。四个目标的 CTest 各 3/3，三种窗口环境的规范布局样例逐字节一致。
 - 独立复跑 native 架构和 Mac 验包脚本共 12 项通过。图片与渐变混搭的 Windows G5 预览及短 MP4 导出冒烟共 4 项通过，Vulkan 与 Raster 各覆盖两项。
 - 缺失、无法解码或超出当前缓存上限的素材使用该层实色。缓存上限为每次配置 64 个素材键、边长 8192 像素、256 MiB 已解码像素。当前验证覆盖 PNG，其他格式的解码差异和平台插件随包交付待查。动态图、角色、注音、装饰与动画组合尚待接通。代表用例与规范样例已登记到后续双架构 Mac CI。
+
+### 14.91 P10 Windows 导出格式冒烟验收（2026-11-19）
+
+以 `62990516` 的 Python 和 Windows sidecar，在同一静态 PNG、渐变及描边组合场景上使用 Vulkan 和 Raster 分别导出透明 PNG 序列、合成 PNG 序列、qtrle 与 ProRes 4444，共 8 项通过。场景 640×360，60 fps，1 秒，无音频。每项检查 60 帧，抽样解码第 46 帧并和同时间的未编码帧比较。透明 PNG 与 qtrle 的 alpha 完全一致，alpha ≥16 的像素 RGB 完全一致。ProRes 4444 八位 alpha 最大差 1，抽样 RGB 平均绝对误差低于 0.08。合成 PNG 的背景角点与真实 D2D GPU 一致，整帧 RGB 平均绝对误差低于 1。MP4 冒烟见 §14.90。
+
+跨平台打包、导出取消和故障回退、60/120 fps 长时间序列、音轨及前后黑段仍需按 P10 验收。
 
 ## 15. 前期探针清理范围
 

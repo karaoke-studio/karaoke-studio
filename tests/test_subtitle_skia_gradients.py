@@ -199,8 +199,12 @@ def test_outline_gradients_declare_capability_and_replay(binary, project, case, 
         plain, _ = collect(process, TIMES, generation=2)
     assert np.array_equal(frames[3], frames[-2]) and np.array_equal(frames[0], frames[-1])
     for t, frame, reference in zip(TIMES, frames[:len(TIMES)], plain, strict=True):
-        # Same coverage footprint as the solid stack; the paint differs inside it.
-        assert np.array_equal(frame[..., 3] > 0, reference[..., 3] > 0) or case == 'translucent', (case, t)
+        # Opaque shader and solid paint paths can round AA coverage differently.
+        # Compare the alpha values themselves so one LSB at an edge is permitted
+        # while shifted or missing outline pixels still fail.
+        if case != 'translucent':
+            delta = np.abs(frame[..., 3].astype(np.int16) - reference[..., 3].astype(np.int16))
+            assert delta.max() <= 1, (case, t, int(delta.max()), int((delta > 1).sum()))
     assert not np.array_equal(frames[1], plain[1])
     if case == 'all' and target == 'gpu':
         (tmp_path / 'outline-gradient-layout.json').write_text(json.dumps({
