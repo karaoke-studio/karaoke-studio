@@ -369,9 +369,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
         const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
         const bool singingGlow = singingScale && !line.zoomPulseEnabled && features.contains("p07_singing_glow");
+        // scanline_band_schema=6: the band repaints over a static glow (no shadow,
+        // no role palette); the glow is drawn under the text as without a band.
+        const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
+            && layout.value("scanline_band_schema").toDouble(-1) >= 6 && style.scanlineMode != "role";
         if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
-                || line.entryAnimation != "none" || line.exitAnimation != "none" || line.scanlineEnabled
+                || line.entryAnimation != "none" || line.exitAnimation != "none" || (line.scanlineEnabled && !scanlineGlow)
                 || !line.bursts.empty() || line.strokeFlashEnabled
                 || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia && !singingGlow)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))

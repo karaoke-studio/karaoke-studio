@@ -78,6 +78,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_static_shadow.py::test_ruby_shadow_keeps_clocks_and_seeks",
     "tests/test_subtitle_skia_static_glow.py::test_ruby_glow_keeps_clocks_and_seeks",
     "tests/test_subtitle_skia_scanline.py::test_upper_ruby_band_keeps_own_clock_and_seek",
+    "tests/test_subtitle_skia_scanline.py::test_glow_band_capability_and_out_of_order_seek",
 )
 
 

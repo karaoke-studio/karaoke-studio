@@ -153,7 +153,7 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 6, 'legacy_mode', 'legacy_glow', 'shape', 'reverse',
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 7, 'legacy_mode', 'legacy_glow', 'shape', 'reverse',
                                       'legacy_utopia', 'utopia_zoom'])
 def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, scanline_source(project))
@@ -772,3 +772,146 @@ def test_combined_particle_layers_match_actual_d2d_and_gpu_raster(binary, projec
     for time, d2d, gpu, raster in zip(times, refs, *results, strict=True):
         assert_particle_region(d2d, gpu, ('combined', singing, scan, time), check_contour=False)
         assert_particle_region(gpu, raster, ('combined', singing, scan, time, 'raster'), check_contour=False)
+
+
+# scanline_band_schema=6: the band repaints over a static glow (main and upper ruby).
+P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_brighten',
+                      'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none']
+
+
+def glow_band_source(reading, case, utopia=False):
+    from test_subtitle_skia_static_glow import glowing_ruby
+    track, style = glowing_ruby(reading, case)
+    style = replace(band(style, 42), scanline_glow_px=10)
+    return track, replace(style, karaoke_anim='utopia') if utopia else style
+
+
+def glow_band_frames(binary, source, dpr, times):
+    from test_subtitle_skia_outline_ruby import render_skia
+    return render_skia(binary, upper_ir(binary, source, dpr), times)
+
+
+@pytest.mark.parametrize('case,utopia', [('inherited', False), ('independent', False), ('inherited', True)])
+def test_glow_band_capability_and_out_of_order_seek(binary, reading, case, utopia, tmp_path):
+    track, style = glow_band_source(reading, case, utopia)
+    ir = upper_ir(binary, (track, style), 1.5)
+    bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1.5)
+    main_glow = case == 'inherited'
+    assert ir['skia_layout']['scanline_band_schema'] == (6 if main_glow else 5 if utopia else 3)
+    assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
+    order = [*RUBY_BAND_TIMES, 1100, 450, 1900]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, order)
+            configure(process, bare)
+            plain, _ = collect(process, RUBY_BAND_TIMES, generation=2)
+        by_time = dict(zip(RUBY_BAND_TIMES, frames))
+        for t, frame in zip(order[len(RUBY_BAND_TIMES):], frames[len(RUBY_BAND_TIMES):], strict=True):
+            assert np.array_equal(frame, by_time[t]), (case, utopia, target, t)
+        # The band repaints while singing and leaves the unsung and completed frames alone.
+        changed = [not np.array_equal(by_time[t], p) for t, p in zip(RUBY_BAND_TIMES, plain, strict=True)]
+        assert any(changed) and not changed[0] and not changed[-1], (case, utopia, target, changed)
+        results.append([by_time[t] for t in RUBY_BAND_TIMES])
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    assert_glow_parity(RUBY_BAND_TIMES, results[0], results[0], results[1], ('seek', case, utopia), 1.5)
+    if main_glow and utopia:
+        (tmp_path / 'scanline-glow-layout.json').write_text(json.dumps({
+            'features': ir['required_features'],
+            'schema': ir['skia_layout']['scanline_band_schema'],
+            'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading):
+    ir = upper_ir(binary, glow_band_source(reading, 'inherited'), 1)
+    bad = copy.deepcopy(ir)
+    bad['skia_layout']['scanline_band_schema'] = 5
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [1100])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [1100], generation=2)
+    assert before[0][..., 3].any() and np.array_equal(before, after)
+
+
+@pytest.mark.parametrize('change', [
+    {'decoration_kind': 'shadow', 'decoration_kind_before': 'shadow'},
+    {'scanline_mode': 'role', 'scanline_role_name': '__global__'},
+    {'entry_anim': 'fade', 'entry_lead_ms': 400},
+    {'karaoke_anim': 'zoom_pulse'},
+    {'scanline_effect': 'star'},
+])
+def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
+    track, style = glow_band_source(reading, 'inherited')
+    with pytest.raises(ValueError):
+        upper_ir(binary, (track, replace(style, **change)), 1)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case,utopia,dpr', [('inherited', False, 1), ('inherited', False, 1.5),
+                                            ('independent', False, 1.5), ('inherited', True, 1),
+                                            ('inherited', True, 1.5)])
+def test_glow_band_matches_actual_d2d_and_gpu_raster(binary, reading, case, utopia, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    track, style = glow_band_source(reading, case, utopia)
+    refs = {}
+    for name, look in (('band', style), ('bare', replace(style, scanline_enabled=False))):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, tuple(RUBY_BAND_TIMES), force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs[name] = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = glow_band_frames(binary, (track, style), dpr, RUBY_BAND_TIMES)
+    assert_glow_parity(RUBY_BAND_TIMES, refs['band'], gpu, raster, ('glow_band', case, utopia), dpr)
+    # Both renderers really draw a band over the glow at the same samples.
+    gpu_bare, _ = glow_band_frames(binary, (track, replace(style, scanline_enabled=False)), dpr, RUBY_BAND_TIMES)
+    for t, ref, ref_bare, skia, skia_bare in zip(RUBY_BAND_TIMES, refs['band'], refs['bare'], gpu, gpu_bare,
+                                                 strict=True):
+        assert np.array_equal(ref, ref_bare) == np.array_equal(skia, skia_bare), (case, utopia, dpr, t)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', P00_SCANLINE_CASES)
+def test_p00_scanline_matches_actual_d2d_and_gpu_raster(binary, application, case_id, tmp_path):
+    """Original 1080p P00 scanline cases: outlines, static glow, outlined upper ruby and a feathered band."""
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == case_id)
+    bare_style = replace(case.style, scanline_enabled=False,
+                         karaoke_anim='utopia' if case.style.karaoke_anim == 'utopia_scanline' else 'none')
+    refs = {}
+    for name, look in (('band', case.style), ('bare', bare_style)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, case.timestamps_ms, force_warp=False,
+                                       track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+        refs[name] = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    frames = {}
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames[target], _ = collect(process, case.timestamps_ms)
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
+        process.configure(case.track, bare_style, width=1920, height=1080, fps=60)
+        bare, _ = collect(process, case.timestamps_ms)
+    assert_glow_parity(case.timestamps_ms, refs['band'], frames['gpu'], frames['raster'], case_id, 1)
+    limit = COMPARISON_BUDGETS['image_categories']['decorated_text']['max_bbox_edge_delta_px_at_1080']
+
+    def bounds(frame):
+        rows, columns = np.where(frame[..., 3] > 16)
+        return np.array([columns.min(), rows.min(), columns.max(), rows.max()])
+
+    banded = 0
+    for t, ref, ref_bare, gpu, gpu_bare, raster in zip(
+            case.timestamps_ms, refs['band'], refs['bare'], frames['gpu'], bare, frames['raster'], strict=True):
+        assert np.max(np.abs(bounds(ref) - bounds(gpu))) <= limit, (case_id, t, 'D2D')
+        assert np.max(np.abs(bounds(gpu) - bounds(raster))) <= limit, (case_id, t, 'Raster')
+        drawn = not np.array_equal(ref, ref_bare)
+        assert drawn == (not np.array_equal(gpu, gpu_bare)), (case_id, t, 'band presence')
+        banded += drawn
+    assert banded >= 1, case_id

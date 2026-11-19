@@ -124,6 +124,9 @@ def _validate_scanline_band(track, style, lines):
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or line.get('zoom_pulse') or line.get('stroke_flash')
                 or look.lower_ruby_enabled
+                # scanline_band_schema=6 composes only a static glow, without role palette.
+                or _uses_decoration(look, 'shadow')
+                or (_uses_decoration(look, 'glow') and look.scanline_mode == 'role')
                 or (track.rubies and (look.scanline_mode == 'role' or
                                       {line.get('entry_anim'), line.get('exit_anim')} != {'none'}))
                 or any(c.role_label is not None or c.vector_glyph is not None
@@ -355,8 +358,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p06_ruby_glow')
     if 'p07_scanline_band' in ir['required_features']:
         scanned = [line for line in ir['track']['lines'] if line.get('scanline')]
+        glowing = any(source.get('scanline') and _uses_decoration(style_for_line(style, line), 'glow')
+                      for source, line in zip(ir['track']['lines'], track.lines, strict=True))
         ir['skia_layout']['scanline_band_schema'] = (
-            5 if any(line.get('karaoke_anim') == 'utopia' for line in scanned)
+            6 if glowing
+            else 5 if any(line.get('karaoke_anim') == 'utopia' for line in scanned)
             else 4 if any(line.get('wipe_reverse') for line in scanned) else 3
         )
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
