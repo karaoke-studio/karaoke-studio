@@ -115,6 +115,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     }
     enum class Layer { OuterOutline, Outline, Body };
     using PhaseShaders = std::array<sk_sp<SkShader>, 2>;
+    const auto inPhaseOrder = [&](auto&& paintCell) {
+        for (std::size_t index = line.cells.size(); index > 0; --index)
+            if (states[index-1].phase == Phase::Before) paintCell(index-1, Phase::Before);
+        for (std::size_t index = 0; index < line.cells.size(); ++index)
+            if (states[index].phase == Phase::After) paintCell(index, Phase::After);
+        for (std::size_t index = 0; index < line.cells.size(); ++index)
+            if (states[index].phase == Phase::Wiping) paintCell(index, Phase::Wiping);
+    };
     const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {
         const auto& cell = line.cells[index];
         const auto& stroke = layer == Layer::OuterOutline ? cell.outerOutline : cell.outline;
@@ -188,12 +196,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto drawLayer = [&](Layer layer, const ImageFill (&images)[2], PhaseShaders shaders) {
         for (std::size_t phase = 0; phase < shaders.size(); ++phase)
             if (images[phase]) shaders[phase] = images[phase].shaderAt(canvas.getTotalMatrix());
-        for (std::size_t index = line.cells.size(); index > 0; --index)
-            if (states[index-1].phase == Phase::Before) drawCell(index-1, layer, shaders);
-        for (std::size_t index = 0; index < line.cells.size(); ++index)
-            if (states[index].phase == Phase::After) drawCell(index, layer, shaders);
-        for (std::size_t index = 0; index < line.cells.size(); ++index)
-            if (states[index].phase == Phase::Wiping) drawCell(index, layer, shaders);
+        inPhaseOrder([&](std::size_t index, Phase) { drawCell(index, layer, shaders); });
     };
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false);
     if (geometry)
@@ -202,7 +205,25 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
                               state.transform, line.characterGeometry.fontPx);
         }
-    line.shadow.draw(canvas, line.cells, tMs, line.shadowInk);
+    for (const auto& layer : line.glow) {
+        const bool before = layer.visible(false), after = layer.visible(true);
+        if (std::ranges::none_of(states, [=](const State& state) {
+                return (before && state.phase != Phase::After) || (after && state.phase != Phase::Before);
+            })) continue;
+        const auto source = layer.createSource(canvas);
+        if (!source.surface) continue;
+        auto& glowCanvas = *source.surface->getCanvas();
+        inPhaseOrder([&](std::size_t index, Phase phase) {
+            if (phase == Phase::Wiping) {
+                layer.drawCell(glowCanvas, index, false, states[index].edge);
+                layer.drawCell(glowCanvas, index, true, states[index].edge);
+            } else {
+                layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt);
+            }
+        });
+        layer.composite(canvas, source);
+    }
+    line.shadow.draw(canvas, line.cells, tMs, line.decorationInk);
     if (line.hasOuterOutline)
         drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
     if (line.hasOutline)

@@ -40,6 +40,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.afterOuterGradient = source.afterOuterGradient;
         line.images = source.images;
         line.shadow = source.shadow;
+        line.glow = PreparedGlow::prepare(source.glow);
         line.noise = source.noise;
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;
@@ -107,6 +108,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (cell.outerOutline) line.hasOuterOutline = true;
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
             if (line.animation.active()) includeCellPaint(line.paintBounds, cell);
+            for (auto& glow : line.glow) glow.appendCell(cell.path);
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth});
@@ -126,7 +128,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             line.inkStart = ink.isEmpty() ? 0.f : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
             if (!ink.isEmpty()) line.inkCenter = ink.centerX();
-            if (line.shadow.visible()) line.shadowInk = ink;
+            if (line.shadow.visible()) line.decorationInk = ink;
         }
         lines_.push_back(std::move(line));
     }

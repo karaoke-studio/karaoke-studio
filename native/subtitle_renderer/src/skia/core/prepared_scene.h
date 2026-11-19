@@ -69,7 +69,8 @@ private:
         sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
         LineImageFills images;
         StaticShadow shadow;
-        SkRect shadowInk = SkRect::MakeEmpty();
+        std::vector<PreparedGlow> glow;
+        SkRect decorationInk = SkRect::MakeEmpty();
         NoiseTransition noise;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;

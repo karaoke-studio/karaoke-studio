@@ -64,8 +64,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool bodyGradients = features.contains("p06_body_gradient");
     const bool outlineGradients = features.contains("p06_outline_gradient");
     const bool imageFills = features.contains("p06_image_fill");
-    const bool staticShadow = features.contains("p06_static_shadow");
-    validateSkiaScene(projected, true, outlineLayers, bodyGradients, outlineGradients, imageFills, staticShadow);
+    validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
+        .outlineGradients = outlineGradients, .imageFills = imageFills,
+        .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow")});
     SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
@@ -341,13 +342,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
         prepared.shadow = skiaStaticShadow(style);
-        if ((prepared.shadow.before.enabled || prepared.shadow.after.enabled)
+        prepared.glow = skiaStaticGlow(style);
+        const bool hasDecoration = prepared.shadow.before.enabled || prepared.shadow.after.enabled
+            || prepared.glow.before.radius || prepared.glow.after.radius;
+        if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.scanlineEnabled
                 || !line.bursts.empty() || line.strokeFlashEnabled || !prepared.rubyGroups.empty()
                 || !projected.charStyles.empty() || gradient || image
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
-            throw BackendError("Skia 静态阴影当前仅支持正向横排实色正文");
+            throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)

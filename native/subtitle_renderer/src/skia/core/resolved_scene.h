@@ -11,6 +11,7 @@
 #include "subtitle_gradient.h"
 #include "image_fill.h"
 #include "static_shadow.h"
+#include "static_glow.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
 #include <optional>
@@ -50,6 +51,7 @@ struct ResolvedLine {
     sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
     LineImageFills images; // Device-anchored static image paints; take precedence over gradients.
     StaticShadow shadow;
+    StaticGlow glow;
     NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;

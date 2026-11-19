@@ -25,23 +25,28 @@ std::filesystem::path fontPath(const std::wstring& value) {
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
-void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool bodyGradients, bool outlineGradients,
-                    bool imageFills, bool staticShadow) {
+void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilities& caps) {
+    const int outlineLayers = caps.outlineLayers;
     const auto gradient = [](const PaintStyle& paint) {
         return !paint.stops.empty()
             && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical");
     };
     const auto supportedBodyFill = [&](const PaintStyle& paint) {
-        return paint.mode == "solid" || (bodyGradients && gradient(paint)) || (imageFills && paint.mode == "image");
+        return paint.mode == "solid" || (caps.bodyGradients && gradient(paint)) || (caps.imageFills && paint.mode == "image");
     };
     const auto supportedOutline = [&](const PaintStyle& paint) {
-        return paint.mode == "solid" || (outlineGradients && gradient(paint)) || (imageFills && paint.mode == "image");
+        return paint.mode == "solid" || (caps.outlineGradients && gradient(paint)) || (caps.imageFills && paint.mode == "image");
     };
     const auto supportedDecoration = [&](bool after) {
         const auto kind = s.decorationKindForState(after);
         const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
-        return kind == "none" || (staticShadow && kind == "shadow" && paint.mode == "solid"
-            && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after)));
+        if (kind == "none") return true;
+        if (paint.mode != "solid") return false;
+        if (kind == "shadow")
+            return caps.staticShadow && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
+        // Ganesh's pinned blur image filter clamps larger sigmas.
+        const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;
+        return caps.staticGlow && kind == "glow" && std::isfinite(radius) && radius <= 532.f;
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
         || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
@@ -75,18 +80,17 @@ void supportedStyle(const TextStyle& s, bool canonical, int outlineLayers, bool 
             "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }
 }
-void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLayers, bool bodyGradients,
-                       bool outlineGradients, bool imageFills, bool staticShadow) {
+void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabilities caps) {
     if (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
         || scene.viewportOffsetY != 0 || scene.lineBand.enabled || (!canonical && !scene.charStyles.empty())
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
-    if (outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");
-    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, outlineLayers, false, false, false, false);
+    if (caps.outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");
+    for (const auto& style : scene.charStyles) supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
-        supportedStyle(style, canonical, outlineLayers, bodyGradients, outlineGradients, imageFills, staticShadow);
+        supportedStyle(style, canonical, caps);
         if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
             || !line.rubies.empty() || (!canonical && !line.bursts.empty()) || (!canonical && !line.placementWindows.empty())
             || line.fadeInMs || line.fadeOutMs
@@ -115,6 +119,16 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLaye
             style.shadowOffsetXForState(after), style.shadowOffsetYForState(after), argb(paint.color)};
     };
     return {state(false), state(true), style.strokeWidth, style.stroke2Width};
+}
+
+::subtitle::skia::StaticGlow skiaStaticGlow(const TextStyle& style) {
+    const auto state = [&](bool after) {
+        if (style.decorationKindForState(after) != "glow") return ::subtitle::skia::GlowState{};
+        const auto& paint = after ? style.afterDecorPaint : style.beforeDecorPaint;
+        const auto radius = after ? style.glowAfterRadius : style.glowBeforeRadius;
+        return ::subtitle::skia::GlowState{int(std::lround(radius)), style.glowConcentrationForState(after), argb(paint.color)};
+    };
+    return {state(false), state(true), style.strokeWidth + style.stroke2Width};
 }
 
 ::subtitle::skia::SubtitleInput skiaSceneInput(const RenderScene& scene) {
