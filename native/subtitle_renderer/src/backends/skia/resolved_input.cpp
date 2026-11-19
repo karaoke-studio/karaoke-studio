@@ -7,6 +7,7 @@
 #include "../render_backend.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../scene/skia_text_projection.h"
+#include "../../skia/core/stroke_flash.h"
 #include "include/core/SkMatrix.h"
 #include <QtCore/QJsonArray>
 #include <cmath>
@@ -259,6 +260,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("rotation_pivot_x")) {
                 throw BackendError("Skia 横排单元不能携带竖排单元框");
             }
+            if (line.strokeFlashEnabled)
+                glyph.strokeFlashWidth = ::subtitle::skia::strokeFlashBaseWidth(paint.fontSize, paint.strokeWidth);
             prepared.cells.push_back(std::move(glyph));
         }
         const int timingOffset = cells.isEmpty() ? 0

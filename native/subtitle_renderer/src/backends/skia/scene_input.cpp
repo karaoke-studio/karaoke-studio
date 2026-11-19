@@ -75,7 +75,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLaye
             || (!canonical && (line.entryAnimation != "none" || line.exitAnimation != "none"))
             || (line.karaokeAnimation != "none" && line.karaokeAnimation != "inherit"
                 && !(canonical && line.karaokeAnimation == "no_wipe"))
-            || (line.scanlineEnabled && !canonical) || line.zoomPulseEnabled || line.strokeFlashEnabled || (line.wipeReverse && !canonical)
+            || (!canonical && (line.scanlineEnabled || line.strokeFlashEnabled || line.wipeReverse)) || line.zoomPulseEnabled
             || line.staticOverlay || line.annotationBaselineY || line.displayWindows.size() != 1)
             throw BackendError("Skia P04: unsupported line animation/layout/annotation");
         if (line.displayWindows[0].fadeInMs > 0 || line.displayWindows[0].fadeOutMs > 0)

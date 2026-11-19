@@ -51,6 +51,7 @@ private:
         std::optional<SolidOutline> outline;
         std::optional<SolidOutline> outerOutline;
         CharacterPivot pivot;
+        float strokeFlashWidth = 0;
     };
     struct Line {
         std::vector<Cell> cells;
@@ -62,6 +63,7 @@ private:
         bool vertical = false;
         bool hasOutline = false;
         bool hasOuterOutline = false;
+        bool hasStrokeFlash = false;
         LineAnimation animation;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;

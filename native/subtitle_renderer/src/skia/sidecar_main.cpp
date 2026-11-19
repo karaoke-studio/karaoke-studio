@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     profiles.append("p07_scanline_band");
     profiles.append("p07_character_transform");
     profiles.append("p07_sing_twinkle");
+    profiles.append("p07_stroke_flash");
     profiles.append("p05_horizontal_rtl_kana_cells");
     profiles.append("p05_horizontal_rtl_kana_marks");
     profiles.append("p05_reverse_wipe");

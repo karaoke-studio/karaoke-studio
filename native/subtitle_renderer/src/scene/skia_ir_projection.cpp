@@ -50,7 +50,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p07_zero_ruby_no_wipe" && feature.toString() != "p07_line_fade"
             && feature.toString() != "p07_line_motion" && feature.toString() != "p07_character_fade"
             && feature.toString() != "p07_scanline_band" && feature.toString() != "p07_character_transform"
-            && feature.toString() != "p07_sing_twinkle"
+            && feature.toString() != "p07_sing_twinkle" && feature.toString() != "p07_stroke_flash"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
@@ -296,11 +296,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || !supportedAnimation(source.exitAnimation, false)
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
                 && source.karaokeAnimation != "no_wipe")
-            || source.zoomPulseEnabled || source.strokeFlashEnabled
+            || source.zoomPulseEnabled
             || (!source.fxBursts.empty() && !features.contains("p07_sing_twinkle")))
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
+        if (source.strokeFlashEnabled
+            && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
+                || !cfg.rubies.empty() || features.contains("p05_resolved_ruby") || source.scanlineEnabled
+                || source.entryAnimation != "none" || source.exitAnimation != "none"
+                || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty()))
+            throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
         // Horizontal solid-color band, without image, ruby or roles.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
@@ -361,6 +367,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         line.exitDurationMs = source.exitDurationMs;
         line.karaokeAnimation = source.karaokeAnimation.toStdString();
         line.scanlineEnabled = source.scanlineEnabled;
+        line.strokeFlashEnabled = source.strokeFlashEnabled;
         line.lane = source.lane;
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
@@ -393,6 +400,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (source.scanlineEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
+            if (source.strokeFlashEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
+                throw BackendError("Skia 唱字描边闪光暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))

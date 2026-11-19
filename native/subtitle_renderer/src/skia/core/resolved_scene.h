@@ -26,6 +26,7 @@ struct ResolvedCell {
     std::optional<SolidOutline> outline;
     std::optional<SolidOutline> outerOutline;
     CharacterPivot pivot;
+    float strokeFlashWidth = 0;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

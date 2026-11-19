@@ -1,6 +1,7 @@
 #include "core/prepared_scene.h"
 #include "character_halo.h"
 #include "character_wipe.h"
+#include "stroke_flash.h"
 #include "../../effects/wipe_clock.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkData.h"
@@ -63,7 +64,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         for (const auto& cell : source.cells) {
             if (++totalCells > 65536) throw std::runtime_error("Skia 字形单元总数超限");
             if (!cell.path.isFinite() || !std::isfinite(cell.left) || !std::isfinite(cell.right)
-                || cell.right < cell.left || cell.endMs < cell.startMs)
+                || cell.right < cell.left || cell.endMs < cell.startMs
+                || !std::isfinite(cell.strokeFlashWidth) || cell.strokeFlashWidth < 0)
                 throw std::runtime_error("Skia: invalid resolved glyph geometry/time");
             if (source.vertical && (!std::isfinite(cell.top) || !std::isfinite(cell.bottom) || cell.bottom <= cell.top))
                 throw std::runtime_error("Skia 竖排单元框无效");
@@ -89,6 +91,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             }
             if (cell.outline) line.hasOutline = true;
             if (cell.outerOutline) line.hasOuterOutline = true;
+            if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
             if (line.animation.active()) {
                 line.paintBounds.join(cell.path.getBounds());
                 if (cell.outline) line.paintBounds.join(cell.outline->path.getBounds());
@@ -96,7 +99,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             }
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
-                                  cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot});
+                                  cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth});
         }
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
@@ -374,6 +377,9 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             setColor(cell.before, cell.after);
             canvas.drawPath(cell.path, paint);
         });
+        if (line.hasStrokeFlash)
+            for (const auto& cell : line.cells)
+                drawStrokeFlash(canvas, cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
         // The GPU's front particle layer covers the main text and readings.
         if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
