@@ -59,15 +59,7 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
     path = path.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));
     return {path, float(left*dpr), float(right*dpr), start, end, before, after};
 }
-// The existing GPU builds the guide from M/L/C/Q/Z commands scaled by
-// max(size, 1) / unitsPerEm (y-down, baseline 0, winding fill, open figures
-// filled), translates it to the cell's left edge and advances by
-// max(size * advanceWidth / unitsPerEm, 1). Advance and ink are re-derived here.
-::subtitle::skia::ResolvedCell ResolvedGlyphContext::vectorCell(const QJsonObject& cell, const VectorGlyph& glyph,
-                                                              const QString& glyphId, double size,
-                                                              int start, int end, std::uint32_t before, std::uint32_t after) const {
-    if (!std::isfinite(size) || size <= 0 || size > 4096 || glyph.commands.empty() || glyph.commands.size() > 65536)
-        throw BackendError("Skia 导唱符尺寸或轮廓无效");
+SkPath vectorGlyphPath(const VectorGlyph& glyph, double size) {
     const float scale = std::max(float(size), 1.0f) / std::max(glyph.unitsPerEm, 1.0f);
     SkPathBuilder builder(SkPathFillType::kWinding);
     bool open = false;
@@ -79,8 +71,20 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
         else if (command.kind == 'Q' && command.values.size() == 4 && open) builder.quadTo(point(0), point(2));
         else if (command.kind == 'Z' && open) { builder.close(); open = false; }
     }
-    const SkPath path = builder.detach();
+    SkPath path = builder.detach();
     if (!path.isFinite()) throw BackendError("Skia 导唱符轮廓包含非有限坐标");
+    return path;
+}
+// The existing GPU builds the guide from M/L/C/Q/Z commands scaled by
+// max(size, 1) / unitsPerEm (y-down, baseline 0, winding fill, open figures
+// filled), translates it to the cell's left edge and advances by
+// max(size * advanceWidth / unitsPerEm, 1). Advance and ink are re-derived here.
+::subtitle::skia::ResolvedCell ResolvedGlyphContext::vectorCell(const QJsonObject& cell, const VectorGlyph& glyph,
+                                                              const QString& glyphId, double size,
+                                                              int start, int end, std::uint32_t before, std::uint32_t after) const {
+    if (!std::isfinite(size) || size <= 0 || size > 4096 || glyph.commands.empty() || glyph.commands.size() > 65536)
+        throw BackendError("Skia 导唱符尺寸或轮廓无效");
+    const SkPath path = vectorGlyphPath(glyph, size);
     const SkRect ink = path.isEmpty() ? SkRect::MakeEmpty() : path.computeTightBounds();
     const double advance = std::max(size * std::max(glyph.advanceWidth, 0.0f) / std::max(glyph.unitsPerEm, 1.0f), 1.0);
     const auto metrics = cell.value("metrics").toObject();

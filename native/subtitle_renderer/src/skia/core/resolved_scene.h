@@ -4,6 +4,7 @@
 #include "character_transform.h"
 #include "line_animation.h"
 #include "scanline_band.h"
+#include "sing_particles.h"
 #include "solid_outline.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
@@ -41,6 +42,7 @@ struct ResolvedLine {
     LineAnimation animation;
     CharacterFade characterFade;
     ScanlineBand scanline;
+    std::vector<SingParticleBurst> particles; // Front layer, drawn after the text stack.
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

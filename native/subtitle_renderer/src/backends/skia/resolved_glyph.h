@@ -9,6 +9,8 @@
 #include <vector>
 
 namespace krok::subtitle::native {
+// The existing GPU's M/L/C/Q/Z geometry at max(size, 1) / unitsPerEm (winding, y-down).
+SkPath vectorGlyphPath(const VectorGlyph& glyph, double size);
 struct ResolvedGlyphContext {
     using Fonts = std::vector<std::shared_ptr<const ::subtitle::skia::text::FontInstance>>;
     std::vector<Fonts> fonts;

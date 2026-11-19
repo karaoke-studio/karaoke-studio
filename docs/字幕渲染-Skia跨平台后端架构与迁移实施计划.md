@@ -556,6 +556,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
 - [ ] P07.3 普通 wipe/no_wipe、反向、共享计时块、空 pause、角色边界、Utopia、ruby Utopia、zoom_pulse、stroke_flash，含完成后的外层释放与下一字符接管。实色正向横排 no_wipe 子集见 §14.35；完整方向/特效组合仍待验收。
 - [ ] P07.4 全部已支持粒子种类与伴生层、sprite 覆盖、双色/跟随字体/复用配色、数量/速度、front/back、geometry/decor、逐字锚点及整行锚点。
+  - [x] 正向横排基础正文的实色唱字星光，覆盖单色、双色和仍在行显示窗内的末字尾迹，见 §14.63。
 - [ ] P07.5 普通高亮带、color/brighten/role、宽度与亮度/发光；与 Utopia/zoom_pulse/ruby 联动。
   - [x] 已验收正向横排无柔化实色高亮带，含停顿、DPR、双描边与已验证入退场组合，见 §14.61。
   - [ ] 柔化、其他取色模式和其余联动仍待验收。
@@ -1999,6 +2000,13 @@ Windows 相关 **84 通过**，含新增 **10 项实际 D2D GPU 对照**（reali
 `character_transform_schema=1` 接通 `char_drip` 和 `spin_flip`，范围限于正向、横排从左至右、无描边的正文。时钟复用 `CharacterFade`：350ms 错开、250ms 渐变，退场优先于入场。`char_drip` 在进度大于 0 时即完全不透明，按 `-侧向 × tan(min(90°×(1-p), 89°))` 绕版面单元右缘做纵向错切。`spin_flip` 的透明度等于进度，并绕单元中心做“平移、纵向错切、缩放、反平移”变换。轴心来自规范布局：Python 以 `origin_x - offset` 和 `width` 给出版面单元左右缘（`layout_left`/`layout_right`），以字形运行（请求字体槽）的 ascent/descent 加基线给出 `pivot_y`，不使用墨迹中心。矩阵只作用于路径，走字裁剪仍在行坐标中进行。变换期间整行淡化层不设边界。门控：变换期间不得有字在走字（入场须在各字开始前完成，退场须在各字结束后开始，否则 D2D 改用逐字形锋面）。描边、扫字线、注音、导唱符、行内角色、右至左、竖排、反向和 no_wipe 在 Python 和 native 两侧都会拒绝；伪造的能力声明、轴心或时序也会被拒绝，并保留上一场景。
 
 Windows 相关 **109 通过**，含新增 **8 项实际 D2D GPU 对照**（不使用 WARP，realization 关闭）。对照覆盖滴落、翻转（各 DPR 1/1.5）、滴落接翻转、升入接翻转、翻转接滑出、淡化接滴落。两侧都能分辨原始 1px 墨迹时（峰值 alpha>128），沿用 alpha>127 的 1px 墨迹/掩码预算，另有锋面预算、峰值 alpha ±2 的相位检查和覆盖加权质心 ≤0.5px 的轴心检查。每例至少 8 个动画帧达到原始几何预算。缩小到 12% 以下的翻转笔画不足 1px，此时覆盖率反映的是抗锯齿而不是几何，因此只做相位和质心检查。Skia GPU 与 Raster 在倒序、重复的独立定位下一致，覆盖 3 种情形。X11/Wayland 专项各 **27 通过、8 跳过**（D2D 对照），独立 Windows/Linux Raster 各 **23 通过**。四份 native 干净重建，CTest 各 **3/3**，指纹 `7551c5562c0e7a1316b6de238993b11a5af14d72143b6fedd776c821d4b32ec3`。样例 `character-transform-layout.json` 在 Windows/X11/Wayland 的严格比较误差为 **0**。复核补齐零时长路径，完整 Windows 专项 36 项通过，Wayland 的拒绝与零时长用例 12 项通过。Mac CI 已纳入专项和规范样例，留待阶段收口时运行。证据前缀 `build/p07-transform*`。
+
+
+### 14.63 P07.4 唱字星光粒子（2026-11-19）
+
+`sing_twinkle_schema=1` 接通正向横排的实色原速唱字星光（`twinkle`）。Python 沿用原规划器输出 burst 和种子，用规范单元左右边、字体度量中线及整行最大 ascent/descent 准备锚点。native 使用共享 `effects::burstParticlesAt` 和同一个 `star4` 轮廓，在正文前方合成。按 D2D 的四角星几何简化实测，在物理坐标以 0.75px 的轴向二阶差阈值细分二次曲线再做抗锯齿。倒序和回跳的同后端帧逐字节一致。粒子可超过末字的唱字结束点，当前验证限制在行显示窗内。速度、跟随取色、描边/装饰、其他粒子及和入退场、扫字线、注音的组合仍需验收。
+
+Windows 相关 **106 项通过**，含 **4 项真实 D2D GPU** 对照（关闭 WARP 和 realization），覆盖 DPR 1/1.5、停顿、单色与双色。GPU/Raster 使用既有粒子区域预算和 1px 高亮轮廓检查。唯一命名低透明度样例为 DPR 1 的 1500ms 换字帧，14 个像素跨了 alpha 16 的掩码阈值，较大一侧最高 24，两侧像素差最高 10，覆盖总量相差 0.3%；对该帧逐像素检查低透明度边缘，其他帧执行原 IoU 预算。已并排复核 Arial 实字的 D2D/Vulkan/Raster 画面。X11/Wayland 各 **14 通过、4 项 D2D 跳过**，独立 Windows/Linux Raster 各 **12 通过**。四份 native 干净重建，CTest 各 **3/3**，源码标识 `cb822fc1cd966e9c708991b808e2f4692199ce6aa1a90f62a7d6474208336af3`。Windows/X11/Wayland 的 `sing-twinkle-layout.json` 字节相同。Mac 工作流已登记专项和样例，阶段收口时运行。证据前缀 `build/p07-twinkle*`。
 
 ## 15. 前期探针清理范围
 

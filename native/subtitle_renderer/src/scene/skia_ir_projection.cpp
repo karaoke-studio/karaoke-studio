@@ -2,6 +2,7 @@
 #include "skia_lower_projection.h"
 #include "style_projection.h"
 #include "line_layout_projection.h"
+#include "skia_particle_projection.h"
 #include "../protocol/render_config_parser.h"
 #include "../model/backend_caps.h"
 #include <QtCore/QJsonArray>
@@ -49,6 +50,7 @@ void validateEnvelope(const QJsonObject& ir) {
             && feature.toString() != "p07_zero_ruby_no_wipe" && feature.toString() != "p07_line_fade"
             && feature.toString() != "p07_line_motion" && feature.toString() != "p07_character_fade"
             && feature.toString() != "p07_scanline_band" && feature.toString() != "p07_character_transform"
+            && feature.toString() != "p07_sing_twinkle"
             && feature.toString() != "p05_horizontal_rtl" && feature.toString() != "p05_horizontal_rtl_cells"
             && feature.toString() != "p05_horizontal_rtl_kana_cells" && feature.toString() != "p05_vertical_solid"
             && feature.toString() != "p05_vertical_japanese_glyphs" && feature.toString() != "p05_vector_guides" && feature.toString() != "p05_vertical_ruby"
@@ -133,6 +135,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_character_transform")
         && ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字滴落/翻转布局版本无效");
+    if (ir.value("required_features").toArray().contains("p07_sing_twinkle")
+        && ir.value("skia_layout").toObject().value("sing_twinkle_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 唱字星光布局版本无效");
     if (ir.value("required_features").toArray().contains("p06_primary_solid_outline")
         && ir.value("skia_layout").toObject().value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
@@ -280,7 +285,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
                 && source.karaokeAnimation != "no_wipe")
             || source.zoomPulseEnabled || source.strokeFlashEnabled
-            || !source.fxBursts.empty())
+            || (!source.fxBursts.empty() && !features.contains("p07_sing_twinkle")))
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
@@ -346,6 +351,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;
+        projectSkiaSingParticles(cfg, source, resolved, offset, out, line);
         if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});
@@ -373,6 +379,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (source.scanlineEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
+            if (!source.fxBursts.empty() && (cell.vectorGlyph || &cellStyle != &resolved))
+                throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation) || transformAnimation(source.exitAnimation))
                 && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 逐字滴落/翻转暂不支持导唱符或行内角色");

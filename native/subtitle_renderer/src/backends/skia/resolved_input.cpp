@@ -92,6 +92,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         glyphs.languages.push_back(run.value("language").toString("und").toStdString());
     }
     glyphs.dpr = ir.value("screen").toObject().value("dpr").toDouble(1);
+    const SkPath particleSprite = projected.fxSprites.empty()
+        ? SkPath() : vectorGlyphPath(projected.fxSprites.front().second, 1000.0);
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     for (int index = 0; index < lines.size(); ++index) {
@@ -127,6 +129,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
                                   line.endMs, delay, kindOf(line.entryAnimation), kindOf(line.exitAnimation)};
         const bool transforms = prepared.characterFade.transforms();
+        const bool pivots = transforms || !line.bursts.empty();
         // scanline_band_schema=1: the line style's solid band; the projection gated the subset.
         if (line.scanlineEnabled)
             prepared.scanline = {true, std::max(style.scanlineWidth, 1.f) * .5f, argb(style.scanlineColor),
@@ -203,7 +206,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 glyph.adjustedWipeEnd = true;
             }
             // character_transform_schema=1: canonical layout cell and glyph-run box center.
-            if (transforms) {
+            if (pivots) {
                 const auto pivot = [&](const char* key) {
                     const auto value = cell.value(QLatin1String(key));
                     if (!value.isDouble() || !std::isfinite(value.toDouble()) || std::abs(value.toDouble()) > 1e6)
@@ -211,10 +214,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     return float(value.toDouble() * glyphs.dpr);
                 };
                 glyph.pivot = {pivot("layout_left"), pivot("layout_right"), pivot("pivot_y")};
-                if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft || glyph.outline || glyph.outerOutline)
+                if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft
+                    || (transforms && (glyph.outline || glyph.outerOutline)))
                     throw BackendError("Skia 逐字变换仅支持无描边正文的有效版面单元");
             } else if (cell.contains("layout_left") || cell.contains("layout_right") || cell.contains("pivot_y")) {
-                throw BackendError("Skia 版面单元轴心缺少逐字变换能力声明");
+                throw BackendError("Skia 版面单元轴心缺少逐字特效能力声明");
             }
             if (style.vertical) {
                 applyVerticalGeometry(glyph, cell, line.chars[j].text, verticalVersion, japaneseGlyphs, glyphs.dpr);
@@ -228,6 +232,24 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset, totalCells, totalGroups);
         if (prepared.characterFade.active() && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
+        // sing_twinkle_schema=1: each burst anchors at its character pivot; the box is
+        // the wipe extent by the line's metric ascent + descent (glyph runs, never ink).
+        if (!line.bursts.empty()) {
+            const auto box = source.value("particle_box_height");
+            if (!box.isDouble() || !std::isfinite(box.toDouble()) || box.toDouble() < 0 || box.toDouble() > 1e5
+                || !prepared.rubyGroups.empty() || style.vertical || style.rightToLeft || line.wipeReverse)
+                throw BackendError("Skia 唱字星光缺少有效的行盒高度");
+            for (const auto& burst : line.bursts) {
+                if (particleSprite.isEmpty() || burst.charIndex < 0 || burst.charIndex >= int(prepared.cells.size()))
+                    throw BackendError("Skia 唱字星光缺少粒子轮廓或锚点");
+                const auto& anchor = prepared.cells[std::size_t(burst.charIndex)];
+                prepared.particles.push_back({burst, particleSprite, argb(burst.color),
+                    (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f, anchor.pivot.centerY,
+                    std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr)});
+            }
+        } else if (source.contains("particle_box_height")) {
+            throw BackendError("Skia 行盒高度缺少唱字星光能力声明");
+        }
         if (transforms) {
             // Transformed cells are never wiping: entry finishes before each cell starts,
             // exit begins after every cell ends. Overlap uses a per-glyph front (unverified).

@@ -65,6 +65,7 @@ private:
         LineAnimation animation;
         CharacterFade characterFade;
         ScanlineBand scanline;
+        std::vector<SingParticleBurst> particles;
         float inkLeft = 0; // Body ink union left: the GPU band needs a sung front past it.
         SkRect paintBounds = SkRect::MakeEmpty();
     };

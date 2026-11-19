@@ -6,7 +6,7 @@ measurement or rendering is used here, and frame draws never call this module.
 from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
 from krok_helper.subtitle_render.engine.layout.display.section_edges import section_edge_context
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
-from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells
+from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells, write_horizontal_pivots
 from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
     validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs, vertical_solid_schema)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
@@ -16,6 +16,7 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
+from .skia_particle_ir import write_singing_twinkle
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
@@ -110,14 +111,11 @@ def _character_transforms(track, ir, plan, measured):
         cells, metrics = ir['skia_layout']['lines'][index]['cells'], measured.lines[item.track_index]
         delay = 350 // (len(cells) - 1) if len(cells) > 1 else 0
         start, end = source['display_start_ms'], source['display_end_ms']
-        for i, (cell, offset, width, run, interval) in enumerate(zip(
-                cells, metrics.offsets, metrics.widths, metrics.slot_metrics, source['resolved_intervals'], strict=True)):
+        for i, interval in enumerate(source['resolved_intervals']):
             # A transformed cell never wipes: the GPU then clips it with a per-glyph front.
             if (entry and interval[0] < start + delay * i + 250) or (exit_ and interval[1] > max(source['end_ms'], end - 600)):
                 raise ValueError('Skia 逐字滴落/翻转期间暂不支持走字')
-            left = cell['origin_x'] - offset
-            cell.update(layout_left=left, layout_right=left + width,
-                        pivot_y=cell['baseline_y'] + (float(run['descent']) - float(run['ascent'])) / 2)
+        write_horizontal_pivots(cells, metrics)
 
 
 def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
@@ -212,6 +210,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         _validate_scanline_band(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_scanline_band')
         ir['skia_layout']['scanline_band_schema'] = 1
+    if any(line.get('fx_bursts') for line in ir['track']['lines']):
+        write_singing_twinkle(track, ir, plan, measured)
+        ir['required_features'].append('p07_sing_twinkle')
+        ir['skia_layout']['sing_twinkle_schema'] = 1
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

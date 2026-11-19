@@ -33,6 +33,13 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                              || !std::isfinite(band.restingPad) || band.restingPad < .5f || band.restingPad > 8192
                              || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty()))
             throw std::runtime_error("Skia 扫字线仅支持正向横排实色高亮带");
+        if (source.particles.size() > 4096) throw std::runtime_error("Skia 唱字粒子数量超限");
+        for (const auto& item : source.particles)
+            if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
+                || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
+                || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty())
+                throw std::runtime_error("Skia 唱字粒子仅支持正向横排正文");
+        line.particles = source.particles;
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
@@ -312,6 +319,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             canvas.drawPath(cell.path, paint);
         });
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
+        // The GPU's front particle layer covers the main text and readings.
+        if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs);
     }
 }
 }

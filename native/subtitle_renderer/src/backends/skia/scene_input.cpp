@@ -70,7 +70,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, int outlineLaye
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
         supportedStyle(style, canonical, outlineLayers);
         if (line.lane < 0 || line.lane >= style.laneCount || (!canonical && line.lane != 0)
-            || !line.rubies.empty() || !line.bursts.empty() || (!canonical && !line.placementWindows.empty())
+            || !line.rubies.empty() || (!canonical && !line.bursts.empty()) || (!canonical && !line.placementWindows.empty())
             || line.fadeInMs || line.fadeOutMs
             || (!canonical && (line.entryAnimation != "none" || line.exitAnimation != "none"))
             || (line.karaokeAnimation != "none" && line.karaokeAnimation != "inherit"

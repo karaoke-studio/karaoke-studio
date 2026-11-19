@@ -66,6 +66,15 @@ def positioned_cells(local, position):
             for cell in local.cells]
 
 
+def write_horizontal_pivots(cells, measured):
+    """Project canonical cell spans and the font's vertical center in scene coordinates."""
+    for cell, offset, width, run in zip(
+            cells, measured.offsets, measured.widths, measured.slot_metrics, strict=True):
+        left = cell['origin_x'] - offset
+        cell.update(layout_left=left, layout_right=left + width,
+                    pivot_y=cell['baseline_y'] + (float(run['descent']) - float(run['ascent'])) / 2)
+
+
 def collision_bounds(local, position):
     if local.ink is None:
         return None
