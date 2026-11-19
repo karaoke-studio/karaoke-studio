@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scanline_feather.h"
+#include "scanline_paint.h"
 #include "../../effects/wipe_clock.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkRect.h"
@@ -18,7 +19,7 @@ namespace subtitle::skia {
 struct ScanlineBand {
     bool enabled = false;
     float halfWidth = .5f;          // max(width, 1) / 2 in physical pixels
-    std::uint32_t argb = 0xffffffff;
+    ScanlinePaint paint;
     float solidPad = 4;             // primary + secondary outline width + 4
     float restingPad = .5f;         // secondary outline width / 2 + 0.5
     float softness = 0;            // Physical pixels, limited to the band half-width.
@@ -43,7 +44,7 @@ struct ScanlineBand {
     // The GPU's wipeEdge, or nothing once the line is complete or nothing is sung.
     template <class Cell>
     std::optional<float> frontAt(const std::vector<Cell>& cells, int t, float inkLeft) const {
-        if (!enabled || cells.empty()
+        if (!enabled || !paint.visible() || cells.empty()
             || std::all_of(cells.begin(), cells.end(), [t](const Cell& c) { return t >= wipeEnd(c); }))
             return std::nullopt;
         float edge = inkLeft;
@@ -58,7 +59,7 @@ struct ScanlineBand {
         if (!(edge > inkLeft)) return std::nullopt;
         return edge;
     }
-    // paintCell(index, argb) repaints one cell's outline stack in a uniform color.
+    // paintCell(index, sung) repaints one cell's stack with the palette side.
     template <class Cell, class PaintCell>
     void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkLeft, float inkTop, PaintCell&& paintCell) const {
         const auto front = frontAt(cells, t, inkLeft);
@@ -75,7 +76,19 @@ struct ScanlineBand {
             if (!sweeping(c, t) || !(band.fLeft < c.right + solidPad && c.left - solidPad < band.fRight)) continue;
             canvas.save();
             canvas.clipRect(band, SkClipOp::kIntersect, true);
-            paintCell(i, argb);
+            if (paint.splitAtFront()) {
+                // The two existing GPU passes leave the original sung front
+                // between their inset edges. The feather is applied to both at once.
+                for (const bool sung : {false, true}) {
+                    SkAutoCanvasRestore keep(&canvas, true);
+                    const float lo = sung ? -1e6f : *front + 1.f;
+                    const float hi = sung ? *front - 1.f : 1e6f;
+                    canvas.clipRect(SkRect::MakeLTRB(lo, band.fTop, hi, band.fBottom), SkClipOp::kIntersect, true);
+                    paintCell(i, sung);
+                }
+            } else {
+                paintCell(i, false);
+            }
             canvas.restore();
         }
         if (softness > 0)

@@ -34,6 +34,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                              || !std::isfinite(band.solidPad) || band.solidPad < 4 || band.solidPad > 8192
                              || !std::isfinite(band.restingPad) || band.restingPad < .5f || band.restingPad > 8192
                              || !std::isfinite(band.softness) || band.softness < 0 || band.softness > band.halfWidth
+                             || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
                              || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty()))
             throw std::runtime_error("Skia 扫字线仅支持正向横排实色高亮带");
         if (source.particles.size() > 4096) throw std::runtime_error("Skia 唱字粒子数量超限");
@@ -316,13 +317,15 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         if (line.hasOuterOutline) drawLayer(Layer::OuterOutline);
         if (line.hasOutline) drawLayer(Layer::Outline);
         drawLayer(Layer::Body);
-        // The GPU repaints each sweeping cell's stack once in the band color, after the body.
-        line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, line.inkTop, [&](std::size_t index, std::uint32_t color) {
+        // The GPU repaints the sweeping cells after the body.
+        line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, line.inkTop, [&](std::size_t index, bool sung) {
             const auto& cell = line.cells[index];
             const float opacity = states[index].transform.opacity;
             if (opacity <= 0) return;
-            paint.setColor(color);
-            if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+            const auto setColor = [&](std::uint32_t before, std::uint32_t after) {
+                paint.setColor(line.scanline.paint.shade(before, after, sung));
+                if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+            };
             for (const bool outer : {true, false}) {
                 const auto& stroke = outer ? cell.outerOutline : cell.outline;
                 if (!stroke) continue;
@@ -331,8 +334,10 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                     canvas.clipPath(cell.path, SkClipOp::kDifference, true);
                     if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
                 }
+                setColor(stroke->before, stroke->after);
                 canvas.drawPath(stroke->path, paint);
             }
+            setColor(cell.before, cell.after);
             canvas.drawPath(cell.path, paint);
         });
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);

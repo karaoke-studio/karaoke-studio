@@ -134,7 +134,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool pivots = transforms || !line.bursts.empty();
         if (line.scanlineEnabled) {
             const float halfWidth = std::max(style.scanlineWidth, 1.f) * .5f;
-            prepared.scanline = {true, halfWidth, argb(style.scanlineColor),
+            using Mode = ::subtitle::skia::ScanlineColorMode;
+            const auto mode = style.scanlineMode == "brighten" ? Mode::Brighten
+                : style.scanlineMode == "follow_before" ? Mode::FollowBefore
+                : style.scanlineMode == "follow_after" ? Mode::FollowAfter : Mode::Color;
+            const auto color = style.scanlineMode == "role" ? style.scanlineRolePaint.color : style.scanlineColor;
+            prepared.scanline = {true, halfWidth, {mode, argb(color), style.scanlineBrightness},
                                  std::max(style.strokeWidth, 0.f) + std::max(style.stroke2Width, 0.f) + 4.f,
                                  std::max(style.stroke2Width, 0.f) * .5f + .5f,
                                  std::min(style.scanlineGlowRadius, halfWidth)};

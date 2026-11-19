@@ -131,7 +131,7 @@ void validateEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 逐字淡化布局版本无效");
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_scanline_band")
-        && scanlineVersion != 1 && scanlineVersion != 2)
+        && scanlineVersion != 1 && scanlineVersion != 2 && scanlineVersion != 3)
         throw BackendError("Skia 扫字线布局版本无效");
     const auto transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_character_transform")
@@ -271,7 +271,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
     const bool allowCharacterTransform = features.contains("p07_character_transform");
-    const bool allowScanlineFeather = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble() == 2;
+    const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble();
     const auto transformAnimation = [](const QString& animation) {
         return animation == "char_drip" || animation == "spin_flip";
     };
@@ -295,12 +295,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         // Forward horizontal solid-color band, without image, ruby or roles.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
-                || resolved.scanlineMode != QStringLiteral("color") || resolved.scanlineShape != QStringLiteral("band")
-                || (resolved.scanlineGlowPx != 0 && !allowScanlineFeather)
+                || (resolved.scanlineMode != "color" && scanlineVersion < 3)
+                || resolved.scanlineShape != "band" || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
                 || cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || source.karaokeAnimation == "no_wipe" || !cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
             throw BackendError("Skia 扫字线当前仅支持正向横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);
+        if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid")
+            throw BackendError("Skia 扫字线的角色取色暂仅支持实色");
         style.rightToLeft = cfg.rightToLeft;
         style.vertical = cfg.vertical;
         style.layoutSemantics = cfg.layoutSemantics.toStdString();

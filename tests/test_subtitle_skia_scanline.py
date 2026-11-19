@@ -11,11 +11,12 @@ from test_subtitle_skia_line_fade import (
     application, binary, project, ir_for, collect, configure, selection, premultiplied,
 )
 from test_subtitle_skia_reverse import source as clock_source
-from test_subtitle_skia_rtl_flow import rtl_source
+from test_subtitle_skia_rtl_flow import colors, rtl_source
 from test_subtitle_skia_secondary_outline import two_outlines
 from test_subtitle_skia_vector_guides import guide_source
 from test_subtitle_skia_vertical import vertical_ruby_source
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -63,7 +64,7 @@ def test_band_ir_contract_and_closed_windows(binary, project, target, kind, tmp_
     track, style = scanline_source(project, kind)
     ir = ir_for(binary, (track, style))
     plain = ir_for(binary, (track, replace(style, scanline_enabled=False)))
-    assert 'p07_scanline_band' in ir['required_features'] and ir['skia_layout']['scanline_band_schema'] == 2
+    assert 'p07_scanline_band' in ir['required_features'] and ir['skia_layout']['scanline_band_schema'] == 3
     assert 'p07_scanline_band' not in plain['required_features'] and 'scanline_band_schema' not in plain['skia_layout']
     assert ir['track']['lines'][0]['scanline'] is True
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
@@ -106,12 +107,11 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['brighten', 'flame', 'image', 'effect', 'reverse', 'rtl', 'vertical',
+@pytest.mark.parametrize('case', ['flame', 'image', 'effect', 'reverse', 'rtl', 'vertical',
                                   'ruby', 'roles', 'guide', 'utopia', 'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
-    if case == 'brighten': style = replace(style, scanline_mode='brighten')
-    elif case == 'flame': style = replace(style, scanline_shape='flame')
+    if case == 'flame': style = replace(style, scanline_shape='flame')
     elif case == 'image': style = replace(style, scanline_shape='image')
     elif case == 'effect': style = replace(style, scanline_effect='sakura')
     elif case == 'reverse':
@@ -131,13 +131,15 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 3, 'mode', 'legacy_glow', 'shape', 'reverse'])
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 4, 'legacy_mode', 'legacy_glow', 'shape', 'reverse'])
 def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, scanline_source(project))
     bad = copy.deepcopy(ir)
     if mutation == 'feature': bad['required_features'].remove('p07_scanline_band')
     elif mutation == 'schema': del bad['skia_layout']['scanline_band_schema']
-    elif mutation == 'mode': bad['style']['scanline_mode'] = 'brighten'
+    elif mutation == 'legacy_mode':
+        bad['style']['scanline_mode'] = 'brighten'
+        bad['skia_layout']['scanline_band_schema'] = 2
     elif mutation == 'legacy_glow':
         bad['style']['scanline_glow_px'] = 4
         bad['skia_layout']['scanline_band_schema'] = 1
@@ -338,3 +340,130 @@ def test_feather_profile_matches_actual_d2d_gpu(binary, project, kind, glow, dpr
             controls.append(frames)
     for time, a, bare_a, b, bare_b in zip(FEATHER_TIMES, *refs, *controls, strict=True):
         assert_feather_profile(a, b, bare_a, bare_b, (kind, glow, dpr, time))
+
+
+PAINT_TIMES = [199, 300, 500, 750, 1100, 1600, 1800, 2200]
+
+
+def paint_band(project, mode, kind='plain', softness=0, brightness=50):
+    track, style = scanline_source(project, kind)
+    palette = colors('#401020', '#103060')
+    if kind == 'tiny':
+        style = replace(style, scanline_width_px=2)
+    if kind == 'outlines':
+        palette = replace(style.karaoke_colors,
+                          before=replace(style.karaoke_colors.before, text=palette.before.text),
+                          after=replace(style.karaoke_colors.after, text=palette.after.text))
+    return track, replace(
+        style, scanline_mode=mode, scanline_glow_px=softness, scanline_brightness_pct=brightness,
+        scanline_role_name='spotlight',
+        custom_style_schemes={'spotlight': SubtitleStyleScheme(karaoke_colors=colors('#224412', '#DEBB83'))},
+        karaoke_colors=palette,
+    )
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('mode,palette', [('follow_before', ((160, 40, 80),)),
+                                         ('follow_after', ((29, 88, 176),)),
+                                         ('brighten', ((160, 40, 80), (29, 88, 176))),
+                                         ('role', ((222, 187, 131),))])
+def test_plain_scanline_uses_the_authored_color_sides(binary, project, target, mode, palette, tmp_path):
+    track, style = paint_band(project, mode)
+    ir = ir_for(binary, (track, style))
+    assert ir['skia_layout']['scanline_band_schema'] == 3
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [750, 1100, 750])
+    assert np.array_equal(frames[0], frames[2])
+    visible = frames[0][..., :3][frames[0][..., 3] == 255]
+    for color in palette:
+        assert np.count_nonzero((visible == color).all(axis=-1)) > 10, (mode, target, color)
+    if target == 'gpu' and mode == 'brighten':
+        (tmp_path / 'scanline-paint-layout.json').write_text(json.dumps({
+            'schema': ir['skia_layout']['scanline_band_schema'],
+            'line': ir['skia_layout']['lines'][0], 'mode': mode, 'brightness': ir['style']['scanline_brightness_pct'],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('kind', ['brightness_zero', 'tiny'])
+def test_base_brighten_zero_and_subpixel_clips(binary, project, kind):
+    track, style = paint_band(project, 'brighten', kind, brightness=0 if kind == 'brightness_zero' else 50)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir_for(binary, (track, style)))
+        bright, _ = collect(process, PAINT_TIMES)
+        configure(process, ir_for(binary, (track, replace(style, scanline_enabled=False))))
+        bare, _ = collect(process, PAINT_TIMES, generation=2)
+    if kind == 'brightness_zero':
+        assert np.array_equal(bright, bare)
+    else:
+        delta = [abs(premultiplied(a) - premultiplied(b)).max() for a, b in zip(bright, bare)]
+        assert 0 < max(delta) <= 7
+        assert delta[0] == delta[-1] == 0
+
+
+def test_gradient_role_scanline_is_explicitly_rejected(binary, project):
+    track, style = paint_band(project, 'role')
+    role = style.custom_style_schemes['spotlight']
+    gradient = PaintFill(mode='gradient_horizontal', start_color='#224412', end_color='#DEBB83')
+    paint = replace(role.karaoke_colors, after=replace(role.karaoke_colors.after, text=gradient))
+    bad = replace(style, custom_style_schemes={'spotlight': replace(role, karaoke_colors=paint)})
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir_for(binary, (track, style)))
+        before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError, match='角色取色'):
+            configure(process, ir_for(binary, (track, bad)))
+        after, _ = collect(process, [750], generation=2)
+    assert np.array_equal(before, after)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('mode,kind,softness,dpr', [
+    ('follow_before', 'plain', 0, 1), ('follow_after', 'outlines', 8, 1.5),
+    ('role', 'plain', 8, 1), ('role', 'outlines', 0, 1.5),
+    ('brighten', 'plain', 0, 1), ('brighten', 'outlines', 8, 1.5), ('brighten', 'tiny', 0, 1),
+])
+def test_scanline_color_modes_match_actual_d2d_gpu(binary, project, mode, kind, softness, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = paint_band(project, mode, kind, softness)
+    bare = replace(style, scanline_enabled=False)
+    reference, results = [], []
+    times = [*PAINT_TIMES, 750]
+    for look in (style, bare):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, tuple(times), force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference.append([np.frombuffer(frame, np.uint8).reshape(round(360*dpr), round(640*dpr), 4)
+                          for frame in raw])
+    irs = [ir_for(binary, (track, look), dpr=dpr) for look in (style, bare)]
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            frames = []
+            for generation, ir in enumerate(irs, start=1):
+                configure(process, ir)
+                received, _ = collect(process, times, generation=generation)
+                assert np.array_equal(received[3], received[-1])
+                frames.append(received)
+        results.append(frames)
+    for time, expected, bare_d2d, gpu, bare_gpu, raster, bare_raster in zip(times, *reference, *results[0], *results[1]):
+        base_a, base_b, base_c = (premultiplied(x) for x in (bare_d2d, bare_gpu, bare_raster))
+        et, gt, rt = premultiplied(expected), premultiplied(gpu), premultiplied(raster)
+        ref = abs(et - base_a)[..., :3].max(axis=-1)
+        cand = abs(gt - base_b)[..., :3].max(axis=-1)
+        cpu = abs(rt - base_c)[..., :3].max(axis=-1)
+        assert bool((ref > 20).any()) == bool((cand > 20).any()) == bool((cpu > 20).any()), (mode, time)
+        if kind == 'tiny':
+            # The inset clips meet only within AA coverage at this width.
+            # Vulkan can cull that intersection while D2D/Raster retain it.
+            for delta in (ref, cand, cpu):
+                assert delta.max() <= 7, (mode, time, 'subpixel coverage')
+                assert np.count_nonzero((delta > 1).any(axis=0)) <= 1, (mode, time, 'subpixel extent')
+        if (ref > 20).any():
+            ys, xs = np.where(ref > 20)
+            y2, x2 = np.where(cand > 20)
+            assert max(abs(xs.min()-x2.min()), abs(xs.max()-x2.max()),
+                       abs(ys.min()-y2.min()), abs(ys.max()-y2.max())) <= 1, (mode, time, 'ink')
+            h = ys.max() - ys.min() + 1
+            assert abs(ref.sum()-cand.sum()) / (255*h) <= 1, (mode, time, 'band mass')
+        assert abs(et - gt).mean() < .15, (mode, time, 'RGBA')
+        assert abs(gt - rt).mean() < .12, (mode, time, 'GPU/Raster')
