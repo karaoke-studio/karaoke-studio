@@ -146,7 +146,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
-            || line.wipeReverse || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
+            || line.wipeReverse || line.strokeFlashEnabled || !line.bursts.empty()
+            // The projection admits a band only with ordinary Utopia singing.
+            || (line.scanlineEnabled && (utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (!utopiaEntry && line.entryAnimation != "none") || (!utopiaExit && line.exitAnimation != "none")
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || line.zoomPulseEnabled || utopiaEntry || utopiaExit))

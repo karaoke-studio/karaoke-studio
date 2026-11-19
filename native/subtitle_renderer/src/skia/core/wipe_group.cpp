@@ -35,6 +35,16 @@ void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, b
         paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; });
 }
 
+// A unit posed by Utopia singing, with outlines rebuilt around the posed glyph.
+std::optional<ResolvedCell> posedUnit(const ResolvedCell& cell, const CharacterTransformState& transform) {
+    if (!transform.transformed) return std::nullopt;
+    ResolvedCell visual = cell;
+    visual.path = cell.path.makeTransform(transform.matrix);
+    if (visual.outline) visual.outline->path = prepareOutlinePath(visual.path, visual.outline->width);
+    if (visual.outerOutline) visual.outerOutline->path = prepareOutlinePath(visual.path, visual.outerOutline->width);
+    return visual;
+}
+
 float singingFront(const ResolvedCell& cell, int timeMs, float originX, const SkRect& ink) {
     const float progress = cell.wipePoints.empty()
         ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
@@ -75,13 +85,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
     for (std::size_t index = 0; index < cells_.size(); ++index) {
         const auto& cell = cells_[index];
         if (cell.path.isEmpty()) continue;
-        const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
-        if (!transform.transformed) continue;
-        auto& visual = animated[index].emplace(cell);
-        visual.path = cell.path.makeTransform(transform.matrix);
-        if (visual.outline) visual.outline->path = prepareOutlinePath(visual.path, visual.outline->width);
-        if (visual.outerOutline)
-            visual.outerOutline->path = prepareOutlinePath(visual.path, visual.outerOutline->width);
+        animated[index] = posedUnit(cell, scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot));
     }
     for (bool after : {false, true}) {
         if (after && !afterVisible) break;
@@ -165,13 +169,31 @@ float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {
     return edge;
 }
 
-void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band, int timeMs) const {
+void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band, int timeMs,
+                                     const SingingScale& scale, float originX) const {
     if (bounds_.isEmpty()) return;
-    const float front = frontAt(timeMs, bounds_.left());
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
-    if (front + band.halfWidth <= bounds_.left() - pad || front - band.halfWidth >= bounds_.right() + pad) return;
     SkPaint brush;
     brush.setAntiAlias(true);
+    if (scale.active) {
+        // Utopia singing: each unit inside its open wipe window carries its own
+        // band at the posed unit's front, as the existing GPU's ruby pass does.
+        for (const auto& source : cells_) {
+            if (source.path.isEmpty() || !(source.startMs < timeMs && timeMs < source.endMs)) continue;
+            const auto posed = posedUnit(source, scale.at(timeMs, source.startMs, source.endMs, source.pivot));
+            const auto& cell = posed ? *posed : source;
+            const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
+            if (edge + band.halfWidth <= bounds_.left() - pad || edge - band.halfWidth >= bounds_.right() + pad)
+                continue;
+            band.drawSlices(canvas, edge, [&](int layer, bool after, float opacity) {
+                paintRubyLayer(canvas, brush, cell, layer,
+                    [&](auto before, auto sung) { return band.paint.shade(before, sung, after); }, opacity);
+            });
+        }
+        return;
+    }
+    const float front = frontAt(timeMs, bounds_.left());
+    if (front + band.halfWidth <= bounds_.left() - pad || front - band.halfWidth >= bounds_.right() + pad) return;
     for (const auto& cell : cells_) {
         if (cell.path.isEmpty() || !ScanlineBand::sweeping(cell, timeMs)) continue;
         band.drawSlices(canvas, front, [&](int layer, bool after, float opacity) {

@@ -12,7 +12,7 @@ public:
     void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
     void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
                         const SingingScale&, float originX) const;
-    void drawScanline(SkCanvas&, const ScanlineBand&, int timeMs) const;
+    void drawScanline(SkCanvas&, const ScanlineBand&, int timeMs, const SingingScale&, float originX) const;
 private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible) const;
     float frontAt(int timeMs, float startEdge) const;

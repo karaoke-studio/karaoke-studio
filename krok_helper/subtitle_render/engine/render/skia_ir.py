@@ -91,7 +91,9 @@ def _write_utopia_pivots(ir, plan, measured):
         if (style.vertical or style.right_to_left or item.line.wipe_reverse
                 or (annotated and (source.get('zoom_pulse') or animations != {'none'}))
                 or not animations <= {'none', 'utopia'} or source.get('karaoke_anim') not in {'none', 'utopia'}
-                or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
+                # A band rides only ordinary singing (scanline_band_schema=5).
+                or (source.get('scanline') and (source.get('zoom_pulse') or animations != {'none'}))
+                or source.get('stroke_flash') or source.get('fx_bursts')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
@@ -115,8 +117,12 @@ def _validate_scanline_band(track, style, lines):
         if not line.get('scanline'):
             continue
         look = style_for_line(style, source)
+        # Ordinary forward Utopia singing is supported (scanline_band_schema=5).
+        utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
+                  and {line.get('entry_anim'), line.get('exit_anim')} == {'none'})
         if (look.scanline_shape != 'band' or look.vertical or look.right_to_left
-                or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')
+                or (line.get('karaoke_anim') != 'none' and not utopia)
+                or line.get('zoom_pulse') or line.get('stroke_flash')
                 or look.lower_ruby_enabled
                 or (track.rubies and (look.scanline_mode == 'role' or
                                       {line.get('entry_anim'), line.get('exit_anim')} != {'none'}))
@@ -348,8 +354,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if 'ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_glow')
     if 'p07_scanline_band' in ir['required_features']:
+        scanned = [line for line in ir['track']['lines'] if line.get('scanline')]
         ir['skia_layout']['scanline_band_schema'] = (
-            4 if any(line.get('scanline') and line.get('wipe_reverse') for line in ir['track']['lines']) else 3
+            5 if any(line.get('karaoke_anim') == 'utopia' for line in scanned)
+            else 4 if any(line.get('wipe_reverse') for line in scanned) else 3
         )
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')

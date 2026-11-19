@@ -61,6 +61,22 @@ struct ScanlineBand {
             }
         }
     }
+    // Utopia singing: the line front only gates the band. Each sweeping cell
+    // repaints its posed layers in feather slices around its own transformed
+    // front, as the existing GPU does per character (both phases, all layers).
+    // edgeOf(index) is that front; paintLayer(index, layer, after, opacity).
+    template <class Cell, class EdgeOf, class PaintLayer>
+    void drawPosed(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkStart,
+                   EdgeOf&& edgeOf, PaintLayer&& paintLayer) const {
+        if (!frontAt(cells, t, inkStart)) return;
+        for (std::size_t i = 0; i < cells.size(); ++i) {
+            const auto& c = cells[i];
+            if (!sweeping(c, t)) continue;
+            const float edge = edgeOf(i);
+            if (!(edge - halfWidth < c.right + solidPad && c.left - solidPad < edge + halfWidth)) continue;
+            drawSlices(canvas, edge, [&](int layer, bool after, float opacity) { paintLayer(i, layer, after, opacity); });
+        }
+    }
     // paintCell(index, sung) repaints one cell's stack with the palette side.
     template <class Cell, class PaintCell>
     void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkStart, float inkTop, PaintCell&& paintCell) const {

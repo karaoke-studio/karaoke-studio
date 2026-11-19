@@ -267,7 +267,33 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         drawLayer(Layer::Outline, line.images.outline, {line.beforeOutlineGradient, line.afterOutlineGradient});
     drawLayer(Layer::Body, line.images.body, {line.beforeGradient, line.afterGradient});
     // The GPU repaints the sweeping cells after the body.
-    line.scanline.draw(canvas, line.cells, tMs, line.inkStart, line.inkTop, [&](std::size_t index, bool sung) {
+    if (utopia) {
+        line.scanline.drawPosed(canvas, line.cells, tMs, line.inkStart, transformedEdge,
+            [&](std::size_t index, int layer, bool after, float slice) {
+                const auto& cell = line.cells[index];
+                const auto& state = states[index];
+                const float opacity = state.transform.opacity * slice;
+                const auto& stroke = layer == 0 ? cell.outerOutline : cell.outline;
+                if (opacity <= 0 || (layer < 2 && !stroke)) return;
+                SkAutoCanvasRestore keep(&canvas, true);
+                if (layer < 2 && stroke->protectBody) {
+                    canvas.clipPath(cell.path, SkClipOp::kDifference, true);
+                    if (layer == 0 && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+                }
+                paint.setShader(nullptr);
+                paint.setColor(layer < 2 ? line.scanline.paint.shade(stroke->before, stroke->after, after)
+                                         : line.scanline.paint.shade(cell.before, cell.after, after));
+                paint.setAlphaf(paint.getAlphaf() * opacity);
+                // The same posed outline as the body pass: fixed width around the posed glyph.
+                if (state.animatedInk) {
+                    if (layer < 2) drawFixedOutline(canvas, *state.animatedInk, paint, stroke->width);
+                    else canvas.drawPath(*state.animatedInk, paint);
+                    return;
+                }
+                if (state.transform.transformed) canvas.concat(state.transform.matrix);
+                canvas.drawPath(layer < 2 ? stroke->path : cell.path, paint);
+            });
+    } else line.scanline.draw(canvas, line.cells, tMs, line.inkStart, line.inkTop, [&](std::size_t index, bool sung) {
         const auto& cell = line.cells[index];
         const float opacity = states[index].transform.opacity;
         if (opacity <= 0) return;
@@ -296,6 +322,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
     if (line.scanline.upperRuby && line.scanline.frontAt(line.cells, tMs, line.inkStart))
-        for (const auto& group : line.rubyGroups) group.drawScanline(canvas, line.scanline, tMs);
+        for (const auto& group : line.rubyGroups)
+            group.drawScanline(canvas, line.scanline, tMs, line.singingScale, line.rubySingingOrigin);
 }
 }

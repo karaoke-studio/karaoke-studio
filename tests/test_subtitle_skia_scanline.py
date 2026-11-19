@@ -42,6 +42,10 @@ def reverse_band(track, style):
 
 
 def scanline_source(project, kind='plain'):
+    # 'utopia*': ordinary Utopia singing (no zoom pulse, no entry/exit) under the band.
+    utopia = kind.startswith('utopia')
+    if utopia:
+        kind = kind.removeprefix('utopia').lstrip('_') or 'plain'
     if kind == 'outlines':
         track, style = two_outlines(project)
     else:
@@ -55,6 +59,10 @@ def scanline_source(project, kind='plain'):
     if kind == 'fade':
         style = replace(style, entry_anim='fade', entry_lead_ms=400, exit_anim='fade', exit_fade_ms=600)
     style = band(style, 18 if kind == 'narrow' else 30)
+    if kind == 'glow':
+        style = replace(style, scanline_glow_px=12)
+    if utopia:
+        style = replace(style, karaoke_anim='utopia')
     if kind == 'reverse':
         return reverse_band(track, style)
     return track, style
@@ -118,7 +126,8 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 
 
 @pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical',
-                                  'ruby_role', 'roles', 'guide', 'utopia', 'no_wipe'])
+                                  'ruby_role', 'roles', 'guide', 'utopia_zoom', 'utopia_entry', 'utopia_reverse',
+                                  'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'flame': style = replace(style, scanline_shape='flame')
@@ -136,13 +145,16 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         track = replace(track, lines=[replace(track.lines[0], chars=[
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
     elif case == 'guide': track, style = guide_source(project); style = band(style)
-    elif case == 'utopia': style = replace(style, karaoke_anim='utopia')
+    elif case == 'utopia_zoom': style = replace(style, karaoke_anim='zoom_pulse')
+    elif case == 'utopia_entry': style = replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600)
+    elif case == 'utopia_reverse': track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
     else: style = replace(style, karaoke_anim='no_wipe')
-    with pytest.raises(ValueError, match='扫字线'):
+    with pytest.raises(ValueError, match='扫字线|Utopia'):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 5, 'legacy_mode', 'legacy_glow', 'shape', 'reverse'])
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 6, 'legacy_mode', 'legacy_glow', 'shape', 'reverse',
+                                      'legacy_utopia', 'utopia_zoom'])
 def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, scanline_source(project))
     bad = copy.deepcopy(ir)
@@ -155,6 +167,12 @@ def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
         bad['style']['scanline_glow_px'] = 4
         bad['skia_layout']['scanline_band_schema'] = 1
     elif mutation == 'shape': bad['style']['scanline_shape'] = 'flame'
+    elif mutation in {'legacy_utopia', 'utopia_zoom'}:
+        bad = ir_for(binary, scanline_source(project, 'utopia'))
+        if mutation == 'legacy_utopia':
+            bad['skia_layout']['scanline_band_schema'] = 4
+        else:
+            bad['track']['lines'][0]['zoom_pulse'] = True
     elif mutation == 'reverse':
         bad['track']['lines'][0]['wipe_reverse'] = True
         bad['required_features'].append('p05_reverse_wipe')
@@ -169,7 +187,8 @@ def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
     assert band_mask(before[0]).any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('kind', ['plain', 'shared', 'outlines', 'char_fade'])
+@pytest.mark.parametrize('kind', ['plain', 'shared', 'outlines', 'char_fade',
+                                  'utopia', 'utopia_pause', 'utopia_outlines', 'utopia_glow'])
 def test_gpu_and_raster_draw_the_same_band_under_out_of_order_seek(binary, project, kind):
     ir = ir_for(binary, scanline_source(project, kind), dpr=1.5)
     times = [*TIMES, 750, 300, 1600]
@@ -207,7 +226,9 @@ def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('kind,dpr', [('plain', 1), ('plain', 1.5), ('pause', 1), ('zero', 1.5), ('shared', 1),
                                       ('narrow', 1.5), ('outlines', 1.5), ('char_fade', 1), ('fade', 1.5),
-                                      ('motion', 1.5), ('reverse', 1.5)])
+                                      ('motion', 1.5), ('reverse', 1.5),
+                                      ('utopia', 1), ('utopia', 1.5), ('utopia_pause', 1), ('utopia_zero', 1.5),
+                                      ('utopia_narrow', 1.5), ('utopia_outlines', 1.5)])
 def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
     """Original 1px ink, sung-front and band-edge budgets against actual D2D GPU."""
     from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -221,7 +242,7 @@ def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
         frames, _ = collect(process, TIMES)
     sung = lambda p: (p[..., 1].astype(float) * p[..., 3] / 255**2).sum()
     full_a, full_b = sung(refs[-1]), sung(frames[-1])
-    banded = 0
+    banded = []
     for t, a, b in zip(TIMES, refs, frames, strict=True):
         if a[..., 3].max() == 0 or b[..., 3].max() == 0:
             assert a[..., 3].max() == b[..., 3].max() == 0, (kind, t)
@@ -237,11 +258,14 @@ def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
         ma, mb = band_mask(a), band_mask(b)
         assert ma.any() == mb.any(), (kind, t, 'band presence')
         if ma.any():
-            banded += 1
+            banded.append(t)
             xa, xb = np.where(ma.any(axis=0))[0], np.where(mb.any(axis=0))[0]
             assert abs(xa.min()-xb.min()) <= 1 and abs(xa.max()-xb.max()) <= 1, (kind, t, 'band', xa, xb)
             assert abs(band_mass(a) - band_mass(b)) / height <= 1, (kind, t, 'band mass')
-    assert banded >= 8, (kind, banded)
+    if kind == 'utopia_pause':
+        assert len(banded) >= 5 and not set(banded).intersection({401, 500, 599}), (kind, banded)
+    else:
+        assert len(banded) >= 8, (kind, banded)
 
 
 FEATHER_TIMES = [199, 230, 300, 399, 400, 500, 599, 600, 750, 900, 1100, 1600, 1800, 2200]
@@ -313,17 +337,20 @@ def assert_feather_profile(reference, candidate, bare_reference, bare_candidate,
 RUBY_BAND_TIMES = [299, 450, 550, 899, 1100, 1400, 1550, 1900, 2100, 2300]
 
 
-def ruby_band_source(reading, softness):
+def ruby_band_source(reading, softness, utopia=False):
     track, style = upper_source(reading, 2)
-    return track, replace(band(style, 42), scanline_glow_px=softness, ruby_interval_px=9)
+    style = replace(band(style, 42), scanline_glow_px=softness, ruby_interval_px=9)
+    return track, replace(style, karaoke_anim='utopia') if utopia else style
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, tmp_path):
-    track, style = ruby_band_source(reading, 10)
+@pytest.mark.parametrize('utopia', [False, True])
+def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, utopia, tmp_path):
+    track, style = ruby_band_source(reading, 10, utopia)
     ir = upper_ir(binary, (track, style), 1)
     plain = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
     assert 'p07_ruby_scanline' in ir['required_features']
+    assert ir['skia_layout']['scanline_band_schema'] == (5 if utopia else 3)
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     bad = copy.deepcopy(ir)
     bad['required_features'].remove('p07_ruby_scanline')
@@ -340,18 +367,20 @@ def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, tmp_p
     ink = [not np.array_equal(a[:reading_y], b[:reading_y]) for a, b in zip(frames[:-1], baseline, strict=True)]
     assert ink[2] and ink[7] and not (ink[0] or ink[4] or ink[-1])
     if target == 'gpu':
-        (tmp_path / 'ruby-scanline-layout.json').write_text(json.dumps({
+        filename = 'ruby-utopia-scanline-layout.json' if utopia else 'ruby-scanline-layout.json'
+        (tmp_path / filename).write_text(json.dumps({
             'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0], 'banded': ink,
         }, sort_keys=True), encoding='utf-8')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('softness,dpr', [(0, 1), (10, 1), (10, 1.5)])
-def test_upper_ruby_band_matches_actual_d2d_and_gpu_raster(binary, reading, softness, dpr):
+@pytest.mark.parametrize('softness,dpr,utopia', [(0, 1, False), (10, 1, False), (10, 1.5, False),
+                                                 (0, 1, True), (0, 1.5, True), (10, 1.5, True)])
+def test_upper_ruby_band_matches_actual_d2d_and_gpu_raster(binary, reading, softness, dpr, utopia):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
 
-    track, style = ruby_band_source(reading, softness)
+    track, style = ruby_band_source(reading, softness, utopia)
     bare = replace(style, scanline_enabled=False)
     expected, expected_bare = [], []
     for look, output in ((style, expected), (bare, expected_bare)):
@@ -365,9 +394,10 @@ def test_upper_ruby_band_matches_actual_d2d_and_gpu_raster(binary, reading, soft
     for time, ref, ref_bare, first, first_bare, second, second_bare in zip(
             RUBY_BAND_TIMES, expected, expected_bare, gpu, gpu_bare, raster, raster_bare, strict=True):
         top = slice(0, reading_y)
-        assert_feather_profile(ref[top], first[top], ref_bare[top], first_bare[top], ('D2D', time, softness, dpr))
+        assert_feather_profile(ref[top], first[top], ref_bare[top], first_bare[top],
+                               ('D2D', time, softness, dpr, utopia))
         assert_feather_profile(first[top], second[top], first_bare[top], second_bare[top],
-                               ('Raster', time, softness, dpr))
+                               ('Raster', time, softness, dpr, utopia))
 
 
 def test_feather_gpu_and_raster_match_under_repeated_seek(binary, project):

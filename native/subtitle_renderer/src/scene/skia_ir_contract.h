@@ -4,7 +4,7 @@
 #include <QtCore/QJsonObject>
 
 namespace krok::subtitle::native::scene {
-inline constexpr int kScanlineBandSchema = 4;
+inline constexpr int kScanlineBandSchema = 5;
 inline constexpr int kCharacterTransformSchema = 8;
 inline constexpr int kSingingParticleSchema = 11;
 
