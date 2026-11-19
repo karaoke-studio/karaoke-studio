@@ -11,7 +11,7 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
     if (source.fxBursts.empty()) return;
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
-    if (cfg.vertical || cfg.rightToLeft || source.wipeReverse || source.scanlineEnabled
+    if (cfg.vertical || cfg.rightToLeft || source.wipeReverse
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
         || source.entryAnimation != "none" || source.exitAnimation != "none" || !cfg.rubies.empty()
         || style.strokeWidthPx > 0 || style.stroke2WidthPx > 0 || !source.displayStartMs || !source.displayEndMs
@@ -27,6 +27,7 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
                                             || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
+        const bool scanline = version >= 7 && fx.kind == "scanline";
         const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke";
         QString defaultSprite = QStringLiteral("star4");
         if (symbol || falling || flame) defaultSprite = fx.kind;
@@ -35,7 +36,9 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         if (fx.kind == "flame_glow") defaultSprite = QStringLiteral("flame");
         if (fx.kind == "ember" || fx.kind == "spark") defaultSprite = QStringLiteral("dot");
         const QString spriteName = fx.sprite.isEmpty() ? defaultSprite : fx.sprite;
-        const bool allowedSprite = spriteName == defaultSprite
+        const bool allowedScanlineSprite = spriteName == "star4" || spriteName == "petal" || spriteName == "feather"
+                                         || spriteName == "snow" || spriteName == "snow_solid" || spriteName == "note";
+        const bool allowedSprite = scanline ? !fx.sprite.isEmpty() && allowedScanlineSprite : spriteName == defaultSprite
             || (fx.kind == "note" && spriteName == "note_dot")
             || (lightning && (spriteName == "bolt_b" || spriteName == "bolt_c"))
             || ((fx.kind == "flame" || fx.kind == "flame_glow")
@@ -43,12 +46,15 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
             || (fx.kind == "flame_alt" && spriteName == "flame_alt_b");
         const auto start = std::int64_t(fx.startMs) + offset, end = std::int64_t(fx.endMs) + offset;
         const bool oldWindow = fx.startMs >= *source.displayStartMs && fx.endMs <= *source.displayEndMs;
-        if (!(star || symbol || ripple || falling || lightning || flame) || fx.anchor != "char"
+        const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
+                                             : fx.emitMs == 0;
+        if (!(star || symbol || ripple || falling || lightning || flame || scanline) || fx.anchor != "char"
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
+            || source.scanlineEnabled != scanline
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10
-            || fx.emitMs != 0 || !std::isfinite(fx.emitX) || std::abs(fx.emitX) > (flame ? .5 : 0.)
+            || !emitWindowValid || !std::isfinite(fx.emitX) || std::abs(fx.emitX) > (flame ? .5 : 0.)
             || fx.reverse || fx.front == back
             || fx.count < 1 || fx.count > 256 || !std::isfinite(fx.sizePx) || fx.sizePx <= 0 || fx.sizePx > 4096
             || !std::isfinite(fx.travelPx) || fx.travelPx < 0 || fx.travelPx > 1e5
@@ -80,6 +86,7 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         burst.sizePx = float(fx.sizePx * cfg.dpr);
         burst.travelPx = float(fx.travelPx * cfg.dpr);
         burst.emitX = float(fx.emitX);
+        burst.emitMs = fx.emitMs;
         burst.sweep = fx.sweep;
         burst.front = fx.front;
         burst.color = projectColor(fx.color, QStringLiteral("#FFFFFF"));

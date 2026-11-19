@@ -13,6 +13,7 @@ from test_subtitle_skia_line_fade import (
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_rtl_flow import colors, rtl_source
 from test_subtitle_skia_secondary_outline import two_outlines
+from test_subtitle_skia_sing_particles import assert_particle_region, blue_coverage
 from test_subtitle_skia_vector_guides import guide_source
 from test_subtitle_skia_vertical import vertical_ruby_source
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
@@ -107,13 +108,13 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['flame', 'image', 'effect', 'reverse', 'rtl', 'vertical',
+@pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse', 'rtl', 'vertical',
                                   'ruby', 'roles', 'guide', 'utopia', 'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'flame': style = replace(style, scanline_shape='flame')
     elif case == 'image': style = replace(style, scanline_shape='image')
-    elif case == 'effect': style = replace(style, scanline_effect='sakura')
+    elif case == 'combined_particles': style = replace(style, scanline_effect='sakura', sing_fx='twinkle')
     elif case == 'reverse':
         track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
         style = replace(style, scanline_reverse_enabled=True)
@@ -467,3 +468,86 @@ def test_scanline_color_modes_match_actual_d2d_gpu(binary, project, mode, kind, 
             assert abs(ref.sum()-cand.sum()) / (255*h) <= 1, (mode, time, 'band mass')
         assert abs(et - gt).mean() < .15, (mode, time, 'RGBA')
         assert abs(gt - rt).mean() < .12, (mode, time, 'GPU/Raster')
+
+
+SCANLINE_PARTICLE_SPRITES = [('star', 'star4'), ('sakura', 'petal'), ('feather', 'feather'),
+                             ('snow', 'snow'), ('snow_solid', 'snow_solid'), ('note', 'note')]
+
+
+def particle_band(project, kind, speed=0):
+    track, style = scanline_source(project, 'pause')
+    return track, replace(style, scanline_color='#FFFF00', scanline_effect=kind, scanline_effect_count=9,
+                          scanline_effect_size_pct=55, scanline_effect_speed_pct=speed,
+                          scanline_effect_color_mode='color', scanline_effect_color='#0000FF',
+                          scanline_effect_color2='#0055FF')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind,sprite', SCANLINE_PARTICLE_SPRITES)
+def test_scanline_particles_preserve_emit_clock_and_extend_tail(binary, project, kind, sprite, target, tmp_path):
+    track, style = particle_band(project, kind, -250)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    original = ir_for(binary, (track, replace(style, scanline_effect_speed_pct=0)), dpr=1.5)
+    line = ir['track']['lines'][0]
+    bursts = line['fx_bursts']
+    assert ir['skia_layout']['sing_twinkle_schema'] == 7
+    assert {it['sprite'] for it in bursts} == {sprite}
+    unchanged = ('kind', 'seed', 'sprite', 'char_index', 'count', 'start_ms', 'emit_ms')
+    for default, slowed in zip(original['track']['lines'][0]['fx_bursts'], bursts, strict=True):
+        assert all(default[name] == slowed[name] for name in unchanged)
+        assert slowed['end_ms'] > default['end_ms']
+        assert 'time_scale' not in slowed and slowed['front'] and not slowed['reverse']
+    assert {it['emit_ms'] for it in bursts if it['char_index'] == 0} == {200}
+    assert line['resolved_intervals'] == original['track']['lines'][0]['resolved_intervals']
+    times = [199, 401, 500, 750, 1600, 1850, 2150, 3000, 500]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+    assert np.array_equal(frames[2], frames[-1])
+    assert not blue_coverage(frames[0]).any() and not frames[-2][..., 3].any()
+    assert max(blue_coverage(frame).max() for frame in frames[5:7]) > 25
+    assert blue_coverage(frames[2]).max() > 12  # The first glyph already released.
+    if kind == 'star' and target == 'gpu':
+        (tmp_path / 'scanline-particles-layout.json').write_text(json.dumps({
+            'bursts': bursts, 'line': ir['skia_layout']['lines'][0],
+            'schema': ir['skia_layout']['sing_twinkle_schema'],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('change', [{'emit_ms': 0}, {'emit_ms': 20000}, {'sprite': 'smoke'},
+                                   {'time_scale': 2}, {'front': False}, {'reverse': True}])
+def test_invalid_scanline_particle_keeps_raster_scene(binary, project, change):
+    ir = ir_for(binary, particle_band(project, 'star'))
+    bad = copy.deepcopy(ir)
+    bad['track']['lines'][0]['fx_bursts'][0].update(change)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [500])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [500], generation=2)
+    assert np.array_equal(before, after)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind,speed', [('star', 0), ('star', -250), ('sakura', 140), ('note', 0)])
+def test_scanline_particle_tail_matches_actual_d2d_and_gpu_raster(binary, project, kind, speed):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = particle_band(project, kind, speed)
+    times = [199, 300, 401, 500, 599, 750, 950, 1400, 1600, 1850, 2000, 2200, 3000]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=640, height=360, dpr=1.5, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(540, 960, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        results.append(frames)
+    assert sum(blue_coverage(frame).max() > 30 for frame in reference) >= 4
+    for time, d2d, gpu, raster in zip(times, reference, *results, strict=True):
+        assert_particle_region(d2d, gpu, ('scanline', kind, speed, time), check_contour=False)
+        assert_particle_region(gpu, raster, ('scanline', kind, speed, time, 'raster'), check_contour=False)

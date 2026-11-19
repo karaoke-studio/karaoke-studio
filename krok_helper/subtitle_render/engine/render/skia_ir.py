@@ -16,7 +16,7 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
-from .skia_particle_ir import write_singing_particles
+from .skia_particle_ir import write_particle_anchors
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
@@ -79,7 +79,7 @@ def _validate_scanline_band(track, style, lines):
             continue
         look = style_for_line(style, source)
         if (look.scanline_shape != 'band'
-                or look.scanline_effect != 'none' or look.vertical or look.right_to_left or source.wipe_reverse
+                or look.vertical or look.right_to_left or source.wipe_reverse
                 or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')
                 or track.rubies or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
@@ -204,7 +204,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p07_scanline_band')
         ir['skia_layout']['scanline_band_schema'] = 3
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
-        ir['skia_layout']['sing_twinkle_schema'] = write_singing_particles(track, ir, plan, measured)
+        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured)
         ir['required_features'].append('p07_sing_twinkle')
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')

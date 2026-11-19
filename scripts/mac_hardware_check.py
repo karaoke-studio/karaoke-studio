@@ -52,6 +52,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_sing_particles.py::test_singing_ripple_uses_back_ring_layers_and_replays",
     "tests/test_subtitle_skia_sing_particles.py::test_singing_falling_spritemap_replays_each_shape",
     "tests/test_subtitle_skia_sing_particles.py::test_singing_energy_layers_replay_in_burst_order",
+    "tests/test_subtitle_skia_scanline.py::test_scanline_particles_preserve_emit_clock_and_extend_tail",
 )
 
 
