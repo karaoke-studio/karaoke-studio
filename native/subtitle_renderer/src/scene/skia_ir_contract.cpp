@@ -65,11 +65,26 @@ bool isSkiaFallingParticle(const QString& kind) {
 
 QString skiaParticleKindForTransition(const QString& animation, bool entry) {
     if (isSkiaFallingParticle(animation) || animation == "note" || animation == "heart"
-        || animation == "ripple" || animation == "sparkle")
+        || animation == "ripple" || animation == "sparkle" || isSkiaEnergyTransition(animation))
         return animation;
     if (entry && animation == "assemble_in") return QStringLiteral("assemble");
     if (!entry && animation == "dissolve_out") return QStringLiteral("dissolve");
     return {};
+}
+
+bool isSkiaEnergyTransition(const QString& animation) {
+    return animation == "flame" || animation == "lightning";
+}
+
+bool isSkiaTransitionLayer(const QString& transition, const QString& kind, bool entry) {
+    // Ignition/strike impacts accompany both energy transitions.
+    const bool impact = kind == "flash" || kind == "shockwave" || kind == "spark";
+    if (transition == "flame")
+        return impact || kind == "flame" || kind == "flame_alt" || kind == "flame_glow" || kind == "ember"
+            || kind == "fireball" || (!entry && kind == "ash");
+    if (transition == "lightning")
+        return impact || kind == "lightning" || kind == "lightning_glow";
+    return kind == transition;
 }
 
 void validateSkiaIrEnvelope(const QJsonObject& ir) {

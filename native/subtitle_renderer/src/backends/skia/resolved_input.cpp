@@ -295,7 +295,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 prepared.particles.push_back({burst, sprite->second, argb(burst.color),
                     (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f, anchor.pivot.centerY,
                     std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr),
-                    burst.kind == "ripple" ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});
+                    // Ripple and shockwave both fill the same ring sprite in the existing GPU.
+                    burst.kind == "ripple" || burst.kind == "shockwave"
+                        ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});
             }
         } else if (source.contains("particle_box_height")) {
             throw BackendError("Skia 粒子行盒高度缺少能力声明");

@@ -204,3 +204,124 @@ def test_symbol_transitions_match_actual_d2d_and_gpu_raster(binary, project, ent
         else:
             assert_particle_region(d2d, gpu, sample, check_contour=False)
         assert_particle_region(gpu, raster, (*sample, 'raster'), check_contour=False)
+
+
+_IMPACT = {'flash', 'shockwave', 'spark'}
+ENERGY_LAYERS = {
+    ('flame', True): {'flame', 'flame_alt', 'flame_glow', 'ember', 'fireball'} | _IMPACT,
+    ('flame', False): {'flame', 'flame_alt', 'flame_glow', 'ember', 'fireball', 'ash'} | _IMPACT,
+    ('lightning', True): {'lightning', 'lightning_glow'} | _IMPACT,
+    ('lightning', False): {'lightning', 'lightning_glow'} | _IMPACT,
+}
+ENERGY_MODES = [('flame', 'flame'), ('lightning', 'lightning'), ('lightning', 'flame')]
+
+
+def alpha_coverage(frame):
+    return frame[..., 3].astype(float)
+
+
+def energy_window_samples(ir):
+    source = ir['track']['lines'][0]
+    start, end = source['display_start_ms'], source['display_end_ms']
+    last = max(b['end_ms'] for b in source['fx_bursts'])
+    assert end < last
+    return sorted({start-1, start, start+20, start+60, start+150, start+300, start+450, start+600, start+860,
+                   2100, 2830, 2900, end-100, end-1, end, end+40, end+120, end+250, last-1, last+1})
+
+
+@pytest.mark.parametrize('entry,exit_', ENERGY_MODES)
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_energy_transitions_keep_companion_layers_and_outside_tail(binary, project, entry, exit_, target, tmp_path):
+    ir = ir_for(binary, symbol_source(project, entry, exit_), dpr=1.5)
+    assert ir['skia_layout']['character_transform_schema'] == 8
+    assert ir['skia_layout']['sing_twinkle_schema'] == 11
+    source = ir['track']['lines'][0]
+    start, end = source['display_start_ms'], source['display_end_ms']
+    bursts = source['fx_bursts']
+    entry_side = [b for b in bursts if b['start_ms'] < 2000]
+    exit_side = [b for b in bursts if b['start_ms'] >= 2000]
+    # Every companion layer of the existing planner is present, at its own depth.
+    assert {b['kind'] for b in entry_side} == ENERGY_LAYERS[(entry, True)]
+    assert {b['kind'] for b in exit_side} == ENERGY_LAYERS[(exit_, False)]
+    assert all(b['sweep'] == 0 and b['front'] == (b['kind'] not in {'flame_glow', 'lightning_glow', 'shockwave'})
+               for b in bursts)
+    times = energy_window_samples(ir)
+    replay = [2830, end + 40, start + 150]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, *replay])
+    for t, frame in zip(replay, frames[len(times):], strict=True):
+        assert np.array_equal(frame, frames[times.index(t)]), (target, t)
+    frames = frames[:len(times)]
+    # Energy kinds have no prelude, but the existing tail gate also admits an
+    # entry burst that is already active before the text window opens.
+    early = any(b['start_ms'] <= start - 1 < b['end_ms'] for b in bursts)
+    assert bool(frames[0][..., 3].any()) == early == (entry == 'lightning')
+    assert not frames[-1][..., 3].any()
+    assert frames[times.index(2100)][..., 3].any()
+    tail = [f for t, f in zip(times, frames, strict=True) if end <= t < times[-1]]
+    assert all(f[..., 3].any() for f in tail[:3])
+    if (entry, exit_) == ('flame', 'flame') and target == 'gpu':
+        (tmp_path / 'energy-transition-layout.json').write_text(json.dumps({
+            'line': ir['skia_layout']['lines'][0], 'bursts': bursts,
+            'features': ir['required_features'], 'display': [start, end], 'colors': ir['fx_color_table'],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('mutation', ['profile', 'transform_profile', 'foreign_layer', 'front_shockwave', 'entry_ash'])
+def test_invalid_energy_transition_keeps_scene(binary, project, mutation):
+    ir = ir_for(binary, symbol_source(project, 'flame', 'lightning'))
+    bad = copy.deepcopy(ir)
+    bursts = bad['track']['lines'][0]['fx_bursts']
+    if mutation == 'profile':
+        bad['skia_layout']['sing_twinkle_schema'] = 10
+    elif mutation == 'transform_profile':
+        bad['skia_layout']['character_transform_schema'] = 7
+    elif mutation == 'foreign_layer':
+        next(b for b in bursts if b['kind'] == 'lightning')['kind'] = 'smoke'
+    elif mutation == 'front_shockwave':
+        next(b for b in bursts if b['kind'] == 'shockwave')['front'] = True
+    else:
+        next(b for b in bursts if b['kind'] == 'fireball')['kind'] = 'ash'
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [1100])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [1100], generation=2)
+    assert before[0][..., 3].any() and np.array_equal(before, after)
+
+
+@pytest.mark.parametrize('changes', [{'sing_fx': 'twinkle'}, {'stroke_width_px': 4}, {'exit_anim': 'fade'}])
+def test_unverified_energy_combinations_are_rejected(binary, project, changes):
+    track, style = symbol_source(project, 'flame', 'lightning')
+    with pytest.raises(ValueError, match='Skia'):
+        ir_for(binary, (track, replace(style, **changes)))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,exit_', ENERGY_MODES)
+def test_energy_transitions_match_actual_d2d_and_gpu_raster(binary, project, entry, exit_):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = symbol_source(project, entry, exit_)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    times = energy_window_samples(ir)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=640, height=360, dpr=1.5, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(540, 960, 4) for p in raw]
+    actual = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        actual.append(frames)
+    end = ir['track']['lines'][0]['display_end_ms']
+    assert any(ref[..., 3].any() for t, ref in zip(times, reference, strict=True) if t >= end)
+    for t, d2d, gpu, raster in zip(times, reference, *actual, strict=True):
+        sample = ('energy_transition', entry, exit_, t)
+        # Blue fire/bolt layers, then the whole composed frame (text body and every companion layer).
+        assert_particle_region(d2d, gpu, sample, check_contour=False)
+        assert_particle_region(d2d, gpu, (*sample, 'alpha'), check_contour=False, coverage=alpha_coverage)
+        assert_particle_region(gpu, raster, (*sample, 'raster'), check_contour=False, coverage=alpha_coverage)

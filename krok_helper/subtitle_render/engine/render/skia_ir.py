@@ -16,7 +16,7 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
-from .skia_particle_ir import FALLING_PARTICLES, PARTICLE_TRANSITIONS, write_particle_anchors
+from .skia_particle_ir import ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, write_particle_anchors
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
@@ -129,6 +129,8 @@ def _character_transforms(track, ir, plan, measured) -> int:
         geometry = bool(animations & _GEOMETRY_TRANSFORMS)
         if animations & PARTICLE_TRANSITIONS.keys():
             version = max(version, 7 if animations & (PARTICLE_TRANSITIONS.keys() - FALLING_PARTICLES) else 6)
+            if animations & ENERGY_TRANSITIONS:
+                version = 8
         elif geometry:
             version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
         line, look = track.lines[item.track_index], item.layout_style

@@ -3,14 +3,30 @@ from ..layout.line.skia_geometry import write_horizontal_pivots
 
 
 FALLING_PARTICLES = frozenset({'petal', 'feather', 'snow', 'snow_solid'})
+ENERGY_TRANSITIONS = frozenset({'flame', 'lightning'})
 PARTICLE_TRANSITIONS = {
-    **{kind: kind for kind in FALLING_PARTICLES | {'note', 'heart', 'ripple', 'sparkle'}},
+    **{kind: kind for kind in FALLING_PARTICLES | ENERGY_TRANSITIONS | {'note', 'heart', 'ripple', 'sparkle'}},
     'assemble_in': 'assemble',
     'dissolve_out': 'dissolve',
 }
+# Companion layers the existing planner emits around each energy transition:
+# fire tongues, back glow, embers and the ignition impact; bolts with their back
+# glow and the strike impact. Burning out also drops ash.
+_IMPACT = {'flash', 'shockwave', 'spark'}
+_TRANSITION_LAYERS = {
+    ('flame', True): {'flame', 'flame_alt', 'flame_glow', 'ember', 'fireball'} | _IMPACT,
+    ('flame', False): {'flame', 'flame_alt', 'flame_glow', 'ember', 'fireball', 'ash'} | _IMPACT,
+    ('lightning', True): {'lightning', 'lightning_glow'} | _IMPACT,
+    ('lightning', False): {'lightning', 'lightning_glow'} | _IMPACT,
+}
 _ENERGY_PARTICLES = {'lightning', 'lightning_glow', 'flame', 'flame_alt', 'flame_glow', 'smoke', 'ember', 'spark'}
-_BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke'}
-_PARTICLES = {'twinkle', 'twinkle_classic', 'scanline'} | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES
+_BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke', 'shockwave'}
+_PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
+              | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
+
+
+def _transition_layers(kind, entry):
+    return _TRANSITION_LAYERS.get((kind, entry), {kind})
 
 
 def write_particle_anchors(track, ir, plan, measured) -> int:
@@ -47,8 +63,11 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if animated:
                 sweep = burst['sweep']
-                if (sweep, kind) not in {(entry_sweep, entry_kind), (exit_sweep, exit_kind)}:
+                if not ((entry_kind and sweep == entry_sweep and kind in _transition_layers(entry_kind, True))
+                        or (exit_kind and sweep == exit_sweep and kind in _transition_layers(exit_kind, False))):
                     raise ValueError('Skia 粒子出入场暂不支持与唱字粒子同场')
+            elif kind in {'fireball', 'flash', 'shockwave', 'ash'}:
+                raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if kind == 'ripple':
                 version = max(version, 4)
             if kind in FALLING_PARTICLES:
@@ -62,6 +81,8 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         if animated:
             falling_only = all(not kind or kind in FALLING_PARTICLES for kind in (entry_kind, exit_kind))
             version = 9 if falling_only else 10
+            if {entry_kind, exit_kind} & ENERGY_TRANSITIONS:
+                version = 11
         metrics = measured.lines[item.track_index]
         write_horizontal_pivots(final['cells'], metrics)
         final['particle_box_height'] = (

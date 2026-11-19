@@ -103,7 +103,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (allowHalo && (entry ? animation == "stretch_in" || animation == "glow_in"
                                     : animation == "stretch_out" || animation == "glow_out"))
             || (allowFalling && isSkiaFallingParticle(animation))
-            || (allowParticleTransition && !skiaParticleKindForTransition(animation, entry).isEmpty());
+            || (allowParticleTransition && !skiaParticleKindForTransition(animation, entry).isEmpty()
+                && (!isSkiaEnergyTransition(animation) || transformVersion >= 8));
     };
     const auto supportedAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")

@@ -11,6 +11,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                           const protocol::ResolvedStyle& style, int offset, int version, RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
     const auto animationKind = [version](const QString& animation, bool entry) {
+        if (isSkiaEnergyTransition(animation) && version < 11) return QString{};
         if (version >= 10) return skiaParticleKindForTransition(animation, entry);
         return version >= 9 && isSkiaFallingParticle(animation) ? animation : QString{};
     };
@@ -37,13 +38,18 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool assembly = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
         const bool validSweep = animated
-            ? (fx.sweep == entrySweep && fx.kind == entry) || (fx.sweep == exitSweep && fx.kind == exit)
+            ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
+                || (!exit.isEmpty() && fx.sweep == exitSweep && isSkiaTransitionLayer(exit, fx.kind, false))
             : !falling || fx.sweep == 0;
+        // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
+        const bool impact = version >= 11 && animated
+            && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
                                             || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
         const bool scanline = version >= 7 && fx.kind == "scanline";
-        const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke";
+        const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke"
+            || (impact && fx.kind == "shockwave");
         QString defaultSprite = QStringLiteral("star4");
         if (symbol || falling || flame) defaultSprite = fx.kind;
         if (ripple) defaultSprite = QStringLiteral("ring");
@@ -51,13 +57,17 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         if (lightning) defaultSprite = QStringLiteral("bolt");
         if (fx.kind == "flame_glow") defaultSprite = QStringLiteral("flame");
         if (fx.kind == "ember" || fx.kind == "spark") defaultSprite = QStringLiteral("dot");
+        if (impact) {
+            defaultSprite = fx.kind == "fireball" ? QStringLiteral("flame") : fx.kind == "flash" ? QStringLiteral("star4")
+                : fx.kind == "shockwave" ? QStringLiteral("ring") : QStringLiteral("ash");
+        }
         const QString spriteName = fx.sprite.isEmpty() ? defaultSprite : fx.sprite;
         const bool allowedScanlineSprite = spriteName == "star4" || spriteName == "petal" || spriteName == "feather"
                                          || spriteName == "snow" || spriteName == "snow_solid" || spriteName == "note";
         const bool allowedSprite = scanline ? !fx.sprite.isEmpty() && allowedScanlineSprite : spriteName == defaultSprite
             || (fx.kind == "note" && spriteName == "note_dot")
             || (lightning && (spriteName == "bolt_b" || spriteName == "bolt_c"))
-            || ((fx.kind == "flame" || fx.kind == "flame_glow")
+            || ((fx.kind == "flame" || fx.kind == "flame_glow" || (impact && fx.kind == "fireball"))
                 && (spriteName == "flame_tall" || spriteName == "flame_wide" || spriteName == "flame_curl"))
             || (fx.kind == "flame_alt" && spriteName == "flame_alt_b");
         const auto start = std::int64_t(fx.startMs) + offset, end = std::int64_t(fx.endMs) + offset;
@@ -66,7 +76,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
-        if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly) || fx.anchor != "char"
+        if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly || impact) || fx.anchor != "char"
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite

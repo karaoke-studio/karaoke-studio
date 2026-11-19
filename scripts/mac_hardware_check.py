@@ -60,6 +60,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_scanline.py::test_combined_particle_layers_keep_both_clocks",
     "tests/test_subtitle_skia_particle_transitions.py::test_falling_transitions_keep_prelude_and_tail_outside_text",
     "tests/test_subtitle_skia_particle_transitions.py::test_particle_transitions_keep_symbol_windows_and_replay",
+    "tests/test_subtitle_skia_particle_transitions.py::test_energy_transitions_keep_companion_layers_and_outside_tail",
     "tests/test_subtitle_skia_noise.py::test_noise_transitions_preserve_final_text_and_are_seekable",
 )
 
