@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlsplit
 
 from PyQt6.QtCore import QObject, QTimer
 
-from krok_helper.app_paths import LEGACY_APP_NAMES
+from krok_helper.app_paths import LEGACY_APP_NAMES, effective_app_name
 from krok_helper.config import APP_NAME
 from krok_helper.windows import hidden_subprocess_kwargs
 
@@ -1231,6 +1231,16 @@ class RealSeparationBackend(SeparationBackend):
             from krok_helper.settings import get_settings_path
 
             return get_settings_path().parent / "PyMSSExternal"
+        if sys.platform.startswith("linux"):
+            data_home = Path(
+                os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+            )
+            # 与 config 目录同一套小写连字符合名（lin-k-lyrics，自动带 Dev 档位）。
+            return (
+                data_home
+                / effective_app_name().lower().replace(" ", "-")
+                / "PyMSSExternal"
+            )
         appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         root = Path(appdata) if appdata else Path.cwd()
         current = root / APP_NAME / "PyMSSExternal"
@@ -1476,8 +1486,10 @@ class RealSeparationBackend(SeparationBackend):
 
     @staticmethod
     def _external_version_supported(version: str) -> bool:
-        # Managed runtime manifests remain pinned. External 2.x environments
-        # must also pass capability checks before they can be connected.
+        # Managed runtime manifests remain pinned. Linux external environments
+        # have no version gate; Windows/macOS accept 2.x with capability checks.
+        if sys.platform.startswith("linux"):
+            return True
         return re.fullmatch(r"2\.[0-9]+\.[0-9]+", version) is not None
 
     def external_ai_python(self) -> str | None:
@@ -1632,7 +1644,13 @@ class RealSeparationBackend(SeparationBackend):
             self._set_ready_state()
         elif executable:
             self._settings["external_model_dir"] = str(Path(model_dir).expanduser()) if model_dir else ""
-            self._settings["external_executable"] = str(Path(executable).resolve())
+            if sys.platform.startswith("linux"):
+                # Linux venv 的 bin/python 是指向系统解释器的符号链接，venv 靠
+                # 「调用时的路径」定位 pyvenv.cfg；resolve 后 venv 失效，
+                # import pymss 会直接失败。abspath 只规范化不解链接。
+                self._settings["external_executable"] = os.path.abspath(executable)
+            else:
+                self._settings["external_executable"] = str(Path(executable).resolve())
             self._settings.pop("external_server_url", None)
             self._settings.pop("install_dir", None)
             self._snap.install_dir = ""

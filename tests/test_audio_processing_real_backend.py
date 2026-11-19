@@ -715,7 +715,7 @@ def test_managed_old_version_enters_upgrade_state_without_losing_location(tmp_pa
         backend.shutdown()
 
 
-def test_saved_external_old_version_requires_user_managed_upgrade(tmp_path) -> None:
+def test_saved_external_2x_version_can_start_without_upgrade(tmp_path) -> None:
     executable = tmp_path / "python.exe"
     executable.write_bytes(b"external-python")
     backend = RealSeparationBackend(
@@ -726,11 +726,9 @@ def test_saved_external_old_version_requires_user_managed_upgrade(tmp_path) -> N
         }
     )
     try:
-        assert (
-            backend.snapshot().state
-            is ServiceState.EXTERNAL_VERSION_INCOMPATIBLE
-        )
-        assert "2.0.17" in backend.snapshot().error
+        assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
+        assert backend.snapshot().pymss_version == "2.0.17"
+        assert not backend.snapshot().error
         assert not backend.snapshot().install_dir
     finally:
         backend.shutdown()

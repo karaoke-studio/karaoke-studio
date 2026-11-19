@@ -105,8 +105,10 @@ def test_overlay_invalidated_when_studio_changes(tmp_path):
 
 
 @pytest.mark.parametrize('platform,version,expected', [
-    ('darwin', '2.3.5', True), ('win32', '2.3.5', False),
-    ('darwin', '2.0.18', True), ('darwin', '2.3.6', False),
+    ('darwin', '2.3.5', True), ('win32', '2.3.5', True),
+    ('darwin', '2.0.18', True), ('darwin', '2.3.6', True),
+    ('win32', '3.0.0', False), ('darwin', '3.0.0', False),
+    ('linux', '2.3.6', True), ('linux', '3.0.0', True),
 ])
 def test_external_version_allowlist(monkeypatch, platform, version, expected):
     from krok_helper.audio_processing.separation import real_backend
