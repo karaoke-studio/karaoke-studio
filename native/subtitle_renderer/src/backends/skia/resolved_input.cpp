@@ -146,12 +146,19 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
+        const bool lineAnimation = singingScale && !line.zoomPulseEnabled
+            && features.contains("p07_utopia_line_animation")
+            && (line.entryAnimation == "none" || line.entryAnimation == "fade" || line.entryAnimation == "slide_in"
+                || line.entryAnimation == "rise")
+            && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
+                || line.exitAnimation == "rise");
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
             || line.wipeReverse || line.strokeFlashEnabled
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             // The projection admits a band only with ordinary Utopia singing.
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit || line.zoomPulseEnabled))
-            || (!utopiaEntry && line.entryAnimation != "none") || (!utopiaExit && line.exitAnimation != "none")
+            || (!lineAnimation && ((!utopiaEntry && line.entryAnimation != "none")
+                || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || line.zoomPulseEnabled || utopiaEntry || utopiaExit))
             || !projected.charStyles.empty()))
@@ -372,13 +379,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
         const bool singingGlow = singingScale && !line.zoomPulseEnabled && features.contains("p07_singing_glow");
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
+        const bool lineGlow = lineAnimation && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         // scanline_band_schema=6: the band repaints over a static glow (no shadow,
         // no role palette); the glow is drawn under the text as without a band.
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && layout.value("scanline_band_schema").toDouble(-1) >= 6 && style.scanlineMode != "role";
         if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
-                || line.entryAnimation != "none" || line.exitAnimation != "none" || (line.scanlineEnabled && !scanlineGlow)
+                || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
+                || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || line.strokeFlashEnabled
                 || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia && !singingGlow)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))

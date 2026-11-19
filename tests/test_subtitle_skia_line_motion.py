@@ -143,14 +143,18 @@ def animated_ruby(track, style, entry, exit_):
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('entry,exit_', RUBY_ANIMATIONS)
-def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, entry, exit_, tmp_path):
+@pytest.mark.parametrize('utopia', [False, True])
+def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, entry, exit_, utopia, tmp_path):
     track, style = upper_source(reading, 2)
+    if utopia:
+        style = replace(style, karaoke_anim='utopia')
     ir = upper_ir(binary, animated_ruby(track, style, entry, exit_), 1.5)
     static = upper_ir(binary, animated_ruby(track, style, 'none', 'none'), 1.5)
     assert 'p07_ruby_line_animation' in ir['required_features']
+    assert ('p07_utopia_line_animation' in ir['required_features']) == utopia
     assert ir['skia_layout']['lines'] == static['skia_layout']['lines']
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_ruby_line_animation')
+    bad['required_features'].remove('p07_utopia_line_animation' if utopia else 'p07_ruby_line_animation')
     line = ir['track']['lines'][0]
     first = line['display_start_ms'] + 100
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -165,7 +169,8 @@ def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, e
     assert np.array_equal(frames[1], normal[1])
     assert not np.array_equal(frames[0], normal[0])
     if target == 'gpu' and entry == 'fade':
-        (tmp_path / 'ruby-line-animation-layout.json').write_text(json.dumps({
+        name = 'ruby-utopia-line-animation-layout.json' if utopia else 'ruby-line-animation-layout.json'
+        (tmp_path / name).write_text(json.dumps({
             'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
             'durations': [line['entry_duration_ms'], line['exit_duration_ms']],
         }, sort_keys=True), encoding='utf-8')
@@ -174,10 +179,50 @@ def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, e
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('entry,exit_', RUBY_ANIMATIONS)
 @pytest.mark.parametrize('dpr', [1, 1.5])
-def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_, dpr):
+@pytest.mark.parametrize('utopia', [False, True])
+def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_, dpr, utopia):
     track, style = animated_ruby(*upper_source(reading, 2), entry, exit_)
+    if utopia:
+        style = replace(style, karaoke_anim='utopia')
     ir = upper_ir(binary, (track, style), dpr)
     compare_animated_ruby(binary, track, style, ir, 640, 360, dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', ['exit_fade', 'exit_slide_out', 'exit_rise'])
+def test_p00_glowing_ruby_exit_matches_actual_gpu(binary, application, case_id, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == case_id)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+        rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, 1)
+    budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
+    for time, reference, gpu, raster in zip(case.timestamps_ms, refs, *rendered, strict=True):
+        for label, a, b in (('D2D', reference, gpu), ('Raster', gpu, raster)):
+            ma, mb = a[..., 3] > 16, b[..., 3] > 16
+            if ma.any():
+                assert mb.any(), (case_id, time, label, 'missing mask')
+                ya, xa = np.where(ma)
+                yb, xb = np.where(mb)
+                edges = np.array([xa.min() - xb.min(), ya.min() - yb.min(),
+                                  xa.max() - xb.max(), ya.max() - yb.max()])
+                assert abs(edges).max() <= budget['max_bbox_edge_delta_px_at_1080'], (case_id, time, label, edges)
+            else:
+                assert not mb.any(), (case_id, time, label, 'unexpected mask')
+                mass_a, mass_b = int(a[..., 3].sum()), int(b[..., 3].sum())
+                assert abs(mass_a - mass_b) <= max(mass_a, mass_b) * budget['max_alpha_sum_relative']
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
