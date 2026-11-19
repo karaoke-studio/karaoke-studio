@@ -2114,6 +2114,12 @@ Windows 关联 **144 项通过**，含 **5 组新增实际 D2D GPU 对照**（�
 
 Windows 关联 **131 项通过**，另有字距展开走字重叠用例独立复核通过。最终 10 项聚焦用例包括 **4 组新增实际 D2D GPU 对照**（关闭 WARP 和 realization），覆盖两组完整入退场、字距/波浪与走字的重叠，及两种 DPR。字距展开 45ms 的第一列跨越 alpha 128 阈值，两后端预乘绿色通道最大差约 0.45/255，专项限制为 1/255 并检查轮廓。X11/Wayland 各 **36 通过、21 项 D2D 跳过**，独立 Windows/Linux Raster 各 **3 通过**。四份 native 干净重建且 CTest 各 **3/3**，源码标识 `9e94c472b21d60c5609f5a0992c9e11fc5b4245866eec6d0d1db1c7546f6ff2d`。新几何动画布局样例在 Windows/X11/Wayland 逐字节一致。证据前缀 `build/p07-char-geometry*`。
 
+### 14.77 Mac 双架构唱字特效汇总 CI（2026-11-19）
+
+提交 `27879a8c` 的双架构 Mac CI **5/5 成功**。Apple Silicon 与 Intel 各 **1390 项产品测试通过、940 项跳过**，干净环境包的新增特效代表套件各 **57 项通过**。两份包均为 `render_feature_suite=1`、`functional_passed=true`、`hardware_gate_passed=false`。直接下载核对的 **55 份规范布局样例全部字节一致**，其中水波纹、镂空雪花、闪电和火焰样例也与本地 X11 对应证据一致。[Mac CI 44461715911](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44461715911)
+
+成功的托管包检查仅上传报告与日志，两份 Actions 结果资产分别为 65,844 和 66,021 字节。失败及最终真机包仍保留原完整证据范围。本轮覆盖截至唱字闪电和火焰的版本，正反向扫字粒子和后续几何动画在此提交之后。最终候选包仍集中安排一次 Mac 真机验证。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
