@@ -211,11 +211,15 @@ def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_p00_multi_lane_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, application):
-    from scripts.subtitle_render_corpus import _ordinary_scenario
+@pytest.mark.parametrize('case_id', ['ordinary_dual_ruby_glow', 'font_variable_latin'])
+def test_p00_glow_matches_actual_d2d_and_gpu_raster(binary, application, case_id, tmp_path):
+    from PyQt6.QtGui import QFontDatabase
+    from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
-    case = _ordinary_scenario()
+    if case_id == 'font_variable_latin' and 'Bahnschrift' not in QFontDatabase.families():
+        pytest.skip('Bahnschrift system font is unavailable')
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == case_id)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
@@ -226,7 +230,7 @@ def test_p00_multi_lane_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, appl
     with SkiaRendererProcess(binary, selection=selection('raster')) as raster:
         raster.configure(case.track, case.style, width=1920, height=1080, fps=60)
         raster_frames, _ = collect(raster, case.timestamps_ms)
-    assert_glow_parity(case.timestamps_ms, refs, gpu_frames, raster_frames, case.name, 1)
+    assert_glow_parity(case.timestamps_ms, refs, gpu_frames, raster_frames, case.case_id, 1)
     limit = COMPARISON_BUDGETS['image_categories']['decorated_text']['max_bbox_edge_delta_px_at_1080']
 
     def bounds(frame):

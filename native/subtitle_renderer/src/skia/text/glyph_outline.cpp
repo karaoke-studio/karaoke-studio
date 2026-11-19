@@ -93,6 +93,13 @@ std::optional<GlyphGeometry> GlyphOutlineSource::load(SkGlyphID glyph) const {
     out.advance = float(slot->linearHoriAdvance) / 65536;
     out.leftBearing = float(m.horiBearingX) / 64;
     out.rightBearing = float(m.horiAdvance - m.horiBearingX - m.width) / 64;
+    if (in.italic) {
+        // DirectWrite derives synthetic bearings from the sheared design
+        // metric box, which can be wider than the transformed ink itself.
+        const float slope = -kSyntheticItalicSkewX / 64.f;
+        out.leftBearing += std::floor(float(m.horiBearingY - m.height) * slope);
+        out.rightBearing -= std::floor(float(m.horiBearingY) * slope);
+    }
     if (in.bold) check(FT_Outline_Embolden(&slot->outline, FT_Pos(in.face->units_per_EM) * 64 / 24));
     Builder builder;
     const FT_Outline_Funcs callbacks{Builder::move, Builder::line, Builder::conic, Builder::cubic, 0, 0};
@@ -100,8 +107,7 @@ std::optional<GlyphGeometry> GlyphOutlineSource::load(SkGlyphID glyph) const {
     if (builder.contour) builder.path.close();
     auto path = builder.path.detach();
     const auto scale = in.size / in.face->units_per_EM;
-    // In y-down coordinates Skia's synthetic italic is skewX=-0.25.
-    if (in.italic) path = path.makeTransform(SkMatrix::Skew(-.25f, 0));
+    if (in.italic) path = path.makeTransform(SkMatrix::Skew(kSyntheticItalicSkewX, 0));
     out.path = path.makeTransform(SkMatrix::Scale(scale, scale));
     return out;
 }

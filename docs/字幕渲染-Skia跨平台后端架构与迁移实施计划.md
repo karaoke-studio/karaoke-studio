@@ -2293,7 +2293,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 正向横排上注音支持继承阴影或独立偏移的实色阴影，覆盖静态走字、普通 Utopia 唱字及单双描边。阴影用各自已解析的唱前、唱后颜色和读音时钟，缩放时沿用变换的字形和裁切。下方罗马音装饰、光晕组合及其他动态效果仍有显式边界。
 - Windows 关联 179 项通过，含 4 组新增 D2D GPU 对照和 Vulkan/Raster 比较，覆盖 DPR 1/1.5、继承及独立阴影。X11 与 Wayland 各 16 项通过、11 项 Windows 专用跳过，Windows/Linux 独立 Raster 各 2 项，四份构建 CTest 各 3/3。三种窗口环境的 `ruby-shadow-layout.json` 逐字节相同。
 - P00 的原样配置现为 2/129，含基础阴影样例和保留原始双描边、正文与注音阴影的真实 N3 片段。该片段在 Windows 对照 D2D 硬件（关闭 WARP 和 realization）、Vulkan、Raster。三个 1080p 时间点的遮罩包围盒一致。按 60Hz 并补采实际起唱点，共比较 387 帧，D2D/Vulkan 最低遮罩 IoU 为 0.99625，最大预乘通道 MAE 为 1.078，最大 alpha 总量差低于 0.077%；Vulkan/Raster 最低 IoU 为 0.99993，最大 MAE 为 0.063。六个时间点回跳后帧摘要相同。该结果覆盖一个真实片段，其他场景及整首导出仍需验收。
-- 阴影和短语标记复验已送跑。[Mac CI 44508389431](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44508389431)
+- 阴影和短语标记的 Mac CI 5 项任务通过。两种架构各 1561 项产品用例、191 项干净包功能用例通过，77 份规范数据逐字节一致。托管虚拟 Metal 的物理 GPU 门槛仍待最终真机验收。[Mac CI 44508389431](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44508389431)
 
 ### 14.103 P06.1 横排多行正文描边（2026-11-19）
 
@@ -2312,13 +2312,19 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 关联 119 项通过，含 4 组新增真实 D2D GPU 对照和 Vulkan/Raster 比较。X11 和 Wayland 各 52 项通过、67 项 Windows 专用跳过，三种窗口环境的 `ruby-singing-glow-layout.json` 逐字节一致。Windows/Linux 独立 Raster 各 2 项，四份构建 CTest 各 3/3。
 - P00 原样 `ordinary_dual_ruby_glow` 三个 1080p 时间点均通过装饰字幕像素预算。真实 D2D GPU（关闭 WARP 和 realization）与 Vulkan 的遮罩 IoU 为 0.97349–0.97587，遮罩边界偏差最大 2px，最大预乘通道 MAE 4.113，最大 p95 17，alpha 总量最大偏差 2.32%；Vulkan/Raster 最低 IoU 为 0.98034，最大边界偏差 1px。
 - P00 原样可配置场景由 2/129 增至 12/129，包括 N3 网格、英数拉伸、可变字体、上注音停顿、无第二描边等既有功能与唱字光晕的组合。12 个已配置场景按原像素预算复跑，11 个通过，可变字体样例的合成斜体仍超限。
-- 双架构 CI 汇总复验多行描边、正文及上注音光晕。[Mac CI 44512277061](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44512277061)
+- 多行描边、正文及上注音光晕的 Mac CI 5 项任务通过。两种架构各 1567 项产品用例、197 项干净包功能用例通过，80 份规范数据逐字节一致。物理 Metal GPU 仍待最终真机验收。[Mac CI 44512277061](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44512277061)
 
 ### 14.106 P07.5 正向横排上注音扫字线（2026-11-19）
 
 - 实色扫字带按各注音组自身的走字前沿裁切，只有当前时刻落在读音单元有效窗口时才重绘。正文与注音暂停和回跳继续使用解析好的时钟。注音保留唱前、唱后两侧与内外描边的绘制顺序。SkSL 计算子像素条带覆盖，统一 Vulkan、Metal 和 Raster 的裁切输入。
 - Windows 定向 16 项通过，含 3 组新增真实 D2D GPU 对照（关闭 WARP 和 realization）及 Vulkan/Raster 比较，覆盖硬边、柔边、DPR 1/1.5、读音暂停和回跳；保留 1px 的带边界、覆盖与羽化剖面断言。X11 和 Wayland 通过本组 71 项，37 项 Windows 专用跳过，三种窗口环境的 `ruby-scanline-layout.json` 逐字节相同。Windows/Linux 独立 Raster 各 1 项，四份构建 CTest 各 3/3。
 - 扫字带与 Utopia 缩放、罗马音、角色取色、特殊扫字形状和粒子的组合仍待复验。
+
+### 14.107 P05 合成斜体的字形与单元侧边距（2026-11-19）
+
+- 实测 DirectWrite 的合成斜体轮廓斜切系数为 `87/256`，包含 Bahnschrift 变轴实例与 Meiryo 普通字体。Skia 塑形与 FreeType 轮廓复用该系数；字形侧边距按设计字框上下边与斜切量计算，字形 advance 保持原始实例值。更新 Skia 度量身份至 `v7`，旧快照在配置时拒绝。
+- Windows 对照原样 Bahnschrift 可变字重 700、合成斜体和 140% 拉伸混排样本，三个 1080p 时间点均通过原预算。D2D GPU/Vulkan 的最低遮罩 IoU 为 0.97691，最大边界偏差 1px，最大预乘通道 MAE 3.948，最大 p95 17。Vulkan/Raster 最低遮罩 IoU 为 0.98201。原样可配置的 12 个 P00 场景全部通过本轮像素预算，完整语料仍有 117 个配置门槛待处理。
+- Windows 字体及字形回归 139 项通过，X11/Wayland 各 63 项通过、76 项跳过。新增便携字体的合成斜体字框回归已在 Windows Vulkan、Windows Raster 和 Linux Raster 上跑通。四份原生构建 CTest 各 3/3。
 
 ## 15. 前期探针清理范围
 

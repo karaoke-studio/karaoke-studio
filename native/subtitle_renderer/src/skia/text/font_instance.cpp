@@ -56,7 +56,7 @@ FontInstance::FontInstance(const FontSpec& spec) {
     // m150 HB's advance callback also multiplies SkFont::scaleX. Shape at unit
     // scale, then transform geometry AND advances once in our shared result.
     scaleX_ = spec.scaleX;
-    font_ = SkFont(face, spec.size, 1, spec.syntheticItalic ? -.25f : 0.f);
+    font_ = SkFont(face, spec.size, 1, spec.syntheticItalic ? kSyntheticItalicSkewX : 0.f);
     font_.setEmbolden(spec.syntheticBold);
     font_.setHinting(SkFontHinting::kNone);
     font_.setEdging(SkFont::Edging::kAntiAlias);
@@ -69,7 +69,7 @@ FontInstance::FontInstance(const FontSpec& spec) {
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
-    key << "skia-m150-hb-ft-v6:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
+    key << "skia-m150-hb-ft-v7:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
         << ':' << std::bit_cast<std::uint32_t>(spec.scaleX) << ':' << spec.syntheticBold << ':' << spec.syntheticItalic;
     for (const auto& axis : coordinates) key << ':' << axis.axis << '=' << std::bit_cast<std::uint32_t>(axis.value);
     identity_ = key.str();

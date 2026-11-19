@@ -84,6 +84,25 @@ def test_simulations_and_horizontal_scale_are_explicit_instances(binary, font):
         assert bold['ink'] != plain['ink'] and italic['ink'] != plain['ink']
 
 
+def test_synthetic_italic_shears_ink_and_design_bearings(binary, tmp_path):
+    from skia_text_fixture import make_font
+
+    path = make_font(tmp_path / 'oblique.ttf')
+    with SkiaTextMetricsProcess(binary) as process:
+        upright = run(process, path, ['A'])[0]
+        italic = run(process, path, ['A'], synthetic_italic=True)[0]
+        stretched = run(process, path, ['A'], synthetic_italic=True, scale_x=1.4)[0]
+
+    # The fixture's rectangular ink is 700 design units high with 50-unit bearings.
+    assert italic['design_left_bearing'] == pytest.approx(50)
+    assert italic['design_right_bearing'] == pytest.approx(-187)
+    assert italic['design_advance'] == upright['design_advance']
+    assert italic['ink'][:2] == pytest.approx(upright['ink'][:2])
+    assert italic['ink'][2] - upright['ink'][2] == pytest.approx(48 * .7 * 87 / 256, abs=.001)
+    assert stretched['ink'][2] == pytest.approx(italic['ink'][2] * 1.4, abs=.001)
+    assert stretched['design_right_bearing'] == pytest.approx(italic['design_right_bearing'], abs=.001)
+
+
 @pytest.mark.parametrize("change", ["hash", "face", "axis", "nan_axis", "size", "unknown_font", "control"])
 def test_invalid_resources_and_requests_fail_without_poisoning_service(binary, font, change):
     fonts = {"main": {"path": str(font)}}

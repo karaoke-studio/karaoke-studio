@@ -149,9 +149,9 @@ def test_forged_or_old_cell_snapshots_keep_the_previous_scene(binary, project, f
     ir = ir_for(binary, (track, replace(style, right_to_left=False)))
     bad = copy.deepcopy(ir)
     fi, decomposed = (c['metrics'] for c in bad['skia_layout']['lines'][0]['cells'][:2])
-    assert fi['font_identity'].startswith('skia-m150-hb-ft-v6:')
+    assert fi['font_identity'].startswith('skia-m150-hb-ft-v7:')
     if forgery == 'old_identity':
-        fi['font_identity'] = fi['font_identity'].replace('-v6:', '-v5:', 1)
+        fi['font_identity'] = fi['font_identity'].replace('-v7:', '-v6:', 1)
     elif forgery == 'ligature_glyph':
         # A cell_glyph_schema-less (HarfBuzz liga) snapshot of the same cell.
         fi['glyphs'] = [{**fi['glyphs'][0], 'cluster_end': 2}]
@@ -272,7 +272,7 @@ def test_line_box_metrics_follow_gpu_os2_rule(binary, tmp_path, name, expected):
         run = process.measure({'f': {'path': str(path)}}, [{'font_ids': ['f'], 'size': 1000, 'cells': ['A']}])[0]
     assert (run['font_metrics']['ascent'], run['font_metrics']['descent']) == pytest.approx(expected, abs=1e-3)
     assert (run['cells'][0]['ascent'], run['cells'][0]['descent']) == pytest.approx(expected, abs=1e-3)
-    assert run['font_metrics']['font_identity'].startswith('skia-m150-hb-ft-v6:')
+    assert run['font_metrics']['font_identity'].startswith('skia-m150-hb-ft-v7:')
 
 
 def test_face_without_os2_keeps_hhea_line_box(binary, tmp_path):
@@ -378,7 +378,7 @@ def test_empty_cells_keep_authored_clocks_and_inkless_boxes(binary, project, rtl
     for index in (0, 3):
         metrics = cells[index]['metrics']
         assert metrics['glyphs'] == [] and metrics['ink'] == [0, 0, 0, 0] and metrics['design_advance'] == 0
-        assert metrics['font_identity'].startswith('skia-m150-hb-ft-v6:')
+        assert metrics['font_identity'].startswith('skia-m150-hb-ft-v7:')
         assert cells[index]['wipe_right'] - cells[index]['wipe_left'] == cell_geometry('', metrics, style)[0]
     size, space = int(style.font_size_px), int(style.space_width_percent)
     assert cell_geometry('', cells[0]['metrics'], style)[0] == size * space * 25 // 100 // 10

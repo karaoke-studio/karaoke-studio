@@ -9,6 +9,9 @@
 struct hb_font_t;
 
 namespace subtitle::skia::text {
+// DirectWrite's synthetic oblique shear in y-down font coordinates.
+inline constexpr float kSyntheticItalicSkewX = -87.f / 256.f;
+
 struct Axis { std::uint32_t tag; float value; };
 struct FontResource {
     std::vector<std::uint8_t> bytes;
