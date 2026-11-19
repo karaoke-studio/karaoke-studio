@@ -96,36 +96,32 @@ def test_static_glow_matches_actual_d2d_and_gpu_raster(binary, project, case, dp
             configure(process, ir)
             frames, _ = collect(process, TIMES)
         draws.append(frames)
-    assert_glow_parity(TIMES, refs, *draws, case, dpr)
+    assert_glow_parity(TIMES, refs, *draws, (case, dpr))
 
 
-def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, dpr):
+def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p00_edges=False):
     budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
     for t, ref, gpu, raster in zip(times, refs, gpu_frames, raster_frames, strict=True):
         for name, first, second in (('D2D', ref, gpu), ('Raster', gpu, raster)):
             a, b = first[..., 3], second[..., 3]
             left, right = a > 16, b > 16
             union = left | right
-            if not union.any():
+            if not union.any() and not check_p00_edges:
                 continue
-            assert left.any() and right.any(), (case, t, name, 'missing image')
             mass_a, mass_b = int(a.sum()), int(b.sum())
             assert abs(mass_a - mass_b) <= max(mass_a, mass_b) * budget['max_alpha_sum_relative'], (
                 case, t, name, mass_a, mass_b)
+            if not union.any():
+                continue
+            assert left.any() and right.any(), (case, t, name, 'missing image')
+            if check_p00_edges:
+                ya, xa = np.where(left)
+                yb, xb = np.where(right)
+                delta = np.array([xa.min() - xb.min(), ya.min() - yb.min(),
+                                  xa.max() - xb.max(), ya.max() - yb.max()])
+                assert abs(delta).max() <= budget['max_bbox_edge_delta_px_at_1080'], (case, t, name, delta)
             iou = (left & right).sum() / union.sum()
-            if case == 'split' and dpr == 1.5 and name == 'D2D' and t in (750, 1200, 1799, 1800, 2200):
-                # The 13px/three-pass sung halo on Vulkan crosses alpha 16
-                # slightly farther out than D2D. The P00 gate remains open
-                # for these exact frames. Keep the stronger contours and the
-                # magnitude of the fringe disagreement under test.
-                fringe = left ^ right
-                strong_left, strong_right = a > 64, b > 64
-                assert iou >= .96, (case, t, name, iou)
-                assert np.max(np.maximum(a, b)[fringe], initial=0) <= 28, (case, t, name)
-                assert np.max(abs(a.astype(np.int16) - b.astype(np.int16))[fringe], initial=0) <= 12, (case, t, name)
-                assert (strong_left & strong_right).sum() / (strong_left | strong_right).sum() >= budget['min_alpha_iou']
-            else:
-                assert iou >= budget['min_alpha_iou'], (case, t, name, iou)
+            assert iou >= budget['min_alpha_iou'], (case, t, name, iou)
             diff = abs(premultiplied(first)[union] - premultiplied(second)[union])
             assert diff.mean() <= budget['max_union_channel_mae'], (case, t, name, diff.mean())
             assert np.percentile(diff, 95) <= budget['max_union_p95'], (case, t, name)
@@ -207,7 +203,7 @@ def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr,
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
     refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
     gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
-    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, (case, singing), dpr)
+    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, (case, singing, dpr))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
@@ -230,13 +226,4 @@ def test_p00_glow_matches_actual_d2d_and_gpu_raster(binary, application, case_id
     with SkiaRendererProcess(binary, selection=selection('raster')) as raster:
         raster.configure(case.track, case.style, width=1920, height=1080, fps=60)
         raster_frames, _ = collect(raster, case.timestamps_ms)
-    assert_glow_parity(case.timestamps_ms, refs, gpu_frames, raster_frames, case.case_id, 1)
-    limit = COMPARISON_BUDGETS['image_categories']['decorated_text']['max_bbox_edge_delta_px_at_1080']
-
-    def bounds(frame):
-        rows, columns = np.where(frame[..., 3] > 16)
-        return np.array([columns.min(), rows.min(), columns.max(), rows.max()])
-
-    for time, ref, gpu_frame, raster_frame in zip(case.timestamps_ms, refs, gpu_frames, raster_frames, strict=True):
-        assert np.max(np.abs(bounds(ref) - bounds(gpu_frame))) <= limit, (time, 'D2D')
-        assert np.max(np.abs(bounds(gpu_frame) - bounds(raster_frame))) <= limit, (time, 'Raster')
+    assert_glow_parity(case.timestamps_ms, refs, gpu_frames, raster_frames, case.case_id, check_p00_edges=True)

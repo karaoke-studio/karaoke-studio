@@ -194,7 +194,6 @@ def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_
 ])
 def test_p00_glowing_ruby_line_motion_matches_actual_gpu(binary, application, case_id, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases
-    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -209,22 +208,7 @@ def test_p00_glowing_ruby_line_motion_matches_actual_gpu(binary, application, ca
             process.configure(case.track, case.style, width=1920, height=1080, fps=60)
             frames, _ = collect(process, case.timestamps_ms)
         rendered.append(frames)
-    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, 1)
-    budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
-    for time, reference, gpu, raster in zip(case.timestamps_ms, refs, *rendered, strict=True):
-        for label, a, b in (('D2D', reference, gpu), ('Raster', gpu, raster)):
-            ma, mb = a[..., 3] > 16, b[..., 3] > 16
-            if ma.any():
-                assert mb.any(), (case_id, time, label, 'missing mask')
-                ya, xa = np.where(ma)
-                yb, xb = np.where(mb)
-                edges = np.array([xa.min() - xb.min(), ya.min() - yb.min(),
-                                  xa.max() - xb.max(), ya.max() - yb.max()])
-                assert abs(edges).max() <= budget['max_bbox_edge_delta_px_at_1080'], (case_id, time, label, edges)
-            else:
-                assert not mb.any(), (case_id, time, label, 'unexpected mask')
-                mass_a, mass_b = int(a[..., 3].sum()), int(b[..., 3].sum())
-                assert abs(mass_a - mass_b) <= max(mass_a, mass_b) * budget['max_alpha_sum_relative']
+    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, check_p00_edges=True)
 
 
 def test_glowing_ruby_fade_preserves_first_nonzero_alpha_on_both_targets(binary, reading):

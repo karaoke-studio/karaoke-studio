@@ -115,7 +115,7 @@ def test_p00_ruby_particles_match_actual_d2d_and_gpu_raster(binary, application,
             process.configure(case.track, case.style, width=1920, height=1080, fps=60)
             frames, _ = collect(process, case.timestamps_ms)
         rendered.append(frames)
-    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, 1)
+    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, check_p00_edges=True)
     with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
         process.configure(case.track, replace(case.style, sing_fx='none'), width=1920, height=1080, fps=60)
         bare, _ = collect(process, case.timestamps_ms)

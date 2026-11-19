@@ -33,8 +33,9 @@ std::vector<PreparedGlow> PreparedGlow::prepare(const StaticGlow& spec, bool mer
 SkPaint PreparedGlow::strokePaint() const {
     SkPaint stroke;
     stroke.setStyle(SkPaint::kStroke_Style);
-    stroke.setStrokeJoin(SkPaint::kMiter_Join);
-    stroke.setStrokeMiter(10.f);
+    // The reference glyph paths request round joins. Miter spikes extend the
+    // source beyond the intended radius before any blur is applied.
+    stroke.setStrokeJoin(SkPaint::kRound_Join);
     stroke.setStrokeWidth(strokeWidth_);
     return stroke;
 }

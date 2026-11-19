@@ -815,7 +815,7 @@ def test_glow_band_capability_and_out_of_order_seek(binary, reading, case, utopi
         assert any(changed) and not changed[0] and not changed[-1], (case, utopia, target, changed)
         results.append([by_time[t] for t in RUBY_BAND_TIMES])
     from test_subtitle_skia_static_glow import assert_glow_parity
-    assert_glow_parity(RUBY_BAND_TIMES, results[0], results[0], results[1], ('seek', case, utopia), 1.5)
+    assert_glow_parity(RUBY_BAND_TIMES, results[0], results[0], results[1], ('seek', case, utopia, 1.5))
     if main_glow and utopia:
         (tmp_path / 'scanline-glow-layout.json').write_text(json.dumps({
             'features': ir['required_features'],
@@ -865,7 +865,7 @@ def test_glow_band_matches_actual_d2d_and_gpu_raster(binary, reading, case, utop
                                        width=640, height=360, dpr=dpr, realization_enabled=False)
         refs[name] = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
     gpu, raster = glow_band_frames(binary, (track, style), dpr, RUBY_BAND_TIMES)
-    assert_glow_parity(RUBY_BAND_TIMES, refs['band'], gpu, raster, ('glow_band', case, utopia), dpr)
+    assert_glow_parity(RUBY_BAND_TIMES, refs['band'], gpu, raster, ('glow_band', case, utopia, dpr))
     # Both renderers really draw a band over the glow at the same samples.
     gpu_bare, _ = glow_band_frames(binary, (track, replace(style, scanline_enabled=False)), dpr, RUBY_BAND_TIMES)
     for t, ref, ref_bare, skia, skia_bare in zip(RUBY_BAND_TIMES, refs['band'], refs['bare'], gpu, gpu_bare,
@@ -899,7 +899,7 @@ def test_p00_scanline_matches_actual_d2d_and_gpu_raster(binary, application, cas
     with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
         process.configure(case.track, bare_style, width=1920, height=1080, fps=60)
         bare, _ = collect(process, case.timestamps_ms)
-    assert_glow_parity(case.timestamps_ms, refs['band'], frames['gpu'], frames['raster'], case_id, 1)
+    assert_glow_parity(case.timestamps_ms, refs['band'], frames['gpu'], frames['raster'], case_id)
     limit = COMPARISON_BUDGETS['image_categories']['decorated_text']['max_bbox_edge_delta_px_at_1080']
 
     def bounds(frame):
