@@ -2047,6 +2047,13 @@ Windows 关联组合 **144 项通过**，另有 **1 项极窄带独立复核通�
 
 Windows 相关 **127 项通过**，含 **4 项新增真实 D2D GPU 对照**（关 WARP 与 realization）和 Skia GPU/Raster 对照，覆盖旧版原速、旧版减速、新版加速、新版减速及带活动粒子的窗末。保留 P00 的粒子区域预算，两个命名的低透明度帧单独复核：旧版原速 750ms 的 8 个掩码差像素最高 21，旧版减速 450ms 的首发样本低于 occupancy 门槛，逐像素差在 2/255 内、覆盖量差不到四分之一像素。发射计划连续、同后端乱序回跳字节一致。X11/Wayland 各 **18 通过、8 项 D2D 跳过**，独立 Windows/Linux Raster 各 **15 通过**。四份 native 干净重建且 CTest 各 **3/3**，源码标识 `79852930ffce15b1bb743fad9a3c05f0119046badec8d656fa14d090bc694c34`。两个唱字星光规范样例在 Windows/X11/Wayland 各自字节相同。证据前缀 `build/p07-twinkle-tempo*`。
 
+
+### 14.68 Mac 近期能力的汇总 CI（2026-11-19）
+
+提交 `7c66149d` 的双架构 Mac CI **5/5 成功**。Apple Silicon 与 Intel 的 Metal 预览各 **21 通过、1 跳过**，产品组合各 **1349 通过、904 项平台专用跳过**，两份干净环境包均为 `render_feature_suite=0`、`functional_passed=true`、`hardware_gate_passed=false`。下载两份产品证据直接比较，**46 个规范样例全部字节相同**，其中整行淡化、位移、逐字淡化、逐字变换、纯色走字线和唱字星光的 6 份样例与本地 X11/Wayland 对应版本也逐字节相同。[Mac CI 44449558810](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44449558810)
+
+本次提交覆盖逐字变换与走字重叠的实现，走字线柔化与取色、唱字星光旧版和速度在此提交之后。按用户决定，朋友在迁移结束时只跑最终候选一次。此轮用于开发期 Metal、Qt 和包的功能证据，真机验收固定入口留待最终候选更新。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
