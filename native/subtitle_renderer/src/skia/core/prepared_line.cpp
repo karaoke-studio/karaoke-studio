@@ -148,8 +148,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 if (layer == Layer::OuterOutline && cell.outline)
                     canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
             }
-            paint.setColor(drawOutline ? (sung ? stroke->after : stroke->before)
-                                       : (sung ? cell.after : cell.before));
+            const auto shader = drawOutline ? nullptr : sung ? line.afterGradient : line.beforeGradient;
+            paint.setShader(shader);
+            paint.setColor(shader ? SK_ColorWHITE : drawOutline ? (sung ? stroke->after : stroke->before)
+                                                               : (sung ? cell.after : cell.before));
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
             if (animatedInk) {
                 if (drawOutline) drawFixedOutline(canvas, *animatedInk, paint, stroke->width);

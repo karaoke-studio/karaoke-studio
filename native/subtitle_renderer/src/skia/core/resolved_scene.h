@@ -8,6 +8,7 @@
 #include "scanline_band.h"
 #include "sing_particles.h"
 #include "solid_outline.h"
+#include "subtitle_gradient.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
 #include <optional>
@@ -43,6 +44,7 @@ struct ResolvedLine {
     // wipeRightToLeft then means bottom-to-top (the existing GPU's reverse vertical).
     bool vertical = false;
     LineAnimation animation;
+    sk_sp<SkShader> beforeGradient, afterGradient;
     NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;

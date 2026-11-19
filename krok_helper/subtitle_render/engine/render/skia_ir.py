@@ -17,6 +17,7 @@ from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
 from .skia_particle_ir import ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, write_particle_anchors
+from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
@@ -243,6 +244,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['scanline_band_schema'] = (
             4 if any(line.get('scanline') and line.get('wipe_reverse') for line in ir['track']['lines']) else 3
         )
+    if write_body_gradient_bounds(track, ir, plan):
+        ir['required_features'].append('p06_body_gradient')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         _validate_stroke_flash(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_stroke_flash')

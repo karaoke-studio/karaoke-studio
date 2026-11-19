@@ -24,6 +24,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
         line.animation = source.animation;
+        line.beforeGradient = source.beforeGradient;
+        line.afterGradient = source.afterGradient;
         line.noise = source.noise;
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;

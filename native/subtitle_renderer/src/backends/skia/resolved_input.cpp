@@ -60,7 +60,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const auto features = ir.value("required_features").toArray();
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
-    validateSkiaScene(projected, true, outlineLayers);
+    const bool bodyGradients = features.contains("p06_body_gradient");
+    validateSkiaScene(projected, true, outlineLayers, bodyGradients);
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -316,6 +317,30 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             }
             if (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe || line.scanlineEnabled)
                 throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
+        }
+        const bool gradient = style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid";
+        if (gradient) {
+            if (!bodyGradients || outlineLayers > 0 || style.vertical || style.rightToLeft || line.wipeReverse
+                || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
+                || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
+                || !prepared.rubyGroups.empty() || !projected.charStyles.empty())
+                throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");
+            if (std::ranges::any_of(prepared.cells, [](const auto& glyph) { return !glyph.path.isEmpty(); })) {
+                const auto rect = source.value("body_gradient_bounds").toArray();
+                if (rect.size() != 4 || std::ranges::any_of(rect, [](const auto& v) {
+                        return !v.isDouble() || !std::isfinite(v.toDouble()) || std::abs(v.toDouble()) > 1e6;
+                    }))
+                    throw BackendError("Skia 正文渐变缺少有效的绘制范围");
+                const auto target = SkRect::MakeLTRB(float(rect[0].toDouble() * glyphs.dpr), float(rect[1].toDouble() * glyphs.dpr),
+                                                    float(rect[2].toDouble() * glyphs.dpr), float(rect[3].toDouble() * glyphs.dpr));
+                if (target.isEmpty()) throw BackendError("Skia 正文渐变的绘制范围为空");
+                if (style.beforeFillPaint.mode != "solid")
+                    prepared.beforeGradient = ::subtitle::skia::subtitleGradient(style.beforeFillPaint, target);
+                if (style.afterFillPaint.mode != "solid")
+                    prepared.afterGradient = ::subtitle::skia::subtitleGradient(style.afterFillPaint, target);
+            }
+        } else if (source.contains("body_gradient_bounds")) {
+            throw BackendError("Skia 实色正文携带了未声明的渐变范围");
         }
         if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
         out.lines.push_back(std::move(prepared));

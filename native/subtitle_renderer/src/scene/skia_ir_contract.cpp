@@ -43,6 +43,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vector_guides",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
+        "p06_body_gradient",
         "p07_line_fade",
         "p07_line_motion",
         "p07_character_fade",
