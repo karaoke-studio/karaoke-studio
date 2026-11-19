@@ -70,9 +70,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         || (!cfg.rubies.empty() && !features.contains("p05_vertical_ruby"))
         || cfg.dualLineLayout || std::any_of(cfg.lineOffsetsX.begin(), cfg.lineOffsetsX.end(), [](int v) { return v != 0; })))
         throw BackendError("Skia 竖排仅支持已验证的单列实色正文");
+    // Upper and lower annotations over solid main outlines need their own capability.
+    const bool outlineRuby = features.contains("p06_outline_ruby");
     if (features.contains("p06_primary_solid_outline")
-        && (cfg.vertical || cfg.rightToLeft || !cfg.rubies.empty() || cfg.dualLineLayout
-            || features.contains("p05_resolved_ruby") || features.contains("p05_reverse_wipe")))
+        && (cfg.vertical || cfg.rightToLeft || cfg.dualLineLayout || features.contains("p05_reverse_wipe")
+            || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 实色描边当前仅支持从左至右的基础横排正文");
     if (cfg.lineBand.enabled
         || cfg.viewportScalePct != 100 || cfg.viewportRotationDeg || cfg.viewportOffsetX || cfg.viewportOffsetY)

@@ -46,6 +46,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_body_gradient",
         "p06_outline_gradient",
         "p06_image_fill",
+        "p06_outline_ruby",
         "p07_line_fade",
         "p07_line_motion",
         "p07_character_fade",
@@ -180,6 +181,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_sing_twinkle")
         && (twinkleVersion < 1 || twinkleVersion > kSingingParticleSchema || std::floor(twinkleVersion) != twinkleVersion))
         throw BackendError("Skia 唱字粒子布局版本无效");
+    if (features.contains("p06_outline_ruby")
+        && (!features.contains("p06_primary_solid_outline") || !features.contains("p05_resolved_ruby")))
+        throw BackendError("Skia 描边正文与注音组合缺少描边或注音能力声明");
     if (features.contains("p06_outline_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 描边渐变缺少正文渐变或描边能力声明");

@@ -19,6 +19,9 @@ def cell_geometry(text, metrics, style, *, edge_size=0):
     advance, bearing_left, bearing_right = (int(v) for v in values)
     width = nicokara_layout_width(int(right - left), advance, bearing_left, bearing_right,
                                   edge_size=edge_size, allow_biting=style.allow_biting)
-    offset = -left + nicokara_char_geometry_left_offset(int(right - left), advance, bearing_left,
-                                                       allow_biting=style.allow_biting) + max(int(edge_size), 0) / 2
+    # The outline contributes an integer inset in reference coordinates,
+    # before the final geometry is scaled for the target DPR.
+    offset = -left + nicokara_char_geometry_left_offset(
+        int(right - left), advance, bearing_left, allow_biting=style.allow_biting,
+    ) + max(int(edge_size), 0) // 2
     return width, float(offset)

@@ -107,8 +107,6 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
         # returns no annotation for a reverse line, exactly as the GPU does.
         if appearance.vertical or appearance.right_to_left:
             raise ValueError('Skia 当前注音几何准备仅支持正向横排上注音')
-        if any(style_for_role_in_layout(appearance, c.role_label).stroke_width_px > 0 for c in line.chars):
-            raise ValueError('Skia 当前注音几何准备尚不支持带描边的主字')
         clock = measured.snapshot.resolve_intervals(line, style)
         intervals.append(clock)
         line_targets = upper_ruby_targets(track, index, line, appearance, clock, annotation_indices)
@@ -175,8 +173,7 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                               'wipe_right': x + ink[2] if visible else origin + width})
             rubies.append(RubyGeometry(target, tuple(span), baseline, tuple(cells),
                                        tuple(unit[0] for unit in metrics.unit_layouts)))
-        # Generated lower ink now participates in the source's placement and
-        # collision envelope; authored upper readings remain outside it.
+        # The collision envelope takes visible lower ink.
         boxes = [local.ink] if local.ink else []
         for group in rubies:
             if group.target.lower:
@@ -187,14 +184,18 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                                       c+cell['origin_x'], d+cell['baseline_y']))
         placement_ink = (min(b[0] for b in boxes), min(b[1] for b in boxes),
                          max(b[2] for b in boxes), max(b[3] for b in boxes)) if boxes else None
-        anchor = ((placement_ink[0], placement_ink[2]) if placement_ink else (0, max(local.layout_width, 1)))
         if appearance.layout_semantics == 'n3_1074':
             # N3 aligns the union of the main grid and ruby UNIT BOXES. Ink
             # bearings are irrelevant here; overflow on either side shifts
             # every path together and must later enter page-width statistics.
-            boxes = [(c['layout_left'], c['layout_right']) for r in rubies for c in r.cells]
-            anchor = (min([0, *(b[0] for b in boxes)]),
-                      max([max(local.layout_width, 1), *(b[1] for b in boxes)]))
+            anchor_boxes = [(0, max(local.layout_width, 1))]
+            anchor_boxes.extend((c['layout_left'], c['layout_right']) for r in rubies for c in r.cells)
+        else:
+            # Legacy alignment unions main ink with the lower readings' unit boxes.
+            anchor_boxes = [(local.ink[0], local.ink[2])] if local.ink else [(0, max(local.layout_width, 1))]
+            anchor_boxes.extend((c['layout_left'], c['layout_right']) for r in rubies if r.target.lower
+                                for c in r.cells)
+        anchor = (min(box[0] for box in anchor_boxes), max(box[1] for box in anchor_boxes))
         lines.append(RubyLineGeometry(tuple(clock), tuple(gaps), (left_overflow, right_overflow),
                                       local, tuple(rubies), anchor, placement_ink))
     signature = (measured.identity, ruby_metrics.identity, value_signature(track.rubies), value_signature(line_styles),

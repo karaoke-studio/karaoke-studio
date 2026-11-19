@@ -216,10 +216,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                             for item in plan.lines)
     if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
         ir['required_features'].append('p06_primary_solid_outline')
-        ir['skia_layout']['primary_solid_outline_schema'] = 1
     if secondary_outline:
         ir['required_features'].append('p06_secondary_solid_outline')
-        ir['skia_layout']['secondary_solid_outline_schema'] = 1
     if any(char.vector_glyph is not None for item in plan.lines for char in item.render_line.chars):
         ir['required_features'].append('p05_vector_guides')
         ir['skia_layout']['vector_guide_schema'] = 1
@@ -314,5 +312,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['skia_layout']['zero_ruby_no_wipe_schema'] = 1
         ir["required_features"].append("p07_no_wipe")
         ir["skia_layout"]["no_wipe_schema"] = 1
+    # Attach the outline schemas to the final layout, including ruby's separate layout projection.
+    if 'p06_primary_solid_outline' in ir['required_features']:
+        ir['skia_layout']['primary_solid_outline_schema'] = 1
+        if 'p05_resolved_ruby' in ir['required_features']:
+            ir['required_features'].append('p06_outline_ruby')
+    if secondary_outline:
+        ir['skia_layout']['secondary_solid_outline_schema'] = 1
     project_reverse_wipe(ir)
     return ir
