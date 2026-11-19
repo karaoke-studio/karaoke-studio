@@ -87,6 +87,8 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
         if (item.burst.front != front) continue;
         paint.setColor(item.argb);
         const float colorAlpha = paint.getAlphaf();
+        const bool flameBody = item.burst.kind == "flame";
+        const bool flameCore = item.burst.kind == "flame_alt";
         for (const auto& particle : krok::subtitle::native::effects::burstParticlesAt(
                  item.burst, tMs, item.originX, item.originY, item.boxW, item.boxH)) {
             if (particle.alpha <= 0.f || particle.sizePx <= 0.f) continue;
@@ -94,7 +96,17 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             transform.preRotate(particle.rotationDeg);
             transform.preScale(particle.sizePx * particle.stretchX / 1000.f,
                                particle.sizePx * particle.stretchY / 1000.f);
-            paint.setAlphaf(colorAlpha * std::clamp(particle.alpha, 0.f, 1.f));
+            const float alpha = colorAlpha * std::clamp(particle.alpha, 0.f, 1.f);
+            // Solid fire paints a larger translucent silhouette before each
+            // tongue. Keep its overlap order with the following particles.
+            if (flameBody || flameCore) {
+                auto halo = transform;
+                const float scale = flameBody ? 1.70f : 1.50f;
+                halo.preScale(scale, scale);
+                paint.setAlphaf(alpha * (flameBody ? .24f : .18f));
+                canvas.drawPath(particle_detail::spriteOutline(item.sprite, halo), paint);
+            }
+            paint.setAlphaf(alpha);
             // Give Skia the final physical outline, as for the subtitle glyphs.
             canvas.drawPath(particle_detail::spriteOutline(item.sprite, transform), paint);
         }

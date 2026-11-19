@@ -24,18 +24,32 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic");
         const bool falling = version >= 5 && (fx.kind == "petal" || fx.kind == "feather"
                                                || fx.kind == "snow" || fx.kind == "snow_solid");
-        QString spriteName = QStringLiteral("star4");
-        if (ripple) spriteName = QStringLiteral("ring");
-        if (symbol) spriteName = fx.kind == "note" && fx.sprite == "note_dot" ? fx.sprite : fx.kind;
-        if (falling) spriteName = fx.kind;
+        const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
+        const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
+                                            || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
+        const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke";
+        QString defaultSprite = QStringLiteral("star4");
+        if (symbol || falling || flame) defaultSprite = fx.kind;
+        if (ripple) defaultSprite = QStringLiteral("ring");
+        if (lightning) defaultSprite = QStringLiteral("bolt");
+        if (fx.kind == "flame_glow") defaultSprite = QStringLiteral("flame");
+        if (fx.kind == "ember" || fx.kind == "spark") defaultSprite = QStringLiteral("dot");
+        const QString spriteName = fx.sprite.isEmpty() ? defaultSprite : fx.sprite;
+        const bool allowedSprite = spriteName == defaultSprite
+            || (fx.kind == "note" && spriteName == "note_dot")
+            || (lightning && (spriteName == "bolt_b" || spriteName == "bolt_c"))
+            || ((fx.kind == "flame" || fx.kind == "flame_glow")
+                && (spriteName == "flame_tall" || spriteName == "flame_wide" || spriteName == "flame_curl"))
+            || (fx.kind == "flame_alt" && spriteName == "flame_alt_b");
         const auto start = std::int64_t(fx.startMs) + offset, end = std::int64_t(fx.endMs) + offset;
         const bool oldWindow = fx.startMs >= *source.displayStartMs && fx.endMs <= *source.displayEndMs;
-        if (!(star || symbol || ripple || falling) || fx.anchor != "char"
+        if (!(star || symbol || ripple || falling || lightning || flame) || fx.anchor != "char"
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
-            || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || (!fx.sprite.isEmpty() && fx.sprite != spriteName)
+            || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10
-            || fx.emitMs != 0 || fx.emitX != 0 || fx.reverse || fx.front != !ripple
+            || fx.emitMs != 0 || !std::isfinite(fx.emitX) || std::abs(fx.emitX) > (flame ? .5 : 0.)
+            || fx.reverse || fx.front == back
             || fx.count < 1 || fx.count > 256 || !std::isfinite(fx.sizePx) || fx.sizePx <= 0 || fx.sizePx > 4096
             || !std::isfinite(fx.travelPx) || fx.travelPx < 0 || fx.travelPx > 1e5
             || end <= start || std::abs(start) > 172800000 || std::abs(end) > 172800000)
@@ -65,6 +79,7 @@ void projectSkiaSingParticles(const protocol::RenderConfig& cfg, const protocol:
         burst.seed = fx.seed;
         burst.sizePx = float(fx.sizePx * cfg.dpr);
         burst.travelPx = float(fx.travelPx * cfg.dpr);
+        burst.emitX = float(fx.emitX);
         burst.sweep = fx.sweep;
         burst.front = fx.front;
         burst.color = projectColor(fx.color, QStringLiteral("#FFFFFF"));

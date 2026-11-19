@@ -3,7 +3,9 @@ from ..layout.line.skia_geometry import write_horizontal_pivots
 
 
 _FALLING_PARTICLES = {'petal', 'feather', 'snow', 'snow_solid'}
-_SINGING_PARTICLES = {'twinkle', 'twinkle_classic', 'note', 'heart', 'ripple'} | _FALLING_PARTICLES
+_ENERGY_PARTICLES = {'lightning', 'lightning_glow', 'flame', 'flame_alt', 'flame_glow', 'smoke', 'ember', 'spark'}
+_BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke'}
+_SINGING_PARTICLES = {'twinkle', 'twinkle_classic', 'note', 'heart', 'ripple'} | _FALLING_PARTICLES | _ENERGY_PARTICLES
 
 
 def write_singing_particles(track, ir, plan, measured) -> int:
@@ -23,15 +25,16 @@ def write_singing_particles(track, ir, plan, measured) -> int:
             raise ValueError('Skia 唱字粒子仅支持正向横排基础正文')
         for burst in bursts:
             kind = burst['kind']
-            ripple = kind == 'ripple'
             if (kind not in _SINGING_PARTICLES
-                    or burst.get('front', True) != (not ripple)
+                    or burst.get('front', True) != (kind not in _BACK_PARTICLES)
                     or 'paint_id' in burst or 'char_color_ids' in burst):
                 raise ValueError('Skia 暂不支持此唱字粒子类型或配色方式')
-            if ripple:
+            if kind == 'ripple':
                 version = max(version, 4)
             if kind in _FALLING_PARTICLES:
-                version = 5
+                version = max(version, 5)
+            if kind in _ENERGY_PARTICLES:
+                version = 6
         metrics = measured.lines[item.track_index]
         write_horizontal_pivots(final['cells'], metrics)
         final['particle_box_height'] = (
