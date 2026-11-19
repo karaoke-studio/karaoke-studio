@@ -13,6 +13,7 @@ from test_subtitle_skia_line_fade import (
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_secondary_outline import two_outlines
+from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_ir
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
@@ -118,3 +119,54 @@ def test_flash_matches_actual_d2d_and_gpu_raster(binary, project, outlines, dpr)
                 delta = abs(premultiplied(a)[union] - premultiplied(b)[union])
                 assert delta.mean() <= rules['max_union_channel_mae'], (sample, 'paint', delta.mean())
                 assert np.percentile(delta, 95) <= rules['max_union_p95'], (sample, 'paint P95')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_composed_flash_preserves_ruby_clocks_and_replays(binary, reading, target, tmp_path):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, karaoke_anim='utopia', karaoke_stroke_flash=True)
+    ir = upper_ir(binary, (track, style), 1)
+    plain = upper_ir(binary, (track, replace(style, karaoke_stroke_flash=False)), 1)
+    assert 'p07_composed_stroke_flash' in ir['required_features']
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_composed_stroke_flash')
+    times = [299, 300, 340, 540, 340]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='描边闪光'):
+            configure(process, bad)
+        replay, _ = collect(process, [340], generation=2)
+        configure(process, plain)
+        bare, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames[2], frames[4]) and np.array_equal(frames[2], replay[0])
+    assert [np.array_equal(a, b) for a, b in zip(frames, bare, strict=True)] == [True, False, False, True, False]
+    if target == 'gpu':
+        (tmp_path / 'composed-stroke-flash-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', ['karaoke_inherit', 'karaoke_none', 'karaoke_utopia'])
+def test_p00_composed_flash_matches_actual_gpu(binary, application, case_id, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == case_id)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+        rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, check_p00_edges=True)

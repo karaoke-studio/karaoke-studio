@@ -102,7 +102,7 @@ def _write_utopia_pivots(ir, plan, measured):
                 or (line_animation and source.get('zoom_pulse'))
                 # A band rides only ordinary singing (scanline_band_schema=5).
                 or (source.get('scanline') and (source.get('zoom_pulse') or animations != {'none'}))
-                or source.get('stroke_flash')
+                or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
                 or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
@@ -148,15 +148,19 @@ def _validate_scanline_band(track, style, lines):
 
 
 def _validate_stroke_flash(track, style, lines):
+    composed = False
     for source, line in zip(track.lines, lines, strict=True):
         if not line.get('stroke_flash'):
             continue
         look = style_for_line(style, source)
-        if (look.vertical or look.right_to_left or source.wipe_reverse or track.rubies or look.lower_ruby_enabled
+        if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                 or line.get('entry_anim') != 'none' or line.get('exit_anim') != 'none'
-                or line.get('karaoke_anim') != 'none' or line.get('scanline') or line.get('fx_bursts')
+                or line.get('karaoke_anim') not in {'none', 'utopia'} or line.get('zoom_pulse')
+                or line.get('scanline') or line.get('fx_bursts') or _uses_decoration(look, 'shadow')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
+        composed = composed or bool(track.rubies) or _uses_decoration(look, 'glow') or line.get('karaoke_anim') == 'utopia'
+    return composed
 
 
 def _validate_noise_transition(track, style, lines):
@@ -310,7 +314,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if any(_uses_decoration(item.layout_style, kind) for item in plan.lines):
             ir['required_features'].append(f'p06_static_{kind}')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
-        _validate_stroke_flash(track, style, ir['track']['lines'])
+        if _validate_stroke_flash(track, style, ir['track']['lines']):
+            ir['required_features'].append('p07_composed_stroke_flash')
         ir['required_features'].append('p07_stroke_flash')
     if any('noise' in (line.get('entry_anim'), line.get('exit_anim')) for line in ir['track']['lines']):
         _validate_noise_transition(track, style, ir['track']['lines'])

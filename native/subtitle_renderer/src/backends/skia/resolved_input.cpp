@@ -153,7 +153,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
-            || line.wipeReverse || line.strokeFlashEnabled
+            || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
+                || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             // The projection admits a band only with ordinary Utopia singing.
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit || line.zoomPulseEnabled))
@@ -380,6 +381,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingGlow = singingScale && !line.zoomPulseEnabled && features.contains("p07_singing_glow");
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool lineGlow = lineAnimation && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
+        const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
+            && features.contains("p07_composed_stroke_flash");
         // scanline_band_schema=6: the band repaints over a static glow (no shadow,
         // no role palette); the glow is drawn under the text as without a band.
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
@@ -388,7 +391,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
-                || (!line.bursts.empty() && !particleGlow) || line.strokeFlashEnabled
+                || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
                 || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia && !singingGlow)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");

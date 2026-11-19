@@ -137,9 +137,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || (source.exitAnimation != "none" && source.exitAnimation != "noise")
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
             throw BackendError("Skia 噪声出入场当前仅支持正向横排实色正文");
+        const bool composedFlash = features.contains("p07_composed_stroke_flash");
         if (source.strokeFlashEnabled
             && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
-                || !cfg.rubies.empty() || features.contains("p05_resolved_ruby") || source.scanlineEnabled
+                || (!composedFlash && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")
+                    || source.karaokeAnimation == "utopia"))
+                || source.scanlineEnabled || source.zoomPulseEnabled
                 || source.entryAnimation != "none" || source.exitAnimation != "none"
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");

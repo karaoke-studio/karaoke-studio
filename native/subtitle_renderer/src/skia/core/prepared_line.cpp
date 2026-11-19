@@ -126,7 +126,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         }();
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
-            && (cell.outline || cell.outerOutline || transform.glowAlpha > 0 || !line.glow.empty()))
+            && (cell.outline || cell.outerOutline || transform.glowAlpha > 0 || !line.glow.empty() || line.hasStrokeFlash))
             animatedInk = cell.path.makeTransform(transform.matrix);
         states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
                           transform, std::move(animatedInk)});
@@ -326,8 +326,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         canvas.drawPath(cell.path, paint);
     });
     if (line.hasStrokeFlash)
-        for (const auto& cell : line.cells)
-            drawStrokeFlash(canvas, cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
+        for (std::size_t index = 0; index < line.cells.size(); ++index) {
+            const auto& cell = line.cells[index];
+            const auto& ink = states[index].animatedInk;
+            drawStrokeFlash(canvas, ink ? *ink : cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
+        }
     for (const auto& group : line.rubyGroups) group.draw(canvas, tMs, line.singingScale, line.rubySingingOrigin);
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
