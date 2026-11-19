@@ -5,5 +5,5 @@
 
 namespace krok::subtitle::native::scene {
 void projectSkiaSingParticles(const protocol::RenderConfig&, const protocol::TimingLine&,
-                              const protocol::ResolvedStyle&, int timingOffset, bool extended, RenderScene&, TextLine&);
+                              const protocol::ResolvedStyle&, int timingOffset, int version, RenderScene&, TextLine&);
 }

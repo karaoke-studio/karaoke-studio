@@ -11,6 +11,7 @@
 #include <QtCore/QJsonArray>
 #include <cmath>
 #include <algorithm>
+#include <map>
 #include <string_view>
 
 namespace krok::subtitle::native {
@@ -95,8 +96,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         glyphs.languages.push_back(run.value("language").toString("und").toStdString());
     }
     glyphs.dpr = ir.value("screen").toObject().value("dpr").toDouble(1);
-    const SkPath particleSprite = projected.fxSprites.empty()
-        ? SkPath() : vectorGlyphPath(projected.fxSprites.front().second, 1000.0);
+    std::map<std::string, SkPath> particleSprites;
+    for (const auto& [name, shape] : projected.fxSprites)
+        particleSprites.emplace(name, vectorGlyphPath(shape, 1000.0));
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     for (int index = 0; index < lines.size(); ++index) {
@@ -254,7 +256,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset, totalCells, totalGroups);
         if (prepared.characterFade.active() && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
-        // sing_twinkle_schema=1: each burst anchors at its character pivot; the box is
+        // Each burst anchors at its character pivot; the box is
         // the wipe extent by the line's metric ascent + descent (glyph runs, never ink).
         if (!line.bursts.empty()) {
             const auto box = source.value("particle_box_height");
@@ -262,10 +264,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !prepared.rubyGroups.empty() || style.vertical || style.rightToLeft || line.wipeReverse)
                 throw BackendError("Skia 唱字星光缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
-                if (particleSprite.isEmpty() || burst.charIndex < 0 || burst.charIndex >= int(prepared.cells.size()))
+                const auto sprite = particleSprites.find(burst.sprite);
+                if (sprite == particleSprites.end() || sprite->second.isEmpty()
+                    || burst.charIndex < 0 || burst.charIndex >= int(prepared.cells.size()))
                     throw BackendError("Skia 唱字星光缺少粒子轮廓或锚点");
                 const auto& anchor = prepared.cells[std::size_t(burst.charIndex)];
-                prepared.particles.push_back({burst, particleSprite, argb(burst.color),
+                prepared.particles.push_back({burst, sprite->second, argb(burst.color),
                     (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f, anchor.pivot.centerY,
                     std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr)});
             }

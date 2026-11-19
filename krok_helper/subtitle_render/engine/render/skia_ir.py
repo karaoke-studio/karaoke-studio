@@ -206,7 +206,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
         write_singing_twinkle(track, ir, plan, measured)
         ir['required_features'].append('p07_sing_twinkle')
-        ir['skia_layout']['sing_twinkle_schema'] = 2
+        ir['skia_layout']['sing_twinkle_schema'] = 3
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

@@ -79,7 +79,7 @@ def test_singing_twinkle_projects_existing_bursts_and_replays_tail(binary, proje
     plain = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
     assert 'p07_sing_twinkle' in ir['required_features']
     assert 'p07_sing_twinkle' not in plain['required_features']
-    assert ir['skia_layout']['sing_twinkle_schema'] == 2
+    assert ir['skia_layout']['sing_twinkle_schema'] == 3
     final = ir['skia_layout']['lines'][0]
     source = ir['track']['lines'][0]
     assert final['particle_box_height'] > 0
@@ -103,7 +103,7 @@ def test_singing_twinkle_projects_existing_bursts_and_replays_tail(binary, proje
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('changes', [{'sing_fx':'note'}, {'sing_fx':'flame'},
+@pytest.mark.parametrize('changes', [{'sing_fx':'petal'}, {'sing_fx':'flame'},
                                      {'entry_anim':'rise', 'entry_lead_ms':400}])
 def test_unverified_particle_styles_are_rejected(binary, project, changes):
     track, style = twinkle_source(project)
@@ -275,3 +275,82 @@ def test_singing_star_speed_matches_actual_d2d_and_gpu_raster(binary, project, v
         else:
             assert a[..., 3].max() == b[..., 3].max() == c[..., 3].max() == 0
     assert active >= 2
+
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind,sprites', [('note', {'note', 'note_dot'}), ('heart', {'heart'})])
+def test_singing_symbols_keep_sprite_resources_and_replay_tail(binary, project, target, kind, sprites, tmp_path):
+    track, style = star_tempo(project, kind, -300, crop=True)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    line = ir['track']['lines'][0]
+    bursts = line['fx_bursts']
+    assert ir['skia_layout']['sing_twinkle_schema'] == 3
+    assert {b['sprite'] for b in bursts} == sprites
+    assert all(b['kind'] == kind and b['anchor'] == 'char' for b in bursts)
+    for char in range(len(line['chars'])):
+        assert sum(b['count'] for b in bursts if b['char_index'] == char) == 3
+    selected = sorted(sprites)
+    shapes = {name: ir['fx_sprites'][name] for name in selected}
+    if kind == 'note':
+        assert shapes['note'] != shapes['note_dot']
+    times = [750, 1999, 2000, 400, 750]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+    assert np.array_equal(frames[0], frames[-1])
+    assert frames[2][..., 3].max() == 0
+    assert blue_coverage(frames[0]).max() > 40 and blue_coverage(frames[1]).max() > 40
+    if target == 'gpu' and kind == 'note':
+        (tmp_path / 'singing-symbol-layout.json').write_text(json.dumps({
+            'schema': ir['skia_layout']['sing_twinkle_schema'], 'bursts': bursts, 'shapes': shapes,
+            'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('mutation', ['old_profile', 'foreign_sprite', 'missing_sprite'])
+def test_invalid_symbol_sprite_does_not_replace_scene(binary, project, mutation):
+    track, style = star_tempo(project, 'note')
+    ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    if mutation == 'old_profile':
+        bad['skia_layout']['sing_twinkle_schema'] = 2
+    elif mutation == 'foreign_sprite':
+        bad['track']['lines'][0]['fx_bursts'][0]['sprite'] = 'heart'
+    else:
+        del bad['fx_sprites']['note_dot']
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [750], generation=2)
+    assert np.array_equal(before, after)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind,speed,crop', [('note', 0, False), ('note', -300, True),
+                                             ('heart', 0, False), ('heart', 320, False)])
+def test_singing_symbol_matches_actual_d2d_and_gpu_raster(binary, project, kind, speed, crop):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = star_tempo(project, kind, speed, crop)
+    times = [199, 400, 600, 750, 1100, 1500, 1820, 1999, 2000, 2200, 2900, 3000]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=640, height=360, dpr=1.5, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(540, 960, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, [*times, 1100])
+        assert np.array_equal(frames[times.index(1100)], frames[-1])
+        results.append(frames[:-1])
+    active = 0
+    for time, d2d, gpu, raster in zip(times, reference, *results, strict=True):
+        assert_particle_region(d2d, gpu, (kind, speed, crop, time), check_contour=False)
+        assert_particle_region(gpu, raster, (kind, speed, crop, time, 'raster'), check_contour=False)
+        active += bool((blue_coverage(d2d) > 60).any())
+    assert active >= 3
