@@ -10,6 +10,7 @@ from uuid import uuid4
 from krok_helper.subtitle_render.domain.models import (
     DecorationKind,
     HORIZONTAL_ALIGNS,
+    LYRICS_LAYOUT_CHAR_FIELDS,
     LYRICS_LAYOUT_FIELDS,
     HorizontalAlign,
     LineHorizontalLayout,
@@ -129,6 +130,31 @@ SCHEME_FIELDS = frozenset(
 )
 
 
+#: 样式方案里**属于布局域**的字段（自 v3 起：字间距 / 空格宽度 / 文字咬合 /
+#: 注音与正文间距都绑在 ``LyricsLayout`` 上，方案只按旧数据兼容性保留槽位）。
+#:
+#: 这些槽位必须在「应用预设 / 导入预设为角色」时丢弃，不能写回目标样式：
+#: 目标若是「全局默认」，就等于同时改掉默认布局和所有继承全局的布局（出厂
+#: 1/3~8 行布局全是继承），用户会看到布局的字符排版被预设里存下的旧值（常
+#: 是默认值）悄悄盖掉；目标若是角色，方案里又会存下一份与布局无关的死值。
+LAYOUT_OWNED_SCHEME_FIELDS: frozenset[str] = frozenset(
+    LYRICS_LAYOUT_CHAR_FIELDS
+) & SCHEME_FIELDS
+
+
+def strip_layout_owned_fields(
+    scheme: SubtitleStyleScheme,
+) -> SubtitleStyleScheme:
+    """清空方案里布局域持有的字符排版槽位（``None`` = 不表态）。"""
+
+    cleared = {
+        name: None
+        for name in LAYOUT_OWNED_SCHEME_FIELDS
+        if getattr(scheme, name) is not None
+    }
+    return replace(scheme, **cleared) if cleared else scheme
+
+
 @dataclass(frozen=True)
 class StyleUpdateResult:
     """One normalized property edit and the fields the UI must resync."""
@@ -189,7 +215,14 @@ class PropertyStyleController:
         style: Style,
         role_name: str | None,
     ) -> SubtitleStyleScheme:
-        """Detach the selected effective scheme without materializing inheritance."""
+        """Detach the selected effective scheme without materializing inheritance.
+
+        Layout-owned character typography (字间距 / 空格宽度 / 咬合 / 注音间距)
+        is **not** part of a scheme since v3: it stays on the active layout and
+        is only inherited by layouts that leave the slot empty.  Capturing it
+        here would copy the global value into every new role / preset and let a
+        later preset application masquerade as a layout edit.
+        """
         values = {
             field: deepcopy(
                 self.own_value(style, role_name, field)
@@ -197,6 +230,7 @@ class PropertyStyleController:
                 else self.value(style, role_name, field)
             )
             for field in SCHEME_FIELDS
+            if field not in LAYOUT_OWNED_SCHEME_FIELDS
         }
         values["decoration_kind"] = normalize_decoration_kind(
             values["decoration_kind"]
@@ -229,9 +263,16 @@ class PropertyStyleController:
         defaults to on) and the font card shows the old state instead of
         "follow main".  For ordinary schemes ``None`` still means "leave the
         global value alone" and is omitted.
+
+        Layout-owned character typography is always omitted（见
+        :data:`LAYOUT_OWNED_SCHEME_FIELDS`）：预设应用到「全局默认」时写进去
+        会连带改掉默认布局和所有继承全局的布局，正是「应用预设后布局字符排版
+        被改回默认值」的根因。
         """
         changes: dict[str, object] = {}
         for field in SCHEME_FIELDS:
+            if field in LAYOUT_OWNED_SCHEME_FIELDS:
+                continue
             value = getattr(scheme, field)
             if value is not None:
                 changes[field] = value
@@ -826,14 +867,19 @@ class RoleSchemeController:
         *,
         reserved_name: str,
     ) -> dict[str, object]:
-        """Import preset copies as new roles without overwriting project roles."""
+        """Import preset copies as new roles without overwriting project roles.
+
+        导入的是**角色方案**（字体 / 配色 / 描边）：预设里残留的布局域字符排版
+        槽位要清掉，否则新角色会带上一份与布局无关的死值（既不会生效，也会
+        在之后作为预设再保存时继续传播）。
+        """
         role_names = self.names
         schemes = dict(style.custom_style_schemes)
         for preset in presets:
             name = str(preset.name).strip()
             if not name or name == reserved_name or name in role_names:
                 continue
-            schemes[name] = deepcopy(preset.scheme)
+            schemes[name] = strip_layout_owned_fields(deepcopy(preset.scheme))
             role_names.append(name)
         self.replace(role_names)
         return {"custom_style_schemes": schemes}
@@ -846,7 +892,7 @@ class RoleSchemeController:
     ) -> dict[str, object]:
         """Replace one role's project scheme with a detached preset copy."""
         schemes = dict(style.custom_style_schemes)
-        schemes[name] = deepcopy(scheme)
+        schemes[name] = strip_layout_owned_fields(deepcopy(scheme))
         self.add(name)
         return {"custom_style_schemes": schemes}
 
@@ -865,10 +911,12 @@ class RoleSchemeController:
             matches = [preset for preset in presets.values() if preset.name == name]
             if len(matches) == 1:
                 # 预设库存的是基准高度下的值，物化进工程时换算到工程输出高度。
-                schemes[name] = rescale_scheme_font_sizes(
-                    deepcopy(matches[0].scheme),
-                    matches[0].reference_height,
-                    style.font_reference_height,
+                schemes[name] = strip_layout_owned_fields(
+                    rescale_scheme_font_sizes(
+                        deepcopy(matches[0].scheme),
+                        matches[0].reference_height,
+                        style.font_reference_height,
+                    )
                 )
             else:
                 schemes[name] = fallback(index)

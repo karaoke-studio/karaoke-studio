@@ -595,6 +595,131 @@ def test_changes_from_n3_scheme_clears_child_slots_for_follow_main():
     )
 
 
+def test_scheme_snapshot_and_apply_never_own_layout_character_typography():
+    """字间距 / 空格宽度 / 咬合 / 注音间距属布局域，方案快照与应用都不携带。
+
+    这两处一旦携带，应用预设到「全局默认」就会连带改掉默认布局和所有继承
+    全局的布局，表现为「布局的字符排版被改回默认值」。
+    """
+    controller = PropertyStyleController()
+    style = Style(
+        letter_spacing_px=25,
+        space_width_percent=33,
+        allow_biting=True,
+        ruby_gap_px=9,
+    )
+
+    snapshot = controller.snapshot(style, None)
+    assert snapshot.letter_spacing_px is None
+    assert snapshot.space_width_percent is None
+    assert snapshot.allow_biting is None
+    assert snapshot.ruby_gap_px is None
+
+    # 旧预设（或 N3 模板）里即使还存着这些值，应用时也必须被丢弃。
+    changes = controller.changes_from_scheme(
+        SubtitleStyleScheme(
+            font_size_px=48,
+            letter_spacing_px=0,
+            space_width_percent=20,
+            allow_biting=False,
+            ruby_gap_px=0,
+        )
+    )
+    assert changes == {"font_size_px": 48}
+
+
+def test_apply_preset_to_global_keeps_layout_character_typography(qapp):
+    """「应用到当前目标」只改方案域外观，不能动布局的字符排版。"""
+
+    panel = PropertyPanel()
+    panel.set_style(
+        replace(
+            Style(),
+            letter_spacing_px=25,
+            space_width_percent=33,
+            allow_biting=True,
+            ruby_gap_px=9,
+        )
+    )
+
+    panel._apply_preset_to_current_target(
+        SubtitleStyleScheme(
+            fill_color="#12ABCD",
+            letter_spacing_px=0,
+            space_width_percent=20,
+            allow_biting=False,
+            ruby_gap_px=0,
+        )
+    )
+
+    style = panel.subtitle_style
+    assert style.fill_color == "#12ABCD"
+    assert style.letter_spacing_px == 25
+    assert style.space_width_percent == 33
+    assert style.allow_biting is True
+    assert style.ruby_gap_px == 9
+    # 回显与生效值同源：控件不能被预设值覆盖。
+    assert panel._letter_spacing_spin.value() == 25
+    assert panel._space_width_spin.value() == 33
+    assert panel._allow_biting_check.isChecked()
+    assert panel._ruby_gap_spin.value() == 9
+
+
+def test_apply_preset_to_role_drops_layout_character_typography(qapp):
+    """应用到角色：方案里不保留布局域槽位（否则会把旧值继续传播）。"""
+
+    panel = PropertyPanel()
+    panel.set_roles(["A"])
+    panel.set_current_scheme_key("custom:A")
+
+    panel._apply_preset_to_current_target(
+        SubtitleStyleScheme(
+            fill_color="#FFCC00",
+            letter_spacing_px=0,
+            space_width_percent=20,
+            allow_biting=False,
+            ruby_gap_px=0,
+        )
+    )
+
+    scheme = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme.fill_color == "#FFCC00"
+    assert scheme.letter_spacing_px is None
+    assert scheme.space_width_percent is None
+    assert scheme.allow_biting is None
+    assert scheme.ruby_gap_px is None
+
+
+def test_import_preset_as_role_drops_layout_character_typography(qapp):
+    """「导入选中项为项目角色」导入的是角色外观，不带布局字符排版。"""
+
+    panel = PropertyPanel()
+    panel._import_preset_schemes(
+        {
+            "p1": StylePreset(
+                name="导入角色",
+                group="",
+                scheme=SubtitleStyleScheme(
+                    fill_color="#00AAEE",
+                    letter_spacing_px=0,
+                    space_width_percent=20,
+                    allow_biting=False,
+                    ruby_gap_px=0,
+                ),
+                preset_id="p1",
+                reference_height=1080,
+            )
+        }
+    )
+
+    scheme = panel.subtitle_style.custom_style_schemes["导入角色"]
+    assert scheme.fill_color == "#00AAEE"
+    assert scheme.letter_spacing_px is None
+    assert scheme.space_width_percent is None
+    assert scheme.allow_biting is None
+    assert scheme.ruby_gap_px is None
+
+
 def test_property_panel_uses_fluent_checkboxes(qapp):
     panel = PropertyPanel()
 

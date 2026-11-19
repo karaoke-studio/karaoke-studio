@@ -239,6 +239,7 @@ from krok_helper.subtitle_render.domain.models import (
     clamp_zoom_pulse_peak_pct,
     effective_karaoke_animation,
     layout_display_name,
+    LYRICS_LAYOUT_CHAR_FIELDS,
     materialize_ruby_decoration_changes,
     rescale_scheme_font_sizes,
     resolve_lit_appearance,
@@ -4179,6 +4180,34 @@ class PropertyPanel(QWidget):
         )
         self._layout_combo.setFixedWidth(max(80, min(120, text_width + 32)))
 
+    def _sync_character_layout_controls(self) -> None:
+        """Refresh the「字符排版」controls from the active layout.
+
+        这组控件描述的是**布局**（字间距 / 空格宽度 / 咬合 / 注音间距），值
+        由当前选中的布局解析、空槽继承全局。任何改动这些来源模型的编辑都要
+        把控件刷回来：否则面板继续显示旧值、渲染却已按新值走，用户看到的就
+        是「布局里的字符排版失效」。
+        """
+        if not hasattr(self, "_letter_spacing_spin"):
+            return
+        values = self._current_layout_values()
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._letter_spacing_spin.setValue(int(values["letter_spacing_px"]))
+            self._space_width_spin.setValue(int(values["space_width_percent"]))
+            self._allow_biting_check.setChecked(bool(values["allow_biting"]))
+            self._ruby_interval_spin.setValue(int(values["ruby_interval_px"]))
+            self._ruby_alignment_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._ruby_alignment_combo.findData(values["ruby_alignment"]),
+                )
+            )
+            self._ruby_gap_spin.setValue(int(values["ruby_gap_px"]))
+        finally:
+            self._syncing = was_syncing
+
     def _sync_layout_editor_controls(self) -> None:
         self._sync_lower_ruby_controls()
         values = self._current_layout_values()
@@ -4195,15 +4224,8 @@ class PropertyPanel(QWidget):
                 )
             )
             self._horizontal_margin_spin.setValue(int(values["horizontal_margin_px"]))
-            self._letter_spacing_spin.setValue(int(values["letter_spacing_px"]))
-            self._space_width_spin.setValue(int(values["space_width_percent"]))
-            self._allow_biting_check.setChecked(bool(values["allow_biting"]))
+            self._sync_character_layout_controls()
             self._force_top_bottom_check.setChecked(bool(values["force_top_bottom_n3"]))
-            self._ruby_interval_spin.setValue(int(values["ruby_interval_px"]))
-            self._ruby_alignment_combo.setCurrentIndex(
-                max(0, self._ruby_alignment_combo.findData(values["ruby_alignment"]))
-            )
-            self._ruby_gap_spin.setValue(int(values["ruby_gap_px"]))
             self._rebuild_line_alignment_rows()
             self._sync_vertical_margin_enabled()
         finally:
@@ -6977,6 +6999,15 @@ class PropertyPanel(QWidget):
             dialog.close()
             dialog.deleteLater()
 
+    def _touches_character_layout(self, changes) -> bool:
+        """改动是否影响「字符排版」组的回显；布局目录变更也算（引用换了）。"""
+
+        changed = set(changes)
+        return bool(
+            changed.intersection(LYRICS_LAYOUT_CHAR_FIELDS)
+            or changed.intersection({"layouts", "hidden_builtin_layout_ids"})
+        )
+
     def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:
             return
@@ -6984,6 +7015,8 @@ class PropertyPanel(QWidget):
             result = self._style_controller.update(self._style, changes, force_global=True)
             self._style = result.style
             self._sync_subtitle_scheme_controls(self._scheme_sync_groups_for_changes(result.changed_fields))
+            if self._touches_character_layout(result.changed_fields):
+                self._sync_character_layout_controls()
             self.styleChanged.emit(self._style)
             return
         if changes.get("lower_ruby_follow_upper") is False and not self._style.lower_ruby_style:
@@ -7151,6 +7184,11 @@ class PropertyPanel(QWidget):
                 self._sync_lit_controls()
             if set(changes).intersection(_LINE_BAND_FIELDS):
                 self._sync_line_band_controls()
+            if self._touches_character_layout(changes):
+                # 字符排版回显以布局为源：布局目录/全局字符字段被外部改动
+                # （预设应用、撤销重做、换布局）时控件必须同一次跟上，不能
+                # 只等宿主 set_style 回流（等值快路径会跳过）。
+                self._sync_character_layout_controls()
         finally:
             self._syncing = False
         # 布局示意图跟随所有影响排版的修改（set_state 内部有变更判重）
