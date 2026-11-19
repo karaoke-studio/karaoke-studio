@@ -146,7 +146,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || (source.scanlineEnabled && !composedScanline)
                 || (source.zoomPulseEnabled && !features.contains("p07_zoom_pulse_decoration"))
                 || source.entryAnimation != "none" || source.exitAnimation != "none"
-                || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty()))
+                || (source.karaokeAnimation == "no_wipe" && !features.contains("p07_no_wipe_decoration"))
+                || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
         const bool rubyScanline = features.contains("p07_ruby_scanline");
         // The band follows the posed unit during forward Utopia singing.

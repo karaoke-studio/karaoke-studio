@@ -172,12 +172,12 @@ def _validate_stroke_flash(track, style, lines):
         look = style_for_line(style, source)
         if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                 or line.get('entry_anim') != 'none' or line.get('exit_anim') != 'none'
-                or line.get('karaoke_anim') not in {'none', 'utopia'}
+                or line.get('karaoke_anim') not in {'none', 'utopia', 'no_wipe'}
                 or line.get('fx_bursts') or _uses_decoration(look, 'shadow')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
         composed = (composed or bool(track.rubies) or _uses_decoration(look, 'glow')
-                    or line.get('karaoke_anim') == 'utopia' or line.get('scanline'))
+                    or line.get('karaoke_anim') != 'none' or line.get('scanline'))
     return composed
 
 
@@ -432,6 +432,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['skia_layout']['zero_ruby_no_wipe_schema'] = 1
         ir["required_features"].append("p07_no_wipe")
         ir["skia_layout"]["no_wipe_schema"] = 1
+        if 'p05_lower_ruby' not in ir['required_features'] and any(
+                source.get('karaoke_anim') == 'no_wipe' and (source.get('stroke_flash')
+                or _uses_decoration(item.layout_style, 'glow') or 'p06_ruby_glow' in ir['required_features'])
+                for source, item in zip(ir['track']['lines'], plan.lines, strict=True)):
+            ir['required_features'].append('p07_no_wipe_decoration')
     # Attach the outline schemas to the final layout, including ruby's separate layout projection.
     if 'p06_primary_solid_outline' in ir['required_features']:
         ir['skia_layout']['primary_solid_outline_schema'] = 1

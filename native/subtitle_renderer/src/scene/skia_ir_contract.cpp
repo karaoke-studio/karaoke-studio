@@ -72,6 +72,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_sing_twinkle",
         "p07_stroke_flash",
         "p07_composed_stroke_flash",
+        "p07_no_wipe_decoration",
         "p07_noise_transition",
         "p05_horizontal_rtl_kana_cells",
         "p05_horizontal_rtl_kana_marks",
@@ -256,6 +257,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_composed_stroke_flash")
         && (!features.contains("p07_stroke_flash") || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 描边闪光组合缺少对应布局能力");
+    if (features.contains("p07_no_wipe_decoration")
+        && (!features.contains("p07_no_wipe") || features.contains("p05_lower_ruby")
+            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow")
+                 || features.contains("p07_composed_stroke_flash"))))
+        throw BackendError("Skia 整字变色装饰缺少对应布局能力");
     if (features.contains("p06_outline_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 描边渐变缺少正文渐变或描边能力声明");

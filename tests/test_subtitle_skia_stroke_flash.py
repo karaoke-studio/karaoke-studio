@@ -122,7 +122,7 @@ def test_flash_matches_actual_d2d_and_gpu_raster(binary, project, outlines, dpr)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('animation', ['utopia', 'zoom_pulse'])
+@pytest.mark.parametrize('animation', ['utopia', 'zoom_pulse', 'no_wipe'])
 def test_composed_flash_preserves_ruby_clocks_and_replays(binary, reading, target, animation, tmp_path):
     from test_subtitle_skia_static_glow import glowing_ruby
 
@@ -130,13 +130,17 @@ def test_composed_flash_preserves_ruby_clocks_and_replays(binary, reading, targe
     style = replace(style, karaoke_anim=animation, karaoke_stroke_flash=True)
     ir = upper_ir(binary, (track, style), 1)
     plain = upper_ir(binary, (track, replace(style, karaoke_stroke_flash=False)), 1)
-    zoom = animation == 'zoom_pulse'
+    profile, filename = {
+        'utopia': ('p07_composed_stroke_flash', 'composed-stroke-flash-layout.json'),
+        'zoom_pulse': ('p07_zoom_pulse_decoration', 'zoom-stroke-flash-layout.json'),
+        'no_wipe': ('p07_no_wipe_decoration', 'no-wipe-stroke-flash-layout.json'),
+    }[animation]
     assert 'p07_composed_stroke_flash' in ir['required_features']
-    assert ('p07_zoom_pulse_decoration' in ir['required_features']) == zoom
+    assert profile in ir['required_features']
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_zoom_pulse_decoration' if zoom else 'p07_composed_stroke_flash')
+    bad['required_features'].remove(profile)
     times = [299, 300, 340, 540, 340]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
@@ -149,14 +153,14 @@ def test_composed_flash_preserves_ruby_clocks_and_replays(binary, reading, targe
     assert np.array_equal(frames[2], frames[4]) and np.array_equal(frames[2], replay[0])
     assert [np.array_equal(a, b) for a, b in zip(frames, bare, strict=True)] == [True, False, False, True, False]
     if target == 'gpu':
-        name = 'zoom-stroke-flash-layout.json' if zoom else 'composed-stroke-flash-layout.json'
-        (tmp_path / name).write_text(json.dumps({
+        (tmp_path / filename).write_text(json.dumps({
             'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
         }, sort_keys=True), encoding='utf-8')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case_id', ['karaoke_inherit', 'karaoke_none', 'karaoke_utopia', 'karaoke_zoom_pulse'])
+@pytest.mark.parametrize('case_id', ['karaoke_inherit', 'karaoke_none', 'karaoke_utopia', 'karaoke_zoom_pulse',
+                                     'karaoke_no_wipe'])
 def test_p00_composed_flash_matches_actual_gpu(binary, application, case_id, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames

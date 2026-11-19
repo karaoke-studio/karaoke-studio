@@ -192,6 +192,7 @@ def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, singing, tmp_
     ('independent', 1.5, 'none'), ('two_groups', 1, 'none'),
     ('inherited', 1, 'utopia'), ('independent', 1.5, 'utopia'), ('two_groups', 1, 'utopia'),
     ('inherited', 1, 'zoom_pulse'), ('independent', 1.5, 'zoom_pulse'), ('two_groups', 1, 'zoom_pulse'),
+    ('inherited', 1, 'no_wipe'), ('independent', 1.5, 'no_wipe'),
 ])
 def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr, animation):
     from test_subtitle_render_gpu_backend import _render_g1_frames

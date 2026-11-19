@@ -398,8 +398,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         // no role palette); the glow is drawn under the text as without a band.
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && layout.value("scanline_band_schema").toDouble(-1) >= 6 && style.scanlineMode != "role";
+        const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
+            && features.contains("p07_no_wipe_decoration");
         if (hasDecoration
-            && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
+            && (style.vertical || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
                 || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)

@@ -99,8 +99,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && line.karaokeAnimation == "utopia"
         && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
     const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
+    const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool allowGlow = features.contains("p06_ruby_glow")
-        && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow)
+        && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || fadeComposition || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);

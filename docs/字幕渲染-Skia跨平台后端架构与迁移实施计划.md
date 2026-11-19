@@ -2403,6 +2403,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 原样 `entry_char_fade` 的 6 个 1080p 采样帧通过 Direct2D GPU、Vulkan 和 Raster 原画面预算，P00 可配置增至 43/129。Windows 关联 17 项通过，X11、Wayland 各 31 项通过、29 项跳过，三个窗口环境的规范快照相同。独立 Raster 在 Windows/Linux 各 2 项通过，四份原生构建 CTest 各通过 3/3。
 - 带注音和光晕的逐字淡出仍待验收。原样 `exit_char_fade` 在 5499ms 的极低透明度帧未达既有 3% alpha 覆盖量预算。
 
+### 14.120 P07.3 整字变色与光晕、描边闪光（2026-11-20）
+
+- 正向横排的整字变色通过 `p07_no_wipe_decoration` 协商正文和上注音的静态实色光晕及描边闪光。光晕沿用整字变色的原有端点和裁剪方式，闪光仍按起唱时刻触发。
+- 原样 `karaoke_no_wipe` 的 5 个 1080p 采样帧通过 Direct2D GPU、Vulkan 和 Raster 原画面预算，P00 可配置增至 44/129。Windows 关联 151 项通过，X11、Wayland 各 73 项通过、78 项跳过，三个窗口环境的组合快照相同。独立 Raster 在 Windows/Linux 各通过 1 项，四份原生构建 CTest 各通过 3/3。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
