@@ -109,6 +109,70 @@ def render_skia(binary, ir, times):
     return out
 
 
+def multi_lane_source(pages, semantics, with_ruby):
+    track, style = pages
+    style = outlined(replace(style, layout_semantics=semantics, line_gap_px=125,
+                             ruby_interval_px=12), 2)
+    if with_ruby:
+        return track, annotated_paint(style, 2)
+    return replace(track, rubies=[]), style
+
+
+def multi_lane_ir(binary, track, style, dpr):
+    with SkiaTextMetricsProcess(binary) as metrics:
+        ir = build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve_skia_font,
+                                  width=640, height=720, fps=60, dpr=dpr)
+    apply_resolved_font_faces(ir)
+    return ir
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multi_lane_outline_keeps_clocks_and_seeks(binary, pages, target, tmp_path):
+    track, style = multi_lane_source(pages, 'n3_1074', True)
+    ir = multi_lane_ir(binary, track, style, 1)
+    assert 'p06_multi_lane_outline' in ir['required_features']
+    assert [line['lane'] for line in ir['track']['lines']] == [0, 1, 2]
+    assert all(line['ruby_groups'] for line in ir['skia_layout']['lines'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p06_multi_lane_outline')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [100, 650, 1900, 650])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, [650], generation=2)
+    assert len(bands(frames[-2])) == 6
+    assert not np.array_equal(frames[0], frames[2])
+    assert np.array_equal(frames[1], frames[3]) and np.array_equal(frames[1], replay[0])
+    if target == 'gpu':
+        (tmp_path / 'multi-lane-outline-layout.json').write_text(json.dumps({
+            'features': ir['required_features'],
+            'lines': ir['skia_layout']['lines'],
+            'clocks': [line['resolved_intervals'] for line in ir['track']['lines']],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('semantics,with_ruby,dpr', [
+    ('legacy', False, 1), ('n3_1074', False, 1.5),
+    ('legacy', True, 1.5), ('n3_1074', True, 1),
+])
+def test_multi_lane_outline_matches_actual_d2d_and_gpu_raster(binary, pages, semantics, with_ruby, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = multi_lane_source(pages, semantics, with_ruby)
+    times = [100, 200, 350, 650, 1200, 1900]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False,
+            track=track, width=640, height=720, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(720*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, multi_lane_ir(binary, track, style, dpr), times)
+    sample = (semantics, with_ruby, dpr)
+    expected = 6 if with_ruby else 3
+    assert_annotated_parity(times, refs, gpu, (*sample, 'D2D'), expected)
+    assert_annotated_parity(times, gpu, raster, (*sample, 'Raster'), expected)
+
+
 @pytest.mark.parametrize('layers', [1, 2])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_outlined_upper_ruby_declares_capability_and_replays(binary, reading, layers, target, tmp_path):

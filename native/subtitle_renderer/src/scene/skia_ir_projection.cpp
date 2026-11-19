@@ -72,10 +72,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         throw BackendError("Skia 竖排仅支持已验证的单列实色正文");
     // Upper and lower annotations over solid main outlines need their own capability.
     const bool outlineRuby = features.contains("p06_outline_ruby");
+    const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
     if (features.contains("p06_primary_solid_outline")
-        && (cfg.vertical || cfg.rightToLeft || cfg.dualLineLayout || features.contains("p05_reverse_wipe")
+        && (cfg.vertical || cfg.rightToLeft || (cfg.dualLineLayout && !multiLaneOutline)
+            || features.contains("p05_reverse_wipe")
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
-        throw BackendError("Skia 实色描边当前仅支持从左至右的基础横排正文");
+        throw BackendError("Skia 描边缺少对应横排布局能力");
     if (cfg.lineBand.enabled
         || cfg.viewportScalePct != 100 || cfg.viewportRotationDeg || cfg.viewportOffsetX || cfg.viewportOffsetY)
         throw BackendError("Skia P04: annotations, line bands and viewport transforms require later phases");

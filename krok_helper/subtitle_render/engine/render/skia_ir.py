@@ -362,6 +362,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     # Attach the outline schemas to the final layout, including ruby's separate layout projection.
     if 'p06_primary_solid_outline' in ir['required_features']:
         ir['skia_layout']['primary_solid_outline_schema'] = 1
+        if style.dual_line_layout:
+            ir['required_features'].append('p06_multi_lane_outline')
         if 'p05_resolved_ruby' in ir['required_features']:
             ir['required_features'].append('p06_outline_ruby')
     if secondary_outline:
