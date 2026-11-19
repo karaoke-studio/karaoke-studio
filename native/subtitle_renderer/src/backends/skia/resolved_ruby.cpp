@@ -95,7 +95,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const auto features = ir.value("required_features").toArray();
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
-        && line.karaokeAnimation == "utopia" && !line.zoomPulseEnabled;
+        && line.karaokeAnimation == "utopia"
+        && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
     const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow)

@@ -60,6 +60,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_singing_glow",
         "p07_ruby_singing_scale",
         "p07_ruby_zoom_pulse",
+        "p07_zoom_pulse_decoration",
         "p07_utopia_line_animation",
         "p07_utopia_transition",
         "p07_character_fade",
@@ -237,6 +238,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_singing_scale")
             || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
         throw BackendError("Skia 唱字光晕缺少唱字放大或光晕能力声明");
+    if (features.contains("p07_zoom_pulse_decoration")
+        && (!features.contains("p07_singing_scale")
+            || !(features.contains("p07_singing_glow") || features.contains("p07_composed_stroke_flash"))))
+        throw BackendError("Skia 整字放大缺少唱字或装饰能力声明");
     if (features.contains("p07_utopia_line_animation")
         && (!features.contains("p07_singing_scale")
             || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))

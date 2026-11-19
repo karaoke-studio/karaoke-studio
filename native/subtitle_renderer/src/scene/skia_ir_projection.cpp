@@ -142,7 +142,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || (!composedFlash && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")
                     || source.karaokeAnimation == "utopia"))
-                || source.scanlineEnabled || source.zoomPulseEnabled
+                || source.scanlineEnabled
+                || (source.zoomPulseEnabled && !features.contains("p07_zoom_pulse_decoration"))
                 || source.entryAnimation != "none" || source.exitAnimation != "none"
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");

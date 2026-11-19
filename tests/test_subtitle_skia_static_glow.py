@@ -187,23 +187,24 @@ def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, singing, tmp_
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case,dpr,singing', [
-    ('inherited', 1, False), ('inherited', 1.5, False),
-    ('independent', 1.5, False), ('two_groups', 1, False),
-    ('inherited', 1, True), ('independent', 1.5, True), ('two_groups', 1, True),
+@pytest.mark.parametrize('case,dpr,animation', [
+    ('inherited', 1, 'none'), ('inherited', 1.5, 'none'),
+    ('independent', 1.5, 'none'), ('two_groups', 1, 'none'),
+    ('inherited', 1, 'utopia'), ('independent', 1.5, 'utopia'), ('two_groups', 1, 'utopia'),
+    ('inherited', 1, 'zoom_pulse'), ('independent', 1.5, 'zoom_pulse'), ('two_groups', 1, 'zoom_pulse'),
 ])
-def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr, singing):
+def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr, animation):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     track, style = glowing_ruby(reading, case)
-    if singing:
-        style = replace(style, karaoke_anim='utopia')
+    style = replace(style, karaoke_anim=animation)
+    times = sorted({*UPPER_TIMES, 950, 1199, 1200, 2199, 2400}) if animation == 'zoom_pulse' else UPPER_TIMES
     with NativeRendererProcess() as process:
-        _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
     refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
-    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
-    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, (case, singing, dpr))
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), times)
+    assert_glow_parity(times, refs, gpu, raster, (case, animation, dpr))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

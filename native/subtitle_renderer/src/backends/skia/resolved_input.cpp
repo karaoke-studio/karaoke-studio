@@ -379,7 +379,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.glow = skiaStaticGlow(style);
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
         const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
-        const bool singingGlow = singingScale && !line.zoomPulseEnabled && features.contains("p07_singing_glow");
+        const bool singingGlow = singingScale && features.contains("p07_singing_glow")
+            && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool lineGlow = lineAnimation && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled

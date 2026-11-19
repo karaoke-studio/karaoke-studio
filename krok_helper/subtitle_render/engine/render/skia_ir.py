@@ -157,7 +157,7 @@ def _validate_stroke_flash(track, style, lines):
         look = style_for_line(style, source)
         if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                 or line.get('entry_anim') != 'none' or line.get('exit_anim') != 'none'
-                or line.get('karaoke_anim') not in {'none', 'utopia'} or line.get('zoom_pulse')
+                or line.get('karaoke_anim') not in {'none', 'utopia'}
                 or line.get('scanline') or line.get('fx_bursts') or _uses_decoration(look, 'shadow')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
@@ -428,5 +428,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if 'p07_singing_scale' in ir['required_features'] and (
             'p06_static_glow' in ir['required_features'] or 'p06_ruby_glow' in ir['required_features']):
         ir['required_features'].append('p07_singing_glow')
+    if any(line.get('zoom_pulse') and (
+            line.get('stroke_flash') or 'p07_singing_glow' in ir['required_features'])
+           for line in ir['track']['lines']):
+        ir['required_features'].append('p07_zoom_pulse_decoration')
     project_reverse_wipe(ir)
     return ir
