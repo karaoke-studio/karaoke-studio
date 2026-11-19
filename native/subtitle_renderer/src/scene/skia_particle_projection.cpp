@@ -18,15 +18,19 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto entry = animationKind(source.entryAnimation, true);
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
+    const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
+    const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if (cfg.vertical || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
-        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit")
+        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
-        || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled)) || !cfg.rubies.empty()
-        || style.strokeWidthPx > 0 || style.stroke2WidthPx > 0 || !source.displayStartMs || !source.displayEndMs
+        || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled))
+        || (!cfg.rubies.empty() && (!rubyParticles || animated || source.scanlineEnabled))
+        || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
+        || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");
     line.bursts.reserve(source.fxBursts.size());
@@ -77,6 +81,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool validBand = scanline ? source.scanlineEnabled
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly || impact) || fx.anchor != "char"
+            || (rubyParticles && !star && !ripple)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite

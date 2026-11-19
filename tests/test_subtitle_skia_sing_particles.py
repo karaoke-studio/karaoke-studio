@@ -14,6 +14,8 @@ from test_subtitle_skia_line_fade import (
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_roles import colors
+from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_source, upper_ir, render_skia
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
@@ -26,6 +28,95 @@ def twinkle_source(project, kind='plain'):
     track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
     color2 = '#00FFFF' if kind == 'two_colors' else '#0000FF'
     return track, replace(style, sing_fx='twinkle', fx_particle_color='#0000FF', fx_particle_color2=color2)
+
+
+RUBY_PARTICLE_TIMES = [150, 450, 550, 899, 950, 1100, 1400, 1700, 2100, 2650, 3200]
+
+
+def outlined_ruby_particles(reading, kind):
+    track, style = upper_source(reading, 2)
+    ink = style.karaoke_colors
+
+    def dark_outlines(state):
+        return replace(state, stroke=PaintFill(color='#202020'), stroke2=PaintFill(color='#080808'))
+
+    return track, replace(style, sing_fx=kind, fx_particle_color='#0000FF', fx_particle_color2='#0000FF',
+                          karaoke_colors=replace(ink, before=dark_outlines(ink.before), after=dark_outlines(ink.after)))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind,front', [('twinkle', True), ('ripple', False)])
+def test_upper_ruby_particles_keep_clocks_and_replay(binary, reading, target, kind, front, tmp_path):
+    source = outlined_ruby_particles(reading, kind)
+    ir = upper_ir(binary, source, 1)
+    assert ir['skia_layout']['sing_twinkle_schema'] == 12
+    line = ir['skia_layout']['lines'][0]
+    assert line['particle_box_height'] > 0 and line['ruby_groups']
+    bursts = ir['track']['lines'][0]['fx_bursts']
+    assert bursts and all(burst['front'] == front for burst in bursts)
+    assert [burst['start_ms'] for burst in bursts] == [
+        ir['track']['lines'][0]['resolved_intervals'][burst['char_index']][0] for burst in bursts]
+    invalid = copy.deepcopy(ir)
+    invalid['skia_layout']['sing_twinkle_schema'] = 11
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*RUBY_PARTICLE_TIMES, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        again, _ = collect(process, [550], generation=2)
+    assert np.array_equal(frames[2], frames[-1]) and np.array_equal(frames[2], again[0])
+    assert not (blue_coverage(frames[0]) > 35).any()
+    assert any((blue_coverage(frame) > 50).any() for frame in frames[1:-1])
+    if target == 'gpu' and kind == 'ripple':
+        (tmp_path / 'ruby-particle-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': line, 'bursts': bursts,
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind,dpr', [('twinkle', 1), ('ripple', 1.5)])
+def test_upper_ruby_particles_match_actual_d2d_and_gpu_raster(binary, reading, kind, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = outlined_ruby_particles(reading, kind)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(RUBY_PARTICLE_TIMES), force_warp=False,
+            track=track, width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), RUBY_PARTICLE_TIMES)
+
+    def blue_particle(frame):
+        rgb = frame[..., :3].astype(float)
+        return np.maximum(rgb[..., 2] - np.maximum(rgb[..., 0], rgb[..., 1]), 0) * frame[..., 3] / 255
+
+    for time, ref, gpu_frame, raster_frame in zip(RUBY_PARTICLE_TIMES, refs, gpu, raster, strict=True):
+        assert_particle_region(ref, gpu_frame, (kind, time, 'D2D'), coverage=blue_particle)
+        assert_particle_region(gpu_frame, raster_frame, (kind, time, 'Raster'), coverage=blue_particle)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', ['sing_twinkle', 'sing_twinkle_classic', 'sing_ripple'])
+def test_p00_ruby_particles_match_actual_d2d_and_gpu_raster(binary, application, case_id, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == case_id)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+            track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+        rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, 1)
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
+        process.configure(case.track, replace(case.style, sing_fx='none'), width=1920, height=1080, fps=60)
+        bare, _ = collect(process, case.timestamps_ms)
+    assert any(not np.array_equal(a, b) for a, b in zip(rendered[0], bare, strict=True))
 
 
 def blue_coverage(frame):

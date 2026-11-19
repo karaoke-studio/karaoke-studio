@@ -93,7 +93,8 @@ def _write_utopia_pivots(ir, plan, measured):
                 or not animations <= {'none', 'utopia'} or source.get('karaoke_anim') not in {'none', 'utopia'}
                 # A band rides only ordinary singing (scanline_band_schema=5).
                 or (source.get('scanline') and (source.get('zoom_pulse') or animations != {'none'}))
-                or source.get('stroke_flash') or source.get('fx_bursts')
+                or source.get('stroke_flash')
+                or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema') != 12)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
@@ -302,9 +303,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any('noise' in (line.get('entry_anim'), line.get('exit_anim')) for line in ir['track']['lines']):
         _validate_noise_transition(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_noise_transition')
-    if any(line.get('fx_bursts') for line in ir['track']['lines']):
-        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured)
-        ir['required_features'].append('p07_sing_twinkle')
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)
@@ -365,6 +363,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             else 5 if any(line.get('karaoke_anim') == 'utopia' for line in scanned)
             else 4 if any(line.get('wipe_reverse') for line in scanned) else 3
         )
+    if any(line.get('fx_bursts') for line in ir['track']['lines']):
+        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured)
+        ir['required_features'].append('p07_sing_twinkle')
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
         ir['skia_layout']['font_chain_schema'] = 1

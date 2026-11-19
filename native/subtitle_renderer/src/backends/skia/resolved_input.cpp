@@ -145,8 +145,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
+        const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) == 12;
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
-            || line.wipeReverse || line.strokeFlashEnabled || !line.bursts.empty()
+            || line.wipeReverse || line.strokeFlashEnabled
+            || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             // The projection admits a band only with ordinary Utopia singing.
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (!utopiaEntry && line.entryAnimation != "none") || (!utopiaExit && line.exitAnimation != "none")
@@ -320,7 +322,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (!line.bursts.empty()) {
             const auto box = source.value("particle_box_height");
             if (!box.isDouble() || !std::isfinite(box.toDouble()) || box.toDouble() < 0 || box.toDouble() > 1e5
-                || !prepared.rubyGroups.empty() || style.vertical || style.rightToLeft)
+                || (!prepared.rubyGroups.empty() && !rubyParticles) || style.vertical || style.rightToLeft)
                 throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
                 const auto sprite = particleSprites.find(burst.sprite);
@@ -369,6 +371,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
         const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
         const bool singingGlow = singingScale && !line.zoomPulseEnabled && features.contains("p07_singing_glow");
+        const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         // scanline_band_schema=6: the band repaints over a static glow (no shadow,
         // no role palette); the glow is drawn under the text as without a band.
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
@@ -376,7 +379,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || (line.scanlineEnabled && !scanlineGlow)
-                || !line.bursts.empty() || line.strokeFlashEnabled
+                || (!line.bursts.empty() && !particleGlow) || line.strokeFlashEnabled
                 || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia && !singingGlow)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");

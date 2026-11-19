@@ -42,20 +42,24 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
         entry, exit_ = source.get('entry_anim'), source.get('exit_anim')
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
+        annotated = bool(track.rubies)
+        scaled_singing = annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
         if (look.vertical or look.right_to_left or (item.line.wipe_reverse and not band)
-                or source.get('karaoke_anim') != 'none'
+                or (source.get('karaoke_anim') != 'none' and not scaled_singing)
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or band or look.sing_fx != 'none'))
-                or track.rubies or look.lower_ruby_enabled
-                or look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
+                or look.lower_ruby_enabled or (annotated and (animated or band))
+                or (not annotated and (look.stroke_width_px > 0
+                    or (look.stroke2_enabled and look.stroke2_width_px > 0)))
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 唱字粒子仅支持正向横排基础正文')
         for burst in bursts:
             kind = burst['kind']
             if (kind not in _PARTICLES
+                    or (annotated and kind not in {'twinkle', 'twinkle_classic', 'ripple'})
                     or (kind == 'scanline' and not band)
                     or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
@@ -89,4 +93,4 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
             max(float(run['ascent']) for run in metrics.slot_metrics)
             + max(float(run['descent']) for run in metrics.slot_metrics)
         )
-    return version
+    return 12 if track.rubies else version

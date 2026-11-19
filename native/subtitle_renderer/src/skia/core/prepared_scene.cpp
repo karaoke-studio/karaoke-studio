@@ -62,7 +62,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         for (const auto& item : source.particles)
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
-                || source.vertical || source.noWipe || !source.rubyGroups.empty()
+                || source.vertical || source.noWipe
                 || item.burst.reverse != source.wipeRightToLeft
                 || (source.wipeRightToLeft && (!band.enabled || item.burst.kind != "scanline")))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
