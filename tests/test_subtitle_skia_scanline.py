@@ -126,7 +126,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 
 
 @pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical',
-                                  'ruby_role', 'roles', 'guide', 'utopia_zoom', 'utopia_entry', 'utopia_reverse',
+                                  'ruby_role', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
@@ -145,7 +145,7 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         track = replace(track, lines=[replace(track.lines[0], chars=[
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
     elif case == 'guide': track, style = guide_source(project); style = band(style)
-    elif case == 'utopia_zoom': style = replace(style, karaoke_anim='zoom_pulse')
+    elif case == 'zoom_role': style = replace(style, karaoke_anim='zoom_pulse', scanline_mode='role')
     elif case == 'utopia_entry': style = replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600)
     elif case == 'utopia_reverse': track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
     else: style = replace(style, karaoke_anim='no_wipe')
@@ -776,7 +776,8 @@ def test_combined_particle_layers_match_actual_d2d_and_gpu_raster(binary, projec
 
 # scanline_band_schema=6: the band repaints over a static glow (main and upper ruby).
 P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_brighten',
-                      'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none']
+                      'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none',
+                      'karaoke_scanline', 'karaoke_utopia_scanline', 'karaoke_zoom_pulse_scanline']
 
 
 def glow_band_source(reading, case, utopia=False):
@@ -791,13 +792,17 @@ def glow_band_frames(binary, source, dpr, times):
     return render_skia(binary, upper_ir(binary, source, dpr), times)
 
 
-@pytest.mark.parametrize('case,utopia', [('inherited', False), ('independent', False), ('inherited', True)])
-def test_glow_band_capability_and_out_of_order_seek(binary, reading, case, utopia, tmp_path):
-    track, style = glow_band_source(reading, case, utopia)
+@pytest.mark.parametrize('case,animation,flash', [('inherited', 'none', False), ('independent', 'none', False),
+                                                 ('inherited', 'utopia', False), ('inherited', 'none', True),
+                                                 ('inherited', 'zoom_pulse', True)])
+def test_glow_band_capability_and_out_of_order_seek(binary, reading, case, animation, flash, tmp_path):
+    track, style = glow_band_source(reading, case)
+    style = replace(style, karaoke_anim=animation, karaoke_stroke_flash=flash)
     ir = upper_ir(binary, (track, style), 1.5)
     bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1.5)
     main_glow = case == 'inherited'
-    assert ir['skia_layout']['scanline_band_schema'] == (6 if main_glow else 5 if utopia else 3)
+    assert ('p07_composed_scanline' in ir['required_features']) == (flash or animation == 'zoom_pulse')
+    assert ir['skia_layout']['scanline_band_schema'] == (6 if main_glow else 5 if animation != 'none' else 3)
     assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
     order = [*RUBY_BAND_TIMES, 1100, 450, 1900]
     results = []
@@ -809,25 +814,31 @@ def test_glow_band_capability_and_out_of_order_seek(binary, reading, case, utopi
             plain, _ = collect(process, RUBY_BAND_TIMES, generation=2)
         by_time = dict(zip(RUBY_BAND_TIMES, frames))
         for t, frame in zip(order[len(RUBY_BAND_TIMES):], frames[len(RUBY_BAND_TIMES):], strict=True):
-            assert np.array_equal(frame, by_time[t]), (case, utopia, target, t)
+            assert np.array_equal(frame, by_time[t]), (case, animation, target, t)
         # The band repaints while singing and leaves the unsung and completed frames alone.
         changed = [not np.array_equal(by_time[t], p) for t, p in zip(RUBY_BAND_TIMES, plain, strict=True)]
-        assert any(changed) and not changed[0] and not changed[-1], (case, utopia, target, changed)
+        assert any(changed) and not changed[0] and not changed[-1], (case, animation, target, changed)
         results.append([by_time[t] for t in RUBY_BAND_TIMES])
     from test_subtitle_skia_static_glow import assert_glow_parity
-    assert_glow_parity(RUBY_BAND_TIMES, results[0], results[0], results[1], ('seek', case, utopia, 1.5))
-    if main_glow and utopia:
-        (tmp_path / 'scanline-glow-layout.json').write_text(json.dumps({
+    assert_glow_parity(RUBY_BAND_TIMES, results[0], results[0], results[1], ('seek', case, animation, 1.5))
+    if main_glow and animation != 'none':
+        name = 'zoom-scanline-flash-layout.json' if animation == 'zoom_pulse' else 'scanline-glow-layout.json'
+        (tmp_path / name).write_text(json.dumps({
             'features': ir['required_features'],
             'schema': ir['skia_layout']['scanline_band_schema'],
             'line': ir['skia_layout']['lines'][0],
         }, sort_keys=True), encoding='utf-8')
 
 
-def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading):
-    ir = upper_ir(binary, glow_band_source(reading, 'inherited'), 1)
+@pytest.mark.parametrize('animation', ['none', 'zoom_pulse'])
+def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, animation):
+    track, style = glow_band_source(reading, 'inherited')
+    ir = upper_ir(binary, (track, replace(style, karaoke_anim=animation)), 1)
     bad = copy.deepcopy(ir)
-    bad['skia_layout']['scanline_band_schema'] = 5
+    if animation == 'zoom_pulse':
+        bad['required_features'].remove('p07_composed_scanline')
+    else:
+        bad['skia_layout']['scanline_band_schema'] = 5
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [1100])
@@ -841,7 +852,7 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading):
     {'decoration_kind': 'shadow', 'decoration_kind_before': 'shadow'},
     {'scanline_mode': 'role', 'scanline_role_name': '__global__'},
     {'entry_anim': 'fade', 'entry_lead_ms': 400},
-    {'karaoke_anim': 'zoom_pulse'},
+    {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
     {'scanline_effect': 'star'},
 ])
 def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
@@ -883,8 +894,9 @@ def test_p00_scanline_matches_actual_d2d_and_gpu_raster(binary, application, cas
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == case_id)
+    animation = case.style.karaoke_anim
     bare_style = replace(case.style, scanline_enabled=False,
-                         karaoke_anim='utopia' if case.style.karaoke_anim == 'utopia_scanline' else 'none')
+                         karaoke_anim=animation.removesuffix('_scanline') if animation.endswith('_scanline') else 'none')
     refs = {}
     for name, look in (('band', case.style), ('bare', bare_style)):
         with NativeRendererProcess() as process:

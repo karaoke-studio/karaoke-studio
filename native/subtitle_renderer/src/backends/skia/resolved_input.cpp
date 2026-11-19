@@ -156,8 +156,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
-            // The projection admits a band only with ordinary Utopia singing.
-            || (line.scanlineEnabled && (utopiaEntry || utopiaExit || line.zoomPulseEnabled))
+            || (line.scanlineEnabled && (utopiaEntry || utopiaExit
+                || (line.zoomPulseEnabled && !features.contains("p07_composed_scanline"))))
             || (!lineAnimation && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")

@@ -138,20 +138,21 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
             throw BackendError("Skia 噪声出入场当前仅支持正向横排实色正文");
         const bool composedFlash = features.contains("p07_composed_stroke_flash");
+        const bool composedScanline = features.contains("p07_composed_scanline");
         if (source.strokeFlashEnabled
             && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || (!composedFlash && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")
                     || source.karaokeAnimation == "utopia"))
-                || source.scanlineEnabled
+                || (source.scanlineEnabled && !composedScanline)
                 || (source.zoomPulseEnabled && !features.contains("p07_zoom_pulse_decoration"))
                 || source.entryAnimation != "none" || source.exitAnimation != "none"
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
         const bool rubyScanline = features.contains("p07_ruby_scanline");
-        // scanline_band_schema=5: ordinary forward Utopia singing (no zoom pulse,
-        // no Utopia or other entry/exit) repaints each posed character's band.
+        // The band follows the posed unit during forward Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
-        const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5 && !source.zoomPulseEnabled
+        const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
+            && (!source.zoomPulseEnabled || composedScanline)
             && !source.wipeReverse && source.entryAnimation == "none" && source.exitAnimation == "none";
         // Horizontal band with a separately negotiated upper-annotation pass.
         if (source.scanlineEnabled
@@ -159,6 +160,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || (resolved.scanlineMode != "color" && scanlineVersion < 3)
                 || resolved.scanlineShape != "band" || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
                 || cfg.vertical || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
+                || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
+                    && (!composedScanline || source.wipeReverse || resolved.scanlineMode == "role"))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
                 || (rubyScanline && (source.wipeReverse || resolved.scanlineMode == "role"

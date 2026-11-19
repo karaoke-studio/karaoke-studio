@@ -102,8 +102,8 @@ def _write_utopia_pivots(ir, plan, measured):
                 or (not line_animation and not animations <= {'none', 'utopia'})
                 or source.get('karaoke_anim') not in {'none', 'utopia'}
                 or (line_animation and source.get('zoom_pulse'))
-                # A band rides only ordinary singing (scanline_band_schema=5).
-                or (source.get('scanline') and (source.get('zoom_pulse') or animations != {'none'}))
+                or (source.get('scanline') and (animations != {'none'} or (source.get('zoom_pulse')
+                    and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
                 or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
@@ -128,25 +128,28 @@ def _write_utopia_pivots(ir, plan, measured):
 def _validate_scanline_band(track, style, lines):
     """Validate the horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
+    composed = False
     for source, line in zip(track.lines, lines, strict=True):
         if not line.get('scanline'):
             continue
         look = style_for_line(style, source)
-        # Ordinary forward Utopia singing is supported (scanline_band_schema=5).
+        ordinary = {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
-                  and {line.get('entry_anim'), line.get('exit_anim')} == {'none'})
+                  and ordinary)
+        with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
         if (look.scanline_shape != 'band' or look.vertical or look.right_to_left
                 or (line.get('karaoke_anim') != 'none' and not utopia)
-                or line.get('zoom_pulse') or line.get('stroke_flash')
+                or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
                 or look.lower_ruby_enabled
                 # scanline_band_schema=6 composes only a static glow, without role palette.
                 or _uses_decoration(look, 'shadow')
                 or (_uses_decoration(look, 'glow') and look.scanline_mode == 'role')
-                or (track.rubies and (look.scanline_mode == 'role' or
-                                      {line.get('entry_anim'), line.get('exit_anim')} != {'none'}))
+                or (track.rubies and (look.scanline_mode == 'role' or not ordinary))
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(source).chars)):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
+        composed = composed or with_zoom_or_flash
+    return composed
 
 
 def _validate_stroke_flash(track, style, lines):
@@ -158,10 +161,11 @@ def _validate_stroke_flash(track, style, lines):
         if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                 or line.get('entry_anim') != 'none' or line.get('exit_anim') != 'none'
                 or line.get('karaoke_anim') not in {'none', 'utopia'}
-                or line.get('scanline') or line.get('fx_bursts') or _uses_decoration(look, 'shadow')
+                or line.get('fx_bursts') or _uses_decoration(look, 'shadow')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
-        composed = composed or bool(track.rubies) or _uses_decoration(look, 'glow') or line.get('karaoke_anim') == 'utopia'
+        composed = (composed or bool(track.rubies) or _uses_decoration(look, 'glow')
+                    or line.get('karaoke_anim') == 'utopia' or line.get('scanline'))
     return composed
 
 
@@ -301,7 +305,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(track, ir, plan, measured)
         ir['required_features'].append('p07_character_transform')
     if any(line.get('scanline') for line in ir['track']['lines']):
-        _validate_scanline_band(track, style, ir['track']['lines'])
+        if _validate_scanline_band(track, style, ir['track']['lines']):
+            ir['required_features'].append('p07_composed_scanline')
         ir['required_features'].append('p07_scanline_band')
     gradients, outlined_gradients, images = write_body_gradient_bounds(track, ir, plan)
     if images:

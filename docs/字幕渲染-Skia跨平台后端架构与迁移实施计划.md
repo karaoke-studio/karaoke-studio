@@ -2391,6 +2391,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p07_zoom_pulse_decoration` 为正向横排的整字缩放启用静态实色光晕和描边闪光。光晕采样使用已缩放的正文及上注音轮廓，闪光保持物理描边宽度和原起唱时钟。GPU 与 Raster 使用同一份绘制实现。
 - Windows 光晕和闪光 53 项通过。原样 P00 `karaoke_zoom_pulse` 的 5 个 1080p 采样帧通过 Direct2D GPU、Vulkan、Raster 画面预算，场景可配置增至 39/129。X11、Wayland 各 46 项通过、70 项跳过，与 Windows 生成的组合快照一致。独立 Raster 在 Windows/Linux 各通过 1 项，四份原生构建 CTest 各通过 3/3。
 
+### 14.118 P07.5 扫字线与整字缩放、闪光（2026-11-20）
+
+- `p07_composed_scanline` 允许正向横排基础走字、Utopia 和整字缩放的实色高亮带叠加描边闪光。扫字线重绘变换后字形的走字锋面，正文扫字带在闪光下，上注音扫字带在注音之上。光晕继续使用对应的变换后轮廓。
+- 三个原样 P00 唱字选项共 15 个 1080p 采样帧通过 Direct2D GPU、Vulkan、Raster 原有画面预算，并验证高亮出现时刻一致。可配置增至 42/129。Windows 关联 58 项通过，X11、Wayland 各 93 项通过、60 项跳过，三个窗口环境的组合快照相同。独立 Raster 在 Windows/Linux 各通过 1 项，四份原生构建 CTest 各通过 3/3。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
