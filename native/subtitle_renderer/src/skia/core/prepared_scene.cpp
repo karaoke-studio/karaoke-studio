@@ -80,7 +80,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             }
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
-                                  cell.top, cell.bottom, cell.outline, cell.outerOutline});
+                                  cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot});
         }
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();
@@ -161,8 +161,9 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             }
         }
         // Fade the composed line, preserving overlaps and translucent strokes.
-        if (animation.opacity < 1.f && !line.paintBounds.isEmpty())
-            canvas.saveLayerAlphaf(&line.paintBounds, animation.opacity);
+        // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
+        if (animation.opacity < 1.f && (line.characterFade.transforms() || !line.paintBounds.isEmpty()))
+            canvas.saveLayerAlphaf(line.characterFade.transforms() ? nullptr : &line.paintBounds, animation.opacity);
         const auto rawProgress = [&](const Cell& cell) {
             if (line.wipeRightToLeft && tMs <= (cell.wipePoints.empty() ? cell.startMs : cell.wipePoints.front().timeMs))
                 return 0.f;
@@ -193,7 +194,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             return line.vertical ? SkRect::MakeLTRB(-1e6f, from, 1e6f, to) : SkRect::MakeLTRB(from, -1e6f, to, 1e6f);
         };
         enum class Phase { Before, After, Wiping };
-        struct State { float progress, edge; Phase phase; float opacity; };
+        struct State { float progress, edge; Phase phase; CharacterTransformState transform; };
         std::vector<State> states;
         states.reserve(line.cells.size());
         const auto wipeStart = [](const Cell& c) { return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs; };
@@ -226,10 +227,9 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 const int followingEnd = wipeEnd(line.cells[index+1]);
                 wiping = start < tMs && tMs < followingEnd && start != followingEnd;
             }
-            const float opacity = line.characterFade.opacityAt(tMs, line.startMs, line.endMs,
-                                                                int(index), int(line.cells.size()));
             states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
-                              opacity});
+                              characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
+                                                   int(index), int(line.cells.size()), cell.pivot)});
         }
         enum class Layer { OuterOutline, Outline, Body };
         const auto drawCell = [&](std::size_t index, Layer layer) {
@@ -238,7 +238,8 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             const bool drawOutline = layer != Layer::Body;
             if (drawOutline && !stroke) return;
             const auto& path = drawOutline ? stroke->path : cell.path;
-            const auto [progress, edge, phase, opacity] = states[index];
+            const auto& [progress, edge, phase, transform] = states[index];
+            const float opacity = transform.opacity;
             if (opacity <= 0) return;
             // The outline can reach beyond the integer wipe padding, just as
             // the vertical glyph can reach beyond its fixed cell.
@@ -254,6 +255,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
                 paint.setColor(drawOutline ? (sung ? stroke->after : stroke->before)
                                            : (sung ? cell.after : cell.before));
                 if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+                if (transform.transformed) canvas.concat(transform.matrix); // Clips stay in line space.
                 canvas.drawPath(path, paint);
             };
             // Two disjoint clips avoid painting translucent after color over before color.
@@ -293,7 +295,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         // The GPU repaints each sweeping cell's stack once in the band color, after the body.
         line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, [&](std::size_t index, std::uint32_t color) {
             const auto& cell = line.cells[index];
-            const float opacity = states[index].opacity;
+            const float opacity = states[index].transform.opacity;
             if (opacity <= 0) return;
             paint.setColor(color);
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
