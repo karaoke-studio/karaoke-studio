@@ -192,7 +192,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             prepared.scanline = {true, halfWidth, {mode, argb(color), style.scanlineBrightness},
                                  std::max(style.strokeWidth, 0.f) + std::max(style.stroke2Width, 0.f) + 4.f,
                                  std::max(style.stroke2Width, 0.f) * .5f + .5f,
-                                 std::min(style.scanlineGlowRadius, halfWidth), line.wipeReverse};
+                                 std::min(style.scanlineGlowRadius, halfWidth), line.wipeReverse,
+                                 features.contains("p07_ruby_scanline")};
         }
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;

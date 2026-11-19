@@ -117,7 +117,9 @@ def _validate_scanline_band(track, style, lines):
         look = style_for_line(style, source)
         if (look.scanline_shape != 'band' or look.vertical or look.right_to_left
                 or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')
-                or track.rubies or look.lower_ruby_enabled
+                or look.lower_ruby_enabled
+                or (track.rubies and (look.scanline_mode == 'role' or
+                                      {line.get('entry_anim'), line.get('exit_anim')} != {'none'}))
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(source).chars)):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
@@ -273,9 +275,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(line.get('scanline') for line in ir['track']['lines']):
         _validate_scanline_band(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_scanline_band')
-        ir['skia_layout']['scanline_band_schema'] = (
-            4 if any(line.get('scanline') and line.get('wipe_reverse') for line in ir['track']['lines']) else 3
-        )
     gradients, outlined_gradients, images = write_body_gradient_bounds(track, ir, plan)
     if images:
         # Static image paints on any body or outline layer of a plain line.
@@ -331,6 +330,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             singing_lines=singing_lines)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
+        if 'p07_scanline_band' in ir['required_features']:
+            ir['required_features'].append('p07_ruby_scanline')
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         if markers:
             ir['required_features'].append('p05_ruby_markers')
@@ -346,6 +347,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p06_ruby_shadow')
         if 'ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_glow')
+    if 'p07_scanline_band' in ir['required_features']:
+        ir['skia_layout']['scanline_band_schema'] = (
+            4 if any(line.get('scanline') and line.get('wipe_reverse') for line in ir['track']['lines']) else 3
+        )
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
         ir['skia_layout']['font_chain_schema'] = 1

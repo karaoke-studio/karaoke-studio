@@ -56,7 +56,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                              || !std::isfinite(band.softness) || band.softness < 0 || band.softness > band.halfWidth
                              || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
                              || source.vertical || band.rightToLeft != source.wipeRightToLeft
-                             || source.noWipe || !source.rubyGroups.empty()))
+                             || source.noWipe || (!band.upperRuby && !source.rubyGroups.empty())))
             throw std::runtime_error("Skia 扫字线仅支持横排实色高亮带");
         if (source.particles.size() > 4096) throw std::runtime_error("Skia 字幕粒子数量超限");
         for (const auto& item : source.particles)

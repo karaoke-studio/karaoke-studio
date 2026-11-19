@@ -143,13 +143,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || source.entryAnimation != "none" || source.exitAnimation != "none"
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
-        // Horizontal solid-color band, without image, ruby or roles.
+        const bool rubyScanline = features.contains("p07_ruby_scanline");
+        // Horizontal band with a separately negotiated upper-annotation pass.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
                 || (resolved.scanlineMode != "color" && scanlineVersion < 3)
                 || resolved.scanlineShape != "band" || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
                 || cfg.vertical || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
-                || source.karaokeAnimation == "no_wipe" || !cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
+                || source.karaokeAnimation == "no_wipe"
+                || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
+                || (rubyScanline && (source.wipeReverse || resolved.scanlineMode == "role"
+                    || source.entryAnimation != "none" || source.exitAnimation != "none"
+                    || source.karaokeAnimation != "none"))))
             throw BackendError("Skia 扫字线当前仅支持横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid")

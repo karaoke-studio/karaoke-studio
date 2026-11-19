@@ -62,6 +62,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_utopia_transition",
         "p07_character_fade",
         "p07_scanline_band",
+        "p07_ruby_scanline",
         "p07_character_transform",
         "p07_sing_twinkle",
         "p07_stroke_flash",
@@ -195,6 +196,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_scanline_band")
         && (scanlineVersion < 1 || scanlineVersion > kScanlineBandSchema || std::floor(scanlineVersion) != scanlineVersion))
         throw BackendError("Skia 扫字线布局版本无效");
+    if (features.contains("p07_ruby_scanline")
+        && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")
+            || features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 注音扫字线缺少上注音或扫字线能力声明");
     const auto transformVersion = layout.value("character_transform_schema").toDouble(-1);
     if (features.contains("p07_character_transform")
         && (transformVersion < 1 || transformVersion > kCharacterTransformSchema || std::floor(transformVersion) != transformVersion))

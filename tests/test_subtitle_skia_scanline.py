@@ -16,6 +16,7 @@ from test_subtitle_skia_secondary_outline import two_outlines
 from test_subtitle_skia_sing_particles import assert_particle_region, blue_coverage
 from test_subtitle_skia_vector_guides import guide_source
 from test_subtitle_skia_vertical import vertical_ruby_source
+from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_source, upper_ir, bands
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
@@ -117,7 +118,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 
 
 @pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical',
-                                  'ruby', 'roles', 'guide', 'utopia', 'no_wipe'])
+                                  'ruby_role', 'roles', 'guide', 'utopia', 'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'flame': style = replace(style, scanline_shape='flame')
@@ -127,7 +128,9 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
     elif case == 'rtl': track, style = rtl_source(project); style = band(style)
     elif case == 'vertical': track, style = vertical_ruby_source(project); track = replace(track, rubies=[]); style = band(style)
-    elif case == 'ruby': track, style = vertical_ruby_source(project); style = band(replace(style, vertical=False))
+    elif case == 'ruby_role':
+        track, style = vertical_ruby_source(project)
+        style = replace(band(replace(style, vertical=False)), scanline_mode='role')
     elif case == 'roles':
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
         track = replace(track, lines=[replace(track.lines[0], chars=[
@@ -305,6 +308,66 @@ def assert_feather_profile(reference, candidate, bare_reference, bare_candidate,
     assert shape <= 1, (sample, 'feather profile', shape)
     delta = abs(premultiplied(reference) - premultiplied(candidate))
     assert delta.mean() < .15, (sample, 'RGBA', delta.mean())
+
+
+RUBY_BAND_TIMES = [299, 450, 550, 899, 1100, 1400, 1550, 1900, 2100, 2300]
+
+
+def ruby_band_source(reading, softness):
+    track, style = upper_source(reading, 2)
+    return track, replace(band(style, 42), scanline_glow_px=softness, ruby_interval_px=9)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, tmp_path):
+    track, style = ruby_band_source(reading, 10)
+    ir = upper_ir(binary, (track, style), 1)
+    plain = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
+    assert 'p07_ruby_scanline' in ir['required_features']
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_ruby_scanline')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*RUBY_BAND_TIMES, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [550], generation=2)
+        configure(process, plain)
+        baseline, _ = collect(process, RUBY_BAND_TIMES, generation=3)
+    assert np.array_equal(frames[2], frames[-1]) and np.array_equal(frames[2], replay[0])
+    reading_y = bands(baseline[0])[1][1] - 2
+    ink = [not np.array_equal(a[:reading_y], b[:reading_y]) for a, b in zip(frames[:-1], baseline, strict=True)]
+    assert ink[2] and ink[7] and not (ink[0] or ink[4] or ink[-1])
+    if target == 'gpu':
+        (tmp_path / 'ruby-scanline-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0], 'banded': ink,
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('softness,dpr', [(0, 1), (10, 1), (10, 1.5)])
+def test_upper_ruby_band_matches_actual_d2d_and_gpu_raster(binary, reading, softness, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = ruby_band_source(reading, softness)
+    bare = replace(style, scanline_enabled=False)
+    expected, expected_bare = [], []
+    for look, output in ((style, expected), (bare, expected_bare)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, tuple(RUBY_BAND_TIMES), force_warp=False, track=track,
+                width=640, height=360, dpr=dpr, realization_enabled=False)
+        output.extend(np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw)
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), RUBY_BAND_TIMES)
+    gpu_bare, raster_bare = render_skia(binary, upper_ir(binary, (track, bare), dpr), RUBY_BAND_TIMES)
+    reading_y = bands(expected_bare[0])[1][1] - 2
+    for time, ref, ref_bare, first, first_bare, second, second_bare in zip(
+            RUBY_BAND_TIMES, expected, expected_bare, gpu, gpu_bare, raster, raster_bare, strict=True):
+        top = slice(0, reading_y)
+        assert_feather_profile(ref[top], first[top], ref_bare[top], first_bare[top], ('D2D', time, softness, dpr))
+        assert_feather_profile(first[top], second[top], first_bare[top], second_bare[top],
+                               ('Raster', time, softness, dpr))
 
 
 def test_feather_gpu_and_raster_match_under_repeated_seek(binary, project):

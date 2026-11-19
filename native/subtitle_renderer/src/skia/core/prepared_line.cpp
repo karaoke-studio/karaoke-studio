@@ -295,5 +295,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     for (const auto& group : line.rubyGroups) group.draw(canvas, tMs, line.singingScale, line.rubySingingOrigin);
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
+    if (line.scanline.upperRuby && line.scanline.frontAt(line.cells, tMs, line.inkStart))
+        for (const auto& group : line.rubyGroups) group.drawScanline(canvas, line.scanline, tMs);
 }
 }

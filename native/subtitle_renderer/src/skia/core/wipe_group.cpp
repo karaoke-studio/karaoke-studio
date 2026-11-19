@@ -8,20 +8,31 @@
 
 namespace subtitle::skia {
 namespace {
-void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after) {
-    const auto outline = [&](const SolidOutline& stroke, bool outer) {
-        SkAutoCanvasRestore restore(&canvas, stroke.protectBody);
-        if (stroke.protectBody) {
-            canvas.clipPath(cell.path, SkClipOp::kDifference, true);
-            if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
-        }
-        brush.setColor(after ? stroke.after : stroke.before);
-        canvas.drawPath(stroke.path, brush);
+template <class Color>
+void paintRubyLayer(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, int layer, Color&& color,
+                    float opacity = 1.f) {
+    const auto paint = [&](const SkPath& path, std::uint32_t before, std::uint32_t after) {
+        brush.setColor(color(before, after));
+        if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
+        canvas.drawPath(path, brush);
     };
-    if (cell.outerOutline) outline(*cell.outerOutline, true);
-    if (cell.outline) outline(*cell.outline, false);
-    brush.setColor(after ? cell.after : cell.before);
-    canvas.drawPath(cell.path, brush);
+    if (layer == 2) {
+        paint(cell.path, cell.before, cell.after);
+        return;
+    }
+    const auto& stroke = layer == 0 ? cell.outerOutline : cell.outline;
+    if (!stroke) return;
+    SkAutoCanvasRestore restore(&canvas, stroke->protectBody);
+    if (stroke->protectBody) {
+        canvas.clipPath(cell.path, SkClipOp::kDifference, true);
+        if (layer == 0 && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+    }
+    paint(stroke->path, stroke->before, stroke->after);
+}
+
+void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after) {
+    for (int layer = 0; layer < 3; ++layer)
+        paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; });
 }
 
 float singingFront(const ResolvedCell& cell, int timeMs, float originX, const SkRect& ink) {
@@ -152,6 +163,22 @@ float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {
         if (timeMs <= cell.endMs) break;
     }
     return edge;
+}
+
+void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band, int timeMs) const {
+    if (bounds_.isEmpty()) return;
+    const float front = frontAt(timeMs, bounds_.left());
+    const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
+    if (front + band.halfWidth <= bounds_.left() - pad || front - band.halfWidth >= bounds_.right() + pad) return;
+    SkPaint brush;
+    brush.setAntiAlias(true);
+    for (const auto& cell : cells_) {
+        if (cell.path.isEmpty() || !ScanlineBand::sweeping(cell, timeMs)) continue;
+        band.drawSlices(canvas, front, [&](int layer, bool after, float opacity) {
+            paintRubyLayer(canvas, brush, cell, layer,
+                [&](auto before, auto sung) { return band.paint.shade(before, sung, after); }, opacity);
+        });
+    }
 }
 
 void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
