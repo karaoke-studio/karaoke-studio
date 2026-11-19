@@ -45,6 +45,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.characterFade = source.characterFade;
         line.characterGeometry = source.characterGeometry;
         line.singingScale = source.singingScale;
+        line.utopiaTransition = source.utopiaTransition;
         line.transformedWipe = source.transformedWipe;
         line.scanline = source.scanline;
         const auto& band = source.scanline;
@@ -113,6 +114,16 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth});
+        }
+        if (line.utopiaTransition.leave) {
+            line.followingDone.resize(line.cells.size());
+            const Cell* next = nullptr;
+            for (std::size_t cursor = line.cells.size(); cursor > 0; --cursor) {
+                const auto& cell = line.cells[cursor - 1];
+                line.followingDone[cursor - 1] = next ? std::max(next->endMs, cell.endMs)
+                    : cell.endMs + std::max(line.utopiaTransition.tailMs - 750, 0);
+                if (!cell.path.isEmpty()) next = &cell;
+            }
         }
         for (const auto& group : source.rubyGroups) {
             totalCells += group.size();

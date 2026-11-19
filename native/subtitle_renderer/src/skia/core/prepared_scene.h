@@ -75,6 +75,8 @@ private:
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;
         SingingScale singingScale;
+        UtopiaTransition utopiaTransition;
+        std::vector<int> followingDone;
         std::optional<float> inkCenter;
         bool transformedWipe = false;
         ScanlineBand scanline;

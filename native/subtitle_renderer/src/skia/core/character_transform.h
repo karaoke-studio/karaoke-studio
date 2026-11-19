@@ -20,6 +20,7 @@ struct CharacterTransformState {
     bool transformed = false;
     float glowAlpha = 0, glowRadiusEm = 0;
     bool glowEcho = false;
+    bool utopiaExit = false;
 };
 
 inline CharacterTransformState characterTransformAt(const CharacterFade& fade, int time, int displayStart,

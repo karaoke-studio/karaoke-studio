@@ -72,6 +72,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_static_shadow.py::test_shadow_palette_keeps_geometry_and_replays",
     "tests/test_subtitle_skia_static_glow.py::test_static_glow_palette_preserves_geometry_and_replay",
     "tests/test_subtitle_skia_singing_scale.py::test_singing_scale_preserves_clocks_and_replays",
+    "tests/test_subtitle_skia_singing_scale.py::test_utopia_transition_releases_following_glyph_and_replays",
 )
 
 

@@ -32,8 +32,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Fade the composed line, preserving overlaps and translucent strokes.
     // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
     const bool geometry = line.characterGeometry.active();
-    const bool singingScale = line.singingScale.active;
-    const bool movingCells = line.characterFade.transforms() || geometry || singingScale;
+    const bool utopia = line.singingScale.active || line.utopiaTransition.active();
+    const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty()))
         canvas.saveLayerAlphaf(movingCells ? nullptr : &line.paintBounds, animation.opacity);
     const auto rawProgress = [&](const Cell& cell) {
@@ -103,7 +103,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             wiping = start < tMs && tMs < followingEnd && start != followingEnd;
         }
         const auto transform = [&] {
-            if (singingScale) return line.singingScale.at(tMs, start, end, cell.pivot);
+            if (utopia) {
+                const int following = line.utopiaTransition.leave ? line.followingDone[index] : 0;
+                return line.utopiaTransition.at(tMs, line.startMs, int(index), int(line.cells.size()), following,
+                                               cell.pivot, line.singingScale, start, end);
+            }
             if (geometry && line.characterFade.side(tMs, line.startMs, line.endMs) == 0)
                 return line.characterGeometry.at(tMs, line.startMs, line.endMs,
                                                  int(index), int(line.cells.size()), cell.pivot, line.inkCenter);
@@ -138,7 +142,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (opacity <= 0) return;
         // The outline can reach beyond the integer wipe padding, just as
         // the vertical glyph can reach beyond its fixed cell.
-        const bool animatedClip = (singingScale || (line.transformedWipe && transform.transformed))
+        const bool animatedClip = (utopia || (line.transformedWipe && transform.transformed))
             && phase == Phase::Wiping;
         float clipEdge = edge;
         if (animatedClip) {
@@ -147,8 +151,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 owner = index + 1;
             const auto& clipCell = line.cells[owner];
             const auto& matrix = states[owner].transform.matrix;
-            const float ratio = singingScale && tMs <= wipeEnd(clipCell)
-                ? rawProgress(clipCell)
+            const float ratio = states[owner].transform.utopiaExit ? 1.f
+                : utopia && tMs <= wipeEnd(clipCell) ? rawProgress(clipCell)
                 : transformedWipeRatio(clipCell.wipePoints, clipCell.adjustedWipeEnd,
                                        wipeStart(clipCell), wipeEnd(clipCell), tMs);
             clipEdge = transformedWipeEdge(line.cells.front().pivot.layoutLeft,

@@ -110,6 +110,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     };
     const auto supportedAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")
+            || (features.contains("p07_utopia_transition") && animation == "utopia")
             || (allowNoise && animation == "noise")
             || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"))
             || (allowCharacterFade && animation == "char_fade")

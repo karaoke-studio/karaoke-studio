@@ -13,6 +13,7 @@
 #include "static_shadow.h"
 #include "static_glow.h"
 #include "singing_scale.h"
+#include "utopia_transition.h"
 #include "../../model/wipe_point.h"
 #include <cstdint>
 #include <optional>
@@ -57,6 +58,7 @@ struct ResolvedLine {
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
     SingingScale singingScale;
+    UtopiaTransition utopiaTransition;
     bool transformedWipe = false;
     ScanlineBand scanline;
     std::vector<SingParticleBurst> particles;

@@ -78,23 +78,29 @@ def _uses_decoration(style, kind):
     )
 
 
-def _write_singing_scale_pivots(track, ir, plan, measured):
-    enabled = False
+def _write_utopia_pivots(track, ir, plan, measured):
+    singing, transition = False, False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         source = ir['track']['lines'][item.track_index]
-        if source.get('karaoke_anim') != 'utopia':
+        scales = source.get('karaoke_anim') == 'utopia'
+        animations = {source.get('entry_anim'), source.get('exit_anim')}
+        if not scales and 'utopia' not in animations:
             continue
         style = item.layout_style
         if (style.vertical or style.right_to_left or item.line.wipe_reverse or track.rubies or style.lower_ruby_enabled
-                or source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
+                or not animations <= {'none', 'utopia'} or source.get('karaoke_anim') not in {'none', 'utopia'}
                 or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
-            raise ValueError('Skia 唱字放大当前仅支持正向横排实色正文')
+            raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
-        enabled = True
-    if enabled:
+        singing = singing or scales
+        transition = transition or 'utopia' in animations
+    if singing:
         ir['required_features'].append('p07_singing_scale')
         ir['skia_layout']['singing_scale_schema'] = 1
+    if transition:
+        ir['required_features'].append('p07_utopia_transition')
+        ir['skia_layout']['utopia_transition_schema'] = 1
 
 
 def _validate_scanline_band(track, style, lines):
@@ -354,6 +360,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             animates_line = True
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
-    _write_singing_scale_pivots(track, ir, plan, measured)
+    _write_utopia_pivots(track, ir, plan, measured)
     project_reverse_wipe(ir)
     return ir
