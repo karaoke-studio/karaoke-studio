@@ -329,6 +329,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             for (std::size_t index = 0; index < line.cells.size(); ++index)
                 if (states[index].phase == Phase::Wiping) drawCell(index, layer);
         };
+        if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false);
         if (line.hasOuterOutline) drawLayer(Layer::OuterOutline);
         if (line.hasOutline) drawLayer(Layer::Outline);
         drawLayer(Layer::Body);
@@ -357,7 +358,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         });
         for (const auto& group : line.rubyGroups) group.draw(canvas, tMs);
         // The GPU's front particle layer covers the main text and readings.
-        if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs);
+        if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
     }
 }
 }

@@ -16,7 +16,7 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
-from .skia_particle_ir import write_singing_twinkle
+from .skia_particle_ir import write_singing_particles
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
@@ -204,9 +204,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p07_scanline_band')
         ir['skia_layout']['scanline_band_schema'] = 3
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
-        write_singing_twinkle(track, ir, plan, measured)
+        ir['skia_layout']['sing_twinkle_schema'] = write_singing_particles(track, ir, plan, measured)
         ir['required_features'].append('p07_sing_twinkle')
-        ir['skia_layout']['sing_twinkle_schema'] = 3
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)

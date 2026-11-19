@@ -12,9 +12,8 @@
 #include <vector>
 
 namespace subtitle::skia {
-// Both of the existing GPU's solid-color singing star effects use this sprite. The
-// shared deterministic evaluator owns every trajectory; this module only maps
-// each particle onto the 1000-unit sprite path (scale, rotate, translate).
+// The shared evaluator owns the trajectory. This module places the 1000-unit
+// sprite path on the specified text layer.
 struct SingParticleBurst {
     krok::subtitle::native::ParticleBurst burst; // Physical size/travel, absolute clocks.
     SkPath sprite;                                // Winding fill, 1000-unit em space.
@@ -81,10 +80,11 @@ inline SkPath spriteOutline(const SkPath& sprite, const SkMatrix& transform) {
 }
 }
 
-inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs) {
+inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs, bool front) {
     SkPaint paint;
     paint.setAntiAlias(true);
     for (const auto& item : bursts) {
+        if (item.burst.front != front) continue;
         paint.setColor(item.argb);
         const float colorAlpha = paint.getAlphaf();
         for (const auto& particle : krok::subtitle::native::effects::burstParticlesAt(
