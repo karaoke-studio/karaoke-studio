@@ -33,9 +33,10 @@ public:
     static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
     void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I());
     bool visible(bool after) const;
+    SkRect sourceBounds() const;
     Source createSource(SkCanvas&) const;
     void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
-                  const SkPath* posed = nullptr) const;
+                  const SkPath* posed = nullptr, float opacity = 1.f) const;
     void composite(SkCanvas&, const Source&) const;
 
 private:

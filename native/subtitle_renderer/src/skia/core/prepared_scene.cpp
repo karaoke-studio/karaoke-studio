@@ -43,6 +43,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         line.glow = PreparedGlow::prepare(source.glow);
         line.noise = source.noise;
         line.characterFade = source.characterFade;
+        const bool needsPaintBounds = line.animation.active() || line.characterFade.active();
         line.characterGeometry = source.characterGeometry;
         line.singingScale = source.singingScale;
         line.rubySingingOrigin = source.rubySingingOrigin;
@@ -110,7 +111,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             if (cell.outline) line.hasOutline = true;
             if (cell.outerOutline) line.hasOuterOutline = true;
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
-            if (line.animation.active()) includeCellPaint(line.paintBounds, cell);
+            if (needsPaintBounds) includeCellPaint(line.paintBounds, cell);
             for (auto& glow : line.glow)
                 glow.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
@@ -129,6 +130,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         }
         std::size_t rubyGlowCells = 0;
         for (const auto& group : source.rubyGroups) {
+            if (group.fadeOwner && *group.fadeOwner >= line.cells.size())
+                throw std::runtime_error("Skia 注音逐字淡化索引超限");
             totalCells += group.cells.size();
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
             std::optional<std::size_t> glowOffset;
@@ -142,8 +145,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                         layer.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             }
             line.rubyGroups.emplace_back(group, source.noWipe, source.vertical, glowOffset);
-            if (line.animation.active())
+            if (needsPaintBounds)
                 for (const auto& cell : group.cells) includeCellPaint(line.paintBounds, cell);
+        }
+        if (line.characterFade.active()) {
+            for (const auto& layer : line.glow) line.paintBounds.join(layer.sourceBounds());
+            for (const auto& layer : line.rubyGlow) line.paintBounds.join(layer.sourceBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
         if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {

@@ -64,6 +64,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_utopia_line_animation",
         "p07_utopia_transition",
         "p07_character_fade",
+        "p07_character_entry_fade_composition",
         "p07_scanline_band",
         "p07_composed_scanline",
         "p07_ruby_scanline",
@@ -201,6 +202,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_character_fade")
         && layout.value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");
+    if (features.contains("p07_character_entry_fade_composition") && !features.contains("p07_character_fade"))
+        throw BackendError("Skia 逐字淡化组合缺少动画能力声明");
     const auto scanlineVersion = layout.value("scanline_band_schema").toDouble(-1);
     if (features.contains("p07_scanline_band")
         && (scanlineVersion < 1 || scanlineVersion > kScanlineBandSchema || std::floor(scanlineVersion) != scanlineVersion))

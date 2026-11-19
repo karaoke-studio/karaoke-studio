@@ -83,10 +83,21 @@ def _ordinary_line_animation(source):
             and source.get('exit_anim') in {'none', 'fade', 'slide_out', 'rise'})
 
 
-def _write_utopia_pivots(ir, plan, measured):
+def _composes_character_fade(source, item):
+    look = item.layout_style
+    return (source.get('entry_anim') == 'char_fade' and source.get('exit_anim') == 'none'
+            and source.get('karaoke_anim') in {'none', 'utopia'} and not source.get('zoom_pulse')
+            and not item.line.wipe_reverse
+            and not (look.vertical or look.right_to_left or look.lower_ruby_enabled)
+            and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
+                     or _uses_decoration(look, 'shadow'))
+            and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars))
+
+
+def _write_utopia_pivots(ir, plan, measured, fade_lines):
     singing, transition, singing_ruby = False, False, False
     with_line_animation = False
-    for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
+    for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         scales = source.get('karaoke_anim') == 'utopia'
         animations = {source.get('entry_anim'), source.get('exit_anim')}
@@ -95,11 +106,12 @@ def _write_utopia_pivots(ir, plan, measured):
         style = item.layout_style
         annotated = bool(final.get('ruby_groups'))
         line_animation = scales and animations != {'none'} and _ordinary_line_animation(source)
+        with_fade = index in fade_lines
         ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
         if (style.vertical or style.right_to_left or item.line.wipe_reverse
                 or (annotated and ((source.get('zoom_pulse') and not ruby_zoom)
-                                   or (animations != {'none'} and not line_animation)))
-                or (not line_animation and not animations <= {'none', 'utopia'})
+                                   or (animations != {'none'} and not (line_animation or with_fade))))
+                or (not (line_animation or with_fade) and not animations <= {'none', 'utopia'})
                 or source.get('karaoke_anim') not in {'none', 'utopia'}
                 or (line_animation and source.get('zoom_pulse'))
                 or (source.get('scanline') and (animations != {'none'} or (source.get('zoom_pulse')
@@ -297,10 +309,17 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(line.get('entry_anim') in {'slide_in', 'rise'} or line.get('exit_anim') in {'slide_out', 'rise'}
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_line_motion')
+    fade_lines = set()
     if any(line.get('entry_anim') == 'char_fade' or line.get('exit_anim') == 'char_fade'
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_character_fade')
-        ir['skia_layout']['character_fade_schema'] = 1
+        fade_lines = {
+            index for index, item in enumerate(plan.lines)
+            if _composes_character_fade(ir['track']['lines'][item.track_index], item)
+            and (geometry.ruby is not None or _uses_decoration(item.layout_style, 'glow'))
+        }
+        if fade_lines:
+            ir['required_features'].append('p07_character_entry_fade_composition')
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(track, ir, plan, measured)
         ir['required_features'].append('p07_character_transform')
@@ -361,11 +380,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         singing_lines = {
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
-            and _ordinary_line_animation(line)
+            and (_ordinary_line_animation(line) or index in fade_lines)
         }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
-            singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines)
+            singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines, fade_lines=fade_lines)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if zoom_lines:
@@ -429,7 +448,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             animates_line = True
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
-    _write_utopia_pivots(ir, plan, measured)
+    if 'p07_character_fade' in ir['required_features']:
+        ir['skia_layout']['character_fade_schema'] = 1
+    _write_utopia_pivots(ir, plan, measured, fade_lines)
     if 'p07_singing_scale' in ir['required_features'] and (
             'p06_static_glow' in ir['required_features'] or 'p06_ruby_glow' in ir['required_features']):
         ir['required_features'].append('p07_singing_glow')

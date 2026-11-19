@@ -30,9 +30,9 @@ void paintRubyLayer(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, 
     paint(stroke->path, stroke->before, stroke->after);
 }
 
-void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after) {
+void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after, float opacity) {
     for (int layer = 0; layer < 3; ++layer)
-        paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; });
+        paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; }, opacity);
 }
 
 // Protected ruby rings scale with the glyph. Opaque outlines keep their width.
@@ -60,7 +60,8 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
 
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
-    : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), noWipe_(noWipe), vertical_(vertical) {
+    : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
+      noWipe_(noWipe), vertical_(vertical) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -83,7 +84,7 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
     }
 }
 void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
-                                   float originX, bool afterVisible) const {
+                                   float originX, bool afterVisible, float opacity) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     std::vector<std::optional<ResolvedCell>> animated(cells_.size());
@@ -107,14 +108,14 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
                                         : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
                 canvas.clipRect(clip, SkClipOp::kIntersect, true);
             }
-            paintRubyCell(canvas, paint, cell, after);
+            paintRubyCell(canvas, paint, cell, after, opacity);
         }
     }
 }
 
 void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
-                                      const SingingScale& scale, float originX) const {
-    if (!glowOffset_ || bounds_.isEmpty()) return;
+                                      const SingingScale& scale, float originX, float opacity) const {
+    if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
     if (scale.active) {
         for (std::size_t index = 0; index < cells_.size(); ++index) {
             const auto& cell = cells_[index];
@@ -126,7 +127,7 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
             if (transform.transformed) posed = cell.path.makeTransform(transform.matrix);
             const auto edge = before || complete ? std::nullopt : std::optional(singingFront(
                 cell, timeMs, originX, (posed ? *posed : cell.path).computeTightBounds()));
-            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr);
+            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr, opacity);
         }
         return;
     }
@@ -135,7 +136,7 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
     if (after ? before : complete) return;
     const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, bounds_.left()));
     for (std::size_t i = 0; i < cells_.size(); ++i)
-        glow.drawCell(canvas, *glowOffset_ + i, after, edge);
+        glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity);
 }
 
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
@@ -208,18 +209,18 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
     }
 }
 
-void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
-    if (bounds_.isEmpty()) return;
+void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX, float opacity) const {
+    if (bounds_.isEmpty() || opacity <= 0) return;
     const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
     const float edge = frontAt(timeMs, startEdge);
     if (scale.active) {
-        drawSinging(canvas, timeMs, scale, originX, edge > startEdge);
+        drawSinging(canvas, timeMs, scale, originX, edge > startEdge, opacity);
         return;
     }
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto draw = [&](bool after) {
-        for (const auto& cell : cells_) paintRubyCell(canvas, paint, cell, after);
+        for (const auto& cell : cells_) paintRubyCell(canvas, paint, cell, after, opacity);
     };
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = lineWipeComplete(cells_, timeMs);

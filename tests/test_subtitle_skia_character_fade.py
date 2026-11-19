@@ -10,6 +10,7 @@ import pytest
 from test_subtitle_skia_line_fade import (
     application, binary, project, fade_project, ir_for, collect, configure, selection, premultiplied,
 )
+from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_ir
 from test_subtitle_skia_rtl_flow import rtl_source
 from test_subtitle_skia_vertical import vertical_ruby_source
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -83,6 +84,50 @@ def test_character_fade_capabilities_and_unsupported_ruby_preserve_scene(binary,
             configure(process, bad)
         after, _ = collect(process, [125], generation=2)
     assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('animation', ['none', 'utopia'])
+def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, target, animation, tmp_path):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'two_groups')
+    style = replace(style, entry_anim='char_fade', entry_lead_ms=600, karaoke_anim=animation)
+    ir = upper_ir(binary, (track, style), 1)
+    assert 'p07_character_entry_fade_composition' in ir['required_features']
+    layout = ir['skia_layout']['lines'][0]
+    groups = layout['ruby_groups']
+    assert [group['fade_owner'] for group in groups] == [0, 1]
+    invalid = copy.deepcopy(ir)
+    invalid['skia_layout']['lines'][0]['ruby_groups'][0]['fade_owner'] = len(layout['cells'])
+    unsupported = copy.deepcopy(ir)
+    unsupported['track']['lines'][0].update(exit_anim='char_fade', exit_duration_ms=600)
+    source = ir['track']['lines'][0]
+    start, end = source['display_start_ms'], source['display_end_ms']
+    times = [start, start+125, start+600, end-200, end, start+125]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        with pytest.raises(NativeRendererError):
+            configure(process, unsupported)
+        previous, _ = collect(process, [start+125], generation=2)
+
+    def alpha(frame, group):
+        unit, = group['units']
+        l, t, r, b = unit['metrics']['ink']
+        x, y = unit['origin_x'], unit['baseline_y']
+        return frame[int(y+t):int(y+b)+1, int(x+l):int(x+r)+1, 3].max()
+
+    assert not frames[0].any() and not frames[4].any()
+    assert 0 < alpha(frames[1], groups[0]) < alpha(frames[2], groups[0])
+    assert alpha(frames[1], groups[1]) == 0 < alpha(frames[2], groups[1])
+    assert alpha(frames[3], groups[0]) > 0 and alpha(frames[3], groups[1]) > 0
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], previous[0])
+    if target == 'gpu' and animation == 'utopia':
+        (tmp_path / 'ruby-character-entry-fade-layout.json').write_text(
+            json.dumps(layout, sort_keys=True), encoding='utf-8')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

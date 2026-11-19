@@ -56,12 +56,17 @@ void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak) {
     cells_.push_back(std::move(outline));
 }
 
-PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas) const {
+SkRect PreparedGlow::sourceBounds() const {
     // Include a transparent filter margin in the source, even when downsampling.
     const float margin = 3.f * radius_ + 2.f;
-    auto source = ink_.makeOutset(margin, margin);
+    return ink_.isEmpty() ? ink_ : ink_.makeOutset(margin, margin);
+}
+
+PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas) const {
+    auto source = sourceBounds();
+    const float margin = 3.f * radius_ + 2.f;
     auto sampled = canvas.getLocalClipBounds().makeOutset(margin, margin);
-    if (ink_.isEmpty() || !source.intersect(sampled)) return {};
+    if (source.isEmpty() || !source.intersect(sampled)) return {};
     const auto bounds = source.roundOut();
     auto target = canvas.makeSurface(SkImageInfo::MakeN32Premul(bounds.width(), bounds.height(),
                                                                 canvas.imageInfo().refColorSpace()));
@@ -77,9 +82,9 @@ bool PreparedGlow::visible(bool after) const {
 }
 
 void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std::optional<float> edge,
-                            const SkPath* posed) const {
+                            const SkPath* posed, float opacity) const {
     const auto& path = posed ? *posed : cells_[index];
-    if (!visible(after) || path.isEmpty()) return;
+    if (!visible(after) || path.isEmpty() || opacity <= 0) return;
     SkAutoCanvasRestore restore(&canvas, edge.has_value());
     if (edge) {
         const auto clip = after ? SkRect::MakeLTRB(-1e6f, -1e6f, *edge, 1e6f)
@@ -89,6 +94,7 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     auto paint = posed ? strokePaint() : SkPaint{};
     paint.setAntiAlias(true);
     paint.setColor(after ? after_ : before_);
+    if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
     canvas.drawPath(path, paint);
 }
 

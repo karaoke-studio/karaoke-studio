@@ -79,7 +79,8 @@ static bool verticalRubyScalar(const QString& text) {
 }
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
-        const RenderScene& scene, int lineIndex, int offset, std::size_t& totalCells, std::size_t& totalGroups) {
+        const RenderScene& scene, int lineIndex, int offset, bool fadeComposition,
+        std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
         || ir.value("skia_layout").toObject().value("ruby_schema").toDouble(-1) != 1
@@ -100,7 +101,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow)
-        && (lineGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+        && (lineGlow || fadeComposition || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
@@ -110,6 +111,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
+        if ((fadeComposition && lower) || object.contains("fade_owner") != fadeComposition)
+            throw BackendError("Skia 注音缺少有效的逐字淡化归属");
+        std::optional<std::size_t> fadeOwner;
+        if (fadeComposition)
+            fadeOwner = integer(object.value("fade_owner"), 0, int(line.chars.size()) - 1);
         if ((zoom && lower) || object.contains("zoom_pivot_y") != zoom)
             throw BackendError("Skia 注音整字放大轴心与布局不一致");
         const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
@@ -251,7 +257,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             cells.push_back(std::move(glyph));
         }
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
-        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt});
+        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt, fadeOwner});
     }
     return groups;
 }
