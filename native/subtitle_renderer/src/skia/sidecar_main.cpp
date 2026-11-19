@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     ready.insert("line_fade_schema", 1);
     ready.insert("line_motion_schema", 1);
     ready.insert("character_fade_schema", 1);
-    ready.insert("scanline_band_schema", 1);
+    ready.insert("scanline_band_schema", 2);
     ready.insert("character_transform_schema", 2);
     ready.insert("sing_twinkle_schema", 1);
     ready.insert("font_chain_schema", 1);

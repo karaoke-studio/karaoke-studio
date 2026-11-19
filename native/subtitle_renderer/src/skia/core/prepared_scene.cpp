@@ -33,6 +33,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
         if (band.enabled && (!std::isfinite(band.halfWidth) || band.halfWidth < .5f || band.halfWidth > 8192
                              || !std::isfinite(band.solidPad) || band.solidPad < 4 || band.solidPad > 8192
                              || !std::isfinite(band.restingPad) || band.restingPad < .5f || band.restingPad > 8192
+                             || !std::isfinite(band.softness) || band.softness < 0 || band.softness > band.halfWidth
                              || source.vertical || source.wipeRightToLeft || source.noWipe || !source.rubyGroups.empty()))
             throw std::runtime_error("Skia 扫字线仅支持正向横排实色高亮带");
         if (source.particles.size() > 4096) throw std::runtime_error("Skia 唱字粒子数量超限");
@@ -104,6 +105,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
             line.inkLeft = ink.isEmpty() ? 0.f : ink.fLeft;
+            line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
         }
         lines_.push_back(std::move(line));
     }
@@ -315,7 +317,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         if (line.hasOutline) drawLayer(Layer::Outline);
         drawLayer(Layer::Body);
         // The GPU repaints each sweeping cell's stack once in the band color, after the body.
-        line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, [&](std::size_t index, std::uint32_t color) {
+        line.scanline.draw(canvas, line.cells, tMs, line.inkLeft, line.inkTop, [&](std::size_t index, std::uint32_t color) {
             const auto& cell = line.cells[index];
             const float opacity = states[index].transform.opacity;
             if (opacity <= 0) return;

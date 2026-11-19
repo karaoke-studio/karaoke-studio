@@ -30,7 +30,8 @@ foreach(library skia skshaper skunicode_core skunicode_icu)
     set_target_properties(krok_${library} PROPERTIES IMPORTED_LOCATION "${archive}")
 endforeach()
 add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/skia/core/motion_probe.cpp
-            src/skia/core/prepared_scene.cpp src/skia/core/solid_outline.cpp src/skia/core/wipe_group.cpp)
+            src/skia/core/prepared_scene.cpp src/skia/core/solid_outline.cpp src/skia/core/wipe_group.cpp
+            src/skia/core/scanline_feather.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/font_instance.cpp src/skia/text/shaped_cell.cpp src/skia/text/glyph_outline.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/fallback_ranges.cpp src/skia/text/mixed_cell.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/font_shaping.cpp)

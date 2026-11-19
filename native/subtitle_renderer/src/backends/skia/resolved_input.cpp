@@ -132,11 +132,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool transforms = prepared.characterFade.transforms();
         prepared.transformedWipe = transforms && allowTransformedWipe;
         const bool pivots = transforms || !line.bursts.empty();
-        // scanline_band_schema=1: the line style's solid band; the projection gated the subset.
-        if (line.scanlineEnabled)
-            prepared.scanline = {true, std::max(style.scanlineWidth, 1.f) * .5f, argb(style.scanlineColor),
+        if (line.scanlineEnabled) {
+            const float halfWidth = std::max(style.scanlineWidth, 1.f) * .5f;
+            prepared.scanline = {true, halfWidth, argb(style.scanlineColor),
                                  std::max(style.strokeWidth, 0.f) + std::max(style.stroke2Width, 0.f) + 4.f,
-                                 std::max(style.stroke2Width, 0.f) * .5f + .5f};
+                                 std::max(style.stroke2Width, 0.f) * .5f + .5f,
+                                 std::min(style.scanlineGlowRadius, halfWidth)};
+        }
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;

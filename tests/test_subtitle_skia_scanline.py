@@ -63,7 +63,7 @@ def test_band_ir_contract_and_closed_windows(binary, project, target, kind, tmp_
     track, style = scanline_source(project, kind)
     ir = ir_for(binary, (track, style))
     plain = ir_for(binary, (track, replace(style, scanline_enabled=False)))
-    assert 'p07_scanline_band' in ir['required_features'] and ir['skia_layout']['scanline_band_schema'] == 1
+    assert 'p07_scanline_band' in ir['required_features'] and ir['skia_layout']['scanline_band_schema'] == 2
     assert 'p07_scanline_band' not in plain['required_features'] and 'scanline_band_schema' not in plain['skia_layout']
     assert ir['track']['lines'][0]['scanline'] is True
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
@@ -106,12 +106,11 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['brighten', 'glow', 'flame', 'image', 'effect', 'reverse', 'rtl', 'vertical',
+@pytest.mark.parametrize('case', ['brighten', 'flame', 'image', 'effect', 'reverse', 'rtl', 'vertical',
                                   'ruby', 'roles', 'guide', 'utopia', 'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'brighten': style = replace(style, scanline_mode='brighten')
-    elif case == 'glow': style = replace(style, scanline_glow_px=8)
     elif case == 'flame': style = replace(style, scanline_shape='flame')
     elif case == 'image': style = replace(style, scanline_shape='image')
     elif case == 'effect': style = replace(style, scanline_effect='sakura')
@@ -132,14 +131,16 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         ir_for(binary, (track, style))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 2, 'mode', 'glow', 'shape', 'reverse'])
+@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 3, 'mode', 'legacy_glow', 'shape', 'reverse'])
 def test_forged_scanline_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, scanline_source(project))
     bad = copy.deepcopy(ir)
     if mutation == 'feature': bad['required_features'].remove('p07_scanline_band')
     elif mutation == 'schema': del bad['skia_layout']['scanline_band_schema']
     elif mutation == 'mode': bad['style']['scanline_mode'] = 'brighten'
-    elif mutation == 'glow': bad['style']['scanline_glow_px'] = 4
+    elif mutation == 'legacy_glow':
+        bad['style']['scanline_glow_px'] = 4
+        bad['skia_layout']['scanline_band_schema'] = 1
     elif mutation == 'shape': bad['style']['scanline_shape'] = 'flame'
     elif mutation == 'reverse':
         bad['track']['lines'][0]['wipe_reverse'] = True
@@ -228,3 +229,112 @@ def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
             assert abs(xa.min()-xb.min()) <= 1 and abs(xa.max()-xb.max()) <= 1, (kind, t, 'band', xa, xb)
             assert abs(band_mass(a) - band_mass(b)) / height <= 1, (kind, t, 'band mass')
     assert banded >= 8, (kind, banded)
+
+
+FEATHER_TIMES = [199, 230, 300, 399, 400, 500, 599, 600, 750, 900, 1100, 1600, 1800, 2200]
+
+
+def feather_coverage(frame):
+    return frame[..., :3].min(axis=-1).astype(float) * frame[..., 3] / 255**2
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_feather_falls_off_inside_ink_and_clamps_to_half_width(binary, project, target, tmp_path):
+    track, style = scanline_source(project, 'pause')
+    inputs = [replace(style, scanline_glow_px=glow) for glow in (0, 15, 200)]
+    raw, normal, cap = [ir_for(binary, (track, variant)) for variant in inputs]
+    legacy = copy.deepcopy(raw)
+    legacy['skia_layout']['scanline_band_schema'] = 1
+    times = [199, 300, 500, 750, 1800, 300]
+    clips = []
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        for generation, ir in enumerate((raw, normal, cap, legacy), start=1):
+            configure(process, ir)
+            frames, _ = collect(process, times, generation=generation)
+            assert np.array_equal(frames[1], frames[-1])
+            clips.append(frames)
+    assert np.array_equal(clips[0], clips[3])
+    assert np.array_equal(clips[1], clips[2])
+    for time, hard, soft in zip(times, *clips[:2], strict=True):
+        if time in (199, 500, 1800):
+            assert np.array_equal(hard, soft)
+            continue
+        sharp, feathered = feather_coverage(hard), feather_coverage(soft)
+        assert (feathered > .8).any()
+        assert np.count_nonzero((sharp > .99) & (feathered > .02) & (feathered < .8)) >= 10
+        assert not ((feathered > .01) & (hard[..., 3] == 0)).any()
+        assert feathered.sum() < sharp.sum() * .75
+    if target == 'gpu':
+        (tmp_path / 'scanline-feather-layout.json').write_text(json.dumps({
+            'schema': normal['skia_layout']['scanline_band_schema'],
+            'line': normal['skia_layout']['lines'][0],
+            'width': normal['style']['scanline_width_px'],
+            'softness': normal['style']['scanline_glow_px'],
+        }, sort_keys=True), encoding='utf-8')
+
+
+def assert_feather_profile(reference, candidate, bare_reference, bare_candidate, sample):
+    # Strip the static text colors and antialiased outline intersections.
+    a = np.maximum(feather_coverage(reference) - feather_coverage(bare_reference), 0)
+    b = np.maximum(feather_coverage(candidate) - feather_coverage(bare_candidate), 0)
+    ma, mb = a > .2, b > .2
+    assert ma.any() == mb.any(), (sample, 'band presence')
+    if not ma.any():
+        return
+    xa, xb = np.where(ma.any(axis=0))[0], np.where(mb.any(axis=0))[0]
+    assert abs(xa.min() - xb.min()) <= 1 and abs(xa.max() - xb.max()) <= 1, (sample, 'band edges')
+    height = max(np.count_nonzero((ma | mb).any(axis=1)), 1)
+    lo, hi = max(0, min(xa.min(), xb.min()) - 3), min(a.shape[1], max(xa.max(), xb.max()) + 4)
+    ca, cb = a[:, lo:hi].sum(axis=0), b[:, lo:hi].sum(axis=0)
+    assert abs(ca.sum() - cb.sum()) / height <= 1, (sample, 'feather coverage')
+    # The D2D bitmap sampler can choose the neighboring texel at a half-pixel
+    # tie. Check location above and compare the shape at that allowed shift.
+    ca = np.pad(ca, 1)
+    cb = np.pad(cb, 2)
+    shape = min(abs(ca - cb[shift:shift + len(ca)]).sum() for shift in range(3)) / height
+    assert shape <= 1, (sample, 'feather profile', shape)
+    delta = abs(premultiplied(reference) - premultiplied(candidate))
+    assert delta.mean() < .15, (sample, 'RGBA', delta.mean())
+
+
+def test_feather_gpu_and_raster_match_under_repeated_seek(binary, project):
+    track, style = scanline_source(project, 'outlines')
+    ir = ir_for(binary, (track, replace(style, scanline_glow_px=15)), dpr=1.5)
+    bare_ir = ir_for(binary, (track, replace(style, scanline_enabled=False)), dpr=1.5)
+    times = [*reversed(FEATHER_TIMES), 300, 1600, 300]
+    results, controls = [], []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            configure(process, bare_ir)
+            bare, _ = collect(process, times, generation=2)
+        assert np.array_equal(frames[-3], frames[-1])
+        results.append(frames)
+        controls.append(bare)
+    for time, gpu, raster, bare_gpu, bare_raster in zip(times, *results, *controls, strict=True):
+        assert_feather_profile(gpu, raster, bare_gpu, bare_raster, time)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind,glow,dpr', [('plain', 8, 1), ('plain', 15, 1.5), ('pause', 40, 1.5),
+                                         ('outlines', 8, 1.5), ('char_fade', 8, 1), ('motion', 8, 1.5)])
+def test_feather_profile_matches_actual_d2d_gpu(binary, project, kind, glow, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = scanline_source(project, kind)
+    style = replace(style, scanline_glow_px=glow)
+    bare = replace(style, scanline_enabled=False)
+    refs, controls = [], []
+    for look in (style, bare):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, tuple(FEATHER_TIMES), force_warp=False,
+                                       track=track, width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for frame in raw])
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
+        for generation, look in enumerate((style, bare), start=1):
+            configure(process, ir_for(binary, (track, look), dpr=dpr))
+            frames, _ = collect(process, FEATHER_TIMES, generation=generation)
+            controls.append(frames)
+    for time, a, bare_a, b, bare_b in zip(FEATHER_TIMES, *refs, *controls, strict=True):
+        assert_feather_profile(a, b, bare_a, bare_b, (kind, glow, dpr, time))

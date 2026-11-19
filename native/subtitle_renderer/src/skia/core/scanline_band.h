@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scanline_feather.h"
 #include "../../effects/wipe_clock.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkRect.h"
@@ -9,8 +10,8 @@
 #include <vector>
 
 namespace subtitle::skia {
-// scanline_band_schema=1: the existing GPU's forward, horizontal, solid-color
-// band without glow. The band follows the GPU's single line-level wipe front;
+// The forward, horizontal, solid-color band follows the existing GPU's
+// single line-level wipe front;
 // only cells whose closed wipe window contains the sample repaint inside it,
 // so timing gaps and pauses carry no band. Clocks are the cells' own resolved
 // clocks; nothing is retimed here.
@@ -20,6 +21,7 @@ struct ScanlineBand {
     std::uint32_t argb = 0xffffffff;
     float solidPad = 4;             // primary + secondary outline width + 4
     float restingPad = .5f;         // secondary outline width / 2 + 0.5
+    float softness = 0;            // Physical pixels, limited to the band half-width.
 
     template <class Cell> static int wipeStart(const Cell& c) {
         return c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs;
@@ -58,10 +60,16 @@ struct ScanlineBand {
     }
     // paintCell(index, argb) repaints one cell's outline stack in a uniform color.
     template <class Cell, class PaintCell>
-    void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkLeft, PaintCell&& paintCell) const {
+    void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkLeft, float inkTop, PaintCell&& paintCell) const {
         const auto front = frontAt(cells, t, inkLeft);
         if (!front) return;
         const SkRect band = SkRect::MakeLTRB(*front - halfWidth, -1e6f, *front + halfWidth, 1e6f);
+        SkAutoCanvasRestore restore(&canvas, false);
+        SkRect layer = band.makeOutset(1.f, 0.f);
+        if (softness > 0) {
+            if (!layer.intersect(canvas.getLocalClipBounds())) return;
+            canvas.saveLayer(layer, nullptr);
+        }
         for (std::size_t i = 0; i < cells.size(); ++i) {
             const auto& c = cells[i];
             if (!sweeping(c, t) || !(band.fLeft < c.right + solidPad && c.left - solidPad < band.fRight)) continue;
@@ -70,6 +78,8 @@ struct ScanlineBand {
             paintCell(i, argb);
             canvas.restore();
         }
+        if (softness > 0)
+            applyScanlineFeather(canvas, layer, *front, halfWidth, softness, band.fLeft - solidPad, inkTop - solidPad);
     }
 };
 }

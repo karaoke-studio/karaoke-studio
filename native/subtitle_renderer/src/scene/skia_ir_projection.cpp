@@ -129,8 +129,9 @@ void validateEnvelope(const QJsonObject& ir) {
     if (ir.value("required_features").toArray().contains("p07_character_fade")
         && ir.value("skia_layout").toObject().value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");
+    const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_scanline_band")
-        && ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1) != 1)
+        && scanlineVersion != 1 && scanlineVersion != 2)
         throw BackendError("Skia 扫字线布局版本无效");
     const auto transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toDouble(-1);
     if (ir.value("required_features").toArray().contains("p07_character_transform")
@@ -270,6 +271,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
     const bool allowCharacterTransform = features.contains("p07_character_transform");
+    const bool allowScanlineFeather = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble() == 2;
     const auto transformAnimation = [](const QString& animation) {
         return animation == "char_drip" || animation == "spin_flip";
     };
@@ -290,12 +292,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
-        // scanline_band_schema=1: forward horizontal solid-color band, no glow, image, ruby or roles.
+        // Forward horizontal solid-color band, without image, ruby or roles.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
-                || ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble(-1) != 1
                 || resolved.scanlineMode != QStringLiteral("color") || resolved.scanlineShape != QStringLiteral("band")
-                || resolved.scanlineGlowPx != 0 || cfg.vertical || cfg.rightToLeft || source.wipeReverse
+                || (resolved.scanlineGlowPx != 0 && !allowScanlineFeather)
+                || cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || source.karaokeAnimation == "no_wipe" || !cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
             throw BackendError("Skia 扫字线当前仅支持正向横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);

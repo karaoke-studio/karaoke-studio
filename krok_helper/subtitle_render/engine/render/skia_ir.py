@@ -72,19 +72,19 @@ def _validate_style(style):
 
 
 def _validate_scanline_band(track, style, lines):
-    """scanline_band_schema=1: forward horizontal solid-color band without glow."""
+    """scanline_band_schema=2: forward horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     for source, line in zip(track.lines, lines, strict=True):
         if not line.get('scanline'):
             continue
         look = style_for_line(style, source)
-        if (look.scanline_mode != 'color' or look.scanline_shape != 'band' or look.scanline_glow_px != 0
+        if (look.scanline_mode != 'color' or look.scanline_shape != 'band'
                 or look.scanline_effect != 'none' or look.vertical or look.right_to_left or source.wipe_reverse
                 or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')
                 or track.rubies or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(source).chars)):
-            raise ValueError('Skia 扫字线当前仅支持正向横排实色高亮带（无柔化）')
+            raise ValueError('Skia 扫字线当前仅支持正向横排实色高亮带')
 
 
 _TRANSFORMS = {'char_drip', 'spin_flip'}
@@ -203,7 +203,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(line.get('scanline') for line in ir['track']['lines']):
         _validate_scanline_band(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_scanline_band')
-        ir['skia_layout']['scanline_band_schema'] = 1
+        ir['skia_layout']['scanline_band_schema'] = 2
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
         write_singing_twinkle(track, ir, plan, measured)
         ir['required_features'].append('p07_sing_twinkle')
