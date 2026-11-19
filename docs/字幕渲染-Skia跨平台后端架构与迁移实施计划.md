@@ -2184,6 +2184,10 @@ Windows 关联 **225 项通过**，余下三组在复核边缘及收紧专项断
 
 Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WARP 和 realization），覆盖三种渐变和横纵透明度色阶，并比较 Skia GPU/Raster。X11/Wayland 各 **8 通过、5 项 D2D 跳过**，独立 Windows/Linux Raster 各 **5 通过**。native 四套构建 CTest 各 **3/3**。Windows、X11、Wayland 的整行渐变范围样例逐字节一致，代表用例已登记后续 Mac CI 与最终实机包。证据前缀 `build/p07-body-gradient*`。
 
+### 14.87 Mac 双架构粒子出入场与噪声汇总 CI（2026-11-19）
+
+提交 `49dfa633` 的双架构 Mac CI **5/5 成功**。Apple Silicon 与 Intel 各 **1449 项产品测试通过、972 项跳过**，干净环境包中的新增特效套件各 **103 项通过**，两份均为 `functional_passed=true`、`hardware_gate_passed=false`。下载核对的 **64 份规范样例全部逐字节相同**，噪声、下落粒子和拼接消散的布局样例也与本地 X11 一致。此版已覆盖粒子环的公共 SkSL。火焰及闪电入退场、正文渐变在此次提交之后，待后续阶段 CI。最终候选的 Mac 真机入口保持待定。[Mac CI 44475259129](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44475259129)
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
