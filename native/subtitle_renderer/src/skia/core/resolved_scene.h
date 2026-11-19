@@ -4,6 +4,7 @@
 #include "character_geometry.h"
 #include "character_transform.h"
 #include "line_animation.h"
+#include "noise_transition.h"
 #include "scanline_band.h"
 #include "sing_particles.h"
 #include "solid_outline.h"
@@ -42,6 +43,7 @@ struct ResolvedLine {
     // wipeRightToLeft then means bottom-to-top (the existing GPU's reverse vertical).
     bool vertical = false;
     LineAnimation animation;
+    NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
     bool transformedWipe = false;

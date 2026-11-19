@@ -65,6 +65,7 @@ private:
         bool hasOuterOutline = false;
         bool hasStrokeFlash = false;
         LineAnimation animation;
+        NoiseTransition noise;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;
         std::optional<float> inkCenter;
@@ -75,6 +76,7 @@ private:
         float inkStart = 0, inkTop = 0; // The band appears after the front enters body ink.
         SkRect paintBounds = SkRect::MakeEmpty();
     };
+    void drawLine(SkCanvas&, const Line&, int time, bool textVisible) const;
     int width_, height_;
     std::vector<Line> lines_;
 };

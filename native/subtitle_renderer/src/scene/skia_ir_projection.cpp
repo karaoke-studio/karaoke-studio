@@ -88,6 +88,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool allowMotion = features.contains("p07_line_motion");
     const bool allowCharacterFade = features.contains("p07_character_fade");
     const bool allowCharacterTransform = features.contains("p07_character_transform");
+    const bool allowNoise = features.contains("p07_noise_transition");
     const int transformVersion = ir.value("skia_layout").toObject().value("character_transform_schema").toInt();
     const bool allowGeometry = allowCharacterTransform && transformVersion >= 4;
     const bool allowHalo = allowGeometry && transformVersion >= 5;
@@ -106,6 +107,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     };
     const auto supportedAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")
+            || (allowNoise && animation == "noise")
             || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"))
             || (allowCharacterFade && animation == "char_fade")
             || (allowCharacterTransform && transformAnimation(animation, entry));
@@ -121,6 +123,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
+        const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
+        if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
+                || !cfg.rubies.empty() || features.contains("p05_resolved_ruby") || source.scanlineEnabled
+                || (source.entryAnimation != "none" && source.entryAnimation != "noise")
+                || (source.exitAnimation != "none" && source.exitAnimation != "noise")
+                || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
+            throw BackendError("Skia 噪声出入场当前仅支持正向横排实色正文");
         if (source.strokeFlashEnabled
             && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || !cfg.rubies.empty() || features.contains("p05_resolved_ruby") || source.scanlineEnabled
@@ -222,6 +231,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (source.strokeFlashEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字描边闪光暂不支持导唱符或行内角色");
+            if (noise && (cell.vectorGlyph || &cellStyle != &resolved))
+                throw BackendError("Skia 噪声出入场暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))

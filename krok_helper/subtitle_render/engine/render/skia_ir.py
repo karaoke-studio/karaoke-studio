@@ -98,6 +98,20 @@ def _validate_stroke_flash(track, style, lines):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
 
 
+def _validate_noise_transition(track, style, lines):
+    for source, line in zip(track.lines, lines, strict=True):
+        entry, exit_ = line.get('entry_anim'), line.get('exit_anim')
+        if 'noise' not in (entry, exit_):
+            continue
+        look = style_for_line(style, source)
+        if (look.vertical or look.right_to_left or source.wipe_reverse or track.rubies or look.lower_ruby_enabled
+                or entry not in {'noise', 'none'} or exit_ not in {'noise', 'none'}
+                or line.get('karaoke_anim') != 'none' or line.get('scanline') or line.get('stroke_flash')
+                or line.get('fx_bursts')
+                or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
+            raise ValueError('Skia 噪声出入场当前仅支持正向横排实色正文')
+
+
 _HALO_TRANSFORMS = {'stretch_in', 'stretch_out', 'glow_in', 'glow_out'}
 _GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'} | _HALO_TRANSFORMS | PARTICLE_TRANSITIONS.keys()
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
@@ -230,6 +244,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         _validate_stroke_flash(track, style, ir['track']['lines'])
         ir['required_features'].append('p07_stroke_flash')
+    if any('noise' in (line.get('entry_anim'), line.get('exit_anim')) for line in ir['track']['lines']):
+        _validate_noise_transition(track, style, ir['track']['lines'])
+        ir['required_features'].append('p07_noise_transition')
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
         ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured)
         ir['required_features'].append('p07_sing_twinkle')

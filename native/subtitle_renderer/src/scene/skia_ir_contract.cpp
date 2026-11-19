@@ -50,6 +50,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_character_transform",
         "p07_sing_twinkle",
         "p07_stroke_flash",
+        "p07_noise_transition",
         "p05_horizontal_rtl_kana_cells",
         "p05_horizontal_rtl_kana_marks",
         "p05_reverse_wipe",

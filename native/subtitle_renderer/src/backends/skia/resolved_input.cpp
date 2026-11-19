@@ -133,8 +133,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || line.entryAnimation == "stretch_in" || line.entryAnimation == "glow_in";
         const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
             || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out";
-        prepared.animation = {line.entryAnimation == "none" || charEntry || geoEntry ? 0 : line.entryDurationMs,
-                              line.exitAnimation == "none" || charExit || geoExit ? 0 : line.exitDurationMs,
+        const bool noiseEntry = line.entryAnimation == "noise", noiseExit = line.exitAnimation == "noise";
+        prepared.noise = {noiseEntry ? line.entryDurationMs : 0, noiseExit ? line.exitDurationMs : 0,
+                          line.endMs, style.fontSize};
+        prepared.animation = {line.entryAnimation == "none" || charEntry || geoEntry || noiseEntry ? 0 : line.entryDurationMs,
+                              line.exitAnimation == "none" || charExit || geoExit || noiseExit ? 0 : line.exitDurationMs,
                               line.entryAnimation == "slide_in" ? slide : 0.f,
                               line.entryAnimation == "rise" ? rise : 0.f,
                               line.exitAnimation == "slide_out" ? slide : 0.f,

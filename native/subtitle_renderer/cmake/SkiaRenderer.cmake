@@ -32,6 +32,8 @@ endforeach()
 add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/skia/core/motion_probe.cpp
             src/skia/core/prepared_scene.cpp src/skia/core/solid_outline.cpp src/skia/core/wipe_group.cpp
             src/skia/core/particle_ring.cpp
+            src/skia/core/prepared_line.cpp
+            src/skia/core/noise_transition.cpp
             src/skia/core/scanline_feather.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/font_instance.cpp src/skia/text/shaped_cell.cpp src/skia/text/glyph_outline.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/fallback_ranges.cpp src/skia/text/mixed_cell.cpp)
