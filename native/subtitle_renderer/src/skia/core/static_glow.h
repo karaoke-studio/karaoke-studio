@@ -28,7 +28,7 @@ public:
         SkIPoint origin;
     };
 
-    static std::vector<PreparedGlow> prepare(const StaticGlow&);
+    static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
     void appendCell(const SkPath&);
     bool visible(bool after) const;
     Source createSource(SkCanvas&) const;

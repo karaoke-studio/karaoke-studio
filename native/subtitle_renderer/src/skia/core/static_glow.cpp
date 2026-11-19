@@ -18,9 +18,10 @@ PreparedGlow::PreparedGlow(const StaticGlow& spec, const GlowState& state, std::
     }
 }
 
-std::vector<PreparedGlow> PreparedGlow::prepare(const StaticGlow& spec) {
+std::vector<PreparedGlow> PreparedGlow::prepare(const StaticGlow& spec, bool mergeMatchingPhases) {
     std::vector<PreparedGlow> layers;
-    if (spec.before.radius == spec.after.radius && spec.before.concentration == spec.after.concentration) {
+    if (mergeMatchingPhases && spec.before.radius == spec.after.radius
+        && spec.before.concentration == spec.after.concentration) {
         if (spec.before.radius > 0) layers.push_back(PreparedGlow(spec, spec.before, std::nullopt));
         return layers;
     }

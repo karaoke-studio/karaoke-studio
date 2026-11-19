@@ -25,8 +25,9 @@ void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, b
 }
 }
 
-PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical)
-    : cells_(group.cells), shadow_(group.shadow), noWipe_(noWipe), vertical_(vertical) {
+PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
+                                     std::optional<std::size_t> glowOffset)
+    : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), noWipe_(noWipe), vertical_(vertical) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -86,6 +87,16 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
             paintRubyCell(canvas, paint, cell, after);
         }
     }
+}
+
+void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after) const {
+    if (!glowOffset_ || bounds_.isEmpty()) return;
+    const bool before = std::ranges::all_of(cells_, [=](const auto& cell) { return timeMs <= cell.startMs; });
+    const bool complete = !before && lineWipeComplete(cells_, timeMs);
+    if (after ? before : complete) return;
+    const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, bounds_.left()));
+    for (std::size_t i = 0; i < cells_.size(); ++i)
+        glow.drawCell(canvas, *glowOffset_ + i, after, edge);
 }
 
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {

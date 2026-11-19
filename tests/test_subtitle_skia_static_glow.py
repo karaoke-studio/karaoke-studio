@@ -10,6 +10,11 @@ import pytest
 
 from test_subtitle_skia_static_shadow import application, binary, project, ir_for, collect, configure, selection
 from test_subtitle_skia_static_shadow import shadow_source, premultiplied
+from test_subtitle_skia_outline_ruby import (
+    annotated, mixed, pages, reading, upper_ir, render_skia, UPPER_TIMES,
+)
+from test_subtitle_skia_static_shadow import shaded_ruby
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
@@ -92,8 +97,12 @@ def test_static_glow_matches_actual_d2d_and_gpu_raster(binary, project, case, dp
             configure(process, ir)
             frames, _ = collect(process, TIMES)
         draws.append(frames)
+    assert_glow_parity(TIMES, refs, *draws, case, dpr)
+
+
+def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, dpr):
     budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
-    for t, ref, gpu, raster in zip(TIMES, refs, *draws, strict=True):
+    for t, ref, gpu, raster in zip(times, refs, gpu_frames, raster_frames, strict=True):
         for name, first, second in (('D2D', ref, gpu), ('Raster', gpu, raster)):
             a, b = first[..., 3], second[..., 3]
             left, right = a > 16, b > 16
@@ -121,3 +130,71 @@ def test_static_glow_matches_actual_d2d_and_gpu_raster(binary, project, case, dp
             diff = abs(premultiplied(first)[union] - premultiplied(second)[union])
             assert diff.mean() <= budget['max_union_channel_mae'], (case, t, name, diff.mean())
             assert np.percentile(diff, 95) <= budget['max_union_p95'], (case, t, name)
+
+
+def glowing_ruby(reading, case):
+    track, style = shaded_ruby(reading, False, False)
+    colors = style.ruby_karaoke_colors
+    colors = replace(colors,
+        before=replace(colors.before, shadow=PaintFill(color='#CCAA5820')),
+        after=replace(colors.after, shadow=PaintFill(color='#B03084D0')))
+    style = replace(style, decoration_before_sync=False,
+                    decoration_kind='glow', decoration_kind_before='glow',
+                    glow_before_radius_px=6, glow_after_radius_px=6,
+                    glow_before_concentration_level=1, glow_concentration_level=1,
+                    ruby_karaoke_colors=colors)
+    if case == 'independent':
+        style = replace(style, decoration_kind='none', decoration_kind_before='none',
+            ruby_decoration_kind='glow', ruby_decoration_kind_before='glow',
+            ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=8,
+            ruby_glow_before_concentration_level=0, ruby_glow_concentration_level=1)
+    elif case == 'two_groups':
+        original = track.rubies[0]
+        first = replace(original, kanji='字', reading='A', reading_parts=['A'], reading_part_ms=[],
+                        target_char_end=1, pos_end_ms=900)
+        second = replace(first, target_char_start=1, target_char_end=2, pos_start_ms=900, pos_end_ms=2100)
+        track = replace(track, rubies=[first, second])
+    return track, style
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, tmp_path):
+    track, style = glowing_ruby(reading, 'two_groups')
+    ir = upper_ir(binary, (track, style), 1)
+    plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
+                                             ruby_decoration_kind_before='none')), 1)
+    assert {'p06_static_glow', 'p06_ruby_glow'} <= set(ir['required_features'])
+    assert 'p06_ruby_glow' not in plain['required_features']
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    assert len(ir['skia_layout']['lines'][0]['ruby_groups']) == 2
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p06_ruby_glow')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [299, 550, 2300, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        again, _ = collect(process, [550], generation=2)
+        configure(process, plain)
+        baseline, _ = collect(process, [299, 550, 2300], generation=3)
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
+    assert all(np.count_nonzero(a[..., 3] > 16) > np.count_nonzero(b[..., 3] > 16)
+               for a, b in zip(frames[:3], baseline, strict=True))
+    if target == 'gpu':
+        (tmp_path / 'ruby-glow-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case,dpr', [('inherited', 1), ('inherited', 1.5), ('independent', 1.5), ('two_groups', 1)])
+def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = glowing_ruby(reading, case)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
+    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, case, dpr)

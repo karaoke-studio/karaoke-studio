@@ -33,7 +33,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         fonts[key] = resource
     run_offset = len(measured.runs)
     lines = []
-    has_outlines, has_shadow = False, False
+    has_outlines, has_shadow, has_glow = False, False, False
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
         singing = line_index in singing_lines
@@ -82,8 +82,10 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             if group.target.lower:
                 serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index],
                                   paint=lower_solid_paint(group.target.style))
-            elif 'shadow' in ruby_decoration_kinds(group.target.style):
-                has_shadow = True
+            else:
+                decorations = ruby_decoration_kinds(group.target.style)
+                has_shadow = has_shadow or 'shadow' in decorations
+                has_glow = has_glow or 'glow' in decorations
             groups.append(serialized)
         line = {'cells': cells, 'ruby_groups': groups}
         if singing:
@@ -97,4 +99,5 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
             **({'ruby_shadow_schema': 1} if has_shadow else {}),
+            **({'ruby_glow_schema': 1} if has_glow else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}

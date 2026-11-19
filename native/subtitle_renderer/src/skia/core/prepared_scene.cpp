@@ -126,10 +126,20 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
                 if (!cell.path.isEmpty()) next = &cell;
             }
         }
+        std::size_t rubyGlowCells = 0;
         for (const auto& group : source.rubyGroups) {
             totalCells += group.cells.size();
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
-            line.rubyGroups.emplace_back(group, source.noWipe, source.vertical);
+            std::optional<std::size_t> glowOffset;
+            if (group.glow) {
+                // Static ruby glow uses one source per phase for all groups in the line style.
+                if (line.rubyGlow.empty()) line.rubyGlow = PreparedGlow::prepare(*group.glow, false);
+                glowOffset = rubyGlowCells;
+                rubyGlowCells += group.cells.size();
+                for (auto& layer : line.rubyGlow)
+                    for (const auto& cell : group.cells) layer.appendCell(cell.path);
+            }
+            line.rubyGroups.emplace_back(group, source.noWipe, source.vertical, glowOffset);
             if (line.animation.active())
                 for (const auto& cell : group.cells) includeCellPaint(line.paintBounds, cell);
         }

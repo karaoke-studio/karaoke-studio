@@ -70,6 +70,7 @@ private:
         LineImageFills images;
         StaticShadow shadow;
         std::vector<PreparedGlow> glow;
+        std::vector<PreparedGlow> rubyGlow;
         SkRect decorationInk = SkRect::MakeEmpty();
         NoiseTransition noise;
         CharacterFade characterFade;

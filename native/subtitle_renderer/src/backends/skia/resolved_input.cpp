@@ -369,7 +369,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.scanlineEnabled
                 || !line.bursts.empty() || line.strokeFlashEnabled
-                || !projected.charStyles.empty() || gradient || image || (hasGlow && (utopia || annotated))
+                || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {

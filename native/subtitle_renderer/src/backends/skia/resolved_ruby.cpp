@@ -86,6 +86,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowShadow = ir.value("required_features").toArray().contains("p06_ruby_shadow")
         && !vertical && line.karaokeAnimation != "no_wipe"
         && line.entryAnimation == "none" && line.exitAnimation == "none";
+    const bool allowGlow = ir.value("required_features").toArray().contains("p06_ruby_glow")
+        && !vertical && line.karaokeAnimation == "none"
+        && line.entryAnimation == "none" && line.exitAnimation == "none"
+        && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
         throw BackendError("Skia 注音组总数超限");
@@ -99,7 +103,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
         const auto shadowState = [&](bool after) -> ::subtitle::skia::ShadowState {
             const auto kind = paint.rubyDecorationKindForState(after);
-            if (lower || kind == "none") return {};
+            if (lower || kind == "none" || kind == "glow") return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
             if (!allowShadow || kind != "shadow" || decor.mode != "solid" || !std::isfinite(x) || !std::isfinite(y))
@@ -108,6 +112,16 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         };
         const ::subtitle::skia::StaticShadow shadow{
             shadowState(false), shadowState(true), paint.rubyStrokeWidth, paint.rubyStroke2Width};
+        const auto glowState = [&](bool after) -> ::subtitle::skia::GlowState {
+            if (lower || paint.rubyDecorationKindForState(after) != "glow") return {};
+            const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
+            const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
+            if (!allowGlow || decor.mode != "solid" || !std::isfinite(radius) || radius > 532.f)
+                throw BackendError("Skia 当前仅支持横排上注音的静态实色光晕");
+            return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
+        };
+        const ::subtitle::skia::StaticGlow glow{
+            glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
         if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"))
             throw BackendError("Skia 注音最终绘制当前仅支持实色");
         const auto fill = object.value("paint").toObject();
@@ -215,7 +229,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             }
             cells.push_back(std::move(glyph));
         }
-        groups.push_back({std::move(cells), shadow});
+        const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
+        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt});
     }
     return groups;
 }

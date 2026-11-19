@@ -216,6 +216,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
                               state.transform, line.characterGeometry.fontPx);
         }
+    for (const auto& layer : line.rubyGlow) {
+        const bool after = layer.visible(true);
+        if (!after && !layer.visible(false)) continue;
+        const auto source = layer.createSource(canvas);
+        if (!source.surface) continue;
+        for (const auto& group : line.rubyGroups)
+            group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after);
+        layer.composite(canvas, source);
+    }
     for (const auto& layer : line.glow) {
         const bool before = layer.visible(false), after = layer.visible(true);
         if (std::ranges::none_of(states, [=](const State& state) {
