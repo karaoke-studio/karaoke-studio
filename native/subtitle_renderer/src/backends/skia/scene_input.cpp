@@ -79,7 +79,9 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
             || (s.litAppearanceMode != "custom" && (!caps.decoratedShapeSignal
                 || (s.litAppearanceMode != "auto" && s.litAppearanceMode != "role")))
             || (s.litStyle != "circle" && s.litStyle != "square" && s.litStyle != "rounded"
-                && (s.litStyle != "image" || !caps.imageShapeSignal)))))
+                && (s.litStyle != "image" || !caps.imageShapeSignal)
+                && (!caps.vectorShapeSignal || (s.litStyle != "star" && s.litStyle != "note8"
+                    && s.litStyle != "note16" && s.litStyle != "notepair"))))))
         throw BackendError(canonical ? "Skia 当前仅支持固定网格横排、实色填充与基础走字" :
             "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }

@@ -21,6 +21,7 @@ struct GlowState {
 struct StaticGlow {
     GlowState before, after;
     float outlineWidth = 0;
+    SkPaint::Join join = SkPaint::kRound_Join;
 };
 
 class PreparedGlow {
@@ -45,6 +46,7 @@ private:
     std::uint32_t before_, after_;
     int radius_;
     float strokeWidth_;
+    SkPaint::Join join_;
     std::optional<bool> phase_;
     std::vector<sk_sp<SkImageFilter>> filters_;
     std::vector<SkPath> cells_;

@@ -6,6 +6,7 @@
 
 namespace subtitle::skia {
 SkPath ShapeSignal::outline() const {
+    if (path) return path->body;
     const auto bounds = SkRect::MakeWH(size, size);
     if (shape == Shape::Square) return SkPath::Rect(bounds);
     if (shape == Shape::Rounded) {
@@ -28,6 +29,12 @@ void ShapeSignal::draw(SkCanvas& canvas, int time) const {
         paint.setAlphaf(paint.getAlphaf() * brushOpacity);
         paint.setStyle(width > 0 ? SkPaint::kStroke_Style : SkPaint::kFill_Style);
         paint.setStrokeWidth(width);
+        if (path) {
+            SkAutoCanvasRestore restore(&canvas, true);
+            canvas.translate(box.left(), box.top());
+            canvas.drawPath(path->body, paint);
+            return;
+        }
         switch (shape) {
         case Shape::Image: // Missing image falls back to a solid circle.
         case Shape::Circle: canvas.drawOval(box, paint); break;
@@ -97,7 +104,9 @@ void ShapeSignal::draw(SkCanvas& canvas, int time) const {
             paint.setColor(SK_ColorWHITE);
             paint.setAlphaf(brushOpacity * highlight);
             paint.setStyle(SkPaint::kFill_Style);
-            canvas.drawCircle(x + size * .34f, y + size * .34f, size * .16f, paint);
+            const auto center = path ? path->highlightCenter : SkPoint::Make(size * .34f, size * .34f);
+            const float radius = path ? path->highlightRadius : size * .16f;
+            canvas.drawCircle(x + center.x(), y + center.y(), radius, paint);
         }
     }
 }

@@ -70,7 +70,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow"),
         .customShapeSignal = features.contains("p08_custom_shape_signal"),
         .imageShapeSignal = features.contains("p08_custom_image_signal"),
-        .decoratedShapeSignal = features.contains("p08_decorated_shape_signal")});
+        .decoratedShapeSignal = features.contains("p08_decorated_shape_signal"),
+        .vectorShapeSignal = features.contains("p08_vector_shape_signal")});
     SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();

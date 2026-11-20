@@ -52,6 +52,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         std::min(style.litEdgeBrightness * .55f, 1.f), argb(style.litFill), argb(style.litStroke), style.litShadow,
         shape == Shape::Image ? images.staticImage(style.litImagePath, style.litImageModifiedMs, style.litImageSize) : nullptr,
     };
+    signal.path = ::subtitle::skia::signalPath(style.litStyle, signal.size);
     if (style.litAppearanceMode == "custom") return signal;
     if (line.zoomPulseEnabled || std::ranges::any_of(line.chars, [](const auto& cell) {
             return cell.styleIndex >= 0 || bool(cell.vectorGlyph);
@@ -81,7 +82,8 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         const auto radius = std::lround(std::max(0.f, palette.glowAfterRadius * ratio));
         if (radius > 256) throw BackendError("Skia 指示灯的光晕半径超限");
         const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color)};
-        decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth});
+        const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
+        decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
         for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
     }
     signal.decoration = std::move(decoration);

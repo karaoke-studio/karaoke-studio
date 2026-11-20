@@ -34,6 +34,7 @@ add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/ski
             src/skia/core/particle_ring.cpp
             src/skia/core/prepared_line.cpp
             src/skia/core/noise_transition.cpp src/skia/core/shape_signal.cpp src/backends/signal_state.cpp
+            src/skia/core/signal_paths.cpp thirdparty/clipper2/src/clipper.engine.cpp
             src/skia/core/subtitle_gradient.cpp
             src/skia/core/scanline_feather.cpp src/skia/core/scanline_shape.cpp
             src/skia/core/scanline_image.cpp src/skia/core/static_glow.cpp)
@@ -42,6 +43,7 @@ target_sources(subtitle_skia_core PRIVATE src/skia/text/fallback_ranges.cpp src/
 target_sources(subtitle_skia_core PRIVATE src/skia/text/font_shaping.cpp)
 target_include_directories(subtitle_skia_core PRIVATE "${KROK_SKIA_SOURCE}/third_party/externals/freetype/include")
 target_include_directories(subtitle_skia_core PUBLIC src/skia "${KROK_SKIA_SOURCE}")
+target_include_directories(subtitle_skia_core PRIVATE thirdparty/clipper2/include)
 target_link_libraries(subtitle_skia_core PUBLIC krok_skshaper krok_skunicode_icu krok_skunicode_core krok_skia subtitle_scene)
 target_compile_definitions(subtitle_skia_core PUBLIC SK_RELEASE)
 krok_strict_float(subtitle_skia_core)

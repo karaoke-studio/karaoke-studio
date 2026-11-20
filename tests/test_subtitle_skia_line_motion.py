@@ -309,7 +309,7 @@ def compare_animated_ruby(binary, track, style, ir, width, height, dpr):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('shape', ['circle', 'square', 'rounded'])
+@pytest.mark.parametrize('shape', ['circle', 'square', 'rounded', 'star', 'note8', 'note16', 'notepair'])
 def test_custom_shape_signal_countdown(binary, project, target, shape):
     track, style = project
     text = replace(style, entry_anim='none', exit_anim='none')
@@ -344,6 +344,8 @@ def test_custom_shape_signal_countdown(binary, project, target, shape):
     ('lamp', None), ('lamp_shape_circle', None), ('lamp_shape_square', None),
     ('lamp_shape_rounded', None), ('lamp_shape_image', None),
     ('lit_appearance_auto', None), ('lit_appearance_role', None),
+    ('lamp_shape_star', None), ('lamp_shape_note8', None),
+    ('lamp_shape_note16', None), ('lamp_shape_notepair', None),
 ])
 def test_p00_shape_signal_matches_actual_gpu(binary, application, tmp_path, case_id, appearance):
     from scripts.subtitle_gpu_baseline.cases import build_cases

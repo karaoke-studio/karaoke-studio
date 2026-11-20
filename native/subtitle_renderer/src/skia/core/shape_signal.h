@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../backends/signal_state.h"
+#include "signal_paths.h"
 #include "static_glow.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkImage.h"
@@ -27,6 +28,7 @@ struct ShapeSignal {
     bool shadow;
     sk_sp<SkImage> image;
     std::optional<Decoration> decoration;
+    std::optional<SignalPath> path;
 
     SkPath outline() const;
     void draw(SkCanvas& canvas, int time) const;

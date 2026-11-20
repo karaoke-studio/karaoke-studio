@@ -10,7 +10,7 @@
 namespace subtitle::skia {
 PreparedGlow::PreparedGlow(const StaticGlow& spec, const GlowState& state, std::optional<bool> phase)
     : before_(spec.before.color), after_(spec.after.color), radius_(state.radius),
-      strokeWidth_(spec.outlineWidth + state.radius), phase_(phase) {
+      strokeWidth_(spec.outlineWidth + state.radius), join_(spec.join), phase_(phase) {
     const int passes = std::clamp(state.concentration, 0, 2) + 1;
     for (int index = 0; index < passes; ++index) {
         const float sigma = float(radius_ - index * radius_ / passes);
@@ -33,9 +33,9 @@ std::vector<PreparedGlow> PreparedGlow::prepare(const StaticGlow& spec, bool mer
 SkPaint PreparedGlow::strokePaint() const {
     SkPaint stroke;
     stroke.setStyle(SkPaint::kStroke_Style);
-    // The reference glyph paths request round joins. Miter spikes extend the
-    // source beyond the intended radius before any blur is applied.
-    stroke.setStrokeJoin(SkPaint::kRound_Join);
+    // Glyphs use round joins, but geometric lamps retain their pointed tips.
+    stroke.setStrokeJoin(join_);
+    if (join_ == SkPaint::kMiter_Join) stroke.setStrokeMiter(10.f);
     stroke.setStrokeWidth(strokeWidth_);
     return stroke;
 }
