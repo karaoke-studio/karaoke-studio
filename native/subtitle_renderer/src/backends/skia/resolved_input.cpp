@@ -481,8 +481,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.karaokeAnimation == "none"
             && (verticalFade || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        const bool reverseVerticalGlow = verticalDecoration && hasGlow && !hasShadow
+            && !annotated && features.contains("p06_vertical_reverse_glow");
         if (hasDecoration
-            && ((style.vertical && !verticalDecoration) || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
+            && ((style.vertical && !verticalDecoration) || style.rightToLeft
+                || (line.wipeReverse && !reverseVerticalGlow) || (prepared.noWipe && !noWipeGlow)
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)

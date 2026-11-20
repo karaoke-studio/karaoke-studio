@@ -43,6 +43,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_columns",
         "p06_vertical_outline",
         "p06_vertical_glow",
+        "p06_vertical_reverse_glow",
         "p06_vertical_shadow",
         "p06_vertical_ruby_decoration",
         "p07_vertical_decoration_fade",
@@ -266,16 +267,20 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p06_multi_lane_outline")))
         throw BackendError("Skia 多列竖排描边缺少对应布局和描边能力");
     const bool verticalGlow = features.contains("p06_vertical_glow");
+    const bool reverseVerticalGlow = features.contains("p06_vertical_reverse_glow");
     const bool verticalShadow = features.contains("p06_vertical_shadow");
     const bool verticalRubyDecoration = features.contains("p06_vertical_ruby_decoration");
     if ((verticalGlow || verticalShadow)
         && (!features.contains("p05_vertical_solid") || !style.value("vertical").toBool()
             || features.contains("p05_vertical_columns")
             || (features.contains("p05_vertical_ruby") && !verticalRubyDecoration)
-            || features.contains("p05_reverse_wipe")
+            || (features.contains("p05_reverse_wipe") && !reverseVerticalGlow)
             || verticalGlow != features.contains("p06_static_glow")
             || verticalShadow != features.contains("p06_static_shadow")))
         throw BackendError("Skia 竖排静态装饰缺少对应布局能力");
+    if (reverseVerticalGlow && (!verticalGlow || verticalShadow || verticalRubyDecoration
+        || !features.contains("p05_reverse_wipe") || features.contains("p05_vertical_ruby")))
+        throw BackendError("Skia 反向竖排光晕缺少对应布局能力");
     if (verticalRubyDecoration
         && (!features.contains("p05_vertical_ruby") || features.contains("p05_vertical_ruby_groups")
             || !(verticalGlow || verticalShadow || features.contains("p06_ruby_glow") || features.contains("p06_ruby_shadow"))))

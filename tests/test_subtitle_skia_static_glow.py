@@ -101,11 +101,14 @@ def test_static_glow_matches_actual_d2d_and_gpu_raster(binary, project, case, dp
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('radius', [6, 10])
-def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, target, radius):
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, target, radius, reverse):
     from test_subtitle_skia_roles import colors
     from test_subtitle_skia_vertical import vertical_source
 
     track, style = vertical_source(project, texts=['字'], position='top')
+    if reverse:
+        track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
     palette = colors('#00000000', '#00000000')
     palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#FFFF0000')),
                       after=replace(palette.after, shadow=PaintFill(color='#FF0000FF')))
@@ -113,7 +116,7 @@ def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, tar
                     decoration_kind_before='glow', glow_before_radius_px=6, glow_after_radius_px=radius,
                     glow_before_concentration_level=0, glow_concentration_level=0)
     ir = ir_for(binary, (track, style), dpr=1.5)
-    feature = 'p06_vertical_glow'
+    feature = 'p06_vertical_reverse_glow' if reverse else 'p06_vertical_glow'
     assert feature in ir['required_features']
     (start, end), = ir['track']['lines'][0]['resolved_intervals']
     times = [start - 1, (start + end) // 2, end + 1]
@@ -135,7 +138,8 @@ def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, tar
 
     assert rows(frames[0], 0).any() and not rows(frames[0], 2).any()
     assert rows(frames[2], 2).any() and not rows(frames[2], 0).any()
-    assert center(rows(frames[1], 2)) + 6 < center(rows(frames[1], 0))
+    sung_minus_unsung = center(rows(frames[1], 2)) - center(rows(frames[1], 0))
+    assert (sung_minus_unsung if reverse else -sung_minus_unsung) > 6
     assert np.array_equal(frames[1], replay[0])
     if target == 'gpu':
         with SkiaRendererProcess(binary, selection=selection('raster')) as process:
