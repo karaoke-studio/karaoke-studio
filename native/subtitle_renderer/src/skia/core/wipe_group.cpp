@@ -178,6 +178,8 @@ float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {
 void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band, int timeMs,
                                      const SingingScale& scale, float originX) const {
     if (bounds_.isEmpty()) return;
+    const float bandAlpha = band.alphaAt(timeMs);
+    if (bandAlpha <= 0.f) return;
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
     SkPaint brush;
     brush.setAntiAlias(true);
@@ -193,7 +195,8 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
                 continue;
             band.drawSlices(canvas, edge, [&](int layer, bool after, float opacity) {
                 paintRubyLayer(canvas, brush, cell, layer,
-                    [&](auto before, auto sung) { return band.paint.shade(before, sung, after); }, opacity);
+                    [&](auto before, auto sung) { return band.paint.shade(before, sung, after); },
+                    opacity * bandAlpha);
             });
         }
         return;
@@ -204,7 +207,8 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
         if (cell.path.isEmpty() || !ScanlineBand::sweeping(cell, timeMs)) continue;
         band.drawSlices(canvas, front, [&](int layer, bool after, float opacity) {
             paintRubyLayer(canvas, brush, cell, layer,
-                [&](auto before, auto sung) { return band.paint.shade(before, sung, after); }, opacity);
+                [&](auto before, auto sung) { return band.paint.shade(before, sung, after); },
+                opacity * bandAlpha);
         });
     }
 }

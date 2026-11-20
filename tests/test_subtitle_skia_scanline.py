@@ -130,7 +130,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
-    if case == 'flame': style = replace(style, scanline_shape='flame')
+    if case == 'flame': style = replace(style, scanline_shape='flame', scanline_mode='brighten')
     elif case == 'image': style = replace(style, scanline_shape='image')
     elif case == 'combined_particles':
         track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
@@ -814,6 +814,7 @@ P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_bri
                       'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none',
                       'karaoke_scanline', 'karaoke_utopia_scanline', 'karaoke_zoom_pulse_scanline']
 P00_SCANLINE_CASES += [f'scanline_particles_{kind}' for kind, _ in SCANLINE_PARTICLE_SPRITES]
+P00_SCANLINE_CASES += ['scanline_flame', 'scanline_bubble']
 
 
 def glow_band_source(reading, case, utopia=False):
@@ -971,3 +972,44 @@ def test_p00_scanline_matches_actual_d2d_and_gpu_raster(binary, application, cas
         assert drawn == (not np.array_equal(gpu, gpu_bare)), (case_id, t, 'band presence')
         banded += drawn
     assert banded >= 1, case_id
+
+
+# scanline_shape_schema=1: procedural flame/bubble at the front, solid color mode.
+SHAPE_TIMES = [199, 300, 500, 750, 1100, 1600, 1800, 2200]
+
+
+@pytest.mark.parametrize('shape', ['flame', 'bubble'])
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_scanline_shapes_negotiate_draw_and_seek(binary, project, shape, target, tmp_path):
+    track, style = scanline_source(project)
+    ir = ir_for(binary, (track, replace(style, scanline_shape=shape)), dpr=1.5)
+    band_ir = ir_for(binary, (track, style), dpr=1.5)
+    assert 'p07_scanline_shape' in ir['required_features'] and ir['skia_layout']['scanline_shape_schema'] == 1
+    assert 'p07_scanline_shape' not in band_ir['required_features']
+    assert ir['skia_layout']['lines'] == band_ir['skia_layout']['lines']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_shape')
+    order = [*SHAPE_TIMES, 750, 300, 1600]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, order)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        kept, _ = collect(process, [750], generation=2)
+        configure(process, band_ir)
+        bands, _ = collect(process, SHAPE_TIMES, generation=3)
+    by_time = dict(zip(SHAPE_TIMES, frames))
+    for t, frame in zip(order[len(SHAPE_TIMES):], frames[len(SHAPE_TIMES):], strict=True):
+        assert np.array_equal(frame, by_time[t]), (shape, target, t)
+    assert np.array_equal(kept[0], by_time[750])
+    # The shape exists only while the band front is active; it adds ink around it.
+    added = [int(np.abs(by_time[t][..., 3].astype(int) - b[..., 3].astype(int)).sum())
+             for t, b in zip(SHAPE_TIMES, bands, strict=True)]
+    assert added[0] == 0 and added[-1] == 0 and min(added[2:5]) > 1000, (shape, added)
+
+
+    if target == 'gpu':
+        (tmp_path / f'scanline-{shape}-layout.json').write_text(json.dumps({
+            'shape': ir['style']['scanline_shape'], 'schema': ir['skia_layout']['scanline_shape_schema'],
+            'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')

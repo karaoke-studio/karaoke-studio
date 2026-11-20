@@ -2,6 +2,7 @@
 
 #include "scanline_feather.h"
 #include "scanline_paint.h"
+#include "scanline_shape.h"
 #include "wipe_front.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkRect.h"
@@ -26,6 +27,10 @@ struct ScanlineBand {
     float softness = 0;            // Physical pixels, limited to the band half-width.
     bool rightToLeft = false;
     bool upperRuby = false;
+    ScanlineShape shape;            // Procedural flame/bubble drawn at the same front.
+
+    // A procedural shape fades the ordinary band with its display-window fade.
+    float alphaAt(int t) const { return shape ? shape.fadeAt(t) : 1.f; }
 
     template <class Cell> static bool sweeping(const Cell& c, int t) {
         const int start = wipeStart(c), end = wipeEnd(c);

@@ -159,11 +159,19 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
             && !source.wipeReverse && source.entryAnimation == "none" && source.exitAnimation == "none";
+        // scanline_shape_schema=1: procedural flame/bubble in the solid color mode
+        // on an ordinary forward line (plain or Utopia singing).
+        const bool scanlineShape = features.contains("p07_scanline_shape")
+            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble")
+            && resolved.scanlineMode == "color" && !source.wipeReverse
+            && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         // Horizontal band with a separately negotiated upper-annotation pass.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
                 || (resolved.scanlineMode != "color" && scanlineVersion < 3)
-                || resolved.scanlineShape != "band" || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
+                || (resolved.scanlineShape != "band" && !scanlineShape)
+                || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
                 || cfg.vertical || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
                 || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
                     && (!composedScanline || source.wipeReverse || resolved.scanlineMode == "role"))

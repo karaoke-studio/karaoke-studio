@@ -85,6 +85,8 @@ private:
         std::vector<SingParticleBurst> particles;
         ParticleVisibility particleVisibility;
         float inkStart = 0, inkTop = 0; // The band appears after the front enters body ink.
+        SkRect bodyInk = SkRect::MakeEmpty();  // Main glyph ink; scanline shapes scale to its height.
+        std::optional<float> rubyInkTop;       // Highest reading ink; scanline shapes reach up to it.
         SkRect paintBounds = SkRect::MakeEmpty();
     };
     void drawLine(SkCanvas&, const Line&, int time, bool textVisible) const;

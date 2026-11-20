@@ -214,6 +214,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                  std::max(style.stroke2Width, 0.f) * .5f + .5f,
                                  std::min(style.scanlineGlowRadius, halfWidth), line.wipeReverse,
                                  features.contains("p07_ruby_scanline")};
+            if (features.contains("p07_scanline_shape") && style.scanlineShape != "band") {
+                int lastCharEnd = line.endMs;
+                for (const auto& cell : line.chars) lastCharEnd = std::max(lastCharEnd, cell.endMs);
+                prepared.scanline.shape = ::subtitle::skia::ScanlineShape::make(
+                    style.scanlineShape, style.scanlineColor, style.scanlineWidth, style.fontSize,
+                    line.displayWindows[0].startMs, line.displayWindows[0].endMs, lastCharEnd);
+            }
         }
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.
         prepared.vertical = style.vertical;

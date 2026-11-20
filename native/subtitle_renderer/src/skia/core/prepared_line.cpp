@@ -297,12 +297,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         drawLayer(Layer::Outline, line.images.outline, {line.beforeOutlineGradient, line.afterOutlineGradient});
     drawLayer(Layer::Body, line.images.body, {line.beforeGradient, line.afterGradient});
     // The GPU repaints the sweeping cells after the body.
+    const float scanlineAlpha = line.scanline.alphaAt(tMs);
     if (utopia) {
         line.scanline.drawPosed(canvas, line.cells, tMs, line.inkStart, transformedEdge,
             [&](std::size_t index, int layer, bool after, float slice) {
                 const auto& cell = line.cells[index];
                 const auto& state = states[index];
-                const float opacity = state.transform.opacity * slice;
+                const float opacity = state.transform.opacity * slice * scanlineAlpha;
                 const auto& stroke = layer == 0 ? cell.outerOutline : cell.outline;
                 if (opacity <= 0 || (layer < 2 && !stroke)) return;
                 SkAutoCanvasRestore keep(&canvas, true);
@@ -325,7 +326,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             });
     } else line.scanline.draw(canvas, line.cells, tMs, line.inkStart, line.inkTop, [&](std::size_t index, bool sung) {
         const auto& cell = line.cells[index];
-        const float opacity = states[index].transform.opacity;
+        const float opacity = states[index].transform.opacity * scanlineAlpha;
         if (opacity <= 0) return;
         const auto setColor = [&](std::uint32_t before, std::uint32_t after) {
             paint.setColor(line.scanline.paint.shade(before, after, sung));
@@ -358,5 +359,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (line.scanline.upperRuby && line.scanline.frontAt(line.cells, tMs, line.inkStart))
         for (const auto& group : line.rubyGroups)
             group.drawScanline(canvas, line.scanline, tMs, line.singingScale, line.rubySingingOrigin);
+    // The GPU draws flame and bubble shapes after the text and readings.
+    if (line.scanline.shape)
+        if (const auto front = line.scanline.frontAt(line.cells, tMs, line.inkStart))
+            line.scanline.shape.draw(canvas, tMs, *front, line.bodyInk, line.rubyInkTop);
 }
 }

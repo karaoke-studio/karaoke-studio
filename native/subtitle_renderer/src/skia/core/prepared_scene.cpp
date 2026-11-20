@@ -161,7 +161,15 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
             if (!ink.isEmpty()) line.inkCenter = ink.centerX();
             if (line.shadow.visible()) line.decorationInk = ink;
+            line.bodyInk = ink;
         }
+        if (line.scanline.shape)
+            for (const auto& group : source.rubyGroups)
+                for (const auto& cell : group.cells)
+                    if (!cell.path.isEmpty()) {
+                        const float top = cell.path.computeTightBounds().fTop;
+                        line.rubyInkTop = std::min(line.rubyInkTop.value_or(top), top);
+                    }
         lines_.push_back(std::move(line));
     }
 }
