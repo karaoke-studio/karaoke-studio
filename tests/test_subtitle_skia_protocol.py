@@ -297,6 +297,40 @@ def test_title_bitmap_guides_match_actual_d2d_gpu(binary, tmp_path, inline):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+def mixed_guide_title(tmp_path):
+    track, style = bitmap_guide_title(tmp_path)
+    _, vector = vector_guide_title()
+    title = replace(style.title_overlays[0], inline_guide_symbols=vector.title_overlays[0].inline_guide_symbols)
+    return track, replace(style, title_overlays=[title])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_mixed_title_guides_share_a_static_layout(binary, tmp_path, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = mixed_guide_title(tmp_path)
+    source = ir_for(binary, (track, style))['skia_titles'][0]['source']
+    assert {'p05_vector_guides', 'p08_bitmap_guides'} <= set(source['required_features'])
+    cells = source['skia_layout']['lines'][0]['cells']
+    assert sum(bool(cell['metrics'].get('vector_glyph_id')) for cell in cells) == 1
+    assert sum(bool(cell['metrics'].get('bitmap_guide')) for cell in cells) == 2
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [500, 1500, 1000])
+    assert frames[0].any() and np.array_equal(frames[0], frames[1]) and not frames[2].any()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_mixed_title_guides_match_actual_d2d_gpu(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = mixed_guide_title(tmp_path)
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='mixed_title_guides'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 @pytest.fixture
 def supported_project(tmp_path):
     from krok_helper.subtitle_render.domain.models import style_to_dict

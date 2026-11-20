@@ -114,12 +114,13 @@ BITMAP_GUIDE_FEATURES = frozenset({
     'p07_singing_scale'})
 
 
-def declare_bitmap_guides(plan_lines, ir):
+def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     """Append p08_bitmap_guides, or reject an unverified combination."""
     if not has_bitmap_guides(item.render_line for item in plan_lines):
         return
     features = ir['required_features']
     features.append('p08_bitmap_guides')
     ir['skia_layout']['bitmap_guide_schema'] = 1
-    if not set(features) <= BITMAP_GUIDE_FEATURES:
+    allowed = BITMAP_GUIDE_FEATURES | {'p05_vector_guides'} if static_title else BITMAP_GUIDE_FEATURES
+    if not set(features) <= allowed:
         raise ValueError('Skia 图片导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')

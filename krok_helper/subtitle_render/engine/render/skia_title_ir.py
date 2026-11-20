@@ -57,11 +57,8 @@ def solid_title_style(title):
                    for part in ('fill', 'stroke', 'stroke2', 'shadow'))):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
-    if guides:
-        if roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']:
-            return None
-        if len({guide['kind'] for guide in guides}) > 1:
-            return None
+    if guides and (roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
+        return None
     if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
                      or paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
