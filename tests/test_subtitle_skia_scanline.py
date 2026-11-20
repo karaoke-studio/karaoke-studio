@@ -447,6 +447,55 @@ def test_upper_ruby_shaped_scanline_and_singing_particles_match_actual_gpu(binar
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('speed', [50, 200])
+def test_upper_ruby_band_singing_and_scanline_particles_use_separate_speed(binary, reading, target, speed):
+    track, style = ruby_band_source(reading, 10, True)
+    style = replace(style, sing_fx='flame', scanline_effect='star', fx_particle_speed_pct=speed,
+                    fx_particle_count=24)
+    ir = upper_ir(binary, (track, style), 1)
+    scan_only = upper_ir(binary, (track, replace(style, sing_fx='none')), 1)
+    no_particles = upper_ir(binary, (track, replace(style, sing_fx='none', scanline_effect='none')), 1)
+    feature = 'p07_ruby_band_singing_particles'
+    assert {feature, 'p07_ruby_scanline_particles'} <= set(ir['required_features'])
+    bursts = ir['track']['lines'][0]['fx_bursts']
+    scan = [b for b in bursts if b['kind'] == 'scanline']
+    singing = [b for b in bursts if b['kind'] != 'scanline']
+    assert scan and singing and all(b['emit_ms'] > 0 and b.get('time_scale', 1) == 1 for b in scan)
+    assert {'flame', 'flame_glow'} <= {b['kind'] for b in singing}
+    assert all(b.get('emit_ms', 0) == 0 and b.get('time_scale', 1) != 1 for b in singing)
+    times = [299, 340, 450, 550, 899, 1100, 1450, 1550, 1900, 2100, 2250, 2400]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, 340])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [1550], generation=2)
+        configure(process, scan_only)
+        only_scan, _ = collect(process, times, generation=3)
+        configure(process, no_particles)
+        neither, _ = collect(process, times, generation=4)
+    assert np.array_equal(frames[times.index(340)], frames[-1])
+    assert np.array_equal(frames[times.index(1550)], replay[0])
+    assert any(not np.array_equal(a, b) for a, b in zip(frames[:-1], only_scan, strict=True))
+    assert any(not np.array_equal(a, b) for a, b in zip(only_scan, neither, strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('speed', [50, 200])
+def test_upper_ruby_band_singing_and_scanline_particles_match_actual_gpu(binary, application, tmp_path, speed):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == f'particles_speed_{speed}')
+    case = replace(base, case_id=f'particles_speed_{speed}_singing_and_scanline',
+                   style=replace(base.style, entry_anim='none', exit_anim='none'))
+    times = tuple(sorted({*base.timestamps_ms, 1210, 1275, 1580, 1760, 1900, 3700, 4400, 4700}))
+    assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('utopia', [False, True])
 def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, utopia, tmp_path):
     track, style = ruby_band_source(reading, 10, utopia)

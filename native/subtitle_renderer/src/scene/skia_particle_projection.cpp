@@ -23,7 +23,11 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
         && !animated && source.scanlineEnabled && rubyParticles && style.scanlineMode == "color"
         && (style.scanlineShape == "flame" || style.scanlineShape == "bubble" || style.scanlineShape == "image");
-    const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || shapedSinging;
+    const bool bandSinging = features.contains("p07_ruby_band_singing_particles")
+        && !animated && source.scanlineEnabled && rubyParticles && style.scanlineShape == "band"
+        && style.scanlineMode != "role" && !source.wipeReverse;
+    const bool scanlineWithSinging = shapedSinging || bandSinging;
+    const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit,
         features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"),
         features.contains("p07_ruby_energy_pair"));
@@ -88,7 +92,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
-            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && (!rubyParticles || shapedSinging));
+            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (rubyParticles && version == 12 && !star && !ripple)
             || (scanline && shapedSinging)

@@ -33,7 +33,7 @@ def _transition_layers(kind, entry):
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
-    ruby_scanline = False
+    ruby_scanline = ruby_band_singing = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -47,6 +47,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         annotated = bool(track.rubies)
         singing_under_shape = (annotated and band and not animated and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
+        singing_under_band = (annotated and band and not animated and look.scanline_shape == 'band'
+                              and look.scanline_mode != 'role' and not item.line.wipe_reverse
+                              and any(burst['kind'] != 'scanline' for burst in bursts))
+        ruby_band_singing = ruby_band_singing or singing_under_band
         scaled_singing = annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
@@ -64,7 +68,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             kind = burst['kind']
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not band)
-                    or (annotated and band and kind != 'scanline' and not singing_under_shape)
+                    or (annotated and band and kind != 'scanline' and not (singing_under_shape or singing_under_band))
                     or (singing_under_shape and kind == 'scanline')
                     or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
@@ -101,4 +105,6 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         )
     if ruby_scanline:
         ir['required_features'].append('p07_ruby_scanline_particles')
+    if ruby_band_singing:
+        ir['required_features'].append('p07_ruby_band_singing_particles')
     return 13 if track.rubies else version
