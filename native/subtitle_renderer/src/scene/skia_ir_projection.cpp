@@ -88,22 +88,23 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool slicedBand = features.contains("p08_line_band_slices");
     const bool rubyBand = features.contains("p08_ruby_line_band");
     const bool staffBand = features.contains("p08_staff_line_band");
-    const bool animatedStaffBand = features.contains("p08_animated_staff_line_band");
+    const bool animatedBand = features.contains("p08_animated_staff_line_band") || features.contains("p08_animated_line_band");
+    const bool tintedBand = features.contains("p08_tinted_line_band");
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
-    const bool bandImageSupported = animatedStaffBand ? band.imagePath.endsWith(".webp", Qt::CaseInsensitive)
+    const bool bandImageSupported = animatedBand ? band.imagePath.endsWith(".webp", Qt::CaseInsensitive)
         : isPng(band.imagePath);
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
         || (staticBand && (!bandFitSupported
             || !bandImageSupported
-            || cfg.vertical || cfg.rightToLeft || !band.tint.isEmpty()
+            || cfg.vertical || cfg.rightToLeft || (tintedBand == band.tint.isEmpty())
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
             || !bandLayersSupported || band.edgeKind != "none"
             || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
-        throw BackendError("Skia 行背景带当前支持横排静态 PNG 与五线谱预设");
+        throw BackendError("Skia 行背景带当前支持横排静态 PNG 与内置预设");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
@@ -119,10 +120,16 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         out.lineBand.srcCapLeft = band.srcCapLeftPx;
         out.lineBand.srcCapRight = band.srcCapRightPx;
         out.lineBand.opacity = float(std::clamp(band.opacityPct, 0, 100)) / 100.f;
+        const auto color = [](const QColor& value) {
+            return RgbaColor{std::uint8_t(value.red()), std::uint8_t(value.green()), std::uint8_t(value.blue()), 255};
+        };
+        if (tintedBand) {
+            const QColor tint(band.tint);
+            out.lineBand.hasTint = tint.isValid();
+            if (out.lineBand.hasTint) out.lineBand.tint = color(tint);
+            out.lineBand.tintStrengthPct = std::clamp(band.tintStrengthPct, 0, 100);
+        }
         if (staffBand) {
-            const auto color = [](const QColor& value) {
-                return RgbaColor{std::uint8_t(value.red()), std::uint8_t(value.green()), std::uint8_t(value.blue()), 255};
-            };
             out.lineBand.linesPath = band.linesPath.toStdWString();
             out.lineBand.clefPath = band.clefPath.toStdWString();
             const QColor lines(band.lineColor), clef(band.clefColor);

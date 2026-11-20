@@ -54,6 +54,7 @@ sk_sp<SkImage> composeStaticStaff(const LineBandStyle& band, SkiaImageFillCache&
 }
 
 sk_sp<SkImage> loadStaffLayer(SkiaImageFillCache& images, const std::wstring& path, bool tint, RgbaColor color) {
+    if (path.empty()) return {};
     auto image = images.staticImage(path, 0, 0);
     if (!image) throw BackendError("Skia 五线谱背景带无法读取预设图层");
     if (!tint) return image;
@@ -69,45 +70,66 @@ sk_sp<SkImage> loadStaffLayer(SkiaImageFillCache& images, const std::wstring& pa
     return image;
 }
 
-std::vector<Frame> loadStaffAnimation(const std::wstring& path, SkiaImageFillCache& images) {
+sk_sp<SkImage> tintBandImage(sk_sp<SkImage> image, const LineBandStyle& band, SkiaImageFillCache& images) {
+    if (!image || !band.hasTint || band.tintStrengthPct <= 0) return image;
+    if (!images.reserveDecodedBytes(std::size_t(image->width()) * image->height() * 4))
+        throw BackendError("Skia 行背景带超过场景图片预算");
+    const auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(image->width(), image->height()));
+    if (!surface) throw BackendError("Skia 无法为行背景带着色");
+    const float strength = band.tintStrengthPct / 100.f;
+    SkColorMatrix matrix;
+    matrix.setScale(1.f - strength, 1.f - strength, 1.f - strength, 1.f);
+    matrix.postTranslate(band.tint.red * strength / 255.f, band.tint.green * strength / 255.f,
+                         band.tint.blue * strength / 255.f, 0.f);
+    SkPaint paint;
+    paint.setColorFilter(SkColorFilters::Matrix(matrix));
+    auto& canvas = *surface->getCanvas();
+    canvas.clear(SK_ColorTRANSPARENT);
+    canvas.drawImage(image, 0, 0, SkSamplingOptions(), &paint);
+    image = surface->makeImageSnapshot();
+    if (!image) throw BackendError("Skia 无法为行背景带着色");
+    return image;
+}
+
+std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCache& images) {
     QFile file(QString::fromStdWString(path));
     constexpr qint64 maxEncodedBytes = 64 * 1024 * 1024;
     if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > maxEncodedBytes)
-        throw BackendError("Skia 五线谱背景带无法读取动画音符");
+        throw BackendError("Skia 行背景带无法读取动画素材");
     const auto data = file.read(maxEncodedBytes + 1);
     if (data.isEmpty() || data.size() > maxEncodedBytes)
-        throw BackendError("Skia 五线谱背景带无法读取动画音符");
+        throw BackendError("Skia 行背景带无法读取动画素材");
     auto codec = SkWebpDecoder::Decode(SkData::MakeWithCopy(data.constData(), data.size()), nullptr);
     const int frameCount = codec ? codec->getFrameCount() : 0;
     if (frameCount < 2 || frameCount > 4096)
-        throw BackendError("Skia 五线谱背景带动画帧无效");
+        throw BackendError("Skia 行背景带动画帧无效");
     const auto info = codec->getInfo().makeColorType(kBGRA_8888_SkColorType).makeAlphaType(kPremul_SkAlphaType);
     const auto stride = info.minRowBytes();
     const auto frameBytes = info.computeByteSize(stride);
     const auto frames = codec->getFrameInfo();
     if (info.width() <= 0 || info.width() > 8192 || info.height() <= 0 || info.height() > 8192
         || frames.size() != std::size_t(frameCount) || !images.reserveDecodedBytes(frameBytes * frames.size()))
-        throw BackendError("Skia 五线谱背景带动画超过场景图片预算");
+        throw BackendError("Skia 行背景带动画超过场景图片预算");
     std::vector<Frame> result;
     result.reserve(frames.size());
     std::int64_t end = 0;
     for (int index = 0; index < int(frames.size()); ++index) {
         auto pixels = SkData::MakeUninitialized(frameBytes);
-        if (!pixels) throw BackendError("Skia 五线谱背景带动画分配失败");
+        if (!pixels) throw BackendError("Skia 行背景带动画分配失败");
         SkCodec::Options options;
         options.fFrameIndex = index;
         const int previous = frames[index].fRequiredFrame;
         if (previous >= 0) {
             SkPixmap prior;
             if (previous >= index || !result[previous].image->peekPixels(&prior) || prior.rowBytes() != stride)
-                throw BackendError("Skia 五线谱背景带动画帧依赖无效");
+                throw BackendError("Skia 行背景带动画帧依赖无效");
             std::memcpy(pixels->writable_data(), prior.addr(), frameBytes);
             options.fPriorFrame = previous;
         }
         if (codec->getPixels(info, pixels->writable_data(), stride, &options) != SkCodec::kSuccess)
-            throw BackendError("Skia 五线谱背景带动画帧解码失败");
+            throw BackendError("Skia 行背景带动画帧解码失败");
         auto image = SkImages::RasterFromData(info, std::move(pixels), stride);
-        if (!image) throw BackendError("Skia 五线谱背景带动画无法准备图像");
+        if (!image) throw BackendError("Skia 行背景带动画无法准备图像");
         end += std::max(frames[index].fDuration, 10);
         result.push_back({std::move(image), end});
     }
@@ -121,10 +143,10 @@ std::vector<Frame> loadStaffAnimation(const std::wstring& path, SkiaImageFillCac
     if (animated) {
         texture.staffLines = loadStaffLayer(images, band.linesPath, band.hasLineColor, band.lineColor);
         texture.staffClef = loadStaffLayer(images, band.clefPath, band.hasClefColor, band.clefColor);
-        texture.animation = loadStaffAnimation(band.imagePath, images);
+        texture.animation = loadBandAnimation(band.imagePath, images);
         texture.image = texture.animation.front().image;
     } else {
-        texture.image = images.staticImage(band.imagePath, 0, 0);
+        texture.image = tintBandImage(images.staticImage(band.imagePath, 0, 0), band, images);
         if (!band.linesPath.empty() || !band.clefPath.empty())
             texture.image = composeStaticStaff(band, images, std::move(texture.image));
     }

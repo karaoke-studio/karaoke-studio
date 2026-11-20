@@ -1,7 +1,8 @@
-"""Project the static line-band rectangle from measured text and display placement."""
+"""Project line-band rectangles from measured text and display placement."""
 
 import math
 
+from ...domain.band_presets import band_preset, preset_id_for_image
 from ..layout.line.skia_placement import legacy_ruby_allowance
 from ..ruby.style_semantics import ruby_stroke2_width, ruby_stroke_width
 
@@ -13,24 +14,29 @@ def _upper_reading_ink_top(group, ink_top):
     return group.baseline_offset + ink_top - (edge + edge2 + 1) // 2
 
 
-def write_static_line_band(ir, style, prepared, *, width, height):
+def write_line_band(ir, style, prepared, *, width, height):
     if not style.line_band_enabled or not style.line_band_image:
         return
-    preset = style.line_band_image.startswith('preset:')
-    staff = style.line_band_image == 'preset:staff_scroll'
-    if not preset and not ir['style'].get('line_band_image'):
+    preset_id = preset_id_for_image(style.line_band_image)
+    preset = band_preset(preset_id) if preset_id is not None else None
+    staff = preset_id == 'staff_scroll'
+    material = ir['style'].get('line_band_image')
+    if preset_id is None and not material:
         return
+    animated = bool(preset and material and material.lower().endswith('.webp'))
     geometry = prepared.geometry
     ruby = geometry.ruby
-    if ((not staff and (preset or not style.line_band_image.lower().endswith('.png')))
+    if ((not preset and (preset_id is not None or not style.line_band_image.lower().endswith('.png')))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.vertical or style.right_to_left
-            or style.line_band_tint or style.line_band_edge_kind != 'none'
+            or (animated and style.line_band_tint) or style.line_band_edge_kind != 'none'
             or style.line_band_shadow_enabled or style.line_band_stroke_enabled or style.line_band_glow_enabled
             or style.volume_enabled or style.lit_enabled or style.lower_ruby_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
-        raise ValueError('Skia 行背景带当前支持横排静态 PNG 和五线谱预设')
+        raise ValueError('Skia 行背景带当前支持横排静态 PNG 和内置预设')
+    if preset and not material:
+        raise ValueError('Skia 行背景带无法读取预设图片')
     if staff and any(not ir['style'].get(key) for key in
                      ('line_band_image', 'line_band_lines_image', 'line_band_clef_image')):
         raise ValueError('Skia 五线谱背景带缺少预设图层')
@@ -79,8 +85,12 @@ def write_static_line_band(ir, style, prepared, *, width, height):
         ir['required_features'].append('p08_ruby_line_band')
     if staff:
         ir['required_features'].append('p08_staff_line_band')
-        if style.line_band_dynamic_notes_enabled:
+        if animated:
             ir['required_features'].append('p08_animated_staff_line_band')
+    elif animated:
+        ir['required_features'].append('p08_animated_line_band')
+    if style.line_band_tint:
+        ir['required_features'].append('p08_tinted_line_band')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
     if sliced:

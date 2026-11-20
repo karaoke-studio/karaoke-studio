@@ -256,6 +256,54 @@ def test_animated_staff_line_band_matches_actual_gpu(binary, application, tmp_pa
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('preset', ['stars', 'bubbles', 'diagonal', 'plain_round'])
+def test_other_line_band_presets_animate_or_preserve_tinted_alpha(binary, project, target, preset):
+    from krok_helper.subtitle_render.domain.band_presets import band_preset
+
+    track, style = motion_project(project, entry='none', exit='none')
+    track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=6000)])
+    spec = band_preset(preset)
+    style = replace(style, line_band_enabled=True, line_band_image=f'preset:{preset}',
+                    line_band_fill_mode=spec.default_fill_mode, line_band_cap_left_px=spec.cap_left_px,
+                    line_band_cap_right_px=spec.cap_right_px, line_band_tint=spec.default_tint or '',
+                    line_band_tint_strength_pct=50)
+    ir = ir_for(binary, (track, style))
+    is_animated = preset in {'stars', 'bubbles'}
+    feature = 'p08_animated_line_band' if is_animated else 'p08_tinted_line_band'
+    assert feature in ir['required_features'] and 'p08_staff_line_band' not in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [2400, 2500, 3600])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        if not is_animated:
+            configure(process, ir_for(binary, (track, replace(style, line_band_tint=''))))
+            plain, _ = collect(process, [2400], generation=2)
+            assert np.array_equal(frames[0][..., 3], plain[0][..., 3])
+            assert np.count_nonzero(frames[0] != plain[0]) > 100
+    assert frames[0].any() and np.array_equal(frames[0], frames[2])
+    assert np.array_equal(frames[0], frames[1]) != is_animated
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('preset', ['stars', 'bubbles', 'diagonal', 'plain_round'])
+def test_other_line_band_presets_match_actual_gpu(binary, application, tmp_path, preset):
+    from krok_helper.subtitle_render.domain.band_presets import band_preset
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    spec = band_preset(preset)
+    style = replace(base.style, line_band_image=f'preset:{preset}', line_band_fill_mode=spec.default_fill_mode,
+                    line_band_cap_left_px=spec.cap_left_px, line_band_cap_right_px=spec.cap_right_px,
+                    line_band_tint=spec.default_tint or '', line_band_tint_strength_pct=50)
+    case = replace(base, case_id=f'line_band_{preset}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (*case.timestamps_ms, 1199, 1200, 2420, 5499))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')
