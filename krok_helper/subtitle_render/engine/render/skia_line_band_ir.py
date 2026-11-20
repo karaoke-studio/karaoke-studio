@@ -17,7 +17,7 @@ def write_static_line_band(ir, style, prepared, *, width, height):
     if not style.line_band_enabled or not style.line_band_image:
         return
     preset = style.line_band_image.startswith('preset:')
-    staff = style.line_band_image == 'preset:staff_scroll' and not style.line_band_dynamic_notes_enabled
+    staff = style.line_band_image == 'preset:staff_scroll'
     if not preset and not ir['style'].get('line_band_image'):
         return
     geometry = prepared.geometry
@@ -30,7 +30,7 @@ def write_static_line_band(ir, style, prepared, *, width, height):
             or style.volume_enabled or style.lit_enabled or style.lower_ruby_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
-        raise ValueError('Skia 行背景带当前支持横排静态 PNG 和静态五线谱')
+        raise ValueError('Skia 行背景带当前支持横排静态 PNG 和五线谱预设')
     if staff and any(not ir['style'].get(key) for key in
                      ('line_band_image', 'line_band_lines_image', 'line_band_clef_image')):
         raise ValueError('Skia 五线谱背景带缺少预设图层')
@@ -79,6 +79,8 @@ def write_static_line_band(ir, style, prepared, *, width, height):
         ir['required_features'].append('p08_ruby_line_band')
     if staff:
         ir['required_features'].append('p08_staff_line_band')
+        if style.line_band_dynamic_notes_enabled:
+            ir['required_features'].append('p08_animated_staff_line_band')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
     if sliced:

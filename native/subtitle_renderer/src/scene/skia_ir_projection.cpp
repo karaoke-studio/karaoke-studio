@@ -88,19 +88,22 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool slicedBand = features.contains("p08_line_band_slices");
     const bool rubyBand = features.contains("p08_ruby_line_band");
     const bool staffBand = features.contains("p08_staff_line_band");
+    const bool animatedStaffBand = features.contains("p08_animated_staff_line_band");
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
+    const bool bandImageSupported = animatedStaffBand ? band.imagePath.endsWith(".webp", Qt::CaseInsensitive)
+        : isPng(band.imagePath);
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
         || (staticBand && (!bandFitSupported
-            || !isPng(band.imagePath)
+            || !bandImageSupported
             || cfg.vertical || cfg.rightToLeft || !band.tint.isEmpty()
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
             || !bandLayersSupported || band.edgeKind != "none"
             || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
-        throw BackendError("Skia 行背景带当前支持横排静态 PNG");
+        throw BackendError("Skia 行背景带当前支持横排静态 PNG 与五线谱预设");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))

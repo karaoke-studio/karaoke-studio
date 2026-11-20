@@ -118,7 +118,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         particleSprites.emplace(name, vectorGlyphPath(shape, 1000.0));
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
-    if (projected.lineBand.enabled) out.lineBand = resolveLineBandTexture(projected.lineBand, imageCache);
+    if (projected.lineBand.enabled)
+        out.lineBand = resolveLineBandTexture(projected.lineBand, imageCache, features.contains("p08_animated_staff_line_band"));
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     const bool columnDecoration = !features.contains("p05_vertical_columns")
         || (features.contains("p06_vertical_columns_decoration")

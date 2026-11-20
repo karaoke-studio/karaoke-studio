@@ -45,6 +45,12 @@ std::size_t imageBytes(int width, int height) {
     return result;
 }
 
+bool SkiaImageFillCache::reserveDecodedBytes(std::size_t bytes) {
+    if (bytes > kMaxBytes - bytes_) return false;
+    bytes_ += bytes;
+    return true;
+}
+
 sk_sp<SkImage> SkiaImageFillCache::staticImage(const std::wstring& path, std::uint64_t modifiedMs, std::uint64_t size) {
     if (path.empty()) return {};
     const Key key{path, modifiedMs, size};
@@ -52,8 +58,7 @@ sk_sp<SkImage> SkiaImageFillCache::staticImage(const std::wstring& path, std::ui
     if (images_.size() + scanlineImages_.size() >= kMaxImages) return {};
     auto image = decode(path);
     const std::size_t bytes = image ? imageBytes(image->width(), image->height()) : 0;
-    if (bytes > kMaxBytes - bytes_) image = nullptr;
-    else bytes_ += bytes;
+    if (!reserveDecodedBytes(bytes)) image = nullptr;
     // Failures are remembered too, so one configure decodes each key once.
     images_.emplace(key, image);
     return image;

@@ -6,5 +6,5 @@
 namespace krok::subtitle::native {
 class SkiaImageFillCache;
 
-::subtitle::skia::LineBandTexture resolveLineBandTexture(const LineBandStyle&, SkiaImageFillCache&);
+::subtitle::skia::LineBandTexture resolveLineBandTexture(const LineBandStyle&, SkiaImageFillCache&, bool animated);
 }

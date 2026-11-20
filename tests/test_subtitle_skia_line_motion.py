@@ -217,6 +217,45 @@ def test_static_staff_line_band_matches_actual_gpu(binary, application, tmp_path
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_animated_staff_line_band_loops_on_scene_time_and_replays(binary, project, target):
+    track, style = motion_project(project, entry='none', exit='none')
+    track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=6000)])
+    style = replace(style, line_band_enabled=True, line_band_image='preset:staff_scroll',
+                    line_band_cap_left_px=190, line_band_cap_right_px=160)
+    ir = ir_for(binary, (track, style))
+    feature = 'p08_animated_staff_line_band'
+    assert feature in ir['required_features']
+    assert ir['style']['line_band_image'].endswith('staff_scroll.webp')
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    # The shipped note animation has sixty 20ms frames. Sample two adjacent
+    # frames in different cycles, after the lyric has finished.
+    times = [2420, 2400, 3620, 3600, 2420]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [2420], generation=2)
+    assert all(np.array_equal(frames[0], other) for other in (frames[2], frames[4], replay[0]))
+    assert np.array_equal(frames[1], frames[3])
+    assert not np.array_equal(frames[0], frames[1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('static_notes', [True, False])
+def test_animated_staff_line_band_matches_actual_gpu(binary, application, tmp_path, static_notes):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    if not static_notes:
+        case = replace(case, case_id='band_dynamic_only', style=replace(case.style, line_band_static_notes_enabled=False))
+    times = sorted(set(case.timestamps_ms) | {1199, 1200, 1220, 2399, 2400, 2420, 4800, 5499})
+    assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')

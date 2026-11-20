@@ -19,6 +19,7 @@ class SkiaImageFillCache {
 public:
     ::subtitle::skia::ImageFill fill(const PaintStyle& paint, float layoutScale);
     sk_sp<SkImage> staticImage(const std::wstring& path, std::uint64_t modifiedMs, std::uint64_t size);
+    bool reserveDecodedBytes(std::size_t bytes);
     std::shared_ptr<const ::subtitle::skia::ScanlineImage> scanline(const TextStyle&, int canvasHeight);
 
 private:

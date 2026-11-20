@@ -273,7 +273,7 @@ void PreparedScene::drawLineBands(SkCanvas& canvas, int timeMs) const {
                 return overlap.width() * overlap.height() > 0.55f * smaller;
             })) continue;
         painted.push_back({bounds, alpha});
-        lineBand_.draw(canvas, bounds, alpha);
+        lineBand_.draw(canvas, bounds, alpha, timeMs);
     }
 }
 

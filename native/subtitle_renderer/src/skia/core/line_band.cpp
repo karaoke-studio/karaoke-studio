@@ -24,20 +24,55 @@ void LineBandTexture::prepareMiddle() {
     if (!repeatedMiddle) throw std::runtime_error("Skia 行背景带无法准备平铺中段");
 }
 
-void LineBandTexture::draw(SkCanvas& canvas, const SkRect& destination, float alpha) const {
+void LineBandTexture::draw(SkCanvas& canvas, const SkRect& destination, float alpha, int timeMs) const {
+    if (animation.empty()) {
+        drawLayer(canvas, image, repeatedMiddle, destination, alpha);
+        return;
+    }
+    const auto duration = animation.back().endMs;
+    const auto phase = ((timeMs % duration) + duration) % duration;
+    const auto frame = std::upper_bound(animation.begin(), animation.end(), phase,
+        [](auto time, const Frame& item) { return time < item.endMs; });
+    drawLayer(canvas, staffLines, {}, destination, alpha);
+    drawLayer(canvas, staffClef, {}, destination, alpha);
+    drawLayer(canvas, frame->image, {}, destination, alpha);
+}
+
+void LineBandTexture::drawLayer(SkCanvas& canvas, const sk_sp<SkImage>& layer, const sk_sp<SkImage>& repeatImage,
+                                const SkRect& destination, float alpha) const {
+    if (!layer) return;
     const SkSamplingOptions linear(SkFilterMode::kLinear);
     SkPaint paint;
     paint.setAlphaf(alpha);
-    const auto drawStretch = [&] { canvas.drawImageRect(image, destination, linear, &paint); };
     if (!slices && fit == Fit::Stretch) {
-        drawStretch();
+        canvas.drawImageRect(layer, destination, linear, &paint);
         return;
     }
-    const float sourceWidth = float(image->width()), sourceHeight = float(image->height());
+    const float sourceWidth = float(layer->width()), sourceHeight = float(layer->height());
     const float heightScale = destination.height() / sourceHeight;
     const auto drawPiece = [&](const SkRect& source, const SkRect& area) {
         if (!source.isEmpty() && !area.isEmpty())
-            canvas.drawImageRect(image, source, area, linear, &paint, SkCanvas::kFast_SrcRectConstraint);
+            canvas.drawImageRect(layer, source, area, linear, &paint, SkCanvas::kFast_SrcRectConstraint);
+    };
+    const auto drawTiled = [&](const SkRect& source, const SkRect& area, float scale) {
+        const float tileWidth = source.width() * scale;
+        if (tileWidth <= 0.5f) {
+            drawPiece(source, area);
+            return;
+        }
+        // Preserve tile origins and the last partial tile when scissoring an offscreen band.
+        SkRect visible;
+        if (!visible.intersect(area, canvas.getLocalClipBounds())) return;
+        const int first = int(std::floor((visible.left() - area.left()) / tileWidth));
+        for (int index = first; ; ++index) {
+            const float left = area.left() + index * tileWidth;
+            if (left >= area.right() - 0.5f || left >= visible.right()) break;
+            const float right = std::min(left + tileWidth, area.right());
+            const auto tile = SkRect::MakeLTRB(left, area.top(), right, area.bottom());
+            const auto crop = SkRect::MakeXYWH(source.left(), source.top(),
+                std::min((right - left) / scale, source.width()), source.height());
+            drawPiece(crop, tile);
+        }
     };
     if (slices) {
         const auto& caps = *slices;
@@ -52,14 +87,16 @@ void LineBandTexture::draw(SkCanvas& canvas, const SkRect& destination, float al
         const auto middle = SkRect::MakeLTRB(left, destination.top(), right, destination.bottom());
         const auto source = SkRect::MakeLTRB(float(caps.sourceLeft), 0, sourceWidth - caps.sourceRight, sourceHeight);
         if (middle.isEmpty() || source.isEmpty()) return;
-        if (caps.middle == Fit::Repeat && repeatedMiddle) {
+        if (caps.middle == Fit::Repeat && repeatImage) {
             // Repeat the isolated middle pixels seamlessly. Endpoint pixels
             // never enter its bilinear sample, even at fractional scaling.
             const float sourceSpan = std::min(middle.width() / scale, 8191.f);
             SkMatrix matrix;
             matrix.setScaleTranslate(middle.width() / sourceSpan, heightScale, middle.left(), middle.top());
-            paint.setShader(repeatedMiddle->makeShader(SkTileMode::kRepeat, SkTileMode::kClamp, linear, matrix));
+            paint.setShader(repeatImage->makeShader(SkTileMode::kRepeat, SkTileMode::kClamp, linear, matrix));
             canvas.drawRect(middle, paint);
+        } else if (caps.middle == Fit::Repeat) {
+            drawTiled(source, middle, scale);
         } else {
             drawPiece(caps.middle == Fit::Cover ? centeredCrop(source, middle) : source, middle);
         }
@@ -69,22 +106,6 @@ void LineBandTexture::draw(SkCanvas& canvas, const SkRect& destination, float al
         drawPiece(centeredCrop(SkRect::MakeWH(sourceWidth, sourceHeight), destination), destination);
         return;
     }
-    const float tileWidth = sourceWidth * heightScale;
-    if (tileWidth <= 0.5f) {
-        drawStretch();
-        return;
-    }
-    // Preserve tile origins and the final partial tile when scissoring an offscreen band.
-    SkRect visible;
-    if (!visible.intersect(destination, canvas.getLocalClipBounds())) return;
-    const int first = int(std::floor((visible.left() - destination.left()) / tileWidth));
-    for (int index = first; ; ++index) {
-        const float left = destination.left() + index * tileWidth;
-        if (left >= destination.right() - 0.5f || left >= visible.right()) break;
-        const float right = std::min(left + tileWidth, destination.right());
-        const auto tile = SkRect::MakeLTRB(left, destination.top(), right, destination.bottom());
-        const auto crop = SkRect::MakeWH(std::min((right - left) / heightScale, sourceWidth), sourceHeight);
-        drawPiece(crop, tile);
-    }
+    drawTiled(SkRect::MakeWH(sourceWidth, sourceHeight), destination, heightScale);
 }
 }

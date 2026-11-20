@@ -66,6 +66,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_line_band_slices",
         "p08_ruby_line_band",
         "p08_staff_line_band",
+        "p08_animated_staff_line_band",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",
@@ -410,6 +411,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool slicedLineBand = features.contains("p08_line_band_slices");
     if (features.contains("p08_staff_line_band") && !features.contains("p08_static_line_band"))
         throw BackendError("Skia 五线谱背景带缺少对应布局能力");
+    if (features.contains("p08_animated_staff_line_band") && !features.contains("p08_staff_line_band"))
+        throw BackendError("Skia 五线谱动画缺少对应布局能力");
     if (features.contains("p08_ruby_line_band")
         && (!features.contains("p08_static_line_band") || !features.contains("p05_resolved_ruby")
             || features.contains("p05_lower_ruby")))
