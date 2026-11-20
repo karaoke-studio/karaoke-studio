@@ -70,7 +70,7 @@ def has_bitmap_guides(lines):
     return any(guide_symbol_is_bitmap(c.vector_glyph) for line in lines for c in line.chars)
 
 
-def validate_bitmap_guides(track, style):
+def validate_bitmap_guides(track, style, *, static_title=False):
     """bitmap_guide_schema=1: one static line-prefix image guide per line.
 
     Verified subset: horizontal LTR forward lines with a pre-roll/anchored
@@ -84,13 +84,15 @@ def validate_bitmap_guides(track, style):
         if not cells:
             continue
         symbol = line.guide_symbol
-        if (line.inline_guide_symbols or symbol is None or not guide_symbol_is_bitmap(symbol)
-                or symbol.replacement_prefix or any(c.vector_glyph is not symbol for c in cells)):
+        if not static_title and (line.inline_guide_symbols or symbol is None or not guide_symbol_is_bitmap(symbol)
+                                 or symbol.replacement_prefix or any(c.vector_glyph is not symbol for c in cells)):
             raise ValueError('Skia 图片导唱符仅支持整行前置导唱符')
-        for path in (symbol.bitmap_before_path, symbol.bitmap_after_path):
-            if path and QImageReader(path).imageCount() > 1:
+        images = [cells[0].vector_glyph] if not static_title else [cell.vector_glyph for cell in cells]
+        paths = {path for image in images for path in (image.bitmap_before_path, image.bitmap_after_path) if path}
+        for path in sorted(paths):
+            if QImageReader(path).imageCount() > 1:
                 raise ValueError('Skia 图片导唱符暂不支持动图')
-            if path and bitmap_guide_image(path) is None:
+            if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
         if (appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled or line.wipe_reverse

@@ -59,8 +59,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
 }
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaSource(
-    const QJsonObject& ir, SkiaImageFillCache& imageCache, const ::subtitle::skia::LineBandTexture* sharedBand) {
-    auto projected = scene::skiaSceneFromIr(ir);
+    const QJsonObject& ir, SkiaImageFillCache& imageCache, const ::subtitle::skia::LineBandTexture* sharedBand,
+    bool staticTitle) {
+    auto projected = scene::skiaSceneFromIr(ir, staticTitle);
     const auto features = ir.value("required_features").toArray();
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
         : features.contains("p06_primary_solid_outline") ? 1 : 0;

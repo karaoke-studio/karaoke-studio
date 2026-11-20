@@ -31,7 +31,7 @@ bool validatedRightToLeftKana(char32_t c) {
 }
 
 }
-RenderScene skiaSceneFromIr(const QJsonObject& ir) {
+RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     validateSkiaIrEnvelope(ir);
     validateSkiaLowerLayout(ir);
     QString error;
@@ -441,7 +441,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             // bitmap_guide_schema=1: line-prefix image guides on horizontal forward main text.
             if (cell.bitmapGuide && (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
                 || cfg.rightToLeft || source.wipeReverse || &cellStyle != &resolved
-                || sawBitmapText))
+                || (sawBitmapText && !staticTitle)))
                 throw BackendError("Skia 图片导唱符仅支持已验证的横排整行前置子集");
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;
             if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))

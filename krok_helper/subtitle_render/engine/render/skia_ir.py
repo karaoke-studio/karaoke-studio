@@ -339,7 +339,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if source_style.vertical:
             validate_vertical_source(source)
         validate_vector_guides(source, source_style)
-        validate_bitmap_guides(source, source_style)
+        validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:

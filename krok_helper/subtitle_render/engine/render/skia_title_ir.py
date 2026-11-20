@@ -60,8 +60,7 @@ def solid_title_style(title):
     if guides:
         if roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']:
             return None
-        if any(guide['kind'] == 'bitmap' for guide in guides) and (
-                title['inline_guide_symbols'] or any(guide['kind'] != 'bitmap' for guide in guides)):
+        if len({guide['kind'] for guide in guides}) > 1:
             return None
     if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
                      or paint['letter_spacing_px'] != title['letter_spacing_px']
@@ -103,39 +102,39 @@ def title_rows(title):
         yield list(zip(title_line_units(text), labels, strict=True))
 
 
+def _title_guide(payload):
+    if payload['kind'] == 'bitmap':
+        return GuideSymbol(kind='bitmap', count=payload['count'], prefix_timing='anchored',
+                           bitmap_before_path=payload['before_path'], bitmap_after_path=payload['after_path'],
+                           bitmap_fix_size=payload['fix_size'], bitmap_zoom_percent=payload['zoom_percent'],
+                           bitmap_margin_left_px=payload['margin_left_px'],
+                           bitmap_margin_right_px=payload['margin_right_px'],
+                           bitmap_margin_bottom_px=payload['margin_bottom_px'])
+    result = guide_symbol_from_dict(payload['vector_glyph'])
+    if result is None:
+        raise ValueError('Skia 标题导唱符轮廓无效')
+    return result
+
+
 def _title_lines(title, rows):
     prefixes = {row: guide for row, guide in title['guide_symbols'] if guide}
     replacements = {(row, column): guide for row, column, guide in title['inline_guide_symbols'] if guide}
     for row, cells in enumerate(rows):
         chars = []
         prefix = prefixes.get(row)
-        image = None
         if prefix:
             if not 1 <= prefix['count'] <= 64:
                 raise ValueError('Skia 标题的行首导唱符数量超限')
-            if prefix['kind'] == 'bitmap':
-                image = GuideSymbol(kind='bitmap', count=prefix['count'], prefix_timing='anchored',
-                                    bitmap_before_path=prefix['before_path'], bitmap_after_path=prefix['after_path'],
-                                    bitmap_fix_size=prefix['fix_size'], bitmap_zoom_percent=prefix['zoom_percent'],
-                                    bitmap_margin_left_px=prefix['margin_left_px'],
-                                    bitmap_margin_right_px=prefix['margin_right_px'],
-                                    bitmap_margin_bottom_px=prefix['margin_bottom_px'])
-            else:
-                symbol = guide_symbol_from_dict(prefix['vector_glyph'])
-                if symbol is None:
-                    raise ValueError('Skia 标题导唱符轮廓无效')
-                chars.extend(TimingChar('\uFFFC', row, vector_glyph=symbol) for _ in range(prefix['count']))
+            symbol = _title_guide(prefix)
+            chars.extend(TimingChar('\uFFFC', row, vector_glyph=symbol) for _ in range(prefix['count']))
         for column, (unit, label) in enumerate(cells):
             inline = replacements.get((row, column))
             if inline:
-                symbol = guide_symbol_from_dict(inline['vector_glyph'])
-                if symbol is None:
-                    raise ValueError('Skia 标题导唱符轮廓无效')
-                chars.append(TimingChar('\uFFFC', row, role_label=label, vector_glyph=symbol))
+                chars.append(TimingChar('\uFFFC', row, role_label=label, vector_glyph=_title_guide(inline)))
             else:
                 chars.append(TimingChar(unit, row, role_label=label))
         if chars:
-            yield TimingLine(chars=chars, track_line_index=row, end_ms=row + 1, guide_symbol=image,
+            yield TimingLine(chars=chars, track_line_index=row, end_ms=row + 1,
                              display_start_override_ms=row, display_end_override_ms=row + 1)
 
 

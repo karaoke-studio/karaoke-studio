@@ -155,7 +155,7 @@ std::vector<::subtitle::skia::ResolvedLine::TitleWindow> titleWindows(const QJso
         const auto source = title.value("source").toObject();
         auto windows = titleWindows(title.value("windows"));
         countSource(source, ir.value("screen"), size, true);
-        auto prepared = resolvedSkiaSource(source, images);
+        auto prepared = resolvedSkiaSource(source, images, nullptr, /*staticTitle=*/true);
         if (prepared.lines.empty() || prepared.lines.size() > 32
             || !prepared.viewport.isIdentity() || prepared.lineBand.image)
             throw BackendError("Skia 标题布局无效");
