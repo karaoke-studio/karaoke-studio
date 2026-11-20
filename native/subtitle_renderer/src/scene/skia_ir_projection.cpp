@@ -68,8 +68,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     // Fixed-cell columns. Readings require a separately versioned feature.
     if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft
         || (!cfg.rubies.empty() && !features.contains("p05_vertical_ruby"))
-        || cfg.dualLineLayout || std::any_of(cfg.lineOffsetsX.begin(), cfg.lineOffsetsX.end(), [](int v) { return v != 0; })))
-        throw BackendError("Skia 竖排仅支持已验证的单列实色正文");
+        || (cfg.dualLineLayout && !features.contains("p05_vertical_columns"))
+        || std::any_of(cfg.lineOffsetsX.begin(), cfg.lineOffsetsX.end(), [](int v) { return v != 0; })))
+        throw BackendError("Skia 竖排列布局或能力声明无效");
     // Upper and lower annotations over solid main outlines need their own capability.
     const bool outlineRuby = features.contains("p06_outline_ruby");
     const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
@@ -236,6 +237,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         // A missing final line is rejected by the resolved-layout line count.
         const auto finalLines = ir.value("skia_layout").toObject().value("lines").toArray();
         const auto finalIndex = qsizetype(out.lines.size());
+        if (cfg.vertical && finalIndex < finalLines.size()) {
+            const auto lane = finalLines.at(finalIndex).toObject().value("vertical_lane");
+            if (cfg.dualLineLayout ? (!lane.isDouble() || lane.toDouble() != source.lane
+                    || source.lane < 0 || source.lane >= style.laneCount) : !lane.isUndefined())
+                throw BackendError("Skia 竖排列号与最终布局不一致");
+        }
         if (source.wipeReverse && finalIndex < finalLines.size()) {
             const auto resolvedLine = finalLines.at(finalIndex).toObject();
             if (!resolvedLine.value("ruby_groups").toArray().isEmpty())

@@ -345,9 +345,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if vertical_ruby is None:
         for index, item in enumerate(plan.lines):
             if item.layout_style.vertical:
-                lines.append({'cells': vertical_cells(geometry.locals[item.track_index], measured.lines[item.track_index], item,
-                                                      width=kwargs['width'], height=kwargs['height']),
-                              'text_flow': 'vertical'})
+                line = {'cells': vertical_cells(geometry.locals[item.track_index], measured.lines[item.track_index], item,
+                                               width=kwargs['width'], height=kwargs['height']),
+                        'text_flow': 'vertical'}
+                if item.layout_style.dual_line_layout:
+                    line['vertical_lane'] = item.lane
+                lines.append(line)
                 continue
             position = geometry.position(item, kwargs['width'], kwargs['height'])
             cells = positioned_cells(geometry.locals[index], position)
@@ -366,6 +369,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                                'p05_overlap_wipe']
     ir['skia_layout'] = {'version': 2, 'wipe_schema': 1, 'overlap_schema': 1, 'metrics_identity': measured.identity,
                          'fonts': measured.fonts, 'runs': measured.runs, 'lines': lines}
+    if style.vertical and style.dual_line_layout:
+        ir['required_features'].append('p05_vertical_columns')
     if vertical_ruby is not None:
         ir['skia_layout'].update(vertical_ruby)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_ruby']

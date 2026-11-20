@@ -138,6 +138,24 @@ def test_lifted_pages_keep_manual_windows_and_seek_stable(binary,collisions,sema
         assert all(frames[i][...,3].max()>0 for i in (0,1,4))
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_overlapping_vertical_pages_shift_as_columns(binary, collisions, target):
+    track, style = pinned_pages(collisions)
+    style = replace(style, vertical=True, line_gap_px=18, line_y_position='top', layout_semantics='n3_1074')
+    ir = ir_for(binary, (track, style))
+    lines = ir['track']['lines']
+    windows = [line['layout_offset_windows'] for line in lines]
+    assert windows[0] == windows[1] and windows[2] == windows[3]
+    assert windows[2] and windows[2][0]['offset_x'] < 0
+    assert all(window['offset_y'] == 0 for group in windows for window in group)
+    assert [line['display_start_ms'] for line in lines] == [0] * 4
+    assert [line['display_end_ms'] for line in lines] == [6000] * 4
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [2200, 800, 6000, 2200])
+    assert frames[0].any() and not frames[2].any() and np.array_equal(frames[0], frames[-1])
+
+
 @pytest.mark.parametrize('mode',['lift','displace'])
 def test_gpu_raster_translations_and_all_time_offsets_agree(binary,collisions,mode):
     track,style=pinned_pages(collisions)

@@ -11,6 +11,7 @@ from ..display.skia_collision import SkiaCollisionGeometry
 from ..display.skia_schedule import display_lines
 from ..line.style import style_for_line
 from ...ruby.skia_geometry import prepare_ruby_geometry
+from ..line.skia_vertical import validate_vertical_columns
 from ...text.skia_metrics import MeasuredTrack, measure_track
 from ...text.skia_batch import font_snapshot
 from .model import TrackLayoutPlan
@@ -31,6 +32,7 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
     with layout_pass(), font_snapshot(resolve_font):
         section_edge_context(track, style)
         styles = [style_for_line(style, line) for line in track.lines]
+        validate_vertical_columns(track, style, styles)
         # Measure the same guide-expanded lines the shared plan lays out.
         rendered = replace(track, lines=[render_line_with_guide_symbols(line) for line in track.lines])
         measured = measure_track(rendered, style, styles, measure=measure, resolve_font=resolve_font)

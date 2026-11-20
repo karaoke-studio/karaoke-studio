@@ -13,6 +13,7 @@ from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_wh
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
 from test_subtitle_skia_font_slots import mixed
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+from krok_helper.subtitle_render.domain.models import LyricsLayout, TimingChar, TimingLine
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -60,7 +61,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
 
 
 @pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'ruby', 'rtl',
-                                    'dual', 'lower', 'offset'])
+                                    'dual_ruby', 'dual_alt_grid', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
@@ -71,11 +72,67 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=600, target_line_index=0,
                                                       target_char_start=0, target_char_end=1)])
     elif change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'dual': style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'])
+    elif change == 'dual_ruby':
+        track, style = vertical_ruby_source(project)
+        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'])
+    elif change == 'dual_alt_grid':
+        track = replace(track, lines=[replace(line, layout_index=1)])
+        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
+                        layouts=[LyricsLayout(line_gap_px=style.line_gap_px + 8)])
     elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     elif change == 'offset': style = replace(style, line_offsets_x=[12])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('semantics,gap', [('legacy', -5), ('n3_1074', 20)])
+def test_vertical_columns_use_page_lanes_and_switch_without_moving_the_clocks(binary, project, target, semantics, gap):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, style = vertical_source(project, position='top')
+    lines = []
+    for i in range(4):
+        start = 200 + i * 180 + (2200 if i >= 2 else 0)
+        lines.append(TimingLine(chars=[TimingChar('字', start), TimingChar('字', start + 160)],
+                                end_ms=start + 400, track_line_index=i, display_start_override_ms=0 if i < 2 else 2200,
+                                display_end_override_ms=1600 if i < 2 else 4400))
+    track = replace(track, lines=lines)
+    style = replace(style, dual_line_layout=True, layout_semantics=semantics, line_gap_px=gap,
+                    line_alignments=['left', 'right'], line_offsets_x=[0, 0],
+                    auto_fill_section_time=False, sync_entry=False)
+    ir = ir_for(binary, (track, style))
+    feature = 'p05_vertical_columns'
+    assert feature in ir['required_features']
+    final = ir['skia_layout']['lines']
+    assert [line['vertical_lane'] for line in final] == [0, 1, 0, 1]
+    columns = [line['cells'][0]['origin_x'] for line in final]
+    assert columns[:2] == pytest.approx(columns[2:])
+    assert columns[0] - columns[1] == pytest.approx(style.font_size_px + gap)
+    for projected, layout, authored in zip(ir['track']['lines'], final, lines, strict=True):
+        assert projected['resolved_intervals'] == [[c.start_ms, end] for c, end in
+            zip(authored.chars, [authored.chars[1].start_ms, authored.end_ms], strict=True)]
+        for cell in layout['cells']:
+            assert cell['wipe_top'] < cell['wipe_bottom']
+        assert layout['cells'][1]['wipe_top'] == pytest.approx(layout['cells'][0]['wipe_bottom'])
+    times = [550, 2000, 3150]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['skia_layout']['lines'][1]['vertical_lane'] = 0
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[0]], generation=2)
+    assert frames[0].any() and not frames[1].any() and frames[2].any()
+    assert np.array_equal(frames[0], replay[0])
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        for gpu, cpu in zip(frames, raster, strict=True):
+            difference = abs(premultiplied(gpu) - premultiplied(cpu))
+            assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',

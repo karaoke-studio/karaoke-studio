@@ -5,6 +5,7 @@ from .resolver import CollisionLineGeometry, build_measured_collision_bands
 from .schedule import collision_time_window_name, display_line_collision_time_window
 from .signal import volume_signal_head_context
 from ..line.skia_geometry import local_line_geometry, line_position, collision_bounds
+from ..line.skia_vertical import vertical_line_box
 from ..page.pagination import line_center_override
 from ..page.skia_smart_horizontal import SmartHorizontalPages
 from ..plan.page_offsets import MeasuredPageLine
@@ -89,8 +90,18 @@ class SkiaCollisionGeometry:
             style = self.styles[i]
             placement = SimpleNamespace(line=item.line, layout_style=style, lane=item.lane, page_line_count=item.page_line_count,
                 center_override=line_center_override(self.track, item.line, style, respect_page_plan=True))
-            position = self.position(placement, width, height)
             local = self.locals[i]
+            if style.vertical and style.dual_line_layout:
+                # Page collisions operate along x for vertical columns, using
+                # the same cell boxes and lane pitch as final layout.
+                column, top, cell_height, _ = vertical_line_box(
+                    placement, self.measured.lines[i], len(local.cells), width, height)
+                half_width = float(style.font_size_px) / 2
+                self.cache[key] = None if local.ink is None else CollisionLineGeometry(
+                    column - half_width, column + half_width, top, top + cell_height * len(local.cells),
+                    column, float(style.line_gap_px))
+                return self.cache[key]
+            position = self.position(placement, width, height)
             if self.ruby is not None:
                 local = replace(local, ink=self.ruby.lines[i].placement_ink)
             bounds = collision_bounds(local, position)

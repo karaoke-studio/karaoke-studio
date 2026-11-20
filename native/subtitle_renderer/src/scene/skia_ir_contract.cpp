@@ -40,6 +40,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_solid",
         "p05_vertical_japanese_glyphs",
         "p05_vertical_ruby",
+        "p05_vertical_columns",
         "p05_vertical_ruby_groups",
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
@@ -231,6 +232,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     }
     if (features.contains("p05_vertical_ruby_groups") && !features.contains("p05_vertical_ruby"))
         throw BackendError("Skia 竖排多组注音缺少基础布局能力");
+    if (features.contains("p05_vertical_columns")
+        && (!features.contains("p05_vertical_solid") || !style.value("vertical").toBool()
+            || features.contains("p05_vertical_ruby")))
+        throw BackendError("Skia 多列竖排缺少基础布局能力或包含注音");
     if (features.contains("p05_vertical_shifted_ruby")
         && (!features.contains("p05_vertical_ruby") || layout.value("vertical_ruby_shift_schema").toDouble(-1) != 1))
         throw BackendError("Skia 竖排注音字位需要版本化能力");

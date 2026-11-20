@@ -53,9 +53,8 @@ def vertical_solid_schema(track):
 
 
 def validate_vertical_style(style):
-    if (style.right_to_left or style.dual_line_layout or any(style.line_offsets_x)
-            or style.lower_ruby_enabled):
-        raise ValueError('Skia 竖排仅支持已验证的单列实色正文')
+    if style.right_to_left or any(style.line_offsets_x) or style.lower_ruby_enabled:
+        raise ValueError('Skia 竖排暂不支持右至左单元、独立列偏移或下方注音')
 
 
 def validate_vertical_source(track):
@@ -67,10 +66,21 @@ def validate_vertical_source(track):
                 raise ValueError('Skia 竖排单元包含未验证字符、多码点或行内角色')
 
 
+def validate_vertical_columns(track, style, line_styles):
+    if not any(s.vertical and s.dual_line_layout for s in (style, *line_styles)):
+        return
+    if track.rubies:
+        raise ValueError('Skia 多列竖排暂不支持注音')
+    for appearance in line_styles:
+        if (appearance.vertical != style.vertical or appearance.dual_line_layout != style.dual_line_layout
+                or len(appearance.line_alignments) != len(style.line_alignments)
+                or (appearance.font_size_px, appearance.line_gap_px, appearance.line_y_margin_px)
+                   != (style.font_size_px, style.line_gap_px, style.line_y_margin_px)):
+            raise ValueError('Skia 多列竖排暂需统一的列宽、间距和边距')
+
+
 def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
     style = item.layout_style
-    if item.lane:
-        raise ValueError('Skia 竖排仅支持单列')
     size = float(style.font_size_px)
     ascent = float(measured.baseline_metrics['ascent'])
     descent = float(measured.baseline_metrics['descent'])
@@ -78,6 +88,8 @@ def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
     block = cell_height * count
     margin = float(style.line_y_margin_px)
     column = width - margin - ruby_allowance - size / 2
+    if item.lane:
+        column -= item.lane * max(size + float(style.line_gap_px), 1.0)
     top = {'top': margin, 'center': max((height - block) / 2, 0.0),
            'bottom': height - margin - block}[style.line_y_position]
     return column, top, cell_height, ascent
