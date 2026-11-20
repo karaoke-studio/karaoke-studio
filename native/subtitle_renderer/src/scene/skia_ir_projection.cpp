@@ -150,6 +150,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
         const bool rubyScanline = features.contains("p07_ruby_scanline");
+        const bool roleLayers = features.contains("p07_role_scanline_layers")
+            && !source.wipeReverse && source.karaokeAnimation == "none"
+            && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && !source.strokeFlashEnabled && source.fxBursts.empty();
         // The band follows the posed unit during forward Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
@@ -165,7 +169,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                     && (!composedScanline || source.wipeReverse || resolved.scanlineMode == "role"))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
-                || (rubyScanline && (source.wipeReverse || resolved.scanlineMode == "role"
+                || (rubyScanline && (source.wipeReverse || (resolved.scanlineMode == "role" && !roleLayers)
                     || source.entryAnimation != "none" || source.exitAnimation != "none"
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前仅支持横排实色高亮带");

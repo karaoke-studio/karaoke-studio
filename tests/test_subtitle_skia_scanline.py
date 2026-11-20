@@ -126,7 +126,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 
 
 @pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical',
-                                  'ruby_role', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
+                                  'ruby_role_utopia', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
@@ -137,9 +137,9 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
     elif case == 'rtl': track, style = rtl_source(project); style = band(style)
     elif case == 'vertical': track, style = vertical_ruby_source(project); track = replace(track, rubies=[]); style = band(style)
-    elif case == 'ruby_role':
+    elif case == 'ruby_role_utopia':
         track, style = vertical_ruby_source(project)
-        style = replace(band(replace(style, vertical=False)), scanline_mode='role')
+        style = replace(band(replace(style, vertical=False)), scanline_mode='role', karaoke_anim='utopia')
     elif case == 'roles':
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
         track = replace(track, lines=[replace(track.lines[0], chars=[
@@ -810,7 +810,7 @@ def test_combined_particle_layers_match_actual_d2d_and_gpu_raster(binary, projec
 
 
 # scanline_band_schema=6: the band repaints over a static glow (main and upper ruby).
-P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_brighten',
+P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_brighten', 'scanline_mode_role',
                       'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none',
                       'karaoke_scanline', 'karaoke_utopia_scanline', 'karaoke_zoom_pulse_scanline']
 P00_SCANLINE_CASES += [f'scanline_particles_{kind}' for kind, _ in SCANLINE_PARTICLE_SPRITES]
@@ -866,13 +866,17 @@ def test_glow_band_capability_and_out_of_order_seek(binary, reading, case, anima
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('animation', ['none', 'zoom_pulse'])
-def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, animation):
+@pytest.mark.parametrize('animation', ['none', 'zoom_pulse', 'role'])
+def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, animation, tmp_path):
     track, style = glow_band_source(reading, 'inherited')
-    ir = upper_ir(binary, (track, replace(style, karaoke_anim=animation)), 1)
+    style = (replace(style, scanline_mode='role', scanline_role_name='__global__') if animation == 'role'
+             else replace(style, karaoke_anim=animation))
+    ir = upper_ir(binary, (track, style), 1)
     bad = copy.deepcopy(ir)
     if animation == 'zoom_pulse':
         bad['required_features'].remove('p07_composed_scanline')
+    elif animation == 'role':
+        bad['required_features'].remove('p07_role_scanline_layers')
     else:
         bad['skia_layout']['scanline_band_schema'] = 5
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
@@ -882,11 +886,15 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
             configure(process, bad)
         after, _ = collect(process, [1100], generation=2)
     assert before[0][..., 3].any() and np.array_equal(before, after)
+    if animation == 'role':
+        (tmp_path / 'ruby-role-scanline-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
 
 
 @pytest.mark.parametrize('change', [
     {'decoration_kind': 'shadow', 'decoration_kind_before': 'shadow'},
-    {'scanline_mode': 'role', 'scanline_role_name': '__global__'},
+    {'scanline_mode': 'role', 'scanline_role_name': '__global__', 'scanline_effect': 'star'},
     {'entry_anim': 'fade', 'entry_lead_ms': 400},
     {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
     {'scanline_effect': 'star', 'sing_fx': 'twinkle'},

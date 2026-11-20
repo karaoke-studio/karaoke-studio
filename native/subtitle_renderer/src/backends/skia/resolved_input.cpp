@@ -394,10 +394,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_composed_stroke_flash");
-        // scanline_band_schema=6: the band repaints over a static glow (no shadow,
-        // no role palette); the glow is drawn under the text as without a band.
+        // The band repaints the glyph stack above its existing static glow.
+        const bool roleScanlineGlow = features.contains("p07_role_scanline_layers")
+            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.strokeFlashEnabled && line.bursts.empty();
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
-            && layout.value("scanline_band_schema").toDouble(-1) >= 6 && style.scanlineMode != "role";
+            && layout.value("scanline_band_schema").toDouble(-1) >= 6
+            && (style.scanlineMode != "role" || roleScanlineGlow);
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
         if (hasDecoration
