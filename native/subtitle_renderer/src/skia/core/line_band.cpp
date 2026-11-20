@@ -34,7 +34,7 @@ void LineBandTexture::prepareMiddle() {
 }
 
 void LineBandTexture::draw(SkCanvas& canvas, const SkRect& destination, float alpha, int timeMs) const {
-    if (outerStroke) drawOuterStroke(canvas, destination, alpha, timeMs);
+    if (stroke) drawStroke(canvas, destination, alpha, timeMs);
     else drawContent(canvas, destination, alpha, timeMs);
 }
 

@@ -475,16 +475,44 @@ def test_line_band_outer_stroke_expands_transparent_alpha(binary, project, tmp_p
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('entry, leave', [('none', 'none'), ('fade', 'slide_out')])
-def test_line_band_outer_stroke_matches_actual_gpu(binary, application, tmp_path, entry, leave):
+@pytest.mark.parametrize('position', ['outside', 'inside', 'center'])
+def test_line_band_stroke_matches_actual_gpu(binary, application, tmp_path, entry, leave, position):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
     style = replace(base.style, line_band_image=str(transparent_band_image(tmp_path)), line_band_fill_mode='stretch',
                     line_band_stroke_enabled=True, line_band_stroke_size_px=3, line_band_stroke_color='#4FD5FD',
-                    entry_anim=entry, exit_anim=leave)
-    case = replace(base, case_id=f'line_band_outer_stroke_{entry}', style=style)
+                    line_band_stroke_position=position, entry_anim=entry, exit_anim=leave)
+    case = replace(base, case_id=f'line_band_stroke_{position}_{entry}', style=style)
     assert_ruby_transition_gpu_parity(binary, case, (299, 450, 600, 1500, 2600, 4400, 5200, 5499, 5500))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_line_band_stroke_inside_stays_in_image_alpha(binary, project, tmp_path, target):
+    track, style = motion_project(project, entry='none', exit='none')
+    style = replace(style, line_band_enabled=True, line_band_image=str(transparent_band_image(tmp_path)),
+                    line_band_fill_mode='stretch', line_band_opacity_pct=100, line_band_stroke_size_px=3,
+                    line_band_stroke_color='#F4CE00', line_band_stroke_enabled=True)
+    irs = [ir_for(binary, (track, replace(style, line_band_stroke_position=pos))) for pos in ('inside', 'center')]
+    plain = ir_for(binary, (track, replace(style, line_band_stroke_enabled=False)))
+    # Use integral edges so both the direct and intermediate-image samples
+    # have the same origin when checking the alpha mask.
+    for ir in [plain, *irs]:
+        line, = ir['skia_layout']['lines']
+        line['line_band_rect'] = [round(edge) for edge in line['line_band_rect']]
+    assert all('p08_line_band_stroke_position' in ir['required_features'] for ir in irs)
+    t = irs[0]['track']['lines'][0]['display_start_ms'] + 250
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, plain)
+        bare, _ = collect(process, [t])
+        configure(process, irs[0])
+        inside, _ = collect(process, [t], generation=2)
+        configure(process, irs[1])
+        centered, _ = collect(process, [t], generation=3)
+    outside = bare[0][..., 3] == 0
+    assert not np.any(inside[0][outside, 3]) and np.count_nonzero(centered[0][outside, 3]) > 100
+    assert np.count_nonzero(inside[0] != bare[0]) > 100
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

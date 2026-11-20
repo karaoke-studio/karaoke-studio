@@ -28,8 +28,11 @@ struct LineBandTexture {
         std::int64_t endMs = 0;
     };
     struct Stroke {
+        enum class Position { Outside, Inside, Center };
+
         float size = 0;
         SkColor color = SK_ColorWHITE;
+        Position position = Position::Outside;
     };
 
     sk_sp<SkImage> image;
@@ -39,7 +42,7 @@ struct LineBandTexture {
     sk_sp<SkImage> repeatedMiddle;
     sk_sp<SkImage> staffLines, staffClef;
     std::vector<Frame> animation;
-    std::optional<Stroke> outerStroke;
+    std::optional<Stroke> stroke;
 
     void prepareMiddle();
     void validateStrokeBounds(const SkRect&) const;
@@ -47,7 +50,7 @@ struct LineBandTexture {
 
 private:
     void drawContent(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
-    void drawOuterStroke(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
+    void drawStroke(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
     void drawLayer(SkCanvas&, const sk_sp<SkImage>&, const sk_sp<SkImage>& middle,
                    const SkRect& destination, float alpha) const;
 };

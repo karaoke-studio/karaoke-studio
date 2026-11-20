@@ -34,7 +34,7 @@ def write_line_band(ir, style, prepared, *, width, height):
             or style.vertical or style.right_to_left
             or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
             or style.line_band_shadow_enabled or style.line_band_glow_enabled
-            or (stroke and (sequence or style.line_band_stroke_position != 'outside'))
+            or (stroke and (sequence or style.line_band_stroke_position not in {'outside', 'inside', 'center'}))
             or style.volume_enabled or style.lit_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
@@ -104,7 +104,8 @@ def write_line_band(ir, style, prepared, *, width, height):
     if style.line_band_tint:
         ir['required_features'].append('p08_tinted_line_band')
     if stroke:
-        ir['required_features'].append('p08_line_band_outer_stroke')
+        ir['required_features'].append('p08_line_band_outer_stroke' if style.line_band_stroke_position == 'outside'
+                                       else 'p08_line_band_stroke_position')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
     if sliced:

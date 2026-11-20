@@ -93,7 +93,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool tintedBand = features.contains("p08_tinted_line_band");
     const bool bandWithEffects = features.contains("p08_line_band_with_effects");
     const bool bandTransition = features.contains("p08_line_band_transition");
-    const bool strokeBand = features.contains("p08_line_band_outer_stroke");
+    const bool positionedStrokeBand = features.contains("p08_line_band_stroke_position");
+    const bool strokeBand = features.contains("p08_line_band_outer_stroke") || positionedStrokeBand;
     const bool hasStrokeBand = band.stroke.enabled && band.stroke.sizePx > 0;
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
@@ -109,7 +110,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || cfg.vertical || cfg.rightToLeft || (tintedBand == band.tint.isEmpty())
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
             || !bandLayersSupported || band.edgeKind != "none" || band.shadow.enabled || band.glow.enabled
-            || strokeBand != hasStrokeBand || (strokeBand && (band.stroke.position != "outside"
+            || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")
                 || band.stroke.sizePx > 512)))))
         throw BackendError("Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
@@ -134,6 +135,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             auto& stroke = out.lineBand.stroke;
             stroke.enabled = true;
             stroke.size = float(band.stroke.sizePx * cfg.dpr);
+            stroke.position = band.stroke.position.toStdString();
             const QColor paint(band.stroke.color);
             if (paint.isValid()) stroke.color = color(paint);
         }

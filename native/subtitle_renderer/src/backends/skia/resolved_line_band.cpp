@@ -164,8 +164,11 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
     }
     if (band.stroke.enabled) {
         const auto& color = band.stroke.color;
-        texture.outerStroke = ::subtitle::skia::LineBandTexture::Stroke{
-            band.stroke.size, SkColorSetARGB(color.alpha, color.red, color.green, color.blue)};
+        using Position = ::subtitle::skia::LineBandTexture::Stroke::Position;
+        const auto position = band.stroke.position == "inside" ? Position::Inside
+            : band.stroke.position == "center" ? Position::Center : Position::Outside;
+        texture.stroke = ::subtitle::skia::LineBandTexture::Stroke{
+            band.stroke.size, SkColorSetARGB(color.alpha, color.red, color.green, color.blue), position};
     }
     return texture;
 }
