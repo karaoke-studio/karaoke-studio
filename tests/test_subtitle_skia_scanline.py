@@ -336,7 +336,10 @@ def assert_feather_profile(reference, candidate, bare_reference, bare_candidate,
 
 
 RUBY_BAND_TIMES = [299, 450, 550, 899, 1100, 1400, 1550, 1900, 2100, 2300]
-SCANLINE_MOTIONS = [('slide_in', 'slide_out'), ('rise', 'rise'), ('fade', 'fade')]
+SCANLINE_MOTIONS = [
+    ('band', 'slide_in', 'slide_out'), ('band', 'rise', 'rise'), ('band', 'fade', 'fade'),
+    ('flame', 'slide_in', 'slide_out'), ('bubble', 'rise', 'rise'), ('animated', 'fade', 'fade'),
+]
 
 
 def ruby_band_source(reading, softness, utopia=False):
@@ -346,18 +349,25 @@ def ruby_band_source(reading, softness, utopia=False):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('entry,leave', SCANLINE_MOTIONS)
-def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, target, entry, leave):
+@pytest.mark.parametrize('shape,entry,leave', SCANLINE_MOTIONS)
+def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, target, shape, entry, leave):
     track, style = ruby_band_source(reading, 10, True)
     track = replace(track, lines=[replace(track.lines[0], display_end_override_ms=2200)])
     style = replace(style, entry_anim=entry, exit_anim=leave, entry_lead_ms=600, exit_fade_ms=600)
+    if shape == 'animated':
+        style = replace(style, scanline_shape='image', scanline_image_band_enabled=False,
+                        scanline_image_path=str(Path(__file__).with_name('data') / 'guide_anim_3frames.gif'))
+    else:
+        style = replace(style, scanline_shape=shape)
     ir = upper_ir(binary, (track, style), 1)
     bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
     assert 'p07_scanline_line_animation' in ir['required_features']
+    feature = 'p07_scanline_line_animation' if shape == 'band' else 'p07_scanline_shape_line_animation'
+    assert feature in ir['required_features']
     assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
     times = [0, 450, 550, 1100, 1880, 2050, 2200]
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_line_animation')
+    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [*times, 550])
@@ -372,14 +382,14 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('entry,leave', SCANLINE_MOTIONS)
-def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, application, tmp_path, entry, leave):
+@pytest.mark.parametrize('shape,entry,leave', SCANLINE_MOTIONS)
+def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, application, tmp_path, shape, entry, leave):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
-    base = next(c for c in build_cases(tmp_path) if c.case_id == 'scanline_band')
+    base = next(c for c in build_cases(tmp_path) if c.case_id == f'scanline_{shape}')
     line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
-    case = replace(base, case_id=f'scanline_line_{entry}', track=replace(base.track, lines=[line]),
+    case = replace(base, case_id=f'scanline_{shape}_line_{entry}', track=replace(base.track, lines=[line]),
                    style=replace(base.style, entry_anim=entry, exit_anim=leave))
     assert_ruby_transition_gpu_parity(binary, case, (950, 1120, 1260, 1380, 1550, 2600,
                                                     4110, 4280, 4450, 4530, 4610, 4650))

@@ -84,6 +84,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_band",
         "p07_scanline_line_animation",
         "p07_scanline_shape",
+        "p07_scanline_shape_line_animation",
         "p07_scanline_image",
         "p07_composed_scanline",
         "p07_role_scanline_layers",
@@ -344,6 +345,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 扫字线形态布局版本无效");
     if (features.contains("p07_scanline_image") && !features.contains("p07_scanline_shape"))
         throw BackendError("Skia 图片扫字线缺少形态能力声明");
+    if (features.contains("p07_scanline_shape_line_animation")
+        && (!features.contains("p07_scanline_shape") || !features.contains("p07_scanline_line_animation")))
+        throw BackendError("Skia 异形扫字线缺少形态或整行出入场能力声明");
     const auto scanlineVersion = layout.value("scanline_band_schema").toDouble(-1);
     if (features.contains("p07_scanline_band")
         && (scanlineVersion < 1 || scanlineVersion > kScanlineBandSchema || std::floor(scanlineVersion) != scanlineVersion))

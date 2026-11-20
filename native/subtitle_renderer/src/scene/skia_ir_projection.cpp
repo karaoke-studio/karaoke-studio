@@ -135,11 +135,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (allowParticleTransition && !skiaParticleKindForTransition(animation, entry).isEmpty()
                 && (!isSkiaEnergyTransition(animation) || transformVersion >= 8));
     };
-    const auto supportedAnimation = [=](const QString& animation, bool entry) {
+    const auto plainLineAnimation = [=](const QString& animation, bool entry) {
         return animation == "none" || (allowFade && animation == "fade")
+            || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"));
+    };
+    const auto supportedAnimation = [&](const QString& animation, bool entry) {
+        return plainLineAnimation(animation, entry)
             || (features.contains("p07_utopia_transition") && animation == "utopia")
             || (allowNoise && animation == "noise")
-            || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"))
             || (allowCharacterFade && animation == "char_fade")
             || (allowCharacterTransform && transformAnimation(animation, entry));
     };
@@ -184,23 +187,21 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         // The band follows the posed unit during forward Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
+        const bool solidShape = features.contains("p07_scanline_shape")
+            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
+                || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
+            && resolved.scanlineMode == "color" && !source.wipeReverse
+            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool movingScanline = features.contains("p07_scanline_line_animation") && utopiaSinging
-            && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
-            && (source.entryAnimation == "none" || source.entryAnimation == "fade"
-                || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")
-            && (source.exitAnimation == "none" || source.exitAnimation == "fade"
-                || source.exitAnimation == "slide_out" || source.exitAnimation == "rise")
+            && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
+            && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
+            && plainLineAnimation(source.exitAnimation, false)
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
             && !source.wipeReverse && (staticScanline || movingScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
-        const bool scanlineShape = features.contains("p07_scanline_shape")
-            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
-                || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
-            && resolved.scanlineMode == "color" && !source.wipeReverse
-            && source.entryAnimation == "none" && source.exitAnimation == "none"
-            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
+        const bool scanlineShape = solidShape && (staticScanline || movingScanline);
         // Horizontal band with a separately negotiated upper-annotation pass.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
