@@ -174,6 +174,58 @@ def test_lower_shadow_and_glow_match_actual_gpu(binary, application, tmp_path, p
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('shadow', [False, True])
+def test_lower_decoration_keeps_its_clocks_under_line_animation(binary, glowing_lower, target, shadow):
+    track, style, resolve = glowing_lower
+    track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=50, display_end_override_ms=2400)])
+    style = lower_shadow_style(style, 'after') if shadow else style
+    style = replace(style, karaoke_anim='utopia')
+    animated = replace(style, entry_anim='slide_in', exit_anim='slide_out', entry_lead_ms=600, exit_fade_ms=600)
+    ir = ir_for(binary, (track, animated, resolve))
+    still = ir_for(binary, (track, style, resolve))
+    feature = 'p07_lower_ruby_decoration_line_animation'
+    assert feature in ir['required_features'] and feature not in still['required_features']
+    assert ir['skia_layout']['lines'] == still['skia_layout']['lines']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    source, = ir['track']['lines']
+    start, end = source['display_start_ms'], source['display_end_ms']
+    entry_ms, exit_ms = source['entry_duration_ms'], source['exit_duration_ms']
+    early, late = start + entry_ms // 2, end - exit_ms // 2
+    middle = (start + entry_ms + end - exit_ms) // 2
+    times = [start, early, middle, late, end]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, early])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [late], generation=2)
+        configure(process, still)
+        static, _ = collect(process, times, generation=3)
+    assert not frames[0].any() and not frames[-2].any()
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[3], replay[0])
+    assert np.array_equal(frames[2], static[2])
+    for index in (1, 3):
+        assert 0 < frames[index][..., 3].sum() < static[index][..., 3].sum()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,leave,shadow', [('slide_in', 'slide_out', None), ('rise', 'rise', 'before'),
+                                               ('fade', 'fade', 'after')])
+def test_lower_decoration_line_animation_matches_actual_gpu(binary, application, tmp_path, entry, leave, shadow):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
+    style = lower_shadow_style(base.style, shadow) if shadow else base.style
+    case = replace(base, case_id=f'lower_decoration_{entry}', track=replace(base.track, lines=[line]),
+                   style=replace(style, entry_anim=entry, exit_anim=leave))
+    assert_ruby_transition_gpu_parity(binary, case, (950, 1120, 1260, 1380, 1550, 2600,
+                                                    4110, 4280, 4450, 4530, 4610, 4650))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_product_lower_preserves_source_and_uses_independent_alpha_paints(binary, independent, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.ruby import lower, style as qt_ruby
     from krok_helper.subtitle_render.engine.render.elements.horizontal import layout

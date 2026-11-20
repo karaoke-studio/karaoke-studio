@@ -132,7 +132,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && scene.charStyles.empty();
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale"));
-    const bool allowLowerDecoration = !vertical && staticLine
+    const bool lowerLineAnimation = features.contains("p07_lower_ruby_decoration_line_animation")
+        && line.karaokeAnimation == "utopia"
+        && (line.entryAnimation == "none" || line.entryAnimation == "fade"
+            || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
+        && (line.exitAnimation == "none" || line.exitAnimation == "fade"
+            || line.exitAnimation == "slide_out" || line.exitAnimation == "rise");
+    const bool allowLowerDecoration = !vertical && (staticLine || lowerLineAnimation)
         && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
         && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);

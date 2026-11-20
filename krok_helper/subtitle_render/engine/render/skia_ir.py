@@ -632,6 +632,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             animates_line = True
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
+        if any(source.get('karaoke_anim') == 'utopia' and _ordinary_line_animation(source)
+               and {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+               and any('lower_glow' in group or 'lower_shadow' in group for group in final['ruby_groups'])
+               for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True)):
+            ir['required_features'].append('p07_lower_ruby_decoration_line_animation')
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
     _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines)
