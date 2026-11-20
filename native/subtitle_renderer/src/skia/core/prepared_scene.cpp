@@ -34,6 +34,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
     if (!viewport_.isFinite())
         throw std::runtime_error("Skia 字幕视口变换无效");
     std::size_t totalPoints = 0, totalCells = 0, totalGroups = 0;
+    std::size_t remainingBitmapHaloBytes = std::size_t(256) << 20;
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
@@ -122,6 +123,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     previousPosition = point.position;
                 }
             }
+            if (cell.bitmap && (!cell.path.isEmpty() || cell.outline || cell.outerOutline || source.vertical
+                                || source.wipeRightToLeft || source.noWipe || cell.strokeFlashWidth > 0))
+                throw std::runtime_error("Skia 图片导唱符仅支持正向横排走字单元");
             if (cell.outline) line.hasOutline = true;
             if (cell.outerOutline) line.hasOuterOutline = true;
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
@@ -130,7 +134,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 glow.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
-                                  cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth});
+                                  cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth,
+                                  cell.bitmap ? std::make_shared<const PreparedBitmapGuide>(*cell.bitmap, remainingBitmapHaloBytes)
+                                              : nullptr});
         }
         if (line.utopiaTransition.leave) {
             line.followingDone.resize(line.cells.size());

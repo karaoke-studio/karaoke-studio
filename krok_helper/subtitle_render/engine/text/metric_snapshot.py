@@ -36,7 +36,11 @@ class CellMetric:
         encoded = text.encode('utf-8')
         boundaries = {len(encoded)} | {i for i, b in enumerate(encoded) if b & 0xc0 != 0x80}
         clusters = tuple((int(g['cluster_start']), int(g['cluster_end'])) for g in payload['glyphs'])
-        if payload.get('vector_glyph_id'):
+        if payload.get('bitmap_guide'):
+            # bitmap_guide_schema=1: an expanded image guide cell has no glyphs.
+            if text != '￼' or clusters or not str(payload['font_identity']).startswith('bitmap:'):
+                raise ValueError("字体度量包含无效 cluster 映射")
+        elif payload.get('vector_glyph_id'):
             # vector_guide_schema=1: an expanded guide cell is a glyphless outline reference.
             if text != '\uFFFC' or clusters or not str(payload['font_identity']).startswith('vector:'):
                 raise ValueError("字体度量包含无效 cluster 映射")

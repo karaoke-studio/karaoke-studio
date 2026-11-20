@@ -14,6 +14,8 @@ from .skia_width import cell_geometry
 from ..layout.line.skia_rows import RowFrame, source_row_frames
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import vector_guide_metrics
+from krok_helper.subtitle_render.engine.guide.skia_bitmap import bitmap_guide_metrics, bitmap_guide_timing_width
+from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,11 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
             if index is not None:
                 row.append(measured[run]['cells'][index])
                 continue
+            if guide_symbol_is_bitmap(char.vector_glyph):
+                # bitmap_guide_schema=1: the image box is the cell's ink.
+                row.append(bitmap_guide_metrics(char.vector_glyph, selected.font_size_px,
+                                                measured[run]['font_metrics'], selected.stroke_width_px))
+                continue
             if glyph_table is None:
                 from krok_helper.subtitle_render.native.protocol import VectorGlyphTable
                 glyph_table = VectorGlyphTable()
@@ -83,8 +90,10 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
         widths = tuple(g[0] for g in geometry)
         # Guide layout uses the GPU's fractional advance. The shared timeline
         # uses the existing integer guide width for both timing weights.
-        timing_widths = tuple(max(round(width), 1) if char.vector_glyph is not None else width
-                              for char, width in zip(line.chars, widths, strict=True))
+        timing_widths = tuple(
+            bitmap_guide_timing_width(char.vector_glyph, selected) if guide_symbol_is_bitmap(char.vector_glyph)
+            else max(round(width), 1) if char.vector_glyph is not None else width
+            for char, width, (_, _, selected) in zip(line.chars, widths, references, strict=True))
         lines.append(MeasuredLine(cells, tuple(r for r, _, _ in references), widths,
                                   tuple(g[1] for g in geometry), edge_sizes, measured[main]['font_metrics'],
                                   slot_metrics=tuple(measured[r]['font_metrics'] for r, _, _ in references)))

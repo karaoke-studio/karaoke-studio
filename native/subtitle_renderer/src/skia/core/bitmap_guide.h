@@ -1,0 +1,45 @@
+#pragma once
+
+#include "include/core/SkImage.h"
+#include "include/core/SkRect.h"
+#include "static_glow.h"
+#include <cstddef>
+#include <vector>
+
+class SkCanvas;
+
+namespace subtitle::skia {
+// bitmap_guide_schema=1: a line-prefix image guide as the existing GPU draws
+// it. The before/after images are decoded at the platform boundary; the box
+// is final physical geometry. Glow follows the GPU: the image alpha tinted
+// with the state's decoration color, blurred at the image's own resolution
+// (sigma divided by the box scale) once per concentration pass, and drawn
+// with linear sampling over the box before the image itself.
+struct BitmapGuide {
+    sk_sp<SkImage> before, after; // after is empty for a guide that never wipes
+    SkRect box = SkRect::MakeEmpty();
+    StaticGlow glow;
+    bool decorate = true;
+    float clipPad = 0; // Wipe clip reach beyond the box (stroke widths + 4).
+};
+
+class PreparedBitmapGuide {
+public:
+    PreparedBitmapGuide(const BitmapGuide&, std::size_t& remainingHaloBytes);
+    bool wipes() const { return bool(after_); }
+    const SkRect& box() const { return box_; }
+    float clipPad() const { return clipPad_; }
+    void draw(SkCanvas&, bool after, float opacity) const;
+
+private:
+    struct Halo {
+        sk_sp<SkImage> image; // Premultiplied tint blurred at native resolution, padded.
+        float pad = 0;        // Native padding on each side.
+    };
+    std::vector<Halo> prepareHalo(const SkImage&, const GlowState&, std::size_t& remainingBytes) const;
+    sk_sp<SkImage> before_, after_;
+    SkRect box_;
+    float clipPad_;
+    std::vector<Halo> halo_[2];
+};
+}

@@ -83,7 +83,9 @@ def validate_vector_guides(track, style):
     from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
     from ..layout.line.style import style_for_line
     for line in track.lines:
-        cells = [c for c in render_line_with_guide_symbols(line).chars if c.vector_glyph is not None]
+        # Bitmap guides follow the separate bitmap_guide_schema subset.
+        cells = [c for c in render_line_with_guide_symbols(line).chars
+                 if c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)]
         if not cells:
             continue
         appearance = style_for_line(style, line)
@@ -109,11 +111,12 @@ VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
 
 def compose_vector_guides(track, features):
     """Append p05_vector_guide_composition, or reject an unverified combination."""
-    from .semantics import render_line_with_guide_symbols
+    from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
     if 'p05_vector_guides' not in features or not VECTOR_GUIDE_COMPOSITION_TRIGGERS.intersection(features):
         return
     for line in track.lines:
-        if not any(c.vector_glyph is not None for c in render_line_with_guide_symbols(line).chars):
+        if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
+                   for c in render_line_with_guide_symbols(line).chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')

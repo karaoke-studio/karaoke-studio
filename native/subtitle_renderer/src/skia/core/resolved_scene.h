@@ -14,6 +14,7 @@
 #include "image_fill.h"
 #include "static_shadow.h"
 #include "static_glow.h"
+#include "bitmap_guide.h"
 #include "singing_scale.h"
 #include "utopia_transition.h"
 #include "../../model/wipe_point.h"
@@ -37,6 +38,7 @@ struct ResolvedCell {
     std::optional<SolidOutline> outerOutline;
     CharacterPivot pivot;
     float strokeFlashWidth = 0;
+    std::optional<BitmapGuide> bitmap; // bitmap_guide_schema=1: drawn instead of the empty path.
 };
 struct ResolvedRubyGroup {
     std::vector<ResolvedCell> cells;

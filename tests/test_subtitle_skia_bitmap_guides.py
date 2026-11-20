@@ -1,0 +1,206 @@
+"""Line-prefix bitmap guides (bitmap_guide_schema=1) against the existing GPU."""
+from base64 import b64decode
+from dataclasses import replace
+import copy
+import sys
+
+import numpy as np
+import pytest
+from PyQt6.QtGui import QColor, QImage
+
+from test_subtitle_skia_rtl_flow import application, binary, collect, configure, ir_for, project, selection
+from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+from krok_helper.subtitle_render.engine.guide.skia_bitmap import bitmap_guide_box
+from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
+from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
+
+GPU = pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+TIMES = (250, 600, 900, 1250, 1500, 2600, 3700, 4200)
+
+
+def image(path, width=12, height=12, color='#30FF80'):
+    picture = QImage(width, height, QImage.Format.Format_ARGB32)
+    picture.fill(QColor(color))
+    for x in range(width // 3):
+        for y in range(height):
+            picture.setPixelColor(x, y, QColor('#FF3050'))
+    assert picture.save(str(path))
+    return str(path)
+
+
+def p00_guide(tmp_path, *, family=None, **changes):
+    """The original P00 guide_bitmap: Utopia singing, upper ruby, double outlines and glow."""
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'guide_bitmap')
+    line = case.track.lines[0]
+    if family is not None:
+        # Protocol and seek tests use the same generated font on every OS.
+        line = replace(line, chars=[replace(char, text=text)
+                                    for char, text in zip(line.chars, 'A字A字字한', strict=True)])
+        ruby, = case.track.rubies
+        style = replace(case.style, font_family=family, font_family_latin=family,
+                        ruby_font_family=family, ruby_font_family_latin=family)
+        case = replace(case, style=style, track=replace(case.track, rubies=[replace(ruby, kanji='字한', reading='AAAA')]))
+    track = replace(case.track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, **changes))])
+    return case, track
+
+
+def test_guide_box_follows_the_gpu_sizing_contract(tmp_path):
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    wide = image(tmp_path / 'wide.png', 30, 20)
+    tall = image(tmp_path / 'tall.png', 8, 24)
+    metrics = {'ascent': 66.0, 'descent': 22.0}
+    symbol = GuideSymbol(kind='bitmap', bitmap_before_path=tall, bitmap_after_path=wide, bitmap_zoom_percent=150,
+                         bitmap_margin_left_px=3, bitmap_margin_right_px=-5, bitmap_margin_bottom_px=4)
+    # The after image sizes the cell; integer height 90*150//100, fractional width.
+    advance, ink = bitmap_guide_box(symbol, 90, metrics, 5)
+    assert ink == (3.0, 22 + 2 - 4 - 135.0, 3 + 202.5, 22 + 2 - 4)
+    assert advance == 202.5 + 3 - 5
+    fixed, fixed_ink = bitmap_guide_box(replace(symbol, bitmap_fix_size=True, bitmap_after_path=None), 90, metrics, 0)
+    assert fixed == 8 + 3 - 5 and fixed_ink == (3.0, 22 - 4 - 24.0, 11.0, 18.0)
+    collapsed, _ = bitmap_guide_box(replace(symbol, bitmap_margin_right_px=-400), 90, metrics, 0)
+    assert collapsed == 0
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path, target):
+    case, track = p00_guide(tmp_path, family=project[1].font_family)
+    ir = ir_for(binary, (track, case.style))
+    assert 'p08_bitmap_guides' in ir['required_features'] and ir['skia_layout']['bitmap_guide_schema'] == 1
+    assert 'p05_vector_guides' not in ir['required_features']
+    source, = ir['track']['lines']
+    final, = ir['skia_layout']['lines']
+    assert source['chars'][0]['text'] == '￼' and 'bitmap_guide' in source['chars'][0]
+    assert [c['start_ms'] for c in source['chars'][:2]] == [200, 1200]
+    cell = final['cells'][0]
+    assert cell['metrics']['bitmap_guide'] and cell['metrics']['glyphs'] == []
+    assert cell['metrics']['advance'] == 90 and cell['metrics']['ink'][2] - cell['metrics']['ink'][0] == 90
+    # Ruby ownership moves with the prefix cell into the render cells.
+    group, = final['ruby_groups']
+    assert group['units'][0]['interval_ms'][0] >= source['resolved_intervals'][5][0]
+    forgeries = []
+    for mutation in ('feature', 'schema', 'ink', 'advance', 'wipe', 'unverified', 'identity'):
+        bad = copy.deepcopy(ir)
+        forged = bad['skia_layout']['lines'][0]['cells'][0]
+        if mutation == 'feature': bad['required_features'].remove('p08_bitmap_guides')
+        elif mutation == 'schema': bad['skia_layout']['bitmap_guide_schema'] = 2
+        elif mutation == 'ink': forged['metrics']['ink'][3] += 1
+        elif mutation == 'advance': forged['metrics']['advance'] += .5
+        elif mutation == 'wipe': forged['wipe_right'] += 2
+        elif mutation == 'unverified': bad['required_features'].append('p06_static_shadow')
+        else: forged['metrics']['font_identity'] = 'vector:x'
+        forgeries.append(bad)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        before, _ = collect(process, [600])
+        for bad in forgeries:
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+        after, _ = collect(process, [600], generation=2)
+    assert before[0].any() and np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('change', ['inline', 'replacement', 'role', 'vertical', 'rtl', 'reverse', 'shadow',
+                                    'lower', 'animated', 'missing'])
+def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
+    case, track = p00_guide(tmp_path, family=project[1].font_family)
+    style, line = case.style, track.lines[0]
+    symbol = line.guide_symbol
+    if change == 'inline':
+        line = replace(line, guide_symbol=None, inline_guide_symbols={1: symbol})
+    elif change == 'replacement':
+        line = replace(line, guide_symbol=replace(symbol, replacement_prefix=(line.chars[0].text,)))
+    elif change == 'role':
+        line = replace(line, guide_symbol=replace(symbol, role_labels=('lead',)))
+    elif change == 'vertical': style = replace(style, vertical=True)
+    elif change == 'rtl': style = replace(style, right_to_left=True)
+    elif change == 'reverse': line = replace(line, wipe_reverse=True)
+    elif change == 'shadow': style = replace(style, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
+    elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
+    elif change == 'animated':
+        frames = tmp_path / 'blink.gif'
+        frames.write_bytes(b64decode(
+            'R0lGODlhAgACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAgAC'
+            'AAAIBgABCAQQEAAh+QQBCgABACwAAAAAAgACAIEAAP8AAAAAAAAAAAAIBgABCAQQEAA7'))
+        line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(frames)))
+    else:
+        line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
+    with pytest.raises(ValueError):
+        ir_for(binary, (replace(track, lines=[line]), style))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_bitmap_guide_out_of_order_seek_is_deterministic(binary, project, tmp_path, target):
+    case, track = p00_guide(tmp_path, family=project[1].font_family)
+    ir = ir_for(binary, (track, case.style))
+    order = [2600, 601, 199, 1250, 250, 1501, 900, 4200]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        ordered, _ = collect(process, sorted(order))
+        shuffled, _ = collect(process, order, generation=2)
+    by_time = dict(zip(sorted(order), ordered))
+    assert all(np.array_equal(by_time[t], f) for t, f in zip(order, shuffled))
+    assert not np.array_equal(by_time[250], by_time[2600])
+
+
+def test_bitmap_guide_large_native_halo_keeps_previous_scene(binary, project, tmp_path):
+    case, track = p00_guide(tmp_path, family=project[1].font_family)
+    valid = ir_for(binary, (track, case.style))
+    line = track.lines[0]
+    guide = replace(line.guide_symbol, bitmap_zoom_percent=1, bitmap_after_path=None,
+                    bitmap_before_path=image(tmp_path / 'magnified-halo.png', 256, 256))
+    oversized = ir_for(binary, (replace(track, lines=[replace(line, guide_symbol=guide)]), case.style))
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, valid)
+        before, _ = collect(process, [600])
+        with pytest.raises(NativeRendererError, match='光晕尺寸超限'):
+            configure(process, oversized)
+        after, _ = collect(process, [600], generation=2)
+    assert before[0].any() and np.array_equal(before[0], after[0])
+
+
+VARIANTS = {
+    'original': {},
+    'before_only': {'after_path': None},
+    'no_decor': {'bitmap_no_decor': True},
+    'fixed_margins': {'bitmap_fix_size': True, 'bitmap_margin_left_px': 7, 'bitmap_margin_right_px': -3,
+                      'bitmap_margin_bottom_px': 6},
+    'zoom_two_images': {'bitmap_zoom_percent': 130, 'after_path': 'after'},
+    'anchored': {'prefix_timing': 'anchored'},
+}
+
+
+@GPU
+@pytest.mark.parametrize('variant', list(VARIANTS))
+def test_p00_bitmap_guide_matches_actual_gpu(binary, application, tmp_path, variant):
+    """Original decorated-text budgets, D2D GPU vs Skia Vulkan and Vulkan vs Raster."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_protocol import collect as collect_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    changes = dict(VARIANTS[variant])
+    after = changes.pop('after_path', ...)
+    if after is None:
+        changes['bitmap_after_path'] = None
+    elif after == 'after':
+        changes['bitmap_after_path'] = image(tmp_path / 'after.png', 18, 12, '#3070FF')
+    case, track = p00_guide(tmp_path, **changes)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, TIMES, force_warp=False, track=track,
+                                   width=1920, height=1080, dpr=1, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect_frames(process, TIMES)
+            rendered.append(frames)
+    assert_glow_parity(TIMES, reference, *rendered, f'guide_bitmap-{variant}', check_p00_edges=True)
+    # The whole-frame budget must not hide the guide: compare its own region too.
+    region = (slice(440, 700), slice(560, 800))
+    for t, ref, gpu in zip(TIMES, reference, rendered[0]):
+        def premultiplied(frame):
+            frame = frame[region].astype(float)
+            frame[..., :3] *= frame[..., 3:] / 255
+            return frame
+        diff = abs(premultiplied(ref) - premultiplied(gpu))
+        assert diff.mean() <= 5 and np.percentile(diff, 95) <= 24, (variant, t, diff.mean())

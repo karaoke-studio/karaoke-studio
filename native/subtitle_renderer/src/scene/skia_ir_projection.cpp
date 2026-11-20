@@ -298,6 +298,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         const bool composedGuide = features.contains("p05_vector_guide_composition");
         bool sawLyrics = false;
+        bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
             if (composedGuide && sawLyrics && cell.vectorGlyph)
                 throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
@@ -338,8 +339,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
-            if (cell.bitmapGuide
-                || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
+            // bitmap_guide_schema=1: line-prefix image guides on horizontal forward main text.
+            if (cell.bitmapGuide && (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
+                || cfg.rightToLeft || source.wipeReverse || &cellStyle != &resolved
+                || sawBitmapText))
+                throw BackendError("Skia 图片导唱符仅支持已验证的横排整行前置子集");
+            sawBitmapText = sawBitmapText || !cell.bitmapGuide;
+            if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
                 || !cell.resolvedEndMs)
                 throw BackendError("Skia 导唱符、未声明的缺字回退或未解析计时尚未支持");
             TextChar ch;
@@ -354,6 +360,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             }
             ch.text = cell.text.toStdWString();
             ch.vectorGlyph = cell.vectorGlyph;
+            ch.bitmapGuide = cell.bitmapGuide;
             // Legacy family hints are provenance only. The resolved font
             // resource chain is verified by resolvedSkiaInput, never rematched.
             ch.startMs = cell.startMs + offset;

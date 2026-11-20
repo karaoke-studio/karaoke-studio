@@ -2,6 +2,7 @@
 #include "include/core/SkPath.h"
 #include "resolved_scene.h"
 #include "wipe_group.h"
+#include <memory>
 #include <cstdint>
 #include <vector>
 
@@ -52,6 +53,7 @@ private:
         std::optional<SolidOutline> outerOutline;
         CharacterPivot pivot;
         float strokeFlashWidth = 0;
+        std::shared_ptr<const PreparedBitmapGuide> bitmap;
     };
     struct Line {
         std::vector<Cell> cells;

@@ -1,6 +1,7 @@
 #include "resolved_input.h"
 #include "resolved_wipe.h"
 #include "resolved_glyph.h"
+#include "resolved_bitmap_guide.h"
 #include "resolved_ruby.h"
 #include "resolved_signal.h"
 #include "image_fill_cache.h"
@@ -323,7 +324,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const auto glyphId = sourceChars[j].toObject().value("vector_glyph_id");
             if ((glyphId.isString() && !vector) || (vector && line.chars[j].text != L"\ufffc"))
                 throw BackendError("Skia 导唱符缺少有效的来源轮廓引用");
-            auto glyph = vector
+            const auto& bitmap = line.chars[j].bitmapGuide;
+            if (bitmap && (!features.contains("p08_bitmap_guides") || vector || line.chars[j].text != L"￼"))
+                throw BackendError("Skia 图片导唱符缺少版本化能力或来源无效");
+            auto glyph = bitmap
+                ? resolvedBitmapGuideCell(cell, *bitmap, imageCache, paint, glyphs.dpr, line.chars[clock].startMs,
+                                          line.chars[clock].endMs, beforeColor, afterColor, wipePad)
+                : vector
                 ? glyphs.vectorCell(cell, *vector, glyphId.toString(), paint.fontSize / glyphs.dpr, line.chars[clock].startMs,
                                     line.chars[clock].endMs, beforeColor, afterColor, wipePad)
                 : glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs,

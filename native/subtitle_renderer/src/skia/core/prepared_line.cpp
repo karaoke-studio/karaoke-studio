@@ -125,6 +125,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             wiping = start < tMs && tMs < followingEnd && start != followingEnd;
         }
         const auto transform = [&] {
+            if (cell.bitmap) return CharacterTransformState{}; // The GPU never poses a bitmap guide.
             if (utopia) {
                 const int following = line.utopiaTransition.leave ? line.followingDone[index] : 0;
                 return line.utopiaTransition.at(tMs, line.startMs, int(index), int(line.cells.size()), following,
@@ -167,8 +168,51 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         return transformedWipeEdge(origin, transform.matrix.mapPoint({cell.pivot.inkLeft, 0}).x(),
             transform.matrix.mapPoint({cell.pivot.inkRight, 0}).x(), ratio, cell.pivot.wipePad);
     };
+    // bitmap_guide_schema=1: the existing GPU draws a bitmap guide (glow, then
+    // image) in the body pass. A wiping guide clips each side around its own
+    // box by the stroke pad; after its own clock the front is the next
+    // outlined cell's front, else its own front extrapolated past the end.
+    const auto drawBitmapGuide = [&](std::size_t index) {
+        const auto& cell = line.cells[index];
+        const auto& guide = *cell.bitmap;
+        const auto phase = states[index].phase;
+        if (!guide.wipes() || phase != Phase::Wiping) {
+            guide.draw(canvas, guide.wipes() && phase == Phase::After, 1.f);
+            return;
+        }
+        float edge = front(cell, rawProgress(cell));
+        if (tMs > wipeEnd(cell)) {
+            if (index + 1 < line.cells.size() && !line.cells[index + 1].path.isEmpty()) {
+                edge = front(line.cells[index + 1], rawProgress(line.cells[index + 1]));
+            } else {
+                auto points = cell.wipePoints;
+                if (points.size() < 2) points = {{cell.startMs, 0.f}, {cell.endMs, 1.f}};
+                std::size_t begin = 0;
+                for (std::size_t i = points.size() - 1; i > 0; --i)
+                    if (points[i - 1].timeMs <= tMs) { begin = i - 1; break; }
+                const auto& from = points[begin];
+                const auto& to = points[begin + 1];
+                const int duration = cell.wipePoints.size() < 2 ? std::max(to.timeMs - from.timeMs, 1)
+                                                                : to.timeMs - from.timeMs;
+                edge = front(cell, duration == 0 ? to.position
+                    : from.position + (to.position - from.position) * float(tMs - from.timeMs) / float(duration));
+            }
+        }
+        const auto& box = guide.box();
+        const float pad = guide.clipPad();
+        for (const bool sung : {false, true}) {
+            SkAutoCanvasRestore keep(&canvas, true);
+            canvas.clipRect(sung ? SkRect::MakeLTRB(box.left() - pad, -1e6f, edge, 1e6f)
+                                 : SkRect::MakeLTRB(edge, -1e6f, box.right() + pad, 1e6f), true);
+            guide.draw(canvas, sung, 1.f);
+        }
+    };
     const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {
         const auto& cell = line.cells[index];
+        if (cell.bitmap) {
+            if (layer == Layer::Body) drawBitmapGuide(index);
+            return;
+        }
         const auto& stroke = layer == Layer::OuterOutline ? cell.outerOutline : cell.outline;
         const bool drawOutline = layer != Layer::Body;
         if (drawOutline && !stroke) return;

@@ -15,6 +15,8 @@ from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
+from krok_helper.subtitle_render.engine.guide.skia_bitmap import declare_bitmap_guides, validate_bitmap_guides
+from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from .skia_lower_ir import lower_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, RUBY_PARTICLE_EXITS, write_particle_anchors)
@@ -305,6 +307,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if source_style.vertical:
             validate_vertical_source(source)
         validate_vector_guides(source, source_style)
+        validate_bitmap_guides(source, source_style)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -432,7 +435,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p06_primary_solid_outline')
     if secondary_outline:
         ir['required_features'].append('p06_secondary_solid_outline')
-    if any(char.vector_glyph is not None for item in plan.lines for char in item.render_line.chars):
+    if any(char.vector_glyph is not None and not guide_symbol_is_bitmap(char.vector_glyph)
+           for item in plan.lines for char in item.render_line.chars):
         ir['required_features'].append('p05_vector_guides')
         ir['skia_layout']['vector_guide_schema'] = 1
     if any(line.get('entry_anim') == 'fade' or line.get('exit_anim') == 'fade'
@@ -691,4 +695,5 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             or style.viewport_offset_x or style.viewport_offset_y):
         ir['required_features'].append('p08_viewport')
     compose_vector_guides(track, ir['required_features'])
+    declare_bitmap_guides(plan.lines, ir)
     return ir
