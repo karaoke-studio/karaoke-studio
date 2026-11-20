@@ -69,6 +69,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_animated_staff_line_band",
         "p08_animated_line_band",
         "p08_tinted_line_band",
+        "p08_line_band_with_effects",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",
@@ -417,6 +418,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 五线谱动画缺少对应布局能力");
     const bool simpleBandAnimation = features.contains("p08_animated_line_band");
     const bool tintedBand = features.contains("p08_tinted_line_band");
+    if (features.contains("p08_line_band_with_effects")
+        && (!features.contains("p08_static_line_band")
+            || (!features.contains("p07_scanline_band") && !features.contains("p07_sing_twinkle"))))
+        throw BackendError("Skia 行背景带缺少对应走字线或粒子能力");
     if (((simpleBandAnimation || tintedBand) && !features.contains("p08_static_line_band"))
         || (simpleBandAnimation && features.contains("p08_staff_line_band"))
         || (tintedBand && (simpleBandAnimation || features.contains("p08_animated_staff_line_band"))))

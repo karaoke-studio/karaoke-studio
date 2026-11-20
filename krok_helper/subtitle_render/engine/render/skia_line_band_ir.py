@@ -42,9 +42,10 @@ def write_line_band(ir, style, prepared, *, width, height):
         raise ValueError('Skia 五线谱背景带缺少预设图层')
     if any(source.get('entry_anim') not in {'none', 'fade', 'slide_in', 'rise'}
            or source.get('exit_anim') not in {'none', 'fade', 'slide_out', 'rise'}
-           or source.get('scanline') or source.get('fx_bursts')
            for source in ir['track']['lines']):
         raise ValueError('Skia 行背景带缺少对应行出入场能力')
+    if any(source.get('scanline') or source.get('fx_bursts') for source in ir['track']['lines']):
+        ir['required_features'].append('p08_line_band_with_effects')
     for item, final in zip(prepared.plan.lines, ir['skia_layout']['lines'], strict=True):
         at = geometry.position(item, width, height)
         local = geometry.locals[item.track_index]

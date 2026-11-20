@@ -90,6 +90,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool staffBand = features.contains("p08_staff_line_band");
     const bool animatedBand = features.contains("p08_animated_staff_line_band") || features.contains("p08_animated_line_band");
     const bool tintedBand = features.contains("p08_tinted_line_band");
+    const bool bandWithEffects = features.contains("p08_line_band_with_effects");
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
@@ -210,7 +211,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
         if (staticBand && (!plainLineAnimation(source.entryAnimation, true)
-                || !plainLineAnimation(source.exitAnimation, false) || source.scanlineEnabled || !source.fxBursts.empty()
+                || !plainLineAnimation(source.exitAnimation, false)
+                || ((source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)
                 || resolved.litEnabled || resolved.volumeEnabled))
             throw BackendError("Skia 行背景带缺少对应行出入场能力");
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";

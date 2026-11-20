@@ -304,6 +304,47 @@ def test_other_line_band_presets_match_actual_gpu(binary, application, tmp_path,
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_line_band_with_scanline_keeps_effect_geometry_and_seek(binary, reading, tmp_path, target):
+    from test_subtitle_skia_scanline import ruby_band_source
+
+    track, style = ruby_band_source(reading, 10, utopia=True)
+    baseline = upper_ir(binary, (track, style), 1)
+    style = replace(style, line_band_enabled=True, line_band_image=str(static_band_image(tmp_path)),
+                    line_band_fill_mode='stretch')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p08_line_band_with_effects'
+    assert feature in ir['required_features']
+    line, = ir['skia_layout']['lines']
+    unbanded, = baseline['skia_layout']['lines']
+    assert {k: v for k, v in line.items() if k != 'line_band_rect'} == unbanded
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 1250, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [550], generation=2)
+        configure(process, baseline)
+        plain, _ = collect(process, [550], generation=3)
+    assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[0])
+    assert np.count_nonzero((frames[0][..., 3] > 0) & (plain[0][..., 3] == 0)) > 100
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape', ['image', 'band'])
+def test_line_band_with_scanline_and_singing_particles_matches_actual_gpu(binary, application, tmp_path, shape):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    original = next(case for case in build_cases(tmp_path) if case.case_id == 'combined_effects')
+    style = replace(original.style, entry_anim='none', exit_anim='none', scanline_shape=shape,
+                    scanline_effect='star' if shape == 'band' else 'none')
+    case = replace(original, case_id=f'line_band_with_{shape}_scanline', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 400, 1199, 1200, 1280, 1500, 2600, 3700, 4700, 5499, 5500))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')
