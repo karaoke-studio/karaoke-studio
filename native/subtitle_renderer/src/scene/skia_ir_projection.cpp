@@ -75,10 +75,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool outlineRuby = features.contains("p06_outline_ruby");
     const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
     if (features.contains("p06_primary_solid_outline")
-        && (cfg.vertical || cfg.rightToLeft || (cfg.dualLineLayout && !multiLaneOutline)
+        && ((cfg.vertical && !features.contains("p06_vertical_outline"))
+            || cfg.rightToLeft || (cfg.dualLineLayout && !multiLaneOutline)
             || features.contains("p05_reverse_wipe")
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
-        throw BackendError("Skia 描边缺少对应横排布局能力");
+        throw BackendError("Skia 描边缺少对应布局能力");
     if (cfg.lineBand.enabled)
         throw BackendError("Skia 当前布局暂不支持行背景带");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg

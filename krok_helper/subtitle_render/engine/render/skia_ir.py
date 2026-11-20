@@ -550,6 +550,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     # Attach the outline schemas to the final layout, including ruby's separate layout projection.
     if 'p06_primary_solid_outline' in ir['required_features']:
         ir['skia_layout']['primary_solid_outline_schema'] = 1
+        if style.vertical:
+            if style.dual_line_layout or track.rubies or any(line.wipe_reverse for line in track.lines):
+                raise ValueError('Skia 竖排描边暂支持无注音、正向单列正文')
+            ir['required_features'].append('p06_vertical_outline')
         if style.dual_line_layout:
             ir['required_features'].append('p06_multi_lane_outline')
         if 'p05_resolved_ruby' in ir['required_features']:

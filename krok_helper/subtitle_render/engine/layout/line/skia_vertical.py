@@ -108,8 +108,9 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0):
         x = column + measured.offsets[index] - measured.widths[index] / 2 + size * offset
         ink = cell['metrics']['ink']
         cell_top = top + index * cell_height
+        wipe_pad = measured.edge_sizes[index] // 2
         positioned = {**cell, 'origin_x': x, 'baseline_y': cell_top + ascent - cell_height * offset,
-                      'wipe_left': x + ink[0], 'wipe_right': x + ink[2],
+                      'wipe_left': x + ink[0] - wipe_pad, 'wipe_right': x + ink[2] + wipe_pad,
                       'wipe_top': cell_top, 'wipe_bottom': cell_top + cell_height,
                       'wipe_end_position': 1.0}
         if vertical_glyph_rotates(text):

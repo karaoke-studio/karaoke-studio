@@ -317,6 +317,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                     line.chars[clock].endMs, beforeColor, afterColor)
                 : glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs,
                               line.chars[clock].endMs, beforeColor, afterColor, wipePad);
+            if (style.vertical) {
+                applyVerticalGeometry(glyph, cell, line.chars[j].text, verticalVersion, japaneseGlyphs, glyphs.dpr);
+            } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("rotation_pivot_x")) {
+                throw BackendError("Skia 横排单元不能携带竖排单元框");
+            }
             if (outlineLayers > 0 && !glyph.path.isEmpty()) {
                 // The existing GPU protects the body from any translucent fill
                 // (including a translucent gradient stop), and the inner outline
@@ -370,11 +375,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 }
             } else if (cell.contains("layout_left") || cell.contains("layout_right") || cell.contains("pivot_y")) {
                 throw BackendError("Skia 版面单元轴心缺少逐字特效能力声明");
-            }
-            if (style.vertical) {
-                applyVerticalGeometry(glyph, cell, line.chars[j].text, verticalVersion, japaneseGlyphs, glyphs.dpr);
-            } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("rotation_pivot_x")) {
-                throw BackendError("Skia 横排单元不能携带竖排单元框");
             }
             if (line.strokeFlashEnabled)
                 glyph.strokeFlashWidth = ::subtitle::skia::strokeFlashBaseWidth(paint.fontSize, paint.strokeWidth);

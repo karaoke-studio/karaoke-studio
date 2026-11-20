@@ -135,6 +135,52 @@ def test_vertical_columns_use_page_lanes_and_switch_without_moving_the_clocks(bi
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('layers', [1, 2])
+def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, project, kana, target, layers):
+    from test_subtitle_skia_outline_ruby import outlined, premultiplied
+
+    track, style = vertical_source(project, texts=['ー'], position='top')
+    track = replace(track, lines=[replace(track.lines[0], chars=track.lines[0].chars[:1])])
+    style = outlined(replace(style, font_family=kana), layers, '80')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p06_vertical_outline'
+    assert feature in ir['required_features']
+    assert ('p06_secondary_solid_outline' in ir['required_features']) == (layers == 2)
+    line, = ir['track']['lines']
+    (start, end), = line['resolved_intervals']
+    times = [start - 1, (start + end) // 2, end + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+
+    def pixels(frame, color, alpha):
+        return (frame[..., :3] == color).all(axis=-1) & (frame[..., 3] == alpha)
+
+    red = pixels(frames[0], [255, 0, 0], 128)
+    y, x = np.nonzero(red)
+    assert y.size > 0 and np.ptp(y) > 4 * np.ptp(x)
+    assert pixels(frames[0], [0, 0, 255], 255).any()
+    assert pixels(frames[0], [0, 255, 255], 255).any() == (layers == 2)
+    green = pixels(frames[1], [0, 255, 0], 128)
+    red = pixels(frames[1], [255, 0, 0], 128)
+    assert red.any() and green.any() and np.nonzero(green)[0].max() < np.nonzero(red)[0].min()
+    assert pixels(frames[2], [0, 255, 0], 128).any()
+    assert np.array_equal(frames[1], replay[0])
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        for gpu, cpu in zip(frames, raster, strict=True):
+            difference = abs(premultiplied(gpu) - premultiplied(cpu))
+            assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',
                                       'rotated_text', 'horizontal_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
