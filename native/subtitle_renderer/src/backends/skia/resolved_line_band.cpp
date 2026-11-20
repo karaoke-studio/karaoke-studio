@@ -1,6 +1,7 @@
 #include "resolved_line_band.h"
 #include "image_fill_cache.h"
 #include "../render_backend.h"
+#include "include/codec/SkGifDecoder.h"
 #include "include/codec/SkWebpDecoder.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorFilter.h"
@@ -99,26 +100,31 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
     const auto data = file.read(maxEncodedBytes + 1);
     if (data.isEmpty() || data.size() > maxEncodedBytes)
         throw BackendError("Skia 行背景带无法读取动画素材");
-    auto codec = SkWebpDecoder::Decode(SkData::MakeWithCopy(data.constData(), data.size()), nullptr);
-    const int frameCount = codec ? codec->getFrameCount() : 0;
-    if (frameCount < 2 || frameCount > 4096)
+    const auto bytes = SkData::MakeWithCopy(data.constData(), data.size());
+    if (!bytes) throw BackendError("Skia 行背景带动画分配失败");
+    auto codec = SkGifDecoder::IsGif(bytes->data(), bytes->size()) ? SkGifDecoder::Decode(bytes, nullptr)
+        : SkWebpDecoder::Decode(bytes, nullptr);
+    if (!codec) throw BackendError("Skia 行背景带动画帧无效");
+    const int frameCount = codec->getFrameCount();
+    if (frameCount < 1 || frameCount > 4096)
         throw BackendError("Skia 行背景带动画帧无效");
     const auto info = codec->getInfo().makeColorType(kBGRA_8888_SkColorType).makeAlphaType(kPremul_SkAlphaType);
     const auto stride = info.minRowBytes();
     const auto frameBytes = info.computeByteSize(stride);
     const auto frames = codec->getFrameInfo();
     if (info.width() <= 0 || info.width() > 8192 || info.height() <= 0 || info.height() > 8192
-        || frames.size() != std::size_t(frameCount) || !images.reserveDecodedBytes(frameBytes * frames.size()))
+        || (frameCount > 1 && frames.size() != std::size_t(frameCount))
+        || !images.reserveDecodedBytes(frameBytes * frameCount))
         throw BackendError("Skia 行背景带动画超过场景图片预算");
     std::vector<Frame> result;
-    result.reserve(frames.size());
+    result.reserve(frameCount);
     std::int64_t end = 0;
-    for (int index = 0; index < int(frames.size()); ++index) {
+    for (int index = 0; index < frameCount; ++index) {
         auto pixels = SkData::MakeUninitialized(frameBytes);
         if (!pixels) throw BackendError("Skia 行背景带动画分配失败");
         SkCodec::Options options;
         options.fFrameIndex = index;
-        const int previous = frames[index].fRequiredFrame;
+        const int previous = frameCount == 1 ? SkCodec::kNoFrame : frames[index].fRequiredFrame;
         if (previous >= 0) {
             SkPixmap prior;
             if (previous >= index || !result[previous].image->peekPixels(&prior) || prior.rowBytes() != stride)
@@ -130,7 +136,7 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
             throw BackendError("Skia 行背景带动画帧解码失败");
         auto image = SkImages::RasterFromData(info, std::move(pixels), stride);
         if (!image) throw BackendError("Skia 行背景带动画无法准备图像");
-        end += std::max(frames[index].fDuration, 10);
+        end += frameCount == 1 ? 10 : std::max(frames[index].fDuration, 10);
         result.push_back({std::move(image), end});
     }
     return result;
@@ -145,6 +151,7 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
         texture.staffClef = loadStaffLayer(images, band.clefPath, band.hasClefColor, band.clefColor);
         texture.animation = loadBandAnimation(band.imagePath, images);
         texture.image = texture.animation.front().image;
+        if (texture.animation.size() == 1) texture.animation.clear();
     } else {
         texture.image = tintBandImage(images.staticImage(band.imagePath, 0, 0), band, images);
         if (!band.linesPath.empty() || !band.clefPath.empty())
@@ -153,7 +160,7 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
     if (band.fillMode == "three_slice") {
         texture.slices = ::subtitle::skia::LineBandTexture::Slices{
             band.capLeft, band.capRight, band.srcCapLeft, band.srcCapRight, fit(band.midMode)};
-        if (!animated) texture.prepareMiddle();
+        if (texture.animation.empty()) texture.prepareMiddle();
     }
     return texture;
 }

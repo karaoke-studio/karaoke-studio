@@ -69,6 +69,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_staff_line_band",
         "p08_animated_staff_line_band",
         "p08_animated_line_band",
+        "p08_line_band_image_sequence",
         "p08_tinted_line_band",
         "p08_line_band_with_effects",
         "p08_line_band_transition",
@@ -418,7 +419,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 五线谱背景带缺少对应布局能力");
     if (features.contains("p08_animated_staff_line_band") && !features.contains("p08_staff_line_band"))
         throw BackendError("Skia 五线谱动画缺少对应布局能力");
-    const bool simpleBandAnimation = features.contains("p08_animated_line_band");
+    const bool customBandSequence = features.contains("p08_line_band_image_sequence");
+    const bool builtinBandAnimation = features.contains("p08_animated_line_band");
+    const bool simpleBandAnimation = builtinBandAnimation || customBandSequence;
     const bool tintedBand = features.contains("p08_tinted_line_band");
     if (features.contains("p08_line_band_with_effects")
         && (!features.contains("p08_static_line_band")
@@ -429,6 +432,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || (!features.contains("p07_character_fade") && !features.contains("p07_character_transform"))))
         throw BackendError("Skia 行背景带缺少对应逐字动画能力");
     if (((simpleBandAnimation || tintedBand) && !features.contains("p08_static_line_band"))
+        || (customBandSequence && builtinBandAnimation)
         || (simpleBandAnimation && features.contains("p08_staff_line_band"))
         || (tintedBand && (simpleBandAnimation || features.contains("p08_animated_staff_line_band"))))
         throw BackendError("Skia 行背景带缺少对应动画或着色能力");

@@ -1,5 +1,7 @@
 """Timed line movement and opacity against Direct2D."""
+from base64 import b64decode
 from dataclasses import replace
+from pathlib import Path
 import copy
 import json
 import sys
@@ -301,6 +303,50 @@ def test_other_line_band_presets_match_actual_gpu(binary, application, tmp_path,
                     line_band_tint=spec.default_tint or '', line_band_tint_strength_pct=50)
     case = replace(base, case_id=f'line_band_{preset}', style=style)
     assert_ruby_transition_gpu_parity(binary, case, (*case.timestamps_ms, 1199, 1200, 2420, 5499))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('format', ['gif', 'webp'])
+def test_custom_line_band_sequence_preserves_transparency_and_seek(binary, project, tmp_path, target, format):
+    path = tmp_path / f'band.{format}'
+    if format == 'gif':
+        path.write_bytes((Path(__file__).parent / 'data' / 'guide_anim_3frames.gif').read_bytes())
+    else:
+        # A still 4x5 lossless WebP with non-opaque pixels.
+        path.write_bytes(b64decode('UklGRh4AAABXRUJQVlA4TBEAAAAvAwABEAdQt8qUu6CBiOh/AAA='))
+    track, style = motion_project(project, entry='none', exit='none')
+    track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=4000)])
+    style = replace(style, line_band_enabled=True, line_band_image=str(path), line_band_fill_mode='cover',
+                    line_band_opacity_pct=90)
+    ir = ir_for(binary, (track, style))
+    feature = 'p08_line_band_image_sequence'
+    assert feature in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['style']['line_band_image'] = str(tmp_path / f'absent.{format}')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [2400, 2500, 2700])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [2400], generation=2)
+    assert frames[0].any() and np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[0])
+    assert np.array_equal(frames[0], frames[1]) == (format == 'webp')
+    if format == 'webp':
+        left, top, _, _ = ir['skia_layout']['lines'][0]['line_band_rect']
+        assert int(frames[0][int(top+3), int(left+3), 3]) == 144
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_custom_line_band_gif_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    gif = Path(__file__).parent / 'data' / 'guide_anim_3frames.gif'
+    style = replace(base.style, line_band_image=str(gif), line_band_fill_mode='repeat',
+                    entry_anim='slide_in', exit_anim='slide_out')
+    case = replace(base, case_id='custom_gif_line_band', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 350, 399, 400, 500, 600, 1499, 1500, 2600, 5499))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

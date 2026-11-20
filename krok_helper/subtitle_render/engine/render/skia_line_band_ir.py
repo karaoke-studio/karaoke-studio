@@ -25,18 +25,18 @@ def write_line_band(ir, style, prepared, *, width, height):
     material = ir['style'].get('line_band_image')
     if preset_id is None and not material:
         return
-    animated = bool(preset and material and material.lower().endswith('.webp'))
+    sequence = bool(material and material.lower().endswith(('.webp', '.gif')))
     geometry = prepared.geometry
     ruby = geometry.ruby
-    if ((not preset and (preset_id is not None or not style.line_band_image.lower().endswith('.png')))
+    if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.vertical or style.right_to_left
-            or (animated and style.line_band_tint) or style.line_band_edge_kind != 'none'
+            or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
             or style.line_band_shadow_enabled or style.line_band_stroke_enabled or style.line_band_glow_enabled
             or style.volume_enabled or style.lit_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
-        raise ValueError('Skia 行背景带当前支持横排静态 PNG 和内置预设')
+        raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')
     if preset and not material:
         raise ValueError('Skia 行背景带无法读取预设图片')
     if staff and any(not ir['style'].get(key) for key in
@@ -93,10 +93,12 @@ def write_line_band(ir, style, prepared, *, width, height):
             ir['required_features'].append('p08_lower_ruby_line_band')
     if staff:
         ir['required_features'].append('p08_staff_line_band')
-        if animated:
+        if sequence:
             ir['required_features'].append('p08_animated_staff_line_band')
-    elif animated:
+    elif sequence and preset:
         ir['required_features'].append('p08_animated_line_band')
+    elif sequence:
+        ir['required_features'].append('p08_line_band_image_sequence')
     if style.line_band_tint:
         ir['required_features'].append('p08_tinted_line_band')
     if fitted:

@@ -89,14 +89,16 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool rubyBand = features.contains("p08_ruby_line_band");
     const bool staffBand = features.contains("p08_staff_line_band");
     const bool animatedBand = features.contains("p08_animated_staff_line_band") || features.contains("p08_animated_line_band");
+    const bool customBandSequence = features.contains("p08_line_band_image_sequence");
     const bool tintedBand = features.contains("p08_tinted_line_band");
     const bool bandWithEffects = features.contains("p08_line_band_with_effects");
     const bool bandTransition = features.contains("p08_line_band_transition");
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
-    const bool bandImageSupported = animatedBand ? band.imagePath.endsWith(".webp", Qt::CaseInsensitive)
-        : isPng(band.imagePath);
+    const bool webp = band.imagePath.endsWith(".webp", Qt::CaseInsensitive);
+    const bool bandImageSupported = customBandSequence ? webp || band.imagePath.endsWith(".gif", Qt::CaseInsensitive)
+        : animatedBand ? webp : isPng(band.imagePath);
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
@@ -106,7 +108,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
             || !bandLayersSupported || band.edgeKind != "none"
             || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
-        throw BackendError("Skia 行背景带当前支持横排静态 PNG 与内置预设");
+        throw BackendError("Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
