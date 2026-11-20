@@ -59,12 +59,15 @@ def test_scene_prewarm_includes_title_slots_and_extra_tracks():
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_solid_title_windows_follow_media_clock_and_seek(binary, target):
+@pytest.mark.parametrize('decorated', [False, True], ids=['plain', 'decorated'])
+def test_solid_title_windows_follow_media_clock_and_seek(binary, target, decorated):
     from test_subtitle_skia_resolved import ir_for
 
     track, style = sample()
     track = replace(track, meta=replace(track.meta, artist='Skia', offset_ms=5000))
     title = solid_title(style)
+    if decorated:
+        title = replace(title, stroke_width_px=5, decoration_kind='glow', glow_radius_px=3)
     lower = replace(title, fill=PaintFill(color='#E22B22'))
     style = replace(style, title_overlays=[title, lower], custom_style_schemes={},
                     timing_offset_ms=600, viewport_offset_y=120)
@@ -82,7 +85,10 @@ def test_solid_title_windows_follow_media_clock_and_seek(binary, target):
             process._expect_ok(process._read_until_event('configured'))
         replay, _ = collect(process, [500], generation=2)
     assert all(not frames[i].any() for i in (0, 1, 5, 8))
-    assert frames[2][..., 3].max() in (191, 192) and np.array_equal(frames[2], frames[4])
+    faded, opaque = frames[2][..., 3], frames[3][..., 3]
+    assert 0 < faded.sum() < opaque.sum() and np.array_equal(frames[2], frames[4])
+    if not decorated:
+        assert faded.max() in (191, 192)
     assert np.array_equal(frames[3], frames[6]) and np.array_equal(frames[6], frames[7])
     assert np.array_equal(frames[3], frames[-1]) and np.array_equal(frames[3], replay[0])
     y, x = np.where(frames[3][..., 3] == 255)
@@ -92,16 +98,21 @@ def test_solid_title_windows_follow_media_clock_and_seek(binary, target):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_solid_title_matches_actual_d2d_gpu(binary):
+@pytest.mark.parametrize('decoration', ['none', 'glow', 'shadow'])
+def test_solid_title_matches_actual_d2d_gpu(binary, decoration):
     from types import SimpleNamespace
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     track, style = sample()
     track = replace(track, meta=replace(track.meta, artist='Skia', offset_ms=5000))
-    style = replace(style, title_overlays=[solid_title(style)], custom_style_schemes={},
+    title = solid_title(style)
+    if decoration != 'none':
+        title = replace(title, decoration_kind=decoration, glow_radius_px=3, stroke_width_px=5,
+                        stroke2_width_px=2, shadow=PaintFill(color='#F99776'))
+    style = replace(style, title_overlays=[title], custom_style_schemes={},
                     timing_offset_ms=600, viewport_offset_y=120)
     assert_ruby_transition_gpu_parity(
-        binary, SimpleNamespace(track=track, style=style, case_id='solid_title'),
+        binary, SimpleNamespace(track=track, style=style, case_id=f'solid_title_{decoration}'),
         (299, 300, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 

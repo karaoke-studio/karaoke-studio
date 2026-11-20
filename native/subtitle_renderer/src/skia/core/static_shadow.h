@@ -23,17 +23,18 @@ struct StaticShadow {
     bool visible() const { return before.visible() || after.visible(); }
 
     template <class Cell> void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int time, const SkRect& ink,
-                                   bool vertical = false, bool reverse = false) const {
+                                   bool vertical = false, bool reverse = false, float opacity = 1.f) const {
         if (!visible() || ink.isEmpty()) return;
         const bool complete = lineWipeComplete(cells, time);
         const float low = vertical ? ink.top() : ink.left(), high = vertical ? ink.bottom() : ink.right();
         const float edge = lineWipeFront(cells, time, reverse ? high : low, secondaryWidth / 2 + .5f, reverse, vertical);
-        drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f, vertical, reverse);
+        drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f, vertical, reverse, opacity);
     }
 
     template <class Cell>
     void drawAt(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
-                float edge, bool complete, float beforePad, bool vertical = false, bool reverse = false) const {
+                float edge, bool complete, float beforePad, bool vertical = false, bool reverse = false,
+                float opacity = 1.f) const {
         const auto paint = [&](const ShadowState& state, const SkRect* clip) {
             if (!state.visible()) return;
             SkAutoCanvasRestore restore(&canvas, true);
@@ -44,6 +45,7 @@ struct StaticShadow {
             SkPaint brush;
             brush.setAntiAlias(true);
             brush.setColor(state.color);
+            if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
             for (const auto& cell : cells) {
                 if (cell.outerOutline) canvas.drawPath(cell.outerOutline->path, brush);
                 else if (cell.outline) canvas.drawPath(cell.outline->path, brush);

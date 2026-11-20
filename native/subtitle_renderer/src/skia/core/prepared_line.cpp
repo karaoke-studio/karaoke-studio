@@ -12,9 +12,8 @@ namespace subtitle::skia {
 void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible, float titleOpacity) const {
     SkPaint paint;
     paint.setAntiAlias(true);
-    auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
-                                 : LineAnimation::State{1.f, 0.f, 0.f};
-    animation.opacity *= titleOpacity;
+    const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
+                                       : LineAnimation::State{1.f, 0.f, 0.f};
     if (animation.opacity <= 0.f) return;
     SkAutoCanvasRestore restore(&canvas, true);
     if (animation.dx != 0 || animation.dy != 0)
@@ -215,7 +214,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (drawOutline && !stroke) return;
         const auto& path = drawOutline ? stroke->path : cell.path;
         const auto& [progress, edge, phase, transform, animatedInk] = states[index];
-        const float opacity = transform.opacity;
+        const float opacity = transform.opacity * titleOpacity;
         if (opacity <= 0) return;
         // The outline can reach beyond the integer wipe padding, just as
         // the vertical glyph can reach beyond its fixed cell.
@@ -335,7 +334,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             if ((compositingSpin || rubyGeometryPhase) && states[index].transform.transformed) return;
             const auto& ink = states[index].animatedInk;
             const auto* posed = ink ? &*ink : nullptr;
-            const float opacity = states[index].transform.opacity;
+            const float opacity = states[index].transform.opacity * titleOpacity;
             if (phase == Phase::Wiping) {
                 const float edge = utopia ? transformedEdge(index) : states[index].edge;
                 layer.drawCell(glowCanvas, index, false, edge, posed, opacity, line.vertical, line.wipeRightToLeft);
@@ -371,7 +370,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                     state.phase == Phase::Wiping ? std::optional<float>(transformedEdge(index)) : std::nullopt};
             });
     } else {
-        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft);
+        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft, titleOpacity);
     }
     for (const auto& group : line.rubyGroups)
         group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin);
