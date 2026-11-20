@@ -2,7 +2,7 @@
 
 from functools import partial
 
-from ...domain.models import Style, TimingChar, TimingLine, TimingTrack, title_line_units
+from ...domain.models import Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, title_line_units
 from ...domain.paint import KaraokeColorState, KaraokeColors, PaintFill
 from ..layout.line.skia_placement import LinePosition
 
@@ -41,22 +41,37 @@ def _title_position(local, item, measured, width, height, *, title, row_count):
     return LinePosition(x + row_offset, top + ascent + step * row)
 
 
-def solid_title_style(title):
-    if (title['role_styles'] or title['guide_symbols'] or title['inline_guide_symbols']
-            or any(title[part]['mode'] != 'solid' for part in ('fill', 'stroke', 'stroke2', 'shadow'))):
-        return None
-    anchor = title['anchor']
-    horizontal = anchor.rsplit('_', 1)[-1]
-    state = KaraokeColorState(text=PaintFill(color=title['fill']['color']),
+def _title_color(title):
+    return KaraokeColorState(text=PaintFill(color=title['fill']['color']),
                               stroke=PaintFill(color=title['stroke']['color']),
                               stroke2=PaintFill(color=title['stroke2']['color']),
                               shadow=PaintFill(color=title['shadow']['color']))
+
+
+def solid_title_style(title):
+    roles = title['role_styles']
+    if (title['guide_symbols'] or title['inline_guide_symbols']
+            or any(paint[part]['mode'] != 'solid' for paint in (title, *roles.values())
+                   for part in ('fill', 'stroke', 'stroke2', 'shadow'))):
+        return None
+    if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
+                     or paint['letter_spacing_px'] != title['letter_spacing_px']
+                     or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
+                     for paint in (title, *roles.values())):
+        return None
+    anchor = title['anchor']
+    horizontal = anchor.rsplit('_', 1)[-1]
+    state = _title_color(title)
+    font_fields = ('font_family', 'font_family_latin', 'font_size_px', 'font_weight', 'italic',
+                   'latin_font_size_px', 'latin_font_weight', 'latin_font_stretch_pct')
+    schemes = {}
+    for label, appearance in roles.items():
+        color = _title_color(appearance)
+        schemes[label] = SubtitleStyleScheme(**{key: appearance[key] for key in font_fields},
+                                            karaoke_colors=KaraokeColors(before=color, after=color))
     return Style(
         layout_semantics='n3_1074',
-        font_family=title['font_family'], font_family_latin=title['font_family_latin'],
-        font_size_px=title['font_size_px'], font_weight=title['font_weight'], italic=title['italic'],
-        latin_font_size_px=title['latin_font_size_px'], latin_font_weight=title['latin_font_weight'],
-        latin_font_stretch_pct=title['latin_font_stretch_pct'], letter_spacing_px=title['letter_spacing_px'],
+        **{key: title[key] for key in font_fields}, letter_spacing_px=title['letter_spacing_px'],
         stroke_width_px=title['stroke_width_px'], stroke2_width_px=title['stroke2_width_px'],
         stroke2_enabled=title['stroke2_width_px'] > 0, decoration_kind=title['decoration_kind'],
         decoration_before_sync=True, glow_radius_px=title['glow_radius_px'],
@@ -64,6 +79,7 @@ def solid_title_style(title):
         glow_concentration_level=title['glow_concentration_level'],
         shadow_offset_x=title['shadow_offset_x'], shadow_offset_y=title['shadow_offset_y'],
         karaoke_colors=KaraokeColors(before=state, after=state),
+        custom_style_schemes=schemes,
         dual_line_layout=False, smart_horizontal='none', line_horizontal_layout='asymmetric',
         line_alignments=[horizontal],
         line_y_position=anchor.split('_', 1)[0], line_y_margin_px=title['offset_y'],
@@ -71,6 +87,11 @@ def solid_title_style(title):
         entry_anim='none', exit_anim='none', karaoke_anim='none', title_overlays=[],
         allow_inter_page_line_overlap=True, auto_fill_section_time=False,
     )
+
+
+def title_rows(title):
+    for text, labels in zip(title['text'].split('\n'), title['resolved_role_labels'], strict=True):
+        yield list(zip(title_line_units(text), labels, strict=True))
 
 
 def build_title_sources(titles, build_source, **kwargs):
@@ -81,14 +102,14 @@ def build_title_sources(titles, build_source, **kwargs):
             continue
         style = solid_title_style(title)
         if style is None:
-            raise ValueError('Skia 标题当前支持实色外观')
-        rows = title['text'].split('\n')
+            raise ValueError('Skia 标题包含尚未支持的外观、角色组合或导唱符')
+        rows = list(title_rows(title))
         if len(rows) > 32:
             raise ValueError('Skia 单个标题最多支持 32 行')
-        lines = [TimingLine(chars=[TimingChar(unit, row) for unit in title_line_units(text)],
+        lines = [TimingLine(chars=[TimingChar(unit, row, role_label=label) for unit, label in cells],
                             track_line_index=row, end_ms=row + 1,
                             display_start_override_ms=row, display_end_override_ms=row + 1)
-                 for row, text in enumerate(rows) if text]
+                 for row, cells in enumerate(rows) if cells]
         position = partial(_title_position, title=title, row_count=len(rows))
         source = build_source(TimingTrack(lines=lines), style, adjust_position=position,
                               **{**kwargs, 'roll_shift_ms': 0})

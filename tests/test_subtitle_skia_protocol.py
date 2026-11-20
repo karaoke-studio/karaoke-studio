@@ -14,8 +14,10 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QImage
 
-from krok_helper.subtitle_render.domain.models import LyricsLayout, Style, TimingChar, TimingLine, TimingTrack, TitleOverlay, TitleTimeWindow
-from krok_helper.subtitle_render.domain.paint import PaintFill
+from krok_helper.subtitle_render.domain.models import (
+    LyricsLayout, Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, TitleOverlay, TitleTimeWindow,
+)
+from krok_helper.subtitle_render.domain.paint import KaraokeColorState, KaraokeColors, PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess, SharedFrameRingReader
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
 
@@ -154,6 +156,48 @@ def test_multiline_title_matches_actual_d2d_gpu(binary, anchor):
     style = replace(style, title_overlays=[title], layouts=[layout], custom_style_schemes={})
     assert_ruby_transition_gpu_parity(
         binary, SimpleNamespace(track=track, style=style, case_id=f'multiline_title_{anchor}'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
+def role_title():
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, offset_ms=5000))
+    title = replace(solid_title(style), text_template='Skia\nGPU', anchor='center',
+                    char_role_labels=[[None, 'accent', None, 'accent'], ['accent']])
+    accent = KaraokeColorState(text=PaintFill(color='#F78E32'))
+    scheme = SubtitleStyleScheme(font_size_px=102, latin_font_size_px=104, font_weight=700,
+                                 latin_font_weight=400, decoration_kind='none',
+                                 karaoke_colors=KaraokeColors(before=accent, after=accent))
+    return track, replace(style, title_overlays=[title], custom_style_schemes={'accent': scheme})
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_title_roles_preserve_fonts_and_static_palette(binary, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = role_title()
+    ir = ir_for(binary, (track, style))
+    layout = ir['skia_titles'][0]['source']['skia_layout']
+    runs = layout['runs']
+    first, second = [[runs[c['run_index']]['size'] for c in row['cells']] for row in layout['lines']]
+    assert first == [80, 104, 80, 104] and second == [104, 104, 104]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [500, 1400, 1000, 500])
+    assert not frames[2].any() and np.array_equal(frames[0], frames[1]) and np.array_equal(frames[0], frames[-1])
+    pixels = frames[0][frames[0][..., 3] == 255, :3]
+    assert np.any(np.all(pixels == [247, 142, 50], axis=-1))
+    assert np.any(np.all(pixels == [97, 190, 248], axis=-1))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_roles_match_actual_d2d_gpu(binary):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = role_title()
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_roles'),
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 

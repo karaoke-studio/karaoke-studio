@@ -6,7 +6,7 @@ those responsibilities and only reads the prepared resource table on workers.
 """
 from collections import defaultdict
 
-from krok_helper.subtitle_render.domain.models import style_for_track, title_line_units
+from krok_helper.subtitle_render.domain.models import style_for_track
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.font_slots import font_style_for_cell
@@ -56,7 +56,7 @@ def fallback_requests(track, style):
 
 def scene_fallback_requests(track, style, extra_tracks=()):
     from krok_helper.subtitle_render.engine.render.render_ir import titles_to_ir
-    from krok_helper.subtitle_render.engine.render.skia_title_ir import solid_title_style
+    from krok_helper.subtitle_render.engine.render.skia_title_ir import solid_title_style, title_rows
     requests = fallback_requests(track, style)
     for source in extra_tracks or ():
         for slot, texts in fallback_requests(source, style).items():
@@ -65,9 +65,9 @@ def scene_fallback_requests(track, style, extra_tracks=()):
         appearance = solid_title_style(title)
         if appearance is None:
             continue
-        for row in title['text'].split('\n'):
-            for unit in title_line_units(row):
-                slot, _ = font_style_for_cell(appearance, unit)
+        for row in title_rows(title):
+            for unit, role in row:
+                slot, _ = font_style_for_cell(style_for_role_in_layout(appearance, role), unit)
                 requests[slot.font_family, slot.font_weight, slot.italic].add(unit)
     return requests
 
