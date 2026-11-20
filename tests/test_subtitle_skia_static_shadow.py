@@ -14,6 +14,7 @@ from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_outline_ruby import (
     annotated, mixed, pages, reading, upper_source, upper_ir, annotated_paint, render_skia, UPPER_TIMES,
 )
+from krok_helper.subtitle_render.domain.models import LyricsLayout
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -39,6 +40,42 @@ def shadow_source(project, case):
         style = replace(style, stroke_width_px=0, stroke2_enabled=False,
                         decoration_before_sync=True, shadow_offset_x=-11, shadow_offset_y=-9)
     return track, style
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multitrack_shadows_stay_with_their_source(binary, reading, target):
+    track, style = shaded_ruby(reading, True, True)
+    style = replace(style, line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=24)])
+    side = replace(track, lines=[replace(track.lines[0], layout_index=1)],
+                   meta=replace(track.meta, offset_ms=1000))
+    ir = ir_for(binary, (track, style), extra_tracks=[side])
+    assert all({'p06_static_shadow', 'p06_ruby_shadow'} <= set(source['required_features'])
+               for source in (ir, *ir['skia_extra_sources']))
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [500, 1800, 5300, 6100, 500])
+    top = np.stack(frames)[:, :180, :, 3]
+    bottom = np.stack(frames)[:, 180:, :, 3]
+    assert not top[0].any() and bottom[0].any()
+    assert top[1].any() and bottom[1].any()
+    assert top[2].any() and not bottom[2].any()
+    assert not frames[3].any() and np.array_equal(frames[0], frames[-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_multitrack_shadows_match_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'shadow')
+    style = replace(base.style, line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=160)])
+    side = replace(base.track, lines=[replace(base.track.lines[0], layout_index=1)],
+                   meta=replace(base.track.meta, offset_ms=900))
+    case = replace(base, style=style, case_id='multitrack_shadows')
+    assert_ruby_transition_gpu_parity(binary, case, (299, 600, 1199, 1200, 1500, 2600, 4400, 5500, 6399, 6400),
+                                      extra_tracks=[side])
 
 
 @pytest.mark.parametrize('case', CASES)
