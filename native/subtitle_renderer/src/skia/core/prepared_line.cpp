@@ -369,5 +369,6 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 line.scanline.shape.draw(canvas, tMs, *front, line.bodyInk, line.rubyInkTop);
         }
     }
+    if (line.shapeSignal) line.shapeSignal->draw(canvas, tMs);
 }
 }

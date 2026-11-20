@@ -75,7 +75,9 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         || (s.latinFontFamily && !s.latinFontFamily->empty() && *s.latinFontFamily != s.fontFamily)
         || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
         || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight))
-        || s.volumeEnabled || s.litEnabled)
+        || s.volumeEnabled || (s.litEnabled && (!caps.customShapeSignal || s.vertical || s.rightToLeft
+            || s.litAppearanceMode != "custom"
+            || (s.litStyle != "circle" && s.litStyle != "square" && s.litStyle != "rounded"))))
         throw BackendError(canonical ? "Skia 当前仅支持固定网格横排、实色填充与基础走字" :
             "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }

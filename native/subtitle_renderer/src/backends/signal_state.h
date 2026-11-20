@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../model/text_style.h"
+#include <cstdint>
 
 namespace krok::subtitle::native {
 
@@ -40,6 +41,17 @@ struct ShapeSignalState {
     float dy = 0.0f;
 };
 
+struct ShapeSignalClock {
+    enum class Transition { None, Fade, Slide };
+    int count;
+    int activeDurationMs;
+    std::int64_t endMs;
+    int transitionRatioPct;
+    float transitionAngleDeg;
+    float transitionDistance;
+    Transition transition;
+};
+
 VolumeSignalGeometry volumeSignalGeometry(const TextStyle &style);
 
 VolumeSignalState volumeSignalState(
@@ -52,6 +64,8 @@ VolumeSignalState volumeSignalState(
 );
 
 ShapeSignalGeometry shapeSignalGeometry(const TextStyle &style);
+ShapeSignalClock shapeSignalClock(int lineStartMs, const TextStyle &style);
+ShapeSignalState shapeSignalState(const ShapeSignalClock &clock, int tMs);
 
 ShapeSignalState shapeSignalState(
     int lineStartMs,

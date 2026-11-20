@@ -95,40 +95,25 @@ ShapeSignalGeometry shapeSignalGeometry(const TextStyle &style) {
     return geometry;
 }
 
-ShapeSignalState shapeSignalState(
-    int lineStartMs,
-    const TextStyle &style,
-    int tMs,
-    int displayStartMs,
-    int displayEndMs,
-    bool signalHead
-) {
-    // 可见下界 = 所在行显示窗起点（特效随所在行一并入场）；动画（逐个
-    // 熄灭）仍从 activeStart 播放——elapsed 钳 0 即满灯初始态。镜像
-    // Painter 的 resolve_signal_lit_groups。
-    ShapeSignalState state;
-    if (!signalHead) {
-        return state;
-    }
-    if (style.vertical || !style.litEnabled || style.litStyle == "volume") {
-        return state;
-    }
+ShapeSignalClock shapeSignalClock(int lineStartMs, const TextStyle &style) {
+    using Transition = ShapeSignalClock::Transition;
+    const auto transition = style.litTransitionMode == "fade" ? Transition::Fade
+        : style.litTransitionMode == "slide" ? Transition::Slide : Transition::None;
     const int duration = std::max(style.signalsDurationMs, 0);
-    const int activeDuration = std::max(
-        duration - std::max(style.litWaitingTimeMs, 0), 0
-    );
-    if (activeDuration <= 0) {
-        return state;
-    }
-    const int signalEnd = lineStartMs + style.litTimeOffsetMs;
-    const int activeStart = signalEnd - activeDuration;
-    if (tMs < displayStartMs || tMs >= displayEndMs) {
-        return state;
-    }
+    return {std::clamp(style.litNumber, 1, 8), std::max(duration - std::max(style.litWaitingTimeMs, 0), 0),
+            std::int64_t(lineStartMs) + style.litTimeOffsetMs, style.litTransitionRatioPct,
+            style.litTransitionAngleDeg, style.litTransitionDistance, transition};
+}
+
+ShapeSignalState shapeSignalState(const ShapeSignalClock &clock, int tMs) {
+    ShapeSignalState state;
+    const int activeDuration = clock.activeDurationMs;
+    if (activeDuration <= 0) return state;
+    const auto activeStart = clock.endMs - activeDuration;
     state.visible = true;
-    const int elapsed = std::max(tMs - activeStart, 0);
-    const int count = std::clamp(style.litNumber, 1, 8);
-    if (activeDuration <= 0 || count <= 1) {
+    const auto elapsed = std::max<std::int64_t>(tMs - activeStart, 0);
+    const int count = clock.count;
+    if (count <= 1) {
         state.activeIndex = 0;
     } else if (elapsed >= activeDuration) {
         state.activeIndex = -1;
@@ -141,7 +126,7 @@ ShapeSignalState shapeSignalState(
             raw - static_cast<float>(state.activeIndex), 0.0f, 1.0f
         );
         const float ratio = std::clamp(
-            static_cast<float>(style.litTransitionRatioPct) / 100.0f,
+            static_cast<float>(clock.transitionRatioPct) / 100.0f,
             0.0f,
             1.0f
         );
@@ -151,24 +136,36 @@ ShapeSignalState shapeSignalState(
             : std::clamp(
                 (transitionPhase - (1.0f - ratio)) / ratio, 0.0f, 1.0f
             );
-        if (style.litTransitionMode == "fade") {
+        if (clock.transition == ShapeSignalClock::Transition::Fade) {
             state.activeOpacity = 1.0f - progress;
-        } else if (style.litTransitionMode == "slide") {
+        } else if (clock.transition == ShapeSignalClock::Transition::Slide) {
             // Exit = time-reversed entrance (mirrors Painter's
             // lit_extinguish_transition_state): opacity 1→0 while the
             // displacement grows from the slot toward the entrance origin
             // (−angle direction). Replaying the entrance curve here left the
             // active lamp invisible for most of its reign.
             state.activeOpacity = 1.0f - progress;
-            const float distance = std::max(style.litTransitionDistance, 0.0f)
+            const float distance = std::max(clock.transitionDistance, 0.0f)
                 * progress;
             constexpr float pi = 3.14159265358979323846f;
-            const float radians = style.litTransitionAngleDeg * pi / 180.0f;
+            const float radians = clock.transitionAngleDeg * pi / 180.0f;
             state.dx = -std::cos(radians) * distance;
             state.dy = -std::sin(radians) * distance;
         }
     }
     return state;
+}
+
+ShapeSignalState shapeSignalState(
+    int lineStartMs, const TextStyle &style, int tMs, int displayStartMs,
+    int displayEndMs, bool signalHead
+) {
+    // The row's display window gates a countdown whose clock is independent.
+    if (!signalHead || style.vertical || !style.litEnabled || style.litStyle == "volume"
+        || tMs < displayStartMs || tMs >= displayEndMs) {
+        return {};
+    }
+    return shapeSignalState(shapeSignalClock(lineStartMs, style), tMs);
 }
 
 VolumeSignalState volumeSignalState(

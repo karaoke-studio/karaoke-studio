@@ -9,6 +9,7 @@ struct SkiaPaintCapabilities {
     bool imageFills = false;
     bool staticShadow = false;
     bool staticGlow = false;
+    bool customShapeSignal = false;
 };
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
 SkMatrix skiaViewport(const RenderScene&);

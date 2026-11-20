@@ -238,6 +238,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 throw BackendError("Skia 反向走字的重叠终点或注音轨道缺少能力声明");
         }
         TextLine line;
+        line.litHead = source.litHead;
         line.wipeReverse = source.wipeReverse;
         line.entryAnimation = source.entryAnimation.toStdString();
         line.entryDurationMs = source.entryDurationMs;

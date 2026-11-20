@@ -6,6 +6,7 @@
 #include "line_animation.h"
 #include "noise_transition.h"
 #include "scanline_band.h"
+#include "shape_signal.h"
 #include "sing_particles.h"
 #include "solid_outline.h"
 #include "subtitle_gradient.h"
@@ -68,6 +69,7 @@ struct ResolvedLine {
     UtopiaTransition utopiaTransition;
     bool transformedWipe = false;
     ScanlineBand scanline;
+    std::optional<ShapeSignal> shapeSignal;
     std::vector<SingParticleBurst> particles;
     ParticleVisibility particleVisibility;
 };

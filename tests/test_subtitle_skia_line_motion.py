@@ -306,3 +306,53 @@ def compare_animated_ruby(binary, track, style, ir, width, height, dpr):
             if diff.size:
                 assert diff.mean() <= budget['max_union_channel_mae'], (t, diff.mean())
                 assert np.percentile(diff, 95) <= budget['max_union_p95'], t
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('shape', ['circle', 'square', 'rounded'])
+def test_custom_shape_signal_countdown(binary, project, target, shape):
+    track, style = project
+    text = replace(style, entry_anim='none', exit_anim='none')
+    lit = replace(text, lit_enabled=True, lit_appearance_mode='custom', lit_style=shape,
+                  lit_offset_y=-15, lit_size=22, lit_number=4, lit_transition_mode='slide', lit_shadow=True)
+    plain = ir_for(binary, (track, text))
+    ir = ir_for(binary, (track, lit))
+    line = ir['track']['lines'][0]
+    start = line['display_start_ms']
+    end = line['chars'][0]['start_ms']
+    before = max(start, end-300)
+    times = [before, end+1, before]
+    assert line['lit_head'] and 'p08_custom_shape_signal' in ir['required_features']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        lamps, _ = collect(process, times)
+        broken = copy.deepcopy(ir)
+        broken['skia_layout']['lines'][0]['shape_signal_anchor'] = [None, 1]
+        with pytest.raises(NativeRendererError, match='最终锚点'):
+            configure(process, broken)
+        replay, _ = collect(process, [before])
+        configure(process, plain)
+        baseline, _ = collect(process, times, generation=2)
+    assert np.count_nonzero(lamps[0][..., 3] > baseline[0][..., 3]) > 0
+    assert np.array_equal(lamps[1], baseline[1])
+    assert np.array_equal(lamps[0], lamps[-1]) and np.array_equal(lamps[0], replay[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_p00_custom_shape_signal_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'lit_appearance_custom')
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+            rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, reference, *rendered, case.case_id, check_p00_edges=True)

@@ -72,6 +72,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
         line.particles = source.particles;
         line.particleVisibility = source.particleVisibility;
+        line.shapeSignal = source.shapeSignal;
         // Annotation groups currently support only a forward front.
         if (source.wipeRightToLeft && !source.rubyGroups.empty())
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
