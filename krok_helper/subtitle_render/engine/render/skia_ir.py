@@ -428,11 +428,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('shadow', 'glow'))
     if style.vertical and (decorations or ruby_decorations):
         if (style.dual_line_layout or any(line.wipe_reverse for line in track.lines)
-                or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') != 'none'
-                       or line.get('exit_anim') != 'none' or line.get('scanline')
+                or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') not in {'none', 'fade'}
+                       or line.get('exit_anim') not in {'none', 'fade'} or line.get('scanline')
                        or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
             raise ValueError('Skia 竖排静态装饰暂支持正向单列基础走字')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
+        if 'p07_line_fade' in ir['required_features']:
+            ir['required_features'].append('p07_vertical_decoration_fade')
         if vertical_ruby is not None:
             if any(len(line['ruby_groups']) > 1 for line in lines):
                 raise ValueError('Skia 竖排静态装饰暂不支持同列多组注音')

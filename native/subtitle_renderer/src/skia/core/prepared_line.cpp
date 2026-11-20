@@ -44,7 +44,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty())) {
         const auto* bounds = movingCells ? nullptr : &line.paintBounds;
-        if (!line.glow.empty() || !line.rubyGlow.empty()) {
+        // Use the destination format for vertical decoration at every opacity
+        // so the blur result itself stays independent of the line fade.
+        if (!line.vertical && (!line.glow.empty() || !line.rubyGlow.empty())) {
             // Keep the halo coverage and the line opacity at float precision
             // until the composed line is written to the 8-bit output.
             SkPaint fade;

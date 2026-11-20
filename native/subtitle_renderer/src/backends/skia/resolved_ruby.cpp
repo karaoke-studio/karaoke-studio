@@ -87,12 +87,16 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool vertical = scene.lineStyles[lineIndex].vertical;
     const auto features = ir.value("required_features").toArray();
     const bool allowOutlines = features.contains("p06_ruby_solid_outline");
+    const bool verticalFade = vertical && features.contains("p07_vertical_decoration_fade")
+        && (line.entryAnimation == "none" || line.entryAnimation == "fade")
+        && (line.exitAnimation == "none" || line.exitAnimation == "fade");
+    const bool staticLine = line.entryAnimation == "none" && line.exitAnimation == "none";
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
-        && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+        && line.karaokeAnimation == "none" && (staticLine || verticalFade)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowShadow = features.contains("p06_ruby_shadow")
         && (!vertical || allowVerticalDecoration) && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
-        && line.entryAnimation == "none" && line.exitAnimation == "none";
+        && (staticLine || verticalFade);
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
@@ -103,7 +107,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || transition != RubyTransition::None || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+        && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade)
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");

@@ -70,6 +70,51 @@ def test_fade_scales_the_composed_outline_stack_and_keeps_timing(binary, project
         }, sort_keys=True), encoding='utf-8')
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('with_ruby', [False, True])
+def test_vertical_decoration_fades_as_a_complete_layer(binary, project, target, with_ruby):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(1, 3))
+    line = replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=3000)
+    track = replace(track, lines=[line], rubies=track.rubies if with_ruby else [])
+    blank = colors('#00000000', '#00000000')
+    before = replace(blank.before, shadow=PaintFill(color='#FFFF0000'))
+    after = replace(blank.after, shadow=PaintFill(color='#FF0000FF'))
+    style = replace(style, karaoke_colors=replace(blank, before=before, after=after),
+                    ruby_karaoke_colors=replace(blank, before=after, after=after),
+                    decoration_kind_before='shadow', decoration_kind='glow', decoration_before_sync=False,
+                    shadow_before_offset_x=-36, shadow_before_offset_y=4,
+                    glow_after_radius_px=8, ruby_decoration_kind='glow', ruby_decoration_kind_before='glow',
+                    ruby_glow_before_radius_px=6, ruby_glow_after_radius_px=6,
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=200, exit_fade_ms=400)
+    ir = ir_for(binary, (track, style))
+    opaque = ir_for(binary, (track, replace(style, entry_anim='none', exit_anim='none')))
+    assert ir['skia_layout']['lines'] == opaque['skia_layout']['lines']
+    feature = 'p07_vertical_decoration_fade'
+    assert feature in ir['required_features'] and feature not in opaque['required_features']
+    source, = ir['track']['lines']
+    assert source['entry_duration_ms'] == 200 and source['exit_duration_ms'] == 400
+    times = [50, 2700]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        faded, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+        configure(process, opaque)
+        full, _ = collect(process, times, generation=3)
+    assert all(np.array_equal(a, b) for a, b in zip(faded, replay[::-1], strict=True))
+    for time, opacity, actual, baseline in zip(times, (.4375, .5625), faded, full, strict=True):
+        assert baseline[..., 3].max() > 16
+        delta = abs(premultiplied(actual) - premultiplied(baseline) * opacity)
+        pos = np.unravel_index(delta.argmax(), delta.shape)
+        assert delta.max() <= 2, (time, pos, actual[pos[:2]], baseline[pos[:2]], delta.max())
+
+
 @pytest.mark.parametrize('mutation', ['missing', 'schema', 'unsupported'])
 def test_invalid_fade_profile_preserves_the_previous_scene(binary, project, mutation):
     ir = ir_for(binary, fade_project(project))

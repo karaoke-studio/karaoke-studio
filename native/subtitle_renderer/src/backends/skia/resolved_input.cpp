@@ -467,15 +467,20 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
         const bool paintedGlow = rubyMainPaint && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
+        const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
+            && (line.entryAnimation == "none" || line.entryAnimation == "fade")
+            && (line.exitAnimation == "none" || line.exitAnimation == "fade");
         const bool verticalDecoration = style.vertical
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
-            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && line.karaokeAnimation == "none"
+            && (verticalFade || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
-                || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
+                || (!(lineGlow || (verticalDecoration && verticalFade))
+                    && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
                 || !projected.charStyles.empty() || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
