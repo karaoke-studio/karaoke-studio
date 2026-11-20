@@ -7,6 +7,15 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
+float LineBandTransition::opacityAt(int timeMs, int startMs, int endMs) const {
+    const auto ease = [](int remaining, int duration) {
+        if (duration <= 0) return 1.f;
+        const float p = std::clamp(float(remaining) / duration, 0.f, 1.f);
+        return p * p * (3.f - 2.f * p);
+    };
+    return ease(timeMs - startMs, inMs) * ease(endMs - timeMs, outMs);
+}
+
 namespace {
 SkRect centeredCrop(const SkRect& source, const SkRect& destination) {
     const float scale = std::max(destination.width() / source.width(), destination.height() / source.height());

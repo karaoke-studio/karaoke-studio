@@ -85,6 +85,7 @@ struct ResolvedLine {
     std::vector<SingParticleBurst> particles;
     ParticleVisibility particleVisibility;
     SkRect lineBand = SkRect::MakeEmpty();
+    LineBandTransition lineBandTransition;
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;

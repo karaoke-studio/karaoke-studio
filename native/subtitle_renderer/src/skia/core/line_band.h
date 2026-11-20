@@ -9,6 +9,12 @@
 class SkCanvas;
 
 namespace subtitle::skia {
+struct LineBandTransition {
+    int inMs = 0, outMs = 0;
+
+    float opacityAt(int timeMs, int startMs, int endMs) const;
+};
+
 struct LineBandTexture {
     enum class Fit { Stretch, Cover, Repeat };
     struct Slices {

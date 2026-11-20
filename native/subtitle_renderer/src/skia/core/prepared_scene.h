@@ -61,6 +61,7 @@ private:
         std::vector<ResolvedLine::Translation> translations;
         SkPoint translationAt(int timeMs) const;
         SkRect lineBand = SkRect::MakeEmpty();
+        LineBandTransition lineBandTransition;
         std::vector<PreparedWipeGroup> rubyGroups;
         bool noWipe = false;
         bool wipeRightToLeft = false;

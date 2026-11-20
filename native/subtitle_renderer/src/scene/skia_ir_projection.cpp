@@ -91,6 +91,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool animatedBand = features.contains("p08_animated_staff_line_band") || features.contains("p08_animated_line_band");
     const bool tintedBand = features.contains("p08_tinted_line_band");
     const bool bandWithEffects = features.contains("p08_line_band_with_effects");
+    const bool bandTransition = features.contains("p08_line_band_transition");
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
@@ -191,6 +192,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         return animation == "none" || (allowFade && animation == "fade")
             || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"));
     };
+    const auto bandAnimation = [&](const QString& animation, bool entry) {
+        return plainLineAnimation(animation, entry) || (bandTransition
+            && (animation == "char_fade" || isSkiaEnergyTransition(animation)));
+    };
     const auto supportedAnimation = [&](const QString& animation, bool entry) {
         return plainLineAnimation(animation, entry)
             || (features.contains("p07_utopia_transition") && animation == "utopia")
@@ -210,8 +215,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
-        if (staticBand && (!plainLineAnimation(source.entryAnimation, true)
-                || !plainLineAnimation(source.exitAnimation, false)
+        if (staticBand && (!bandAnimation(source.entryAnimation, true)
+                || !bandAnimation(source.exitAnimation, false)
                 || ((source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)
                 || resolved.litEnabled || resolved.volumeEnabled))
             throw BackendError("Skia 行背景带缺少对应行出入场能力");

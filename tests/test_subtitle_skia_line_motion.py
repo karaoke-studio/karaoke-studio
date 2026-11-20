@@ -345,6 +345,50 @@ def test_line_band_with_scanline_and_singing_particles_matches_actual_gpu(binary
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_line_band_character_transition_uses_its_own_smoothstep(binary, project, tmp_path, target):
+    track, style = motion_project(project, entry='char_fade', exit='char_fade')
+    style = replace(style, entry_lead_ms=600, exit_fade_ms=600, line_band_enabled=True,
+                    line_band_image=str(static_band_image(tmp_path)), line_band_fill_mode='stretch',
+                    line_band_opacity_pct=100, line_band_pad_top_px=35)
+    ir = ir_for(binary, (track, style))
+    feature = 'p08_line_band_transition'
+    assert feature in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    source, = ir['track']['lines']
+    start, end = source['display_start_ms'], source['display_end_ms']
+    entry, leave = source['entry_duration_ms'] or 600, source['exit_duration_ms'] or 600
+    left, top, _, _ = ir['skia_layout']['lines'][0]['line_band_rect']
+    x, y = int(left+4), int(top+4)
+    times = [start, start+entry//4, start+entry//2, start+entry, end-leave//2, end-leave//4, end]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+    alpha = np.array([int(frame[y, x, 3]) for frame in frames])
+    intervals = np.array(times)
+    rising = np.clip((intervals - start) / entry, 0, 1)
+    falling = np.clip((end - intervals) / leave, 0, 1)
+    expected = np.rint(255 * rising**2 * (3 - 2 * rising) * falling**2 * (3 - 2 * falling))
+    assert np.max(np.abs(alpha - expected)) <= 1
+    assert np.array_equal(replay[0], frames[1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['entry_char_fade', 'entry_flame', 'exit_lightning'])
+def test_line_band_character_transition_matches_actual_gpu(binary, application, tmp_path, effect):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == effect)
+    style = replace(base.style, line_band_enabled=True, line_band_image='preset:staff_scroll')
+    case = replace(base, case_id=f'line_band_{effect}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')

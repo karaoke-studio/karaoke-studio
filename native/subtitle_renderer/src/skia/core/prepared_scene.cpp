@@ -44,6 +44,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.vertical = source.vertical;
         line.animation = source.animation;
         line.lineBand = source.lineBand;
+        line.lineBandTransition = source.lineBandTransition;
         line.beforeGradient = source.beforeGradient;
         line.afterGradient = source.afterGradient;
         line.beforeOutlineGradient = source.beforeOutlineGradient;
@@ -262,10 +263,11 @@ void PreparedScene::drawLineBands(SkCanvas& canvas, int timeMs) const {
     for (const auto& line : lines_) {
         if (timeMs < line.startMs || timeMs >= line.endMs || line.lineBand.isEmpty()) continue;
         const auto animation = line.animation.at(timeMs, line.startMs, line.endMs);
-        if (animation.opacity <= 0) continue;
+        const float alpha = lineBand_.opacity * animation.opacity
+            * line.lineBandTransition.opacityAt(timeMs, line.startMs, line.endMs);
+        if (alpha <= 0) continue;
         const auto origin = line.translationAt(timeMs);
         const auto bounds = line.lineBand.makeOffset(origin.x() + animation.dx, origin.y() + animation.dy);
-        const float alpha = lineBand_.opacity * animation.opacity;
         if (std::ranges::any_of(painted, [&](const auto& other) {
                 SkRect overlap;
                 if (alpha > other.alpha + 0.02f || !overlap.intersect(bounds, other.bounds)) return false;

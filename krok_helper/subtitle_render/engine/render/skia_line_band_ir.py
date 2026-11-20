@@ -6,6 +6,8 @@ from ...domain.band_presets import band_preset, preset_id_for_image
 from ..layout.line.skia_placement import legacy_ruby_allowance
 from ..ruby.style_semantics import ruby_stroke2_width, ruby_stroke_width
 
+_BAND_TRANSITIONS = {'char_fade', 'flame', 'lightning'}
+
 
 def _upper_reading_ink_top(group, ink_top):
     edge = int(ruby_stroke_width(group.target.style))
@@ -40,10 +42,13 @@ def write_line_band(ir, style, prepared, *, width, height):
     if staff and any(not ir['style'].get(key) for key in
                      ('line_band_image', 'line_band_lines_image', 'line_band_clef_image')):
         raise ValueError('Skia 五线谱背景带缺少预设图层')
-    if any(source.get('entry_anim') not in {'none', 'fade', 'slide_in', 'rise'}
-           or source.get('exit_anim') not in {'none', 'fade', 'slide_out', 'rise'}
+    if any(source.get('entry_anim') not in ({'none', 'fade', 'slide_in', 'rise'} | _BAND_TRANSITIONS)
+           or source.get('exit_anim') not in ({'none', 'fade', 'slide_out', 'rise'} | _BAND_TRANSITIONS)
            for source in ir['track']['lines']):
         raise ValueError('Skia 行背景带缺少对应行出入场能力')
+    if any({source.get('entry_anim'), source.get('exit_anim')} & _BAND_TRANSITIONS
+           for source in ir['track']['lines']):
+        ir['required_features'].append('p08_line_band_transition')
     if any(source.get('scanline') or source.get('fx_bursts') for source in ir['track']['lines']):
         ir['required_features'].append('p08_line_band_with_effects')
     for item, final in zip(prepared.plan.lines, ir['skia_layout']['lines'], strict=True):

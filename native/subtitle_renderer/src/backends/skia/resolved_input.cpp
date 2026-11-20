@@ -148,6 +148,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 throw BackendError("Skia 行背景带缺少有效的目标矩形");
             const auto px = [&](int i) { return float(rect[i].toDouble() * glyphs.dpr); };
             prepared.lineBand = SkRect::MakeLTRB(px(0), px(1), px(2), px(3));
+            if (features.contains("p08_line_band_transition")) {
+                const auto duration = [](const std::string& kind, int value) {
+                    if (kind != "char_fade" && kind != "flame" && kind != "lightning") return 0;
+                    return value > 0 ? value : 600;
+                };
+                prepared.lineBandTransition = {duration(line.entryAnimation, line.entryDurationMs),
+                                               duration(line.exitAnimation, line.exitDurationMs)};
+            }
         } else if (source.contains("line_band_rect")) {
             throw BackendError("Skia 行背景带缺少能力声明");
         }
