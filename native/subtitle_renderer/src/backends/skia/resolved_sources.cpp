@@ -55,7 +55,8 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p08_line_band_blur", "p08_line_band_animated_decoration"
     };
     for (const auto& feature : source.value("required_features").toArray())
-        if (!allowed.contains(feature) && !(title && feature == QJsonValue("p05_vector_guides")))
+        if (!allowed.contains(feature)
+            && !(title && (feature == QJsonValue("p05_vector_guides") || feature == QJsonValue("p08_bitmap_guides"))))
             throw BackendError("Skia 多轨暂不支持此绘制能力 " + feature.toString().toStdString());
     const auto layout = source.value("skia_layout").toObject().value("lines").toArray();
     if ((size.lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");

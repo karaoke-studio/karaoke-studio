@@ -173,7 +173,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const auto& guide = *cell.bitmap;
         const auto phase = states[index].phase;
         if (!guide.wipes() || phase != Phase::Wiping) {
-            guide.draw(canvas, guide.wipes() && phase == Phase::After, 1.f);
+            guide.draw(canvas, guide.wipes() && phase == Phase::After, titleOpacity);
             return;
         }
         float edge = front(cell, rawProgress(cell));
@@ -200,7 +200,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             SkAutoCanvasRestore keep(&canvas, true);
             canvas.clipRect(sung ? SkRect::MakeLTRB(box.left() - pad, -1e6f, edge, 1e6f)
                                  : SkRect::MakeLTRB(edge, -1e6f, box.right() + pad, 1e6f), true);
-            guide.draw(canvas, sung, 1.f);
+            guide.draw(canvas, sung, titleOpacity);
         }
     };
     const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {

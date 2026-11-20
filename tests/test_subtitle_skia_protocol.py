@@ -238,6 +238,48 @@ def test_title_vector_guides_match_actual_d2d_gpu(binary):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+def bitmap_guide_title(tmp_path):
+    from test_subtitle_skia_image_fills import write_png
+
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, offset_ms=5000))
+    pixels = np.zeros((27, 35, 4), dtype=np.uint8)
+    pixels[3:-3, 3:-3] = [225, 75, 31, 255]
+    before = write_png(tmp_path / 'title-before.png', pixels)
+    pixels[3:-3, 3:-3] = [56, 245, 85, 255]
+    after = write_png(tmp_path / 'title-after.png', pixels)
+    guide = GuideSymbol(kind='bitmap', bitmap_before_path=str(before), bitmap_after_path=str(after),
+                        count=2, bitmap_fix_size=True, bitmap_margin_left_px=4,
+                        bitmap_margin_right_px=7, bitmap_margin_bottom_px=5)
+    title = replace(solid_title(style), text_template='Skia', guide_symbols={0: guide})
+    return track, replace(style, title_overlays=[title], custom_style_schemes={})
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_title_bitmap_guides_use_before_image_at_every_time(binary, tmp_path, target):
+    track, style = bitmap_guide_title(tmp_path)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [400, 500, 1800, 500, 1000])
+    assert not frames[4].any()
+    assert np.array_equal(frames[1], frames[2]) and np.array_equal(frames[1], frames[3])
+    colors = frames[1][frames[1][..., 3] == 255, :3]
+    assert np.count_nonzero(np.all(colors == [225, 75, 31], axis=1)) > 900
+    assert not np.any(np.all(colors == [56, 245, 85], axis=1))
+    assert frames[0][..., 3].sum() < frames[1][..., 3].sum()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_bitmap_guides_match_actual_d2d_gpu(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = bitmap_guide_title(tmp_path)
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_bitmap_guides'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 @pytest.fixture
 def supported_project(tmp_path):
     from krok_helper.subtitle_render.domain.models import style_to_dict

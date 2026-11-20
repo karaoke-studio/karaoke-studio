@@ -2,7 +2,7 @@
 
 from functools import partial
 
-from ...domain.models import Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, title_line_units
+from ...domain.models import GuideSymbol, Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, title_line_units
 from ...domain.paint import KaraokeColorState, KaraokeColors, PaintFill
 from ...serialization.timing import guide_symbol_from_dict
 from ..layout.line.skia_placement import LinePosition
@@ -14,7 +14,9 @@ def _title_position(local, item, measured, width, height, *, title, row_count):
     style = item.layout_style
     line = measured.lines[item.track_index]
     ascent = descent = 0
-    for run, metrics, edge in zip(line.run_indices, line.slot_metrics, line.edge_sizes, strict=True):
+    for cell, run, metrics, edge in zip(line.cells, line.run_indices, line.slot_metrics, line.edge_sizes, strict=True):
+        if cell.get('bitmap_guide'):
+            continue
         size = measured.runs[run]['size']
         below = size * metrics['descent'] / max(metrics['ascent'] + metrics['descent'], 1)
         ascent = max(ascent, size - below + edge / 2)
@@ -55,9 +57,12 @@ def solid_title_style(title):
                    for part in ('fill', 'stroke', 'stroke2', 'shadow'))):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
-    if guides and (roles or any(guide['kind'] != 'vector' for guide in guides)
-                   or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
-        return None
+    if guides:
+        if roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']:
+            return None
+        if any(guide['kind'] == 'bitmap' for guide in guides) and (
+                title['inline_guide_symbols'] or any(guide['kind'] != 'bitmap' for guide in guides)):
+            return None
     if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
                      or paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
@@ -104,13 +109,22 @@ def _title_lines(title, rows):
     for row, cells in enumerate(rows):
         chars = []
         prefix = prefixes.get(row)
+        image = None
         if prefix:
             if not 1 <= prefix['count'] <= 64:
                 raise ValueError('Skia 标题的行首导唱符数量超限')
-            symbol = guide_symbol_from_dict(prefix['vector_glyph'])
-            if symbol is None:
-                raise ValueError('Skia 标题导唱符轮廓无效')
-            chars.extend(TimingChar('\uFFFC', row, vector_glyph=symbol) for _ in range(prefix['count']))
+            if prefix['kind'] == 'bitmap':
+                image = GuideSymbol(kind='bitmap', count=prefix['count'], prefix_timing='anchored',
+                                    bitmap_before_path=prefix['before_path'], bitmap_after_path=prefix['after_path'],
+                                    bitmap_fix_size=prefix['fix_size'], bitmap_zoom_percent=prefix['zoom_percent'],
+                                    bitmap_margin_left_px=prefix['margin_left_px'],
+                                    bitmap_margin_right_px=prefix['margin_right_px'],
+                                    bitmap_margin_bottom_px=prefix['margin_bottom_px'])
+            else:
+                symbol = guide_symbol_from_dict(prefix['vector_glyph'])
+                if symbol is None:
+                    raise ValueError('Skia 标题导唱符轮廓无效')
+                chars.extend(TimingChar('\uFFFC', row, vector_glyph=symbol) for _ in range(prefix['count']))
         for column, (unit, label) in enumerate(cells):
             inline = replacements.get((row, column))
             if inline:
@@ -121,7 +135,7 @@ def _title_lines(title, rows):
             else:
                 chars.append(TimingChar(unit, row, role_label=label))
         if chars:
-            yield TimingLine(chars=chars, track_line_index=row, end_ms=row + 1,
+            yield TimingLine(chars=chars, track_line_index=row, end_ms=row + 1, guide_symbol=image,
                              display_start_override_ms=row, display_end_override_ms=row + 1)
 
 
