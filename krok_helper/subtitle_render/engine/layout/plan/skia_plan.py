@@ -36,7 +36,8 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
         # Measure the same guide-expanded lines the shared plan lays out.
         rendered = replace(track, lines=[render_line_with_guide_symbols(line) for line in track.lines])
         measured = measure_track(rendered, style, styles, measure=measure, resolve_font=resolve_font)
-        ruby = (prepare_ruby_geometry(track, style, styles, measured, measure=measure, resolve_font=resolve_font)
+        ruby = (prepare_ruby_geometry(track, style, styles, measured, rendered_lines=rendered.lines,
+                                      measure=measure, resolve_font=resolve_font)
                 if not style.vertical and (track.rubies or any(s.lower_ruby_enabled for s in styles)) else None)
         geometry = SkiaCollisionGeometry(track, style, styles, measured, ruby_geometry=ruby)
 

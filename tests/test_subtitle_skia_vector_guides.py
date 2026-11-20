@@ -103,9 +103,10 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'rtl', 'ruby', 'lower', 'role', 'stroke'])
+@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'rtl', 'ruby', 'lower', 'role', 'stroke', 'shadow'])
 def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
-    track, style = guide_source(project)
+    # Ruby and outlines are verified only with a line-level prefix guide.
+    track, style = guide_source(project, 'inline' if change in {'ruby', 'stroke'} else 'prefix')
     line = track.lines[0]
     if change == 'bitmap':
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, kind='bitmap', path_commands=(),
@@ -118,9 +119,75 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     elif change == 'role':
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, role_labels=('lead',)))])
+    elif change == 'shadow':
+        style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
     else: style = replace(style, stroke_width_px=4)
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def p00_guide(tmp_path, count=1):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'guide_vector')
+    line = case.track.lines[0]
+    track = replace(case.track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, count=count))])
+    return case, track
+
+
+@pytest.mark.parametrize('count', [1, 2])
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, target):
+    from test_subtitle_skia_outline_ruby import outlined
+
+    track, style = guide_source(project, symbol=replace(SQUARE, count=count), effect='utopia')
+    line = track.lines[0]
+    line = replace(line, chars=[replace(char, text='字') for char in line.chars])
+    # All occurrences have the same text. Explicit authored ownership must
+    # survive insertion even when the old slot still matches the reading text.
+    ruby = RubyAnnotation('字', 'A', target_char_start=2, target_char_end=3)
+    track = replace(track, lines=[line], rubies=[ruby])
+    ir = ir_for(binary, (track, outlined(style, 2)))
+    assert 'p05_vector_guide_composition' in ir['required_features']
+    assert ir['skia_layout']['vector_guide_schema'] == 1
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    source, = ir['track']['lines']
+    assert group['style_cell'] == 2 + count
+    assert group['units'][0]['interval_ms'] == source['resolved_intervals'][count + 2]
+    assert [c['text'] for c in source['chars'][:count + 1]] == ['\uFFFC'] * count + ['字']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        before, _ = collect(process, [950])
+        for mutation in ('feature', 'unverified'):
+            bad = copy.deepcopy(ir)
+            if mutation == 'feature':
+                bad['required_features'].remove('p05_vector_guide_composition')
+            else:
+                bad['required_features'].append('p06_static_shadow')
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+        after, _ = collect(process, [950], generation=2)
+    assert before[0].any() and np.array_equal(before[0], after[0])
+
+
+@GPU
+@pytest.mark.parametrize('count', [1, 2])
+def test_p00_prefix_guide_with_utopia_ruby_outlines_and_glow_matches_actual_gpu(binary, application, tmp_path, count):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_protocol import collect as collect_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    case, track = p00_guide(tmp_path, count)
+    times = [*case.timestamps_ms, 250, 3700, 4200]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, times, force_warp=False, track=track,
+                                   width=1920, height=1080, dpr=1, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect_frames(process, times)
+            rendered.append(frames)
+    assert_glow_parity(times, reference, *rendered, f'guide_vector-{count}', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'ink', 'advance', 'metrics_id', 'different_id',

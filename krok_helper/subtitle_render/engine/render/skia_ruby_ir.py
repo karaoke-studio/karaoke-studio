@@ -21,7 +21,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     if lower_source_indices is None and any(group.target.lower for line in ruby.lines for group in line.rubies):
         raise ValueError('Skia 下方注音最终绘制需要完整来源映射')
     markers = any(is_utopia_group_marker(r) for r in geometry.track.rubies)
-    timings = [prepare_ruby_wipe_timing(item.line, local, item.layout_style.ruby_main_progress_mode)
+    # Ruby targets index the guide-expanded render cells, as in the GPU's line layout.
+    timings = [prepare_ruby_wipe_timing(item.render_line, local, item.layout_style.ruby_main_progress_mode)
                for item, local in zip(prepared.plan.lines, ruby.lines, strict=True)]
     standalone_marks = any(starts_with_mark(unit) for timing in timings for c in timing.readings for unit in c.glyph_units)
     unit_projection = standalone_marks or any(c.units != tuple(split_graphemes(g.target.effective.reading)) or c.glyph_units != c.units
@@ -58,7 +59,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             if not clock.units:
                 continue
             indices = group.target.indices
-            style_cell = next((i for i in indices if item.line.chars[i].role_label), indices[0])
+            style_cell = next((i for i in indices if item.render_line.chars[i].role_label), indices[0])
             outlines = solid_ruby_outlines(group.target.style)
             # The existing GPU floors a half-width in reference pixels, then
             # uses that integer directly in the physical annotation clip.

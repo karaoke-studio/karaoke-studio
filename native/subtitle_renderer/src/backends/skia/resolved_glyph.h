@@ -22,6 +22,6 @@ struct ResolvedGlyphContext {
     // vector_guide_schema=1: an authored guide outline at logical font size.
     ::subtitle::skia::ResolvedCell vectorCell(const QJsonObject&, const VectorGlyph&, const QString& glyphId,
                                            double size, int startMs, int endMs,
-                                           std::uint32_t before, std::uint32_t after) const;
+                                           std::uint32_t before, std::uint32_t after, double wipePad) const;
 };
 }

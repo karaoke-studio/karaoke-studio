@@ -281,7 +281,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         for (const auto& window : source.placementWindows)
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
+        const bool composedGuide = features.contains("p05_vector_guide_composition");
+        bool sawLyrics = false;
         for (const auto& cell : source.chars) {
+            if (composedGuide && sawLyrics && cell.vectorGlyph)
+                throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
+            sawLyrics = sawLyrics || !cell.vectorGlyph;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
                 throw BackendError("Skia 竖排单元包含尚未支持的行内角色");
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
@@ -311,9 +316,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 逐字变换暂不支持导唱符或行内角色");
-            // vector_guide_schema=1: solid horizontal LTR main text, no roles, ruby or outlines.
+            // vector_guide_schema=1: solid horizontal LTR main text without roles. Ruby and
+            // outlines need the verified composition profile.
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
-                || !cfg.rubies.empty() || &cellStyle != &resolved || features.contains("p06_primary_solid_outline")))
+                || &cellStyle != &resolved
+                || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
+                    && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
             if (cell.bitmapGuide
                 || (!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))

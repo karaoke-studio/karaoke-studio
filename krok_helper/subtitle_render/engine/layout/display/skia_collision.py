@@ -10,6 +10,7 @@ from ..page.pagination import line_center_override
 from ..page.skia_smart_horizontal import SmartHorizontalPages
 from ..plan.page_offsets import MeasuredPageLine
 from ...render_progress import report_display_measure_progress, report_render_progress
+from ...guide.semantics import render_line_with_guide_symbols
 from ...ruby.skia_geometry import ruby_line_position
 from ...style.style_semantics import auto_appearance_basis
 from ....domain.models import resolve_volume_appearance
@@ -22,7 +23,9 @@ class SkiaCollisionGeometry:
         if ruby_geometry is not None and (ruby_geometry.main_identity != measured.identity
                 or len(ruby_geometry.lines) != len(track.lines)):
             raise ValueError('Skia 注音几何与正文度量不一致或已过期')
-        if self.ruby is not None and any(tuple(measured.snapshot.resolve_intervals(line, style)) != ruby.intervals
+        # Ruby clocks belong to the measured guide-expanded cells.
+        if self.ruby is not None and any(
+                tuple(measured.snapshot.resolve_intervals(render_line_with_guide_symbols(line), style)) != ruby.intervals
                 for line, ruby in zip(track.lines, self.ruby.lines, strict=True)):
             raise ValueError('Skia 注音几何与正文时间区间不一致或已过期')
         self.identity = (('skia', measured.identity) if self.ruby is None

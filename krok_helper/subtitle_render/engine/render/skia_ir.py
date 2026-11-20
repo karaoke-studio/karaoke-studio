@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
-from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
+from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
 from .skia_lower_ir import lower_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, RUBY_PARTICLE_EXITS, write_particle_anchors)
@@ -125,7 +125,7 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
                     and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
                 or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12)
-                or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
+                or any(c.role_label is not None for c in item.render_line.chars)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
         singing = singing or scales
@@ -472,6 +472,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
             fade_lines=fade_lines | composed_geometry_lines, spin_lines=spin_lines,
             affine_lines=affine_geometry_lines)
+        if 'p05_vector_guides' in ir['required_features']:
+            ir['skia_layout']['vector_guide_schema'] = 1
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if zoom_lines:
@@ -613,4 +615,5 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if (style.viewport_scale_pct != 100 or style.viewport_rotation_deg
             or style.viewport_offset_x or style.viewport_offset_y):
         ir['required_features'].append('p08_viewport')
+    compose_vector_guides(track, ir['required_features'])
     return ir

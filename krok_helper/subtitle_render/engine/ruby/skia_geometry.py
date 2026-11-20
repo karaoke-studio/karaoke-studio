@@ -93,7 +93,7 @@ def upper_ruby_targets(track, index, line, appearance, clock, annotation_indices
     return targets
 
 
-def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, measure):
+def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, measure, rendered_lines=None):
     """Use canonical intervals for ownership, repeated-text targets and clamping.
 
     The resulting cells use a separate ruby font-instance table; their y values
@@ -102,15 +102,25 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
     """
     annotation_indices = {id(r): i for i, r in enumerate(track.rubies)}
     lower = select_lower_targets(track, style, line_styles, measured)
+    if rendered_lines is None:
+        rendered_lines = track.lines
+    prefix_counts = [len(rendered.chars) - len(authored.chars)
+                     for authored, rendered in zip(track.lines, rendered_lines, strict=True)]
     targets, intervals, readings, reference_pairs = [], [], [], []
-    for index, (line, appearance) in enumerate(zip(track.lines, line_styles, strict=True)):
+    for index, (authored, line, appearance, prefix) in enumerate(
+            zip(track.lines, rendered_lines, line_styles, prefix_counts, strict=True)):
         # Reverse singing is not text direction. The shared selection below
         # returns no annotation for a reverse line, exactly as the GPU does.
         if appearance.vertical or appearance.right_to_left:
             raise ValueError('Skia 当前注音几何准备仅支持正向横排上注音')
         clock = measured.snapshot.resolve_intervals(line, style)
         intervals.append(clock)
-        line_targets = upper_ruby_targets(track, index, line, appearance, clock, annotation_indices)
+        # Resolve annotation ownership in authored cells before projecting the
+        # span into render cells. Repeated lyrics can match at the old index.
+        line_targets = upper_ruby_targets(track, index, authored, appearance, clock[prefix:], annotation_indices)
+        if prefix:
+            line_targets = [replace(target, indices=tuple(i + prefix for i in target.indices))
+                            for target in line_targets]
         readings.extend((target.effective, target.style) for target in line_targets)
         for generated in lower[index]:
             target = RubyTarget(-1-generated.clock.annotation_index, generated.indices,
@@ -125,8 +135,8 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
     lower_baselines = {target.annotation_index: round(reference.lower_baseline(target.style.ruby_gap_px))
                        for target, reference in zip(lower_targets, references, strict=True)}
     offset, lines = 0, []
-    for line, appearance, main, clock, line_targets in zip(
-            track.lines, line_styles, measured.lines, intervals, targets, strict=True):
+    for authored, line, appearance, main, clock, line_targets, prefix in zip(
+            track.lines, rendered_lines, line_styles, measured.lines, intervals, targets, prefix_counts, strict=True):
         reading_metrics = ruby_metrics.readings[offset:offset + len(line_targets)]
         offset += len(line_targets)
         gaps, left_overflow, right_overflow = resolve_line_spacing(main, appearance, line_targets, reading_metrics)
@@ -143,7 +153,7 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
         rubies = []
         for target, metrics in zip(line_targets, reading_metrics, strict=True):
             original = target.effective if target.lower else track.rubies[target.annotation_index]
-            span = ruby_target_x_range(original, line, clock, ranges)
+            span = ruby_target_x_range(original, authored, clock[prefix:], ranges[prefix:])
             if span is None:
                 continue
             if has_lower:
@@ -151,7 +161,7 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
                 # slots, then translates each whole group with its first main
                 # cell. Re-rounding after a negative origin crosses zero can
                 # move an internal wipe boundary by an extra pixel.
-                initial = ruby_target_x_range(original, line, clock, initial_ranges)
+                initial = ruby_target_x_range(original, authored, clock[prefix:], initial_ranges[prefix:])
                 if initial is None:
                     raise ValueError('Skia 注音缺少初始正文几何')
                 shift = lefts[min(target.indices)]-initial_lefts[min(target.indices)]

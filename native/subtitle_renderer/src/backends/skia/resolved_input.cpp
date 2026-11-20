@@ -156,6 +156,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
+        const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
             && !line.scanlineEnabled && !line.strokeFlashEnabled
@@ -200,6 +201,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
+            || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
@@ -314,7 +316,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 throw BackendError("Skia 导唱符缺少有效的来源轮廓引用");
             auto glyph = vector
                 ? glyphs.vectorCell(cell, *vector, glyphId.toString(), paint.fontSize / glyphs.dpr, line.chars[clock].startMs,
-                                    line.chars[clock].endMs, beforeColor, afterColor)
+                                    line.chars[clock].endMs, beforeColor, afterColor, wipePad)
                 : glyphs.cell(cell, QString::fromStdWString(line.chars[j].text), line.chars[clock].startMs,
                               line.chars[clock].endMs, beforeColor, afterColor, wipePad);
             if (style.vertical) {
@@ -470,7 +472,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
                 || !projected.charStyles.empty() || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
-                || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
+                || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))

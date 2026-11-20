@@ -49,6 +49,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
         "p05_vector_guides",
+        "p05_vector_guide_composition",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",
@@ -268,6 +269,22 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p05_vector_guides")
         && layout.value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");
+    if (features.contains("p05_vector_guide_composition")) {
+        // Verified prefix guides with Utopia, upper ruby, solid outlines and glow only.
+        static const QJsonArray allowed{
+            "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
+            "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
+            "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
+            "p05_upper_ruby", "p05_vector_guides", "p05_vector_guide_composition",
+            "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
+            "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
+            "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};
+        if (!features.contains("p05_vector_guides"))
+            throw BackendError("Skia 导唱符组合缺少导唱符能力");
+        for (const auto& feature : features)
+            if (!allowed.contains(feature))
+                throw BackendError("Skia 导唱符组合包含未验证能力");
+    }
     if (features.contains("p07_line_fade")
         && layout.value("line_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 出入场淡化布局版本无效");

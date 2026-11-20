@@ -81,7 +81,8 @@ SkPath vectorGlyphPath(const VectorGlyph& glyph, double size) {
 // max(size * advanceWidth / unitsPerEm, 1). Advance and ink are re-derived here.
 ::subtitle::skia::ResolvedCell ResolvedGlyphContext::vectorCell(const QJsonObject& cell, const VectorGlyph& glyph,
                                                               const QString& glyphId, double size,
-                                                              int start, int end, std::uint32_t before, std::uint32_t after) const {
+                                                              int start, int end, std::uint32_t before, std::uint32_t after,
+                                                              double wipePad) const {
     if (!std::isfinite(size) || size <= 0 || size > 4096 || glyph.commands.empty() || glyph.commands.size() > 65536)
         throw BackendError("Skia 导唱符尺寸或轮廓无效");
     const SkPath path = vectorGlyphPath(glyph, size);
@@ -98,7 +99,8 @@ SkPath vectorGlyphPath(const VectorGlyph& glyph, double size) {
         throw BackendError("Skia 导唱符度量快照与轮廓不一致");
     const auto x = finite(cell, "origin_x"), y = finite(cell, "baseline_y");
     const auto left = finite(cell, "wipe_left"), right = finite(cell, "wipe_right");
-    if (right < left || (!ink.isEmpty() && (std::abs(left - x - ink.left()) > 1e-3 || std::abs(right - x - ink.right()) > 1e-3)))
+    if (right < left || (!ink.isEmpty() && (std::abs(left - x - ink.left() + wipePad) > 1e-3
+                                            || std::abs(right - x - ink.right() - wipePad) > 1e-3)))
         throw BackendError("Skia 导唱符走字边界与轮廓墨迹不一致");
     auto positioned = path.makeTransform(SkMatrix::Translate(float(x), float(y)));
     positioned = positioned.makeTransform(SkMatrix::Scale(float(dpr), float(dpr)));

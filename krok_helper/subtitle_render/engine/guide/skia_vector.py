@@ -89,10 +89,37 @@ def validate_vector_guides(track, style):
         appearance = style_for_line(style, line)
         if any(guide_symbol_is_bitmap(c.vector_glyph) or not c.vector_glyph.path_commands for c in cells):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
-        if (appearance.vertical or appearance.right_to_left or track.rubies or appearance.lower_ruby_enabled
-                or any(c.role_label is not None for c in cells) or appearance.stroke_width_px > 0
-                or (appearance.stroke2_enabled and appearance.stroke2_width_px > 0)):
+        if (appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled
+                or any(c.role_label is not None for c in cells)):
             raise ValueError('Skia 导唱符仅支持已验证的横排实色正文子集')
+
+
+# Verified with a line-level prefix guide: Utopia singing, upper ruby, solid
+# double outlines and glow. Any other capability keeps the plain subset only.
+VECTOR_GUIDE_COMPOSITION_TRIGGERS = frozenset({
+    'p05_resolved_ruby', 'p06_primary_solid_outline', 'p06_static_glow', 'p07_singing_scale'})
+VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
+    'p05_fixed_row_grid', 'p05_inline_roles', 'p05_overlap_wipe', 'p05_page_collisions',
+    'p05_resolved_horizontal', 'p05_resolved_ruby', 'p05_segmented_wipe', 'p05_single_line_placement',
+    'p05_smart_horizontal', 'p05_upper_ruby', 'p05_vector_guides', 'p05_vector_guide_composition',
+    'p06_outline_ruby', 'p06_primary_solid_outline', 'p06_ruby_glow', 'p06_ruby_solid_outline',
+    'p06_secondary_solid_outline', 'p06_static_glow', 'p07_ruby_singing_scale', 'p07_singing_glow',
+    'p07_singing_scale'})
+
+
+def compose_vector_guides(track, features):
+    """Append p05_vector_guide_composition, or reject an unverified combination."""
+    from .semantics import render_line_with_guide_symbols
+    if 'p05_vector_guides' not in features or not VECTOR_GUIDE_COMPOSITION_TRIGGERS.intersection(features):
+        return
+    for line in track.lines:
+        if not any(c.vector_glyph is not None for c in render_line_with_guide_symbols(line).chars):
+            continue
+        if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
+            raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
+    if not set(features) <= VECTOR_GUIDE_COMPOSITION_FEATURES - {'p05_vector_guide_composition'}:
+        raise ValueError('Skia 导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')
+    features.append('p05_vector_guide_composition')
 
 
 def vector_guide_metrics(glyph, size, font_metrics, glyph_id):
