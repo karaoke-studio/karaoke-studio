@@ -42,6 +42,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_ruby",
         "p05_vertical_columns",
         "p06_vertical_outline",
+        "p06_vertical_ruby_outline",
         "p05_vertical_ruby_groups",
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
@@ -240,8 +241,13 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_vertical_outline")
         && (!features.contains("p05_vertical_solid") || !style.value("vertical").toBool()
             || !features.contains("p06_primary_solid_outline") || features.contains("p05_vertical_columns")
-            || features.contains("p05_vertical_ruby") || features.contains("p05_reverse_wipe")))
+            || (features.contains("p05_vertical_ruby") && !features.contains("p06_vertical_ruby_outline"))
+            || features.contains("p05_reverse_wipe")))
         throw BackendError("Skia 竖排描边缺少对应布局能力");
+    if (features.contains("p06_vertical_ruby_outline")
+        && (!features.contains("p05_vertical_ruby")
+            || !(features.contains("p06_vertical_outline") || features.contains("p06_ruby_solid_outline"))))
+        throw BackendError("Skia 竖排注音描边缺少对应能力");
     if (features.contains("p05_vertical_shifted_ruby")
         && (!features.contains("p05_vertical_ruby") || layout.value("vertical_ruby_shift_schema").toDouble(-1) != 1))
         throw BackendError("Skia 竖排注音字位需要版本化能力");

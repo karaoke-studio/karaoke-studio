@@ -161,6 +161,62 @@ def test_vertical_ruby_rotated_punctuation_wipes_over_rotated_ink(binary, projec
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('main_outline', [False, True])
+def test_vertical_ruby_outlines_follow_ink_and_keep_independent_colors(binary, project, kana, target, main_outline):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import outlined, premultiplied
+
+    track, style = vertical_ruby_source(project, reading='ー', family=kana)
+    if main_outline:
+        style = outlined(style, 2)
+    ruby = style.ruby_karaoke_colors
+    before = replace(ruby.before, text=PaintFill(color='#800000FF'),
+                     stroke=PaintFill(color='#FFFFFFFF'), stroke2=PaintFill(color='#FFFF8000'))
+    after = replace(ruby.after, text=PaintFill(color='#80FF00FF'),
+                    stroke=PaintFill(color='#FFFFFFFF'), stroke2=PaintFill(color='#FFFF8000'))
+    style = replace(style, ruby_stroke_width_px=3, ruby_stroke2_enabled=True, ruby_stroke2_width_px=3,
+                    ruby_karaoke_colors=replace(ruby, before=before, after=after))
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p06_vertical_ruby_outline'
+    assert {feature, 'p06_ruby_solid_outline'} <= set(ir['required_features'])
+    assert ('p06_vertical_outline' in ir['required_features']) == main_outline
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert [group['outlines'][layer]['width'] for layer in ('stroke', 'stroke2')] == [3, 3]
+    unit, = group['units']
+    start, end = unit['interval_ms']
+    times = [start - 1, (start + end) // 2, end + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert np.array_equal(frames[1], replay[1])
+
+    def mask(frame, color, alpha):
+        return (frame[..., :3] == color).all(axis=-1) & (frame[..., 3] == alpha)
+
+    blue = mask(frames[0], [0, 0, 255], 128)
+    y, x = np.nonzero(blue)
+    assert y.size and np.ptp(y) > 4 * np.ptp(x)
+    assert mask(frames[0], [255, 255, 255], 255).any()
+    assert mask(frames[0], [255, 128, 0], 255).any()
+    sung = np.nonzero(mask(frames[1], [255, 0, 255], 128))[0]
+    unsung = np.nonzero(mask(frames[1], [0, 0, 255], 128))[0]
+    assert sung.size and unsung.size and sung.max() < unsung.min()
+    assert mask(frames[2], [255, 0, 255], 128).any()
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        for gpu, cpu in zip(frames, raster, strict=True):
+            difference = abs(premultiplied(gpu) - premultiplied(cpu))
+            assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
+
+
 def ink_bounds(mask):
     y, x = np.nonzero(mask)
     return np.array([x.min(), y.min(), x.max(), y.max()]) if x.size else np.array([])

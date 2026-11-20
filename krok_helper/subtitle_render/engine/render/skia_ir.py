@@ -380,6 +380,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p05_vertical_shifted_ruby')
         if vertical_ruby.get('vertical_ruby_rotation_schema'):
             ir['required_features'].append('p05_vertical_rotated_ruby')
+        if vertical_ruby.get('ruby_solid_outline_schema'):
+            ir['required_features'] += ['p06_ruby_solid_outline', 'p06_vertical_ruby_outline']
     secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
                             for item in plan.lines)
     if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
@@ -551,8 +553,13 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if 'p06_primary_solid_outline' in ir['required_features']:
         ir['skia_layout']['primary_solid_outline_schema'] = 1
         if style.vertical:
-            if style.dual_line_layout or track.rubies or any(line.wipe_reverse for line in track.lines):
-                raise ValueError('Skia 竖排描边暂支持无注音、正向单列正文')
+            if style.dual_line_layout or any(line.wipe_reverse for line in track.lines):
+                raise ValueError('Skia 竖排描边暂支持正向单列正文')
+            if vertical_ruby is not None:
+                if any(len(line['ruby_groups']) > 1 for line in lines):
+                    raise ValueError('Skia 竖排描边暂不支持同列多组注音')
+                if 'p06_vertical_ruby_outline' not in ir['required_features']:
+                    ir['required_features'].append('p06_vertical_ruby_outline')
             ir['required_features'].append('p06_vertical_outline')
         if style.dual_line_layout:
             ir['required_features'].append('p06_multi_lane_outline')

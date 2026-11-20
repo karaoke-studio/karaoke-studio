@@ -105,8 +105,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const bool allowVerticalRotation = features.contains("p05_vertical_rotated_ruby");
+    const bool allowVerticalOutlines = features.contains("p06_vertical_ruby_outline");
     const auto rubyGroups = source.value("ruby_groups").toArray();
     const bool multipleVertical = vertical && rubyGroups.size() > 1;
+    if (multipleVertical && allowVerticalOutlines)
+        throw BackendError("Skia 竖排描边暂不支持同列多组注音");
     int previousSpanEnd = 0;
     double previousInkBottom = -std::numeric_limits<double>::infinity();
     if (rubyGroups.size() > 4096 - totalGroups)
@@ -178,9 +181,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             || (totalCells += units.toArray().size()) > 65536)
             throw BackendError("Skia 注音最终单元数量无效或超限");
         const auto outlines = object.value("outlines").toObject();
-        if (object.contains("outlines") && (!allowOutlines || vertical || outlines.isEmpty()
+        if (object.contains("outlines") && (!allowOutlines || (vertical && !allowVerticalOutlines) || outlines.isEmpty()
             || outlines.size() != int(outlines.contains("stroke")) + int(outlines.contains("stroke2"))))
-            throw BackendError("Skia 注音描边要求横排布局和有效的实色描边能力");
+                throw BackendError("Skia 注音描边要求有效的实色描边能力");
         const auto primary = outlinePaint(outlines, "stroke");
         const auto secondary = outlinePaint(outlines, "stroke2");
         if (!lower) {
@@ -254,16 +257,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             } else if (cell.contains("utopia_layout_left")) {
                 throw BackendError("Skia 注音单元轴心缺少 Utopia 能力声明");
             }
-            if (!glyph.path.isEmpty()) {
-                using namespace ::subtitle::skia;
-                if (primary.width)
-                    glyph.outline = SolidOutline{prepareOutlinePath(glyph.path, innerWidth), primary.before,
-                                                primary.after, protectFill, innerWidth};
-                if (secondary.width)
-                    glyph.outerOutline = SolidOutline{prepareOutlinePath(glyph.path, outerWidth), secondary.before,
-                                                     secondary.after,
-                                                     protectFill || (primary.width && primary.hasAlpha()), outerWidth};
-            }
             if (vertical) {
                 const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");
                 const auto ink = cell.value("metrics").toObject().value("ink").toArray();
@@ -301,6 +294,16 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 inkBottom = std::max(inkBottom, bottom.toDouble());
             } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom") || cell.contains("vertical_rotation_pivot")) {
                 throw BackendError("Skia 横排注音单元不能携带竖排范围");
+            }
+            if (!glyph.path.isEmpty()) {
+                using namespace ::subtitle::skia;
+                if (primary.width)
+                    glyph.outline = SolidOutline{prepareOutlinePath(glyph.path, innerWidth), primary.before,
+                                                primary.after, protectFill, innerWidth};
+                if (secondary.width)
+                    glyph.outerOutline = SolidOutline{prepareOutlinePath(glyph.path, outerWidth), secondary.before,
+                                                     secondary.after,
+                                                     protectFill || (primary.width && primary.hasAlpha()), outerWidth};
             }
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
                 glyph.wipePoints = {{int(shiftedStart), 0.f}, {int(shiftedEnd), *end}};

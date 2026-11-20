@@ -8,9 +8,10 @@ from ..layout.line.skia_vertical import (
 from ..ruby.skia_geometry import upper_ruby_targets
 from ..ruby.skia_metrics import measure_timed_readings
 from ..ruby.skia_timing import prepare_ruby_target_timing, wipe_points_to_ir
+from .skia_ruby_paint_ir import solid_ruby_outlines
 
 
-def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_offset, font_size):
+def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_offset, font_size, wipe_pad):
     ascent = float(reading.baseline_metrics['ascent'])
     font_height = ascent + float(reading.baseline_metrics['descent'])
     units = []
@@ -24,14 +25,15 @@ def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_of
         x = ruby_column + glyph_offset - cell_width / 2 + font_size * shift
         baseline = reading_top + index * span_height / len(reading.cells) + ascent - font_height * shift
         unit = {'text': name, 'metrics': metrics, 'run_index': run_offset + run,
-                'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left, 'wipe_right': x + right,
+                'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left - wipe_pad,
+                'wipe_right': x + right + wipe_pad,
                 'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
                 'wipe_end_position': 1.0, 'interval_ms': list(interval)}
         if vertical_glyph_rotates(name):
             pivot_y = baseline - ascent + font_height / 2
             unit['vertical_rotation_pivot'] = [ruby_column, pivot_y]
-            unit['wipe_top'] = pivot_y + unit['wipe_left'] - ruby_column
-            unit['wipe_bottom'] = pivot_y + unit['wipe_right'] - ruby_column
+            unit['wipe_top'] = pivot_y + x + left - ruby_column
+            unit['wipe_bottom'] = pivot_y + x + right - ruby_column
         units.append(unit)
     return units
 
@@ -42,7 +44,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
     annotation_indices = {id(ruby): i for i, ruby in enumerate(track.rubies)}
     entries, readings = [], []
     version = 1
-    shifted = rotated = False
+    shifted = rotated = outlined = False
     for index, (line, style) in enumerate(zip(track.lines, geometry.styles, strict=True)):
         intervals = measured.snapshot.resolve_intervals(line, geometry.style)
         targets = sorted(upper_ruby_targets(track, index, line, style, intervals, annotation_indices),
@@ -91,12 +93,20 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
         for target, clock, reading_index in groups:
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
+            outlines = solid_ruby_outlines(target.style)
+            wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
             units = _reading_units(ruby.readings[reading_index], clock, ruby_column, top + first * height_per_cell,
-                                   (end - first) * height_per_cell, len(measured.runs), target.style.ruby_font_size_px)
+                                   (end - first) * height_per_cell, len(measured.runs),
+                                   target.style.ruby_font_size_px, wipe_pad)
             if min(unit['wipe_top'] for unit in units) < previous_bottom:
                 raise ValueError('Skia 竖排同列注音的墨迹范围不能重叠')
             previous_bottom = max(unit['wipe_bottom'] for unit in units)
             group = {'style_cell': first, 'units': units}
+            if outlines:
+                if len(groups) > 1:
+                    raise ValueError('Skia 竖排描边暂不支持同列多组注音')
+                group['outlines'] = outlines
+                outlined = True
             if len(groups) > 1:
                 group['span_end_cell'] = end
             ruby_groups.append(group)
@@ -109,4 +119,6 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
         result['vertical_ruby_shift_schema'] = 1
     if rotated:
         result['vertical_ruby_rotation_schema'] = 1
+    if outlined:
+        result['ruby_solid_outline_schema'] = 1
     return result
