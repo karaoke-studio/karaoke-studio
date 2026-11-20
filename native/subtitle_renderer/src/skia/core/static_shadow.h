@@ -22,16 +22,18 @@ struct StaticShadow {
 
     bool visible() const { return before.visible() || after.visible(); }
 
-    template <class Cell> void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int time, const SkRect& ink) const {
+    template <class Cell> void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int time, const SkRect& ink,
+                                   bool vertical = false) const {
         if (!visible() || ink.isEmpty()) return;
         const bool complete = lineWipeComplete(cells, time);
-        const float edge = lineWipeFront(cells, time, ink.left(), secondaryWidth / 2 + .5f, false);
-        drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f);
+        const float edge = lineWipeFront(cells, time, vertical ? ink.top() : ink.left(),
+                                         secondaryWidth / 2 + .5f, false, vertical);
+        drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f, vertical);
     }
 
     template <class Cell>
     void drawAt(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
-                float edge, bool complete, float beforePad) const {
+                float edge, bool complete, float beforePad, bool vertical = false) const {
         const auto paint = [&](const ShadowState& state, const SkRect* clip) {
             if (!state.visible()) return;
             SkAutoCanvasRestore restore(&canvas, true);
@@ -48,17 +50,22 @@ struct StaticShadow {
                 canvas.drawPath(cell.path, brush);
             }
         };
+        const auto band = [vertical](float low, float high) {
+            return vertical ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
+                            : SkRect::MakeLTRB(low, -1e6f, high, 1e6f);
+        };
         const float stroke = outlineWidth + secondaryWidth;
+        const float start = vertical ? ink.top() : ink.left(), end = vertical ? ink.bottom() : ink.right();
         if (before.enabled && !after.enabled) {
             if (!complete) {
-                const auto clip = SkRect::MakeLTRB(edge, -1e6f, ink.right() + beforePad, 1e6f);
+                const auto clip = band(edge, end + beforePad);
                 paint(before, &clip);
             }
         } else {
             paint(before, nullptr);
         }
-        if (edge > ink.left()) {
-            const auto clip = SkRect::MakeLTRB(ink.left() - std::max(stroke, 2.f) - 4.f, -1e6f, edge, 1e6f);
+        if (edge > start) {
+            const auto clip = band(start - std::max(stroke, 2.f) - 4.f, edge);
             paint(after, complete ? nullptr : &clip);
         }
     }

@@ -446,7 +446,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
-        const bool hasDecoration = hasGlow || prepared.shadow.before.enabled || prepared.shadow.after.enabled;
+        const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled;
+        const bool hasDecoration = hasGlow || hasShadow;
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
@@ -466,12 +467,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
         const bool paintedGlow = rubyMainPaint && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool verticalGlow = style.vertical && features.contains("p06_vertical_glow")
-            && !annotated && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
+        const bool verticalDecoration = style.vertical && !annotated
+            && (!hasGlow || features.contains("p06_vertical_glow"))
+            && (!hasShadow || features.contains("p06_vertical_shadow"))
             && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if (hasDecoration
-            && ((style.vertical && !verticalGlow) || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
+            && ((style.vertical && !verticalDecoration) || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
                 || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)

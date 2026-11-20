@@ -72,6 +72,65 @@ def test_shadow_palette_keeps_geometry_and_replays(binary, project, case, target
         }, sort_keys=True), encoding='utf-8')
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('before_kind,after_kind', [('shadow', 'none'), ('none', 'shadow'),
+                                                  ('shadow', 'shadow'), ('shadow', 'glow')])
+def test_vertical_static_shadow_respects_y_wipe_and_screen_offsets(binary, project, target, before_kind, after_kind):
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, texts=['字'], position='top')
+    palette = colors('#00000000', '#00000000')
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#FFFF0000')),
+                      after=replace(palette.after, shadow=PaintFill(color='#FF0000FF')))
+    style = replace(style, karaoke_colors=palette, decoration_before_sync=False,
+                    decoration_kind_before=before_kind, decoration_kind=after_kind,
+                    shadow_before_offset_x=-12, shadow_before_offset_y=4,
+                    shadow_offset_x=12, shadow_offset_y=7, glow_after_radius_px=6)
+    ir = ir_for(binary, (track, style))
+    feature = 'p06_vertical_shadow'
+    assert feature in ir['required_features']
+    assert ('p06_vertical_glow' in ir['required_features']) == (after_kind == 'glow')
+    (start, end), = ir['track']['lines'][0]['resolved_intervals']
+    times = [start - 1, (start + end) // 2, end + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+    assert np.array_equal(frames[1], replay[0])
+
+    def weights(frame, channel, axis):
+        return (frame[..., channel].astype(float) * frame[..., 3]).sum(axis=axis)
+
+    def center(row_weights):
+        assert row_weights.sum() > 0
+        return np.average(np.arange(row_weights.size), weights=row_weights)
+
+    early = weights(frames[0], 0, 1)
+    assert bool(early.any()) == (before_kind == 'shadow')
+    if after_kind == 'none':
+        middle = weights(frames[1], 0, 1)
+        assert 0 < middle.sum() < early.sum()
+        assert center(middle) > center(early)
+        assert not frames[2].any()
+    else:
+        middle, late = (weights(frame, 2, 1) for frame in frames[1:])
+        assert 0 < middle.sum() < late.sum()
+        assert center(middle) + 3 < center(late)
+    if after_kind == 'shadow' and before_kind == 'shadow':
+        assert center(weights(frames[2], 2, 0)) - center(weights(frames[0], 0, 0)) == pytest.approx(24, abs=1)
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        diff = abs(premultiplied(np.stack(frames)) - premultiplied(np.stack(raster)))
+        assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case,dpr', [(case, 1.5) for case in CASES] + [('both', 1)])
 def test_static_shadow_matches_actual_d2d_and_gpu_raster(binary, project, case, dpr):
