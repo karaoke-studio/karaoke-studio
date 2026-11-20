@@ -135,6 +135,143 @@ def test_vertical_columns_use_page_lanes_and_switch_without_moving_the_clocks(bi
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
+def decorated_columns(project, kind, *, reverse=False, outline=False, mixed_directions=False):
+    """Two simultaneous columns whose static decoration is isolated by a transparent body."""
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import outlined
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_source(project, position='top')
+    lines = [TimingLine(chars=[TimingChar('字', start), TimingChar('字', start + 160)], end_ms=start + 400,
+                        track_line_index=i, wipe_reverse=reverse != (mixed_directions and i == 1),
+                        display_start_override_ms=0, display_end_override_ms=1600)
+             for i, start in enumerate((200, 380))]
+    style = replace(style, dual_line_layout=True, layout_semantics='n3_1074', line_gap_px=30,
+                    line_alignments=['left', 'right'], line_offsets_x=[0, 0],
+                    auto_fill_section_time=False, sync_entry=False)
+    palette = outlined(style, 2).karaoke_colors if outline else colors('#00000000', '#00000000')
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#FFFF0000')),
+                      after=replace(palette.after, shadow=PaintFill(color='#FF0000FF')))
+    if outline:
+        style = outlined(style, 2)
+    before_kind, after_kind = {'glow': ('glow', 'glow'), 'shadow': ('shadow', 'shadow'),
+                               'shadow_to_glow': ('shadow', 'glow')}[kind]
+    plain = replace(style, karaoke_colors=palette)
+    style = replace(plain, decoration_before_sync=False, decoration_kind_before=before_kind,
+                    decoration_kind=after_kind, glow_before_radius_px=6, glow_after_radius_px=6,
+                    glow_before_concentration_level=0, glow_concentration_level=0,
+                    shadow_before_offset_x=-6, shadow_before_offset_y=4, shadow_offset_x=6, shadow_offset_y=4)
+    return replace(track, lines=lines), style, plain
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('kind', ['glow', 'shadow', 'shadow_to_glow'])
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('outline', [False, True])
+def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, project, target, kind, reverse, outline):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, style, plain = decorated_columns(project, kind, reverse=reverse, outline=outline)
+    ir = ir_for(binary, (track, style))
+    undecorated = ir_for(binary, (track, plain))
+    feature = 'p06_vertical_columns_decoration'
+    features = ir['required_features']
+    assert {feature, 'p05_vertical_columns'} <= set(features)
+    assert ('p06_vertical_columns_outline' in features) == outline
+    assert ('p06_vertical_glow' in features) == (kind != 'shadow')
+    assert ('p06_vertical_shadow' in features) == (kind != 'glow')
+    assert ('p06_vertical_reverse_glow' in features) == (reverse and kind != 'shadow')
+    assert ('p06_vertical_reverse_shadow' in features) == (reverse and kind != 'glow')
+    assert feature not in undecorated['required_features']
+    # Decoration does not move the columns, the page windows or the clocks.
+    assert ir['skia_layout']['lines'] == undecorated['skia_layout']['lines']
+    for key in ('layout_offset_windows', 'resolved_intervals', 'display_start_ms', 'display_end_ms'):
+        assert [line.get(key) for line in ir['track']['lines']] == [line.get(key) for line in undecorated['track']['lines']]
+    columns = [line['cells'][0]['origin_x'] for line in ir['skia_layout']['lines']]
+    assert [line['vertical_lane'] for line in ir['skia_layout']['lines']] == [0, 1]
+    times = [100, 440, 1000]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        for missing in (feature, 'p05_vertical_columns'):
+            bad = copy.deepcopy(ir)
+            bad['required_features'].remove(missing)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+        configure(process, undecorated)
+        baseline, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames[1], replay[0])
+    assert all(not np.array_equal(a, b) for a, b in zip(frames, baseline, strict=True))
+    if not outline:
+        # origin_x is the cell's left edge; each window holds one column and its +-6px shadows.
+        half = (columns[0] - columns[1]) / 2
+
+        def rows(frame, channel, column):
+            middle = column + style.font_size_px / 2
+            area = frame[:, round(middle - half):round(middle + half)]
+            return (area[..., channel].astype(float) * area[..., 3]).sum(axis=1)
+
+        def center(weights):
+            assert weights.sum() > 0
+            return np.average(np.arange(weights.size), weights=weights)
+
+        direction = -1 if reverse else 1
+        for column in columns:
+            assert rows(frames[0], 0, column).any() and not rows(frames[0], 2, column).any()
+            middle, late = rows(frames[1], 2, column), rows(frames[2], 2, column)
+            assert 0 < middle.sum() < late.sum()
+            assert direction * (center(late) - center(middle)) > 3
+            if kind != 'shadow':
+                assert not rows(frames[2], 0, column).any()
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        diff = abs(premultiplied(np.stack(frames)) - premultiplied(np.stack(raster)))
+        assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.parametrize('change', ['mixed_directions', 'line_fade', 'ruby'])
+def test_vertical_column_decoration_stays_single_direction_without_ruby(binary, project, change):
+    track, style, _ = decorated_columns(project, 'glow', mixed_directions=change == 'mixed_directions')
+    if change == 'line_fade':
+        style = replace(style, entry_anim='fade', exit_anim='fade')
+    elif change == 'ruby':
+        track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=360, target_line_index=0,
+                                                      target_char_start=0, target_char_end=1)])
+    with pytest.raises(ValueError):
+        ir_for(binary, (track, style))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_native_rejects_mixed_direction_column_decoration(binary, project, target):
+    def spliced(decorated):
+        irs = []
+        for reverse in (False, True):
+            track, style, plain = decorated_columns(project, 'glow', reverse=reverse)
+            irs.append(ir_for(binary, (track, style if decorated else plain)))
+        forward, backward = irs
+        mixed = copy.deepcopy(forward)
+        mixed['track']['lines'][1] = backward['track']['lines'][1]
+        mixed['skia_layout'] = {**forward['skia_layout'], **backward['skia_layout'],
+                                'lines': [forward['skia_layout']['lines'][0], backward['skia_layout']['lines'][1]]}
+        mixed['required_features'] = list(dict.fromkeys(forward['required_features'] + backward['required_features']))
+        return forward, mixed
+
+    _, plain_mixed = spliced(False)
+    ir, mixed = spliced(True)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        # Mixed directions remain valid for undecorated (transparent) columns.
+        configure(process, plain_mixed)
+        configure(process, ir)
+        frames, _ = collect(process, [440])
+        with pytest.raises(NativeRendererError):
+            configure(process, mixed)
+        replay, _ = collect(process, [440], generation=2)
+    assert frames[0].any() and np.array_equal(frames[0], replay[0])
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('layers', [1, 2])
 @pytest.mark.parametrize('reverse', [False, True])

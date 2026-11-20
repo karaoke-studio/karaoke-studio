@@ -116,6 +116,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
+    // Multi-column decoration is verified for a single wipe direction across the track.
+    const bool columnDecoration = !features.contains("p05_vertical_columns")
+        || (features.contains("p06_vertical_columns_decoration")
+            && std::ranges::all_of(projected.lines, [&](const auto& other) {
+                return other.wipeReverse == projected.lines.front().wipeReverse;
+            }));
     for (int index = 0; index < lines.size(); ++index) {
         const auto source = lines[index].toObject();
         const auto& line = projected.lines[index];
@@ -474,7 +480,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");
-        const bool verticalDecoration = style.vertical
+        const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
