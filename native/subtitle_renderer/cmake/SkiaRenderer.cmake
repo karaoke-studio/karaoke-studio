@@ -39,7 +39,7 @@ add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/ski
             src/skia/core/subtitle_gradient.cpp
             src/skia/core/scanline_feather.cpp src/skia/core/scanline_shape.cpp
             src/skia/core/scanline_image.cpp src/skia/core/static_glow.cpp
-            src/skia/core/bitmap_guide.cpp)
+            src/skia/core/bitmap_guide.cpp src/skia/core/line_band.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/font_instance.cpp src/skia/text/shaped_cell.cpp src/skia/text/glyph_outline.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/fallback_ranges.cpp src/skia/text/mixed_cell.cpp)
 target_sources(subtitle_skia_core PRIVATE src/skia/text/font_shaping.cpp)

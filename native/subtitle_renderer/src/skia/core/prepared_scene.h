@@ -103,8 +103,7 @@ private:
     void drawLineBands(SkCanvas&, int time) const;
     int width_, height_;
     SkMatrix viewport_ = SkMatrix::I();
-    sk_sp<SkImage> lineBandImage_;
-    float lineBandOpacity_ = 0;
+    LineBandTexture lineBand_;
     std::vector<Line> lines_;
 };
 }

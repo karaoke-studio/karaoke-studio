@@ -83,13 +83,15 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         throw BackendError("Skia 描边缺少对应布局能力");
     const auto& band = cfg.lineBand;
     const bool staticBand = features.contains("p08_static_line_band");
+    const bool fittedBand = features.contains("p08_line_band_fit");
     if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
-        || (staticBand && (band.fillMode != "stretch" || !band.imagePath.endsWith(".png", Qt::CaseInsensitive)
+        || (staticBand && ((fittedBand ? band.fillMode != "repeat" && band.fillMode != "cover" : band.fillMode != "stretch")
+            || !band.imagePath.endsWith(".png", Qt::CaseInsensitive)
             || cfg.vertical || cfg.rightToLeft || !cfg.rubies.empty() || !band.tint.isEmpty()
             || features.contains("p05_resolved_ruby")
             || !band.linesPath.isEmpty() || !band.clefPath.isEmpty() || band.edgeKind != "none"
             || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
-        throw BackendError("Skia 行背景带当前支持静态横排 PNG 拉伸");
+        throw BackendError("Skia 行背景带当前支持静态横排 PNG 拉伸、居中裁切或平铺");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
@@ -98,6 +100,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     if (staticBand) {
         out.lineBand.enabled = true;
         out.lineBand.imagePath = band.imagePath.toStdWString();
+        out.lineBand.fillMode = band.fillMode.toStdString();
         out.lineBand.opacity = float(std::clamp(band.opacityPct, 0, 100)) / 100.f;
     }
     out.width = cfg.physicalWidth();

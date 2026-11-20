@@ -118,8 +118,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
     if (projected.lineBand.enabled) {
-        out.lineBandImage = imageCache.staticImage(projected.lineBand.imagePath, 0, 0);
-        out.lineBandOpacity = projected.lineBand.opacity;
+        using Fit = ::subtitle::skia::LineBandTexture::Fit;
+        const auto& band = projected.lineBand;
+        out.lineBand = {imageCache.staticImage(band.imagePath, 0, 0), band.opacity,
+                        band.fillMode == "cover" ? Fit::Cover : band.fillMode == "repeat" ? Fit::Repeat : Fit::Stretch};
     }
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     const bool columnDecoration = !features.contains("p05_vertical_columns")

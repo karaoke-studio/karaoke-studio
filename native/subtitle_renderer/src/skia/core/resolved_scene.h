@@ -15,6 +15,7 @@
 #include "static_shadow.h"
 #include "static_glow.h"
 #include "bitmap_guide.h"
+#include "line_band.h"
 #include "singing_scale.h"
 #include "utopia_transition.h"
 #include "../../model/wipe_point.h"
@@ -89,7 +90,6 @@ struct ResolvedSubtitleInput {
     int width = 0, height = 0;
     std::vector<ResolvedLine> lines;
     SkMatrix viewport = SkMatrix::I();
-    sk_sp<SkImage> lineBandImage;
-    float lineBandOpacity = 0;
+    LineBandTexture lineBand;
 };
 }
