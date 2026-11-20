@@ -131,13 +131,15 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('animation', ['spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out'])
+@pytest.mark.parametrize('animation', [
+    'spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out', 'petal', 'note',
+])
 def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, target, animation):
     from test_subtitle_skia_static_glow import glowing_ruby
 
     track, style = glowing_ruby(reading, 'inherited')
     spinning = animation == 'spin_flip'
-    exiting = spinning or animation == 'dissolve_out'
+    exiting = spinning or animation in {'dissolve_out', 'petal', 'note'}
     style = replace(style, entry_anim='none' if exiting else animation,
                     exit_anim=animation if exiting else 'none', entry_lead_ms=600, exit_fade_ms=600,
                     karaoke_anim='utopia')
@@ -146,6 +148,7 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
         'spin_flip': 'p07_ruby_character_exit_spin',
         'tracking_in': 'p07_ruby_character_translation', 'wave_in': 'p07_ruby_character_translation',
         'assemble_in': 'p07_ruby_particle_assembly', 'dissolve_out': 'p07_ruby_particle_assembly',
+        'petal': 'p07_ruby_particle_fade', 'note': 'p07_ruby_particle_fade',
     }[animation]
     assert expected in ir['required_features']
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
@@ -170,6 +173,7 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
     'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
+    'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle',
 ])
 def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tmp_path, case_id):
     from scripts.subtitle_gpu_baseline.cases import build_cases

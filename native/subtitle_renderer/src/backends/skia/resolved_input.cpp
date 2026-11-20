@@ -167,11 +167,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
             && line.bursts.empty() && line.exitAnimation == "none" && line.entryDurationMs > 0;
-        const bool assemblyComposition = transformedRuby && features.contains("p07_ruby_particle_assembly")
-            && !line.bursts.empty()
-            && ((line.entryAnimation == "assemble_in" && line.entryDurationMs > 0 && line.exitAnimation == "none")
-                || (line.exitAnimation == "dissolve_out" && line.exitDurationMs > 0 && line.entryAnimation == "none"));
-        const bool geometryComposition = translationComposition || assemblyComposition;
+        const bool particleComposition = transformedRuby && !line.bursts.empty()
+            && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
+                || (line.exitDurationMs > 0 && line.entryAnimation == "none"))
+            && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind,
+                features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"));
+        const bool geometryComposition = translationComposition || particleComposition;
         const bool fadeComposition = features.contains("p07_character_entry_fade_composition")
             && line.entryAnimation == "char_fade" && line.exitAnimation == "none"
             && (line.karaokeAnimation == "none" || (singingScale && !line.zoomPulseEnabled))
@@ -369,7 +370,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         auto rubyTransition = RubyTransition::None;
-        if (fadeComposition || assemblyComposition) rubyTransition = RubyTransition::Fade;
+        if (fadeComposition || particleComposition) rubyTransition = RubyTransition::Fade;
         if (spinComposition) rubyTransition = RubyTransition::Spin;
         if (translationComposition) rubyTransition = RubyTransition::Translation;
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,

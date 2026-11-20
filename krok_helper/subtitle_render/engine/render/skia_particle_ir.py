@@ -9,6 +9,7 @@ PARTICLE_TRANSITIONS = {
     'assemble_in': 'assemble',
     'dissolve_out': 'dissolve',
 }
+RUBY_PARTICLE_EXITS = {'petal', 'feather', 'snow_solid', 'note', 'heart', 'sparkle'}
 # Companion layers the existing planner emits around each energy transition:
 # fire tongues, back glow, embers and the ignition impact; bolts with their back
 # glow and the strike impact. Burning out also drops ash.
@@ -29,7 +30,7 @@ def _transition_layers(kind, entry):
     return _TRANSITION_LAYERS.get((kind, entry), {kind})
 
 
-def write_particle_anchors(track, ir, plan, measured, assembly_lines=()) -> int:
+def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = False
@@ -52,7 +53,7 @@ def write_particle_anchors(track, ir, plan, measured, assembly_lines=()) -> int:
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or band or look.sing_fx != 'none'))
-                or look.lower_ruby_enabled or (annotated and animated and index not in assembly_lines)
+                or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
                 or (not annotated and (look.stroke_width_px > 0
                     or (look.stroke2_enabled and look.stroke2_width_px > 0)))
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):

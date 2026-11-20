@@ -11,6 +11,8 @@ inline constexpr int kSingingParticleSchema = 13;
 const QJsonArray& skiaIrProfiles();
 bool isSkiaFallingParticle(const QString& kind);
 QString skiaParticleKindForTransition(const QString& animation, bool entry);
+bool allowsSkiaRubyParticleTransition(const QString& entryKind, const QString& exitKind,
+                                      bool allowAssembly, bool allowFade);
 // flame/lightning entry and exit (character_transform_schema>=8, sing_twinkle_schema>=11).
 bool isSkiaEnergyTransition(const QString& animation);
 // Whether the planner emits this burst kind as a layer of the given transition kind.

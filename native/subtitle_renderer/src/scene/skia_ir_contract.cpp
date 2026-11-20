@@ -83,6 +83,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_character_exit_spin",
         "p07_ruby_character_translation",
         "p07_ruby_particle_assembly",
+        "p07_ruby_particle_fade",
         "p08_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",
@@ -112,6 +113,15 @@ QString skiaParticleKindForTransition(const QString& animation, bool entry) {
 
 bool isSkiaEnergyTransition(const QString& animation) {
     return animation == "flame" || animation == "lightning";
+}
+
+bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
+                                      bool allowAssembly, bool allowFade) {
+    if (entry.isEmpty() == exit.isEmpty()) return false;
+    const auto& kind = exit.isEmpty() ? entry : exit;
+    if (kind == "assemble" || kind == "dissolve") return allowAssembly;
+    return allowFade && entry.isEmpty() && (kind == "petal" || kind == "feather"
+        || kind == "snow_solid" || kind == "note" || kind == "heart" || kind == "sparkle");
 }
 
 bool isSkiaTransitionLayer(const QString& transition, const QString& kind, bool entry) {

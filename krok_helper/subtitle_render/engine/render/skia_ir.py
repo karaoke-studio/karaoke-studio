@@ -16,7 +16,8 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import validate_vector_guides
 from .skia_lower_ir import lower_sources
-from .skia_particle_ir import ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, write_particle_anchors
+from .skia_particle_ir import (
+    ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, RUBY_PARTICLE_EXITS, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -291,6 +292,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     spin_lines = set()
     translation_lines = set()
     assembly_lines = set()
+    particle_fade_lines = set()
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
@@ -298,11 +300,15 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                     or source.get('scanline') or source.get('stroke_flash')
                     or _uses_decoration(item.layout_style, 'shadow')):
                 continue
-            if (len(plan.lines) == 1 and item.layout_style.sing_fx == 'none' and source.get('fx_bursts')
-                    and (source.get('entry_anim'), source.get('exit_anim')) in {
-                        ('assemble_in', 'none'), ('none', 'dissolve_out')}):
-                assembly_lines.add(index)
             if source.get('fx_bursts'):
+                if len(plan.lines) == 1 and item.layout_style.sing_fx == 'none':
+                    entry, leave = source.get('entry_anim'), source.get('exit_anim')
+                    effect = (entry if leave == 'none' and source['entry_duration_ms'] > 0
+                              else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
+                    if effect in {'assemble_in', 'dissolve_out'}:
+                        assembly_lines.add(index)
+                    if entry == 'none' and effect in RUBY_PARTICLE_EXITS:
+                        particle_fade_lines.add(index)
                 continue
             if (source.get('entry_anim') == 'none' and source.get('exit_anim') == 'spin_flip'
                     and source.get('exit_duration_ms', 0) > 0):
@@ -310,6 +316,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
                 translation_lines.add(index)
+    composed_particle_lines = assembly_lines | particle_fade_lines
+    composed_geometry_lines = translation_lines | composed_particle_lines
     lines = []
     if vertical_ruby is None:
         for index, item in enumerate(plan.lines):
@@ -421,12 +429,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
             and (_ordinary_line_animation(line) or index in fade_lines or index in spin_lines
-                 or index in translation_lines or index in assembly_lines or _noise_animation(line))
+                 or index in composed_geometry_lines or _noise_animation(line))
         }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
-            fade_lines=fade_lines | translation_lines | assembly_lines, spin_lines=spin_lines)
+            fade_lines=fade_lines | composed_geometry_lines, spin_lines=spin_lines)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if zoom_lines:
@@ -453,9 +461,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p07_ruby_character_translation')
         if assembly_lines:
             ir['required_features'].append('p07_ruby_particle_assembly')
+        if particle_fade_lines:
+            ir['required_features'].append('p07_ruby_particle_fade')
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
-            track, ir, plan, measured, spin_lines, translation_lines | assembly_lines)
+            track, ir, plan, measured, spin_lines, composed_geometry_lines)
         ir['required_features'].append('p07_character_transform')
     write_body_gradient_bounds(ir, plan)
     if 'p07_scanline_band' in ir['required_features']:
@@ -470,7 +480,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             else 4 if any(line.get('wipe_reverse') for line in scanned) else 3
         )
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
-        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured, assembly_lines)
+        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured, composed_particle_lines)
         ir['required_features'].append('p07_sing_twinkle')
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
@@ -510,7 +520,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p07_ruby_line_animation')
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
-    _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | translation_lines | assembly_lines)
+    _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines)
     if 'p07_singing_scale' in ir['required_features'] and (
             'p06_static_glow' in ir['required_features'] or 'p06_ruby_glow' in ir['required_features']):
         ir['required_features'].append('p07_singing_glow')
