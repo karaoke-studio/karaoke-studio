@@ -150,7 +150,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowVerticalOutlines = features.contains("p06_vertical_ruby_outline");
     const auto rubyGroups = source.value("ruby_groups").toArray();
     const bool multipleVertical = vertical && rubyGroups.size() > 1;
-    if (multipleVertical && allowVerticalOutlines)
+    if (multipleVertical && allowVerticalOutlines && !features.contains("p06_vertical_ruby_group_paint"))
         throw BackendError("Skia 竖排描边暂不支持同列多组注音");
     int previousSpanEnd = 0;
     std::optional<::subtitle::skia::StaticGlow> lowerGlowSpec;

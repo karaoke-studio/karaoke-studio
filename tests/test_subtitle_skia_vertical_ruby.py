@@ -272,6 +272,50 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
         assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('outlined', [False, True])
+def test_vertical_ruby_groups_keep_independent_decoration_clocks(binary, project, target, outlined):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(0, 1))
+    other, _ = vertical_ruby_source(project, span=(2, 3))
+    track = replace(track, rubies=track.rubies + other.rubies)
+    blank = colors('#00000000', '#00000000')
+    ruby = replace(blank, before=replace(blank.before, shadow=PaintFill(color='#FF0000'),
+                                         stroke=PaintFill(color='#00FF00'), stroke2=PaintFill(color='#FFFF00')),
+                   after=replace(blank.after, shadow=PaintFill(color='#0000FF'),
+                                 stroke=PaintFill(color='#00FF00'), stroke2=PaintFill(color='#FFFF00')))
+    style = replace(style, karaoke_colors=blank, ruby_karaoke_colors=ruby, decoration_before_sync=False,
+                    ruby_decoration_kind='glow', ruby_decoration_kind_before='shadow',
+                    ruby_shadow_before_offset_y=3, ruby_shadow_before_offset_x=0, ruby_glow_after_radius_px=4,
+                    ruby_stroke_width_px=2 if outlined else 0, ruby_stroke2_width_px=2,
+                    ruby_stroke2_enabled=outlined)
+    ir = ir_for(binary, (track, style))
+    feature = 'p06_vertical_ruby_group_paint'
+    assert {feature, 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
+    assert ('p06_vertical_ruby_outline' in ir['required_features']) == outlined
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    first, second = [g['units'][0] for g in groups]
+    boundary = round((first['wipe_bottom'] + second['wipe_top']) / 2)
+    times = [first['interval_ms'][0] - 1, first['interval_ms'][1] + 1, second['interval_ms'][1] + 1]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, list(reversed(times)), generation=2)
+    assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+    for section, switch in [(slice(None, boundary), 1), (slice(boundary, None), 2)]:
+        def blue(frame):
+            pixels = frame[section]
+            return ((pixels[..., 2] > 128) & (pixels[..., 3] > 8)).sum()
+        assert all(blue(frame) == 0 for frame in frames[:switch])
+        assert all(blue(frame) > 20 for frame in frames[switch:])
+
+
 def ink_bounds(mask):
     y, x = np.nonzero(mask)
     return np.array([x.min(), y.min(), x.max(), y.max()]) if x.size else np.array([])

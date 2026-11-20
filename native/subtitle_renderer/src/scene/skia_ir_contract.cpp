@@ -54,6 +54,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_vertical_mixed_column_decoration",
         "p07_vertical_columns_decoration_fade",
         "p06_vertical_ruby_outline",
+        "p06_vertical_ruby_group_paint",
         "p05_vertical_ruby_groups",
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
@@ -302,8 +303,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_vertical_mixed_column_decoration")
         && (!features.contains("p06_vertical_columns_decoration") || !reverseVertical))
         throw BackendError("Skia 正反混合竖排列缺少相应走字装饰能力");
+    const bool rubyGroupPaint = features.contains("p06_vertical_ruby_group_paint");
     if (verticalRubyDecoration
-        && (!features.contains("p05_vertical_ruby") || features.contains("p05_vertical_ruby_groups")
+        && (!features.contains("p05_vertical_ruby") || (features.contains("p05_vertical_ruby_groups") && !rubyGroupPaint)
             || !(verticalGlow || verticalShadow || features.contains("p06_ruby_glow") || features.contains("p06_ruby_shadow"))))
         throw BackendError("Skia 竖排注音静态装饰缺少对应布局能力");
     if (features.contains("p07_vertical_decoration_fade")
@@ -317,6 +319,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p05_vertical_ruby")
             || !(features.contains("p06_vertical_outline") || features.contains("p06_ruby_solid_outline"))))
         throw BackendError("Skia 竖排注音描边缺少对应能力");
+    if (rubyGroupPaint != (features.contains("p05_vertical_ruby_groups")
+        && (verticalRubyDecoration || features.contains("p06_vertical_ruby_outline"))))
+        throw BackendError("Skia 同列多组竖排注音缺少描边或装饰能力声明");
     if (features.contains("p05_vertical_shifted_ruby")
         && (!features.contains("p05_vertical_ruby") || layout.value("vertical_ruby_shift_schema").toDouble(-1) != 1))
         throw BackendError("Skia 竖排注音字位需要版本化能力");

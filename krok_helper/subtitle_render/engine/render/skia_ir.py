@@ -461,11 +461,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('shadow', 'glow'))
     if style.vertical and (decorations or ruby_decorations):
         reverse_vertical = any(line.wipe_reverse for line in track.lines)
-        # Columns: body-only static decoration with one wipe direction for the whole track.
         columns = style.dual_line_layout
-        if (columns and (vertical_ruby is not None
-                         or len({bool(line.wipe_reverse) for line in track.lines}) > 1)
-                or (reverse_vertical and vertical_ruby is not None)
+        if ((columns or reverse_vertical) and vertical_ruby is not None
                 or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') not in {'none', 'fade'}
                        or line.get('exit_anim') not in {'none', 'fade'} or line.get('scanline')
                        or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
@@ -482,8 +479,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if columns:
                 ir['required_features'].append('p07_vertical_columns_decoration_fade')
         if vertical_ruby is not None:
-            if any(len(line['ruby_groups']) > 1 for line in lines):
-                raise ValueError('Skia 竖排静态装饰暂不支持同列多组注音')
             ir['required_features'].append('p06_vertical_ruby_decoration')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         if _validate_stroke_flash(track, style, ir['track']['lines']):
@@ -634,8 +629,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if any(line.wipe_reverse for line in track.lines):
                 ir['required_features'].append('p06_vertical_reverse_outline')
             if vertical_ruby is not None:
-                if any(len(line['ruby_groups']) > 1 for line in lines):
-                    raise ValueError('Skia 竖排描边暂不支持同列多组注音')
                 if 'p06_vertical_ruby_outline' not in ir['required_features']:
                     ir['required_features'].append('p06_vertical_ruby_outline')
             ir['required_features'].append('p06_vertical_outline')
@@ -645,6 +638,9 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p06_outline_ruby')
     if secondary_outline:
         ir['skia_layout']['secondary_solid_outline_schema'] = 1
+    if ('p05_vertical_ruby_groups' in ir['required_features'] and (
+            'p06_vertical_ruby_outline' in ir['required_features'] or 'p06_vertical_ruby_decoration' in ir['required_features'])):
+        ir['required_features'].append('p06_vertical_ruby_group_paint')
     animates_line = False
     for feature, schema in (('p07_line_fade', 'line_fade_schema'), ('p07_line_motion', 'line_motion_schema')):
         if feature in ir['required_features']:
