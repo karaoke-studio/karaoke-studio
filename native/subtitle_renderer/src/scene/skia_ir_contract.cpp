@@ -69,6 +69,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_main_paint",
         "p06_utopia_main_paint",
         "p06_ruby_fill_gradient",
+        "p06_ruby_fill_image",
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
         "p06_static_shadow",
@@ -483,6 +484,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_ruby_fill_gradient")
         && (!features.contains("p06_ruby_main_paint") || !features.contains("p06_body_gradient")))
         throw BackendError("Skia 上注音渐变缺少正文画笔或注音能力声明");
+    if (features.contains("p06_ruby_fill_image")
+        && (!features.contains("p06_ruby_main_paint") || !features.contains("p06_image_fill")))
+        throw BackendError("Skia 上注音图片缺少正文画笔或注音能力声明");
     if (features.contains("p06_primary_solid_outline")
         && layout.value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");

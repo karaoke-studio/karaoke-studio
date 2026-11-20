@@ -402,7 +402,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))
             rubyTransition = RubyTransition::Affine;
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
-                                                    rubyTransition, totalCells, totalGroups);
+                                                    rubyTransition, imageCache, totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");

@@ -1,4 +1,5 @@
 #include "resolved_ruby.h"
+#include "image_fill_cache.h"
 #include "resolved_wipe.h"
 #include "vertical_text.h"
 #include "../render_backend.h"
@@ -123,7 +124,7 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
 // The vertical profile accepts only upright CJK/Hangul/full-size kana units.
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
-    const RenderScene& scene, int lineIndex, int offset, RubyTransition transition,
+    const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
         std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
@@ -243,11 +244,16 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
         const bool gradientFill = !lower && (rubyFillGradientMode(paint.rubyBeforeFillPaint)
                                            || rubyFillGradientMode(paint.rubyAfterFillPaint));
-        const bool allowGradientFill = gradientFill && features.contains("p06_ruby_fill_gradient")
-            && !vertical && staticLine && lowerWipe && line.karaokeAnimation != "no_wipe"
+        const bool imageFill = !lower && (paint.rubyBeforeFillPaint.mode == "image" || paint.rubyAfterFillPaint.mode == "image");
+        const bool allowFillPaint = !vertical && staticLine && lowerWipe && line.karaokeAnimation != "no_wipe"
             && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
             && line.bursts.empty() && scene.charStyles.empty();
-        const auto validFill = [&](const auto& fill) { return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill)); };
+        const bool allowGradientFill = allowFillPaint && features.contains("p06_ruby_fill_gradient");
+        const bool allowImageFill = allowFillPaint && features.contains("p06_ruby_fill_image");
+        const auto validFill = [&](const auto& fill) {
+            return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
+                || (allowImageFill && fill.mode == "image");
+        };
         if (!lower && (!validFill(paint.rubyBeforeFillPaint) || !validFill(paint.rubyAfterFillPaint)))
             throw BackendError("Skia 注音最终绘制缺少对应画笔能力");
         const auto fill = object.value("paint").toObject();
@@ -275,7 +281,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                                    width2, glyphs.dpr))
                 throw BackendError("Skia 上注音描边与实色样式不一致");
         }
-        const bool protectFill = (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
+        const bool protectFill = imageFill || (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
             && (::subtitle::skia::paintNeedsBodyProtection(paint.rubyBeforeFillPaint)
                 || ::subtitle::skia::paintNeedsBodyProtection(paint.rubyAfterFillPaint)));
         const float innerWidth = float(primary.width * glyphs.dpr);
@@ -417,8 +423,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         auto gradients = gradientFill ? rubyFillGradients(paint, source, cells,
             ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr)), glyphs.dpr)
             : std::array<sk_sp<SkShader>, 2>{};
+        std::array<::subtitle::skia::ImageFill, 2> images;
+        if (imageFill) {
+            images[0] = imageCache.fill(paint.rubyBeforeFillPaint, scene.layoutReferenceScale);
+            images[1] = imageCache.fill(paint.rubyAfterFillPaint, scene.layoutReferenceScale);
+        }
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
-                          fadeOwner, spinPivot, affineComposition, lower, std::move(gradients)});
+                          fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images)});
     }
     return groups;
 }

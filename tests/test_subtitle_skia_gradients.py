@@ -123,6 +123,25 @@ def test_p00_inherited_ruby_gradients_match_actual_gpu(binary, application, tmp_
     assert_ruby_transition_gpu_parity(binary, case, times)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('texture', ['original', 'transparent'])
+def test_p00_inherited_ruby_image_matches_actual_gpu(binary, application, tmp_path, texture):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'paint_image')
+    if texture == 'transparent':
+        image = write_png(tmp_path / 'inherited-alpha.png', pattern(texture))
+        colors = case.style.karaoke_colors
+        before = replace(colors.before, text=replace(colors.before.text, image_path=str(image)))
+        after = replace(colors.after, text=replace(colors.after.text, image_path=str(image)))
+        case = replace(case, case_id='inherited_ruby_alpha_image',
+                       style=replace(case.style, karaoke_colors=replace(colors, before=before, after=after)))
+    times = tuple(sorted({*case.timestamps_ms, 3430, 3520, 3750, 4111, 4490, 4520}))
+    assert_ruby_transition_gpu_parity(binary, case, times)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_ruby_gradient_can_use_its_ink_or_the_shared_body_domain(binary, reading, target):
     track, style = reading
@@ -151,6 +170,37 @@ def test_ruby_gradient_can_use_its_ink_or_the_shared_body_domain(binary, reading
     assert np.array_equal(local[0][..., 3], shared[0][..., 3])
     assert np.array_equal(local[0][cutoff:], shared[0][cutoff:])
     assert not np.array_equal(local[0][:cutoff], shared[0][:cutoff])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_inherited_ruby_image_uses_shared_texture_and_missing_asset_fallback(binary, reading, tmp_path, target):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style = reading
+    texture = write_png(tmp_path / 'body-and-ruby.png', pattern('transparent'))
+    style = replace(style, karaoke_anim='utopia', ruby_colors_follow_main=True, ruby_karaoke_colors=None)
+
+    def layout(fill):
+        colors = replace(style.karaoke_colors, before=replace(style.karaoke_colors.before, text=fill))
+        return upper_ir(binary, (track, replace(style, karaoke_colors=colors)), 1)
+
+    image = PaintFill(mode='image', color='#FF822ADA', image_path=str(texture))
+    present = layout(image)
+    missing = layout(replace(image, image_path=str(tmp_path / 'missing.png')))
+    solid = layout(PaintFill(color=image.color))
+    assert 'p06_ruby_fill_image' in present['required_features']
+    units = present['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    cutoff = round(max(unit['baseline_y'] + unit['metrics']['ink'][3] for unit in units)) + 2
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, present)
+        actual, _ = collect(process, [150, 500, 150])
+        configure(process, missing)
+        fallback, _ = collect(process, [150], generation=2)
+        configure(process, solid)
+        expected, _ = collect(process, [150], generation=3)
+    assert np.array_equal(actual[0], actual[-1])
+    assert fallback[0][:cutoff].any() and np.array_equal(fallback, expected)
+    assert not np.array_equal(actual[0][:cutoff], expected[0][:cutoff])
 
 
 @pytest.mark.parametrize('mode', MODES)

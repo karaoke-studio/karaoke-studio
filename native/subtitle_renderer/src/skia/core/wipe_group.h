@@ -23,6 +23,7 @@ private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible,
                      float opacity, float viewportHeight) const;
     float frontAt(int timeMs, float startEdge) const;
+    sk_sp<SkShader> fillShader(const SkCanvas&, bool after) const;
     std::vector<ResolvedCell> cells_;
     StaticShadow shadow_;
     std::optional<std::size_t> glowOffset_;
@@ -35,5 +36,6 @@ private:
     bool affine_ = false;
     bool lower_ = false;
     std::array<sk_sp<SkShader>, 2> fillGradients_;
+    std::array<ImageFill, 2> fillImages_;
 };
 }

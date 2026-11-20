@@ -27,6 +27,7 @@ def write_body_gradient_bounds(ir, plan):
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
+    ruby_image = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
@@ -44,9 +45,11 @@ def write_body_gradient_bounds(ir, plan):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint = ruby_paint or annotated
         singing_paint = singing_paint or singing
-        if annotated and modes & _GRADIENTS:
+        if annotated:
             colors = effective_ruby_karaoke_colors(look)
-            ruby_gradient = ruby_gradient or bool({colors.before.text.mode, colors.after.text.mode} & _GRADIENTS)
+            ruby_modes = {colors.before.text.mode, colors.after.text.mode}
+            ruby_gradient = ruby_gradient or bool(modes & _GRADIENTS and ruby_modes & _GRADIENTS)
+            ruby_image = ruby_image or ('image' in modes and 'image' in ruby_modes)
         images = images or 'image' in modes
         if not modes & _GRADIENTS:
             continue
@@ -66,6 +69,7 @@ def write_body_gradient_bounds(ir, plan):
         (images, 'p06_image_fill'), (ruby_paint, 'p06_ruby_main_paint'),
         (singing_paint, 'p06_utopia_main_paint'),
         (ruby_gradient, 'p06_ruby_fill_gradient'),
+        (ruby_image, 'p06_ruby_fill_image'),
     ):
         if enabled_feature:
             ir['required_features'].append(feature)
