@@ -32,8 +32,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Fade the composed line, preserving overlaps and translucent strokes.
     // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
     const bool geometry = line.characterGeometry.active();
+    const bool translatingRuby = line.rubyTranslation && line.characterGeometry.inEntryWindow(tMs, line.startMs);
     // The opacity-only character transition owns the entry window.
-    const bool utopia = (line.singingScale.active || line.utopiaTransition.active())
+    const bool utopia = !translatingRuby && (line.singingScale.active || line.utopiaTransition.active())
         && line.characterFade.side(tMs, line.startMs, line.endMs) == 0;
     const bool fadeActive = line.characterFade.side(tMs, line.startMs, line.endMs) != 0;
     const bool compositingSpin = fadeActive
@@ -239,20 +240,23 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     const auto rubyPose = [&](const PreparedWipeGroup& group) {
         const auto owner = group.fadeOwner();
+        if (translatingRuby && owner) return states[*owner].transform.matrix;
         return fadeActive && owner ? group.spinMatrix(states[*owner].transform) : SkMatrix::I();
     };
     // Accumulate faint fill, outline and halo contributions before rounding
     // the final pixel to the destination's 8-bit channels.
     const bool hasGlow = !line.glow.empty() || !line.rubyGlow.empty();
-    const bool highPrecisionFade = line.characterFade.active()
+    const bool highPrecisionFade = (line.characterFade.active() || translatingRuby)
         && (hasGlow || !line.rubyGroups.empty())
         && std::ranges::any_of(states, [](const State& state) {
             return state.transform.opacity > 0.f && state.transform.opacity < 1.f;
         });
     if (highPrecisionFade) {
-        const auto* bounds = line.characterFade.transforms() ? nullptr : &line.paintBounds;
+        const auto* bounds = line.characterFade.transforms() || translatingRuby ? nullptr : &line.paintBounds;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
+    // Tracking and wave restore static glow as each unit settles. Spin keeps
+    // a separate blurred source for moving glyphs.
     for (const auto& layer : line.rubyGlow) {
         const bool after = layer.visible(true);
         if (!after && !layer.visible(false)) continue;
@@ -265,7 +269,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             layer.composite(canvas, source);
         }
         for (const auto& group : line.rubyGroups)
-            if (const auto pose = rubyPose(group); !pose.isIdentity())
+            if (const auto pose = rubyPose(group); !translatingRuby && !pose.isIdentity())
                 group.compositeSpinGlow(canvas, layer, tMs, after, rubyOpacity(group), pose);
     }
     for (const auto& layer : line.glow) {
@@ -278,7 +282,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (!source.surface) continue;
         auto& glowCanvas = *source.surface->getCanvas();
         inPhaseOrder([&](std::size_t index, Phase phase) {
-            if (compositingSpin && states[index].transform.transformed) return;
+            if ((compositingSpin || translatingRuby) && states[index].transform.transformed) return;
             const auto& ink = states[index].animatedInk;
             const auto* posed = ink ? &*ink : nullptr;
             const float opacity = states[index].transform.opacity;

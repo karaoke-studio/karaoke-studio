@@ -79,7 +79,7 @@ static bool verticalRubyScalar(const QString& text) {
 }
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
-    const RenderScene& scene, int lineIndex, int offset, bool fadeComposition, bool spinComposition,
+    const RenderScene& scene, int lineIndex, int offset, RubyTransition transition,
         std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
@@ -104,7 +104,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || fadeComposition || spinComposition || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+        && (lineGlow || transition != RubyTransition::None || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
@@ -114,7 +114,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
-        const bool animatedOwner = fadeComposition || spinComposition;
+        const bool animatedOwner = transition != RubyTransition::None;
+        const bool spinComposition = transition == RubyTransition::Spin;
         if ((animatedOwner && lower) || object.contains("fade_owner") != animatedOwner)
             throw BackendError("Skia 注音缺少有效的逐字淡化归属");
         std::optional<std::size_t> fadeOwner;

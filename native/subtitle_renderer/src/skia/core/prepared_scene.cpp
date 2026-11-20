@@ -48,6 +48,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.characterFade = source.characterFade;
         const bool needsPaintBounds = line.animation.active() || line.characterFade.active();
         line.characterGeometry = source.characterGeometry;
+        line.rubyTranslation = source.rubyTranslation;
         line.singingScale = source.singingScale;
         line.rubySingingOrigin = source.rubySingingOrigin;
         line.utopiaTransition = source.utopiaTransition;

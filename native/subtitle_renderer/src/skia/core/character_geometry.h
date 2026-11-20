@@ -13,12 +13,15 @@ struct CharacterGeometry {
     float fontPx = 0;
 
     bool active() const { return entryMs > 0 || exitMs > 0; }
+    bool inEntryWindow(int time, int displayStart) const {
+        return entryMs > 0 && time <= displayStart + std::clamp(entryMs, 120, 3000);
+    }
 
     CharacterTransformState at(int time, int displayStart, int displayEnd, int index, int count,
                                const CharacterPivot& pivot, std::optional<float> lineCenter) const {
         const int exitStart = std::max(singingEnd, displayEnd - std::clamp(exitMs, 120, 3000));
         const bool exiting = exitMs > 0 && time >= exitStart;
-        if (!exiting && (entryMs <= 0 || time > displayStart + std::clamp(entryMs, 120, 3000)))
+        if (!exiting && !inEntryWindow(time, displayStart))
             return {};
         const float x = (pivot.layoutLeft + pivot.layoutRight) * .5f;
         const auto& effect = exiting ? exit : entry;

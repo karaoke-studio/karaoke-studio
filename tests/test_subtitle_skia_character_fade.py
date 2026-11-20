@@ -131,36 +131,45 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_ruby_character_exit_spin_owns_its_anchor_and_replays(binary, reading, target):
+@pytest.mark.parametrize('animation', ['spin_flip', 'tracking_in', 'wave_in'])
+def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, target, animation):
     from test_subtitle_skia_static_glow import glowing_ruby
 
     track, style = glowing_ruby(reading, 'inherited')
-    style = replace(style, entry_anim='none', exit_anim='spin_flip', exit_fade_ms=600, karaoke_anim='utopia')
+    spinning = animation == 'spin_flip'
+    style = replace(style, entry_anim='none' if spinning else animation,
+                    exit_anim=animation if spinning else 'none', entry_lead_ms=600, exit_fade_ms=600,
+                    karaoke_anim='utopia')
     ir = upper_ir(binary, (track, style), 1)
-    assert 'p07_ruby_character_exit_spin' in ir['required_features']
+    expected = 'p07_ruby_character_exit_spin' if spinning else 'p07_ruby_character_translation'
+    assert expected in ir['required_features']
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     assert group['fade_owner'] == 0
-    assert len(group['spin_pivot']) == 2 and np.isfinite(group['spin_pivot']).all()
+    if spinning:
+        assert len(group['spin_pivot']) == 2 and np.isfinite(group['spin_pivot']).all()
     bad = copy.deepcopy(ir)
-    del bad['skia_layout']['lines'][0]['ruby_groups'][0]['spin_pivot']
-    end = ir['track']['lines'][0]['display_end_ms']
+    del bad['skia_layout']['lines'][0]['ruby_groups'][0]['spin_pivot' if spinning else 'fade_owner']
+    line = ir['track']['lines'][0]
+    moving = line['display_end_ms']-400 if spinning else line['display_start_ms']+170
+    steady = line['display_end_ms']-600 if spinning else line['display_start_ms']+600
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
-        frames, _ = collect(process, [end-400, end-600, end-400])
+        frames, _ = collect(process, [moving, steady, moving])
         with pytest.raises(NativeRendererError):
             configure(process, bad)
-        replay, _ = collect(process, [end-400])
+        replay, _ = collect(process, [moving])
     assert frames[0].any() and not np.array_equal(frames[0], frames[1])
     assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[0])
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_p00_ruby_character_exit_spin_matches_actual_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('case_id', ['exit_spin_flip', 'entry_tracking_in', 'entry_wave_in'])
+def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tmp_path, case_id):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_spin_flip')
+    case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)

@@ -75,6 +75,7 @@ private:
         NoiseTransition noise;
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;
+        bool rubyTranslation = false;
         SingingScale singingScale;
         float rubySingingOrigin = 0;
         UtopiaTransition utopiaTransition;

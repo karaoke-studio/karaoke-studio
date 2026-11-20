@@ -576,6 +576,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [ ] 带上注音和光晕的逐字滴落，按 §14.133 的原样样本修正后验收。
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
   - [x] 正向横排无描边正文的字距展开、波浪、散开和收拢，含不同入退场时长和走字重叠，见 §14.76。
+  - [x] 字距展开与波浪入场叠加上注音、双描边、光晕和普通 Utopia，见 §14.135。
   - [x] 正向横排无描边正文的拉伸、辉光及其入退场背层，见 §14.78。
   - [x] 正向横排实色正文的噪声遮罩、拖影及入退场回跳，见 §14.84。
   - [x] 正向横排的噪声出入场与上注音、光晕及普通 Utopia 唱字叠加，见 §14.126。
@@ -2528,6 +2529,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p07_ruby_character_exit_spin` 让上注音使用宿主字的退出时钟，围绕规范字体框中的自身组轴心翻转。共用的绘图核心在字形空间生成浮点光晕，再将其变换到目标。场景配置校验轴心，失败后保留上一个有效场景。
 - 原样 `exit_spin_flip` 的 6 个 1080p 采样帧通过 Direct2D GPU、Vulkan 和 Raster 的原有画面预算，可配置增至 76/129。Windows 逐字变换回归 84 项通过，X11 和 Wayland 各 53 通过、31 跳过，独立 Windows/Linux Raster 各 1 项通过。四份原生构建 CTest 各 3/3。
 - 同一组合的翻转入场仍待验收。301ms 帧最高 alpha 为 2/255，Direct2D 和 Vulkan 的总 alpha 均为 221，Raster 为 228，差 7 个单位，超过既有 3% 预算。试验输入、补丁与逐帧结果保存在本地 `build/p07-ruby-spin-experiment.patch` 和 `build/p07-ruby-spin-diagnostics.log`。
+- 在 `74987ff6` 上复跑 76 个可配置原样场景，322 个 1080p 采样帧通过既定预算。
+
+### 14.135 P07.2 字距展开与波浪入场跟随上注音（2026-11-20）
+
+- `p07_ruby_character_translation` 令每个上注音组复用其宿主字的位移和透明度。字符落位时恢复自身光晕，入场结束后按原时钟回到普通走字或 Utopia。正文不透明实色双描边跟随位移。GPU 与 Raster 共享绘制与时序。
+- 原样 `entry_tracking_in`、`entry_wave_in` 共 12 个 1080p 采样帧通过 Direct2D GPU、Vulkan 和 Raster 的既定画面预算，可配置增至 78/129。Windows 聚焦 9 项通过，WSL X11 和 Wayland 各 57 通过、33 跳过，Windows/Linux 各 3 项独立 Raster 测试通过。四份原生构建各通过 3 项 CTest。
 
 ## 15. 前期探针清理范围
 
