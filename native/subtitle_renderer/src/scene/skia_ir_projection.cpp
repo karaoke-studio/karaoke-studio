@@ -84,14 +84,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const auto& band = cfg.lineBand;
     const bool staticBand = features.contains("p08_static_line_band");
     const bool fittedBand = features.contains("p08_line_band_fit");
+    const bool slicedBand = features.contains("p08_line_band_slices");
+    const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
+        : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
-        || (staticBand && ((fittedBand ? band.fillMode != "repeat" && band.fillMode != "cover" : band.fillMode != "stretch")
+        || (staticBand && (!bandFitSupported
             || !band.imagePath.endsWith(".png", Qt::CaseInsensitive)
             || cfg.vertical || cfg.rightToLeft || !cfg.rubies.empty() || !band.tint.isEmpty()
             || features.contains("p05_resolved_ruby")
             || !band.linesPath.isEmpty() || !band.clefPath.isEmpty() || band.edgeKind != "none"
             || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
-        throw BackendError("Skia 行背景带当前支持静态横排 PNG 拉伸、居中裁切或平铺");
+        throw BackendError("Skia 行背景带当前支持横排静态 PNG");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
@@ -101,6 +104,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         out.lineBand.enabled = true;
         out.lineBand.imagePath = band.imagePath.toStdWString();
         out.lineBand.fillMode = band.fillMode.toStdString();
+        out.lineBand.midMode = band.midMode.toStdString();
+        out.lineBand.capLeft = float(band.capLeftPx);
+        out.lineBand.capRight = float(band.capRightPx);
+        out.lineBand.srcCapLeft = band.srcCapLeftPx;
+        out.lineBand.srcCapRight = band.srcCapRightPx;
         out.lineBand.opacity = float(std::clamp(band.opacityPct, 0, 100)) / 100.f;
     }
     out.width = cfg.physicalWidth();

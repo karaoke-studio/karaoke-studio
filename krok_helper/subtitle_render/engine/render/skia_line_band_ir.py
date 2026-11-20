@@ -11,13 +11,14 @@ def write_static_line_band(ir, style, prepared, *, width, height):
     if not style.line_band_image.startswith('preset:') and not ir['style'].get('line_band_image'):
         return
     if (not style.line_band_image.lower().endswith('.png') or style.line_band_image.startswith('preset:')
-            or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover'} or style.vertical or style.right_to_left
+            or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
+            or style.vertical or style.right_to_left
             or style.line_band_tint or style.line_band_edge_kind != 'none'
             or style.line_band_shadow_enabled or style.line_band_stroke_enabled or style.line_band_glow_enabled
             or style.volume_enabled or style.lit_enabled or prepared.geometry.ruby is not None
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
-        raise ValueError('Skia 行背景带当前支持静态横排 PNG 拉伸、居中裁切或平铺')
+        raise ValueError('Skia 行背景带当前支持横排静态 PNG')
     if any(source.get('entry_anim') not in {'none', 'fade', 'slide_in', 'rise'}
            or source.get('exit_anim') not in {'none', 'fade', 'slide_out', 'rise'}
            or source.get('scanline') or source.get('fx_bursts')
@@ -48,8 +49,11 @@ def write_static_line_band(ir, style, prepared, *, width, height):
                                    y + top - style.line_band_pad_top_px,
                                    at.offset_x + right + style.line_band_pad_right_px,
                                    y + bottom + style.line_band_pad_bottom_px]
-    fitted = style.line_band_fill_mode != 'stretch'
-    ir['skia_layout']['line_band_schema'] = 2 if fitted else 1
+    fitted = style.line_band_fill_mode in {'cover', 'repeat'}
+    sliced = style.line_band_fill_mode == 'three_slice'
+    ir['skia_layout']['line_band_schema'] = 3 if sliced else 2 if fitted else 1
     ir['required_features'].append('p08_static_line_band')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
+    if sliced:
+        ir['required_features'].append('p08_line_band_slices')

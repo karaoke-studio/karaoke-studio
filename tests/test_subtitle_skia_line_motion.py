@@ -47,20 +47,32 @@ def static_band_image(tmp_path):
     return write_png(tmp_path / 'line-band.png', pixels)
 
 
+BAND_FITS = ['stretch', 'cover', 'repeat', 'slice_stretch', 'slice_cover', 'slice_repeat']
+
+
+def line_band_fit_settings(fit):
+    if not fit.startswith('slice_'):
+        return {'line_band_fill_mode': fit}
+    return dict(line_band_fill_mode='three_slice', line_band_mid_mode=fit.removeprefix('slice_'),
+                line_band_cap_left_px=5, line_band_cap_right_px=9)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('fit', ['stretch', 'cover', 'repeat'])
+@pytest.mark.parametrize('fit', BAND_FITS)
 def test_static_line_bands_stay_below_active_rows_and_follow_line_motion(binary, project, tmp_path, target, fit):
     track, style = motion_project(project, two_lanes=True)
     band = replace(style, line_band_enabled=True, line_band_image=str(static_band_image(tmp_path)),
-                   line_band_fill_mode=fit, line_band_opacity_pct=65,
-                   line_band_pad_top_px=25, line_band_pad_bottom_px=30)
+                   line_band_opacity_pct=65, line_band_pad_top_px=25, line_band_pad_bottom_px=30,
+                   **line_band_fit_settings(fit))
     valid = ir_for(binary, (track, band), dpr=1.5)
     plain = ir_for(binary, (track, style), dpr=1.5)
     missing = ir_for(binary, (track, replace(band, line_band_image=str(tmp_path / 'missing.png'))), dpr=1.5)
     feature = 'p08_static_line_band'
     assert feature in valid['required_features']
-    assert ('p08_line_band_fit' in valid['required_features']) == (fit != 'stretch')
-    assert valid['skia_layout']['line_band_schema'] == (1 if fit == 'stretch' else 2)
+    sliced = fit.startswith('slice_')
+    assert ('p08_line_band_fit' in valid['required_features']) == (fit in {'cover', 'repeat'})
+    assert ('p08_line_band_slices' in valid['required_features']) == sliced
+    assert valid['skia_layout']['line_band_schema'] == (3 if sliced else 1 if fit == 'stretch' else 2)
     assert feature not in plain['required_features'] and feature not in missing['required_features']
     windows = [(line['display_start_ms'], line['display_end_ms']) for line in valid['track']['lines']]
     first, last = min(s for s, _ in windows), max(e for _, e in windows)
@@ -94,16 +106,30 @@ def test_static_line_bands_stay_below_active_rows_and_follow_line_motion(binary,
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('entry,leave', [('none', 'none'), ('slide_in', 'slide_out')])
-@pytest.mark.parametrize('fit', ['stretch', 'cover', 'repeat'])
+@pytest.mark.parametrize('fit', BAND_FITS)
 def test_static_line_band_matches_actual_gpu(binary, application, tmp_path, entry, leave, fit):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
     case = replace(base, case_id=f'static_line_band_{fit}_{entry}', track=replace(base.track, rubies=[]),
-                   style=replace(base.style, entry_anim=entry, exit_anim=leave, line_band_fill_mode=fit,
-                                 line_band_image=str(static_band_image(tmp_path)), line_band_include_ruby=False))
+                   style=replace(base.style, entry_anim=entry, exit_anim=leave,
+                                 line_band_image=str(static_band_image(tmp_path)), line_band_include_ruby=False,
+                                 **line_band_fit_settings(fit)))
     assert_ruby_transition_gpu_parity(binary, case, (299, 450, 650, 1000, 1500, 2600, 4950, 5300, 5450, 5500))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_static_line_band_caps_share_the_width_when_the_band_is_tall(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    style = replace(base.style, line_band_image=str(static_band_image(tmp_path)), line_band_include_ruby=False,
+                    line_band_fill_mode='three_slice', line_band_cap_left_px=16, line_band_cap_right_px=16,
+                    line_band_pad_top_px=220, line_band_pad_bottom_px=200)
+    case = replace(base, case_id='static_line_band_crowded_caps', track=replace(base.track, rubies=[]), style=style)
+    assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

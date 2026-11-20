@@ -63,6 +63,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_bitmap_guides",
         "p08_static_line_band",
         "p08_line_band_fit",
+        "p08_line_band_slices",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",
@@ -404,9 +405,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_scanline_shape") || !features.contains("p07_scanline_line_animation")))
         throw BackendError("Skia 异形扫字线缺少形态或整行出入场能力声明");
     const bool fittedLineBand = features.contains("p08_line_band_fit");
-    if ((fittedLineBand && !features.contains("p08_static_line_band"))
+    const bool slicedLineBand = features.contains("p08_line_band_slices");
+    if (((fittedLineBand || slicedLineBand) && !features.contains("p08_static_line_band"))
+        || (fittedLineBand && slicedLineBand)
         || (features.contains("p08_static_line_band")
-            && layout.value("line_band_schema").toDouble(-1) != (fittedLineBand ? 2 : 1)))
+            && layout.value("line_band_schema").toDouble(-1) != (slicedLineBand ? 3 : fittedLineBand ? 2 : 1)))
         throw BackendError("Skia 行背景带布局版本无效");
     const auto scanlineVersion = layout.value("scanline_band_schema").toDouble(-1);
     if (features.contains("p07_scanline_band")
