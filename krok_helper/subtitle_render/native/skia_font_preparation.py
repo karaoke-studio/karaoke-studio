@@ -65,9 +65,10 @@ def scene_fallback_requests(track, style, extra_tracks=()):
         appearance = solid_title_style(title)
         if appearance is None:
             continue
-        for unit in title_line_units(title['text']):
-            slot, _ = font_style_for_cell(appearance, unit)
-            requests[slot.font_family, slot.font_weight, slot.italic].add(unit)
+        for row in title['text'].split('\n'):
+            for unit in title_line_units(row):
+                slot, _ = font_style_for_cell(appearance, unit)
+                requests[slot.font_family, slot.font_weight, slot.italic].add(unit)
     return requests
 
 

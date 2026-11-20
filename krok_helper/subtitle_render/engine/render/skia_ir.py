@@ -430,7 +430,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 continue
             position = geometry.position(item, kwargs['width'], kwargs['height'])
             if adjust_position is not None:
-                position = adjust_position(position, item.layout_style, measured, item.track_index, kwargs['height'])
+                position = adjust_position(geometry.locals[index], item, measured, kwargs['width'], kwargs['height'])
             cells = positioned_cells(geometry.locals[index], position)
             ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
                                      dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,

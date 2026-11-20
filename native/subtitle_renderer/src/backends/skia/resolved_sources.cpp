@@ -155,13 +155,15 @@ std::vector<::subtitle::skia::ResolvedLine::TitleWindow> titleWindows(const QJso
         auto windows = titleWindows(title.value("windows"));
         countSource(source, ir.value("screen"), size);
         auto prepared = resolvedSkiaSource(source, images);
-        if (prepared.lines.size() != 1 || !prepared.viewport.isIdentity() || prepared.lineBand.image)
+        if (prepared.lines.empty() || prepared.lines.size() > 32
+            || !prepared.viewport.isIdentity() || prepared.lineBand.image)
             throw BackendError("Skia 标题布局无效");
-        auto& line = prepared.lines.front();
-        if (line.cells.empty() || line.animation.active() || !line.rubyGroups.empty() || !line.particles.empty())
-            throw BackendError("Skia 标题必须使用静态文字布局");
-        line.titleWindows = std::move(windows);
-        lines.push_back(std::move(line));
+        for (auto& line : prepared.lines) {
+            if (line.cells.empty() || line.animation.active() || !line.rubyGroups.empty() || !line.particles.empty())
+                throw BackendError("Skia 标题必须使用静态文字布局");
+            line.titleWindows = windows;
+            lines.push_back(std::move(line));
+        }
     }
     lines.insert(lines.end(), std::make_move_iterator(result.lines.begin()), std::make_move_iterator(result.lines.end()));
     result.lines = std::move(lines);

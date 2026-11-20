@@ -116,6 +116,47 @@ def test_solid_title_matches_actual_d2d_gpu(binary, decoration):
         (299, 300, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multiline_title_keeps_blank_row_and_per_row_alignment(binary, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = sample()
+    title = replace(solid_title(style), text_template='Skia\n\nGPU', layout_index=1, font_size_px=45)
+    layout = LyricsLayout(layout_id='title', line_y_position='top', line_y_margin_px=35, line_gap_px=18,
+                          line_alignments=['left', 'center', 'right'], line_offsets_x=[13, 0, -19])
+    style = replace(style, title_overlays=[title], layouts=[layout], custom_style_schemes={})
+    track = replace(track, meta=replace(track.meta, offset_ms=5000))
+    ir = ir_for(binary, (track, style))
+    rows = ir['skia_titles'][0]['source']['skia_layout']['lines']
+    assert len(rows) == 2
+    first, second = (row['cells'][0] for row in rows)
+    assert second['baseline_y'] - first['baseline_y'] == pytest.approx(126)
+    assert first['origin_x'] < 100 and second['origin_x'] > 440
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [400, 500, 1000, 500])
+    assert frames[1][:120, :200, 3].any() and frames[1][140:260, 440:, 3].any()
+    assert not frames[1][100:140, :, 3].any()
+    assert not frames[2].any() and np.array_equal(frames[1], frames[-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('anchor', ['top', 'center', 'bottom'])
+def test_multiline_title_matches_actual_d2d_gpu(binary, anchor):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, offset_ms=5000))
+    title = replace(solid_title(style), text_template='Skia\n\nGPU\nRenderer', layout_index=1, stroke_width_px=5)
+    layout = LyricsLayout(layout_id='title', line_y_position=anchor, line_y_margin_px=55, line_gap_px=19,
+                          line_alignments=['left', 'center', 'center', 'right'], line_offsets_x=[7, 0, 19, -13])
+    style = replace(style, title_overlays=[title], layouts=[layout], custom_style_schemes={})
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id=f'multiline_title_{anchor}'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 @pytest.fixture
 def supported_project(tmp_path):
     from krok_helper.subtitle_render.domain.models import style_to_dict
