@@ -1,4 +1,5 @@
 """Multi-row canonical geometry with shared page/show-time semantics."""
+import copy
 from dataclasses import replace
 import json
 import sys
@@ -7,15 +8,127 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from test_subtitle_skia_roles import application, binary, project, roles, mixed
+from test_subtitle_skia_roles import application, binary, colors, project, roles, mixed
 from test_subtitle_skia_resolved import ir_for
 from test_subtitle_skia_protocol import collect, selection
-from krok_helper.subtitle_render.domain.models import LyricsLayout, TimingChar, TimingLine
-from krok_helper.subtitle_render.domain.timing import TrackPage, TrackSection, TrackPagePlan
+from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme, TimingChar, TimingLine
+from krok_helper.subtitle_render.domain.timing import TrackDisplayTiming, TrackPage, TrackSection, TrackPagePlan
 from krok_helper.subtitle_render.engine.layout.line.skia_placement import place_horizontal_line
 from krok_helper.subtitle_render.engine.layout.display.skia_schedule import display_lines
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
+
+
+@pytest.fixture
+def multiple_sources(project):
+    track, style = project
+    style = replace(style, timing_offset_ms=110, font_size_px=90,
+                    karaoke_colors=colors('#E21416', '#E21416'),
+                    custom_style_schemes={
+                        'green': SubtitleStyleScheme(karaoke_colors=colors('#14E216', '#14E216')),
+                        'blue': SubtitleStyleScheme(karaoke_colors=colors('#1416E2', '#1416E2')),
+                    })
+    line = TimingLine(chars=[TimingChar('A', 1000)], end_ms=1400,
+                      display_start_override_ms=0, display_end_override_ms=2400)
+    main = replace(track, lines=[line], meta=replace(track.meta, offset_ms=140))
+    extras = []
+    for label, offset, end in [('green', -90, 1600), ('blue', 270, 1750)]:
+        side_line = replace(line, chars=[replace(line.chars[0], role_label=label)],
+                            display_start_override_ms=800, display_end_override_ms=end)
+        extras.append(replace(track, lines=[side_line], meta=replace(track.meta, offset_ms=offset)))
+    extras[0].display_timing = TrackDisplayTiming(follow_main=False, overrides={'timing_offset_ms': 420})
+    return main, style, extras
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multiple_sources_use_separate_clocks_and_composite_in_list_order(binary, multiple_sources, target):
+    main, style, extras = multiple_sources
+    style = replace(style, viewport_offset_x=24, viewport_offset_y=-16)
+    args = dict(width=640, height=360, fps=60, roll_shift_ms=350)
+    times = [599, 600, 1479, 1480, 1530, 2280, 2480, 3000, 1480]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        original = process.configure(main, style, extra_tracks=extras, **args)
+        output, _ = collect(process, times)
+        swapped = process.configure(main, style, extra_tracks=extras[::-1], **args)
+        reverse, _ = collect(process, [1530], generation=2)
+    assert original['metrics_identity'] != swapped['metrics_identity']
+    assert not output[0][..., 3].any() and not output[-2][..., 3].any()
+    assert np.array_equal(output[1], output[2]) and np.array_equal(output[3], output[-1])
+    # Removing the second source changes the antialiased edge under the top
+    # source, even though the opaque center retains the same top color.
+    assert output[4][..., 3].sum() > output[5][..., 3].sum()
+    assert np.array_equal(output[1], output[6])
+    for frame, color in ((output[1], [226, 20, 22]), (output[3], [20, 226, 22]),
+                         (output[4], [20, 22, 226]), (output[5], [20, 22, 226]),
+                         (reverse[0], [20, 226, 22])):
+        opaque = frame[..., 3] == 255
+        assert opaque.any()
+        assert np.all(frame[opaque][:, :3] == color)
+
+
+def test_multiple_sources_validate_all_sources_before_replacing_scene(binary, multiple_sources):
+    main, style, extras = multiple_sources
+    ir = ir_for(binary, (main, style), extra_tracks=extras)
+    valid = ir['skia_extra_sources']
+    assert ir['track']['meta']['offset_ms'] == 140
+    assert valid[0]['style']['timing_offset_ms'] == 420 and valid[0]['track']['meta']['offset_ms'] == -90
+    assert valid[1]['style']['timing_offset_ms'] == 110
+    mutations = []
+    for key, value in [('screen', {**ir['screen'], 'width': 641}), ('skia_extra_sources', []),
+                       ('skia_layout', None), ('required_features', ['p08_static_line_band'])]:
+        invalid = copy.deepcopy(ir)
+        invalid['skia_extra_sources'][1][key] = value
+        mutations.append(invalid)
+    undeclared = copy.deepcopy(ir)
+    undeclared['required_features'].remove('p08_multiple_sources')
+    mutations.append(undeclared)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        process.configure(main, style, extra_tracks=extras, width=640, height=360, fps=60)
+        before, _ = collect(process, [1200])
+        for invalid in mutations:
+            process._send({'cmd': 'configure', 'ir': invalid})
+            with pytest.raises(NativeRendererError):
+                process._expect_ok(process._read_until_event('configured'))
+        after, _ = collect(process, [1200], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+def test_multiple_sources_keep_independent_page_plans(binary, grid):
+    track, style = grid
+    style = replace(style, sync_entry=True, sync_ending=True, sync_each_page=True)
+    main = replace(track, lines=track.lines[:3],
+                   page_plan=TrackPagePlan(sections=[TrackSection(pages=[TrackPage(3)])]))
+    side = replace(track, lines=track.lines[3:7],
+                   page_plan=TrackPagePlan(sections=[TrackSection(pages=[TrackPage(2), TrackPage(2)])]))
+    combined = ir_for(binary, (main, style), extra_tracks=[side])
+    extra = combined['skia_extra_sources'][0]
+    for source, payload in ((main, combined), (side, extra)):
+        single = ir_for(binary, (source, style))
+        assert payload['track'] == single['track']
+        assert payload['skia_layout']['lines'] == single['skia_layout']['lines']
+    assert [line['lane'] for line in combined['track']['lines']] == [0, 1, 2]
+    assert [line['lane'] for line in extra['track']['lines']] == [1, 2, 1, 2]
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU comparison')
+def test_multiple_sources_match_d2d_gpu(binary, multiple_sources):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    main, style, extras = multiple_sources
+    style = replace(style, viewport_offset_x=44, viewport_offset_y=-25)
+    times = (249, 250, 1129, 1130, 1180, 1930, 2130, 2650)
+    with NativeRendererProcess() as d2d:
+        _, raw = _render_g1_frames(d2d, style, times, track=main, extra_tracks=extras, force_warp=False,
+                                   width=1920, height=1080, realization_enabled=False)
+    ref = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    output = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(main, style, extra_tracks=extras, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, times)
+            output.append(frames)
+    assert_glow_parity(times, ref, *output, 'multiple_sources', check_p00_edges=True)
 
 
 @pytest.fixture

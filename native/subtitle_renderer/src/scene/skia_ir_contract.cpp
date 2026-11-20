@@ -77,6 +77,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_line_band_stroke_position",
         "p08_line_band_blur",
         "p08_line_band_animated_decoration",
+        "p08_multiple_sources",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",
@@ -201,6 +202,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             throw BackendError("Skia IR: unknown required feature");
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
+    if (ir.contains("skia_extra_sources") || features.contains("p08_multiple_sources"))
+        throw BackendError("Skia: 多轨配置缺少规范布局或包含嵌套来源");
     if (features.contains("p07_noise_composition")
         && (!features.contains("p07_noise_transition") || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 噪声出入场组合缺少对应布局能力");

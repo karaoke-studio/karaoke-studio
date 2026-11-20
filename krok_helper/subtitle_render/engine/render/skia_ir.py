@@ -3,6 +3,9 @@
 Font discovery and process IPC are injected configuration capabilities. No Qt
 measurement or rendering is used here, and frame draws never call this module.
 """
+from hashlib import sha256
+
+from krok_helper.subtitle_render.domain.models import style_for_track
 from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
 from krok_helper.subtitle_render.engine.layout.display.section_edges import section_edge_context
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
@@ -292,9 +295,25 @@ def _character_transforms(track, ir, plan, measured, spin_lines, composed_geomet
     return version
 
 
-def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
-    if kwargs.get('extra_tracks'):
-        raise ValueError('Skia 当前规范布局尚不支持附加轨道')
+def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=None, **kwargs):
+    sources = tuple(extra_tracks or ())
+    if len(sources) > 15:
+        raise ValueError('Skia 规范布局最多支持 15 条附加轨道')
+    with font_snapshot(resolve_font):
+        ir = _build_source_ir(track, style, measure=measure, resolve_font=resolve_font, **kwargs)
+        if not sources:
+            return ir
+        extras = [_build_source_ir(source, style_for_track(style, source),
+                                  measure=measure, resolve_font=resolve_font, **kwargs)
+                  for source in sources]
+    ir['skia_extra_sources'] = extras
+    ir['required_features'].append('p08_multiple_sources')
+    identities = (source['skia_layout']['metrics_identity'] for source in (ir, *extras))
+    ir['skia_layout']['metrics_identity'] = sha256(''.join(identities).encode('ascii')).hexdigest()
+    return ir
+
+
+def _build_source_ir(track, style, *, measure, resolve_font, **kwargs):
     prepared = []
 
     def build_plan(source, source_style, **plan_kwargs):
@@ -317,13 +336,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         prepared.append(result)
         return result.plan
 
-    with font_snapshot(resolve_font):  # Every plan of this IR shares one content snapshot.
-        ir = build_render_ir(track, style, layout_plan_builder=build_plan,
-                             serialize_source_baselines=False, **kwargs)
-        vertical_ruby = None
-        if style.vertical and track.rubies:
-            vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
-                                                dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure)
+    ir = build_render_ir(track, style, layout_plan_builder=build_plan,
+                         serialize_source_baselines=False, **kwargs)
+    vertical_ruby = None
+    if style.vertical and track.rubies:
+        vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
+                                            dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     spin_lines = set()
