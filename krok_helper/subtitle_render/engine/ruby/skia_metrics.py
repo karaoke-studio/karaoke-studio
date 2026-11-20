@@ -55,8 +55,8 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
         main, _ = font_style_for_ruby_cell(style, '')
         baseline_run = batch.instance(main)
         zoom_reference = None
-        if (effective_karaoke_zoom_pulse(style) or style.entry_anim == 'stretch_in'
-                or style.exit_anim in {'spin_flip', 'scatter_out', 'converge_out', 'stretch_out'}):
+        if (effective_karaoke_zoom_pulse(style) or style.entry_anim in {'stretch_in', 'glow_in'}
+                or style.exit_anim in {'spin_flip', 'scatter_out', 'converge_out', 'stretch_out', 'glow_out'}):
             slot, stretch = font_style_for_ruby_cell(style, reading)
             zoom_reference = (batch.instance(slot, stretch), slot.font_size_px)
         units = []
