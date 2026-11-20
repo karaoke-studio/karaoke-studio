@@ -47,6 +47,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_body_gradient",
         "p06_outline_gradient",
         "p06_image_fill",
+        "p06_ruby_main_paint",
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
         "p06_static_shadow",

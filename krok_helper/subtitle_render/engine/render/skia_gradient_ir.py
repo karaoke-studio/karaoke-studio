@@ -18,15 +18,15 @@ def _layer_modes(look):
     return modes, outlined
 
 
-def write_body_gradient_bounds(track, ir, plan):
-    """Write the glyph ink union of gradient lines; return (gradients, outlined gradients, images).
+def write_body_gradient_bounds(ir, plan):
+    """Write the glyph ink union and declare the corresponding paint capabilities.
 
     The existing GPU maps every gradient layer of a line onto this ink union: a
     horizontal paint spans the glyph ink, a vertical paint spans the ink padded
     by the line's visual outline pad (applied natively at the reference scale).
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
-    enabled = outlined_gradient = images = False
+    enabled = outlined_gradient = images = ruby_paint = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
@@ -37,9 +37,10 @@ def write_body_gradient_bounds(track, ir, plan):
                 or look.vertical or look.right_to_left or item.line.wipe_reverse
                 or source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
                 or source.get('scanline') or source.get('fx_bursts') or source.get('stroke_flash')
-                or source.get('karaoke_anim') != 'none' or track.rubies or look.lower_ruby_enabled
+                or source.get('karaoke_anim') != 'none' or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
+        ruby_paint = ruby_paint or bool(final.get('ruby_groups'))
         images = images or 'image' in modes
         if not modes & _GRADIENTS:
             continue
@@ -54,4 +55,9 @@ def write_body_gradient_bounds(track, ir, plan):
             final['body_gradient_bounds'] = [min(left), min(top), max(right), max(bottom)]
         enabled = True
         outlined_gradient = outlined_gradient or outlined
-    return enabled, outlined_gradient, images
+    for enabled_feature, feature in (
+        (enabled, 'p06_body_gradient'), (outlined_gradient, 'p06_outline_gradient'),
+        (images, 'p06_image_fill'), (ruby_paint, 'p06_ruby_main_paint'),
+    ):
+        if enabled_feature:
+            ir['required_features'].append(feature)

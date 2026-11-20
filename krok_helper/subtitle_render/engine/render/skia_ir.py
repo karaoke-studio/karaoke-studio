@@ -353,15 +353,6 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if role_layers:
             ir['required_features'].append('p07_role_scanline_layers')
         ir['required_features'].append('p07_scanline_band')
-    gradients, outlined_gradients, images = write_body_gradient_bounds(track, ir, plan)
-    if images:
-        # Static image paints on any body or outline layer of a plain line.
-        ir['required_features'].append('p06_image_fill')
-    if gradients:
-        ir['required_features'].append('p06_body_gradient')
-    if outlined_gradients:
-        # Gradient paint on, or under, a solid or gradient outline stack.
-        ir['required_features'].append('p06_outline_gradient')
     for kind in ('shadow', 'glow'):
         if any(_uses_decoration(item.layout_style, kind) for item in plan.lines):
             ir['required_features'].append(f'p06_static_{kind}')
@@ -432,6 +423,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p06_ruby_shadow')
         if 'ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_glow')
+    write_body_gradient_bounds(ir, plan)
     if 'p07_scanline_band' in ir['required_features']:
         scanned = [line for line in ir['track']['lines'] if line.get('scanline')]
         glowing = any(source.get('scanline') and _uses_decoration(style_for_line(style, line), 'glow')

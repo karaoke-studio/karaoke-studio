@@ -424,12 +424,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.scanlineMode != "role" || roleScanlineGlow);
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
+        const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
+            && !features.contains("p05_lower_ruby");
+        const bool paintedGlow = rubyMainPaint && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         if (hasDecoration
             && (style.vertical || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
                 || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
-                || !projected.charStyles.empty() || gradient || image || (hasGlow && utopia && !singingGlow)
+                || !projected.charStyles.empty() || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
                 || std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); })))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (gradient || image) {
@@ -438,7 +441,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || style.vertical || style.rightToLeft || line.wipeReverse || utopia
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
                 || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
-                || !prepared.rubyGroups.empty() || !projected.charStyles.empty())
+                || (!prepared.rubyGroups.empty() && !rubyMainPaint) || !projected.charStyles.empty())
                 throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");
             // Image paints need no line domain: the existing GPU tiles them on the canvas.
             for (int i = 0; i < 6 && image; ++i)

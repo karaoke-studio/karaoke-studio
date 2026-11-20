@@ -12,6 +12,7 @@ from test_subtitle_skia_line_fade import (
 )
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
+from test_subtitle_skia_outline_ruby import annotated, mixed, pages, prepared_source, reading, source, upper_ir
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -40,6 +41,54 @@ def gradient_source(project, mode, translucent=False):
             after=replace(colors.after, text=replace(colors.after.text, start_color='#6028CB53', end_color='#C0BB37AF')),
         )
     return track, replace(style, karaoke_colors=colors, right_to_left=False)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target):
+    track, style = reading
+    style = replace(style, karaoke_anim='none')
+    gradient = PaintFill(mode='gradient_horizontal', start_color='#FFFFAA00', end_color='#FF0044FF')
+    colors = replace(style.karaoke_colors, before=replace(style.karaoke_colors.before, text=gradient))
+    ir = upper_ir(binary, (track, replace(style, karaoke_colors=colors)), 1)
+    plain = upper_ir(binary, (track, style), 1)
+    assert 'p06_ruby_main_paint' in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_ruby_main_paint')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, plain)
+        ruby, _ = collect(process, [150])
+        configure(process, ir)
+        painted, _ = collect(process, [150], generation=2)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [150], generation=2)
+    region = ruby[0][..., 3] > 16
+    assert region.any() and np.array_equal(painted[0][region], ruby[0][region])
+    assert np.count_nonzero(painted[0][..., 3] > 16) > np.count_nonzero(region)
+    assert np.array_equal(replay[0], painted[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('mode', [*MODES, 'image'])
+def test_p00_ruby_with_main_paint_matches_actual_gpu(binary, application, tmp_path, mode):
+    from scripts.subtitle_gpu_baseline.cases import build_cases, representative_style
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == f'paint_{mode}')
+    style = replace(case.style, karaoke_anim='none', ruby_colors_follow_main=False,
+                    ruby_karaoke_colors=representative_style().karaoke_colors)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, case.timestamps_ms, force_warp=False,
+                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+            rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, reference, *rendered, case.case_id, check_p00_edges=True)
 
 
 @pytest.mark.parametrize('mode', MODES)
