@@ -8,7 +8,7 @@ from ..layout.line.skia_vertical import (
 from ..ruby.skia_geometry import upper_ruby_targets
 from ..ruby.skia_metrics import measure_timed_readings
 from ..ruby.skia_timing import prepare_ruby_target_timing, wipe_points_to_ir
-from .skia_ruby_paint_ir import solid_ruby_outlines
+from .skia_ruby_paint_ir import ruby_decoration_kinds, solid_ruby_outlines
 
 
 def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_offset, font_size, wipe_pad):
@@ -45,6 +45,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
     entries, readings = [], []
     version = 1
     shifted = rotated = outlined = False
+    decorations = set()
     for index, (line, style) in enumerate(zip(track.lines, geometry.styles, strict=True)):
         intervals = measured.snapshot.resolve_intervals(line, geometry.style)
         targets = sorted(upper_ruby_targets(track, index, line, style, intervals, annotation_indices),
@@ -94,6 +95,10 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
             outlines = solid_ruby_outlines(target.style)
+            decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow'}
+            if decoration and len(groups) > 1:
+                raise ValueError('Skia 竖排静态装饰暂不支持同列多组注音')
+            decorations.update(decoration)
             wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
             units = _reading_units(ruby.readings[reading_index], clock, ruby_column, top + first * height_per_cell,
                                    (end - first) * height_per_cell, len(measured.runs),
@@ -121,4 +126,5 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
         result['vertical_ruby_rotation_schema'] = 1
     if outlined:
         result['ruby_solid_outline_schema'] = 1
+    result.update({f'ruby_{kind}_schema': 1 for kind in decorations})
     return result

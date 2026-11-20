@@ -217,6 +217,61 @@ def test_vertical_ruby_outlines_follow_ink_and_keep_independent_colors(binary, p
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('body_shadow', [False, True])
+def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, target, body_shadow):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(1, 3))
+    blank = colors('#00000000', '#00000000')
+    body = replace(blank, before=replace(blank.before, shadow=PaintFill(color='#FF00FF00')),
+                   after=replace(blank.after, shadow=PaintFill(color='#FF00FF00')))
+    ruby = replace(blank, before=replace(blank.before, shadow=PaintFill(color='#FFFF0000')),
+                   after=replace(blank.after, shadow=PaintFill(color='#FF0000FF')))
+    body_kind = 'shadow' if body_shadow else 'none'
+    style = replace(style, karaoke_colors=body, ruby_karaoke_colors=ruby, decoration_before_sync=False,
+                    decoration_kind=body_kind, decoration_kind_before=body_kind,
+                    shadow_offset_x=-18, shadow_before_offset_x=-18,
+                    ruby_decoration_kind='glow', ruby_decoration_kind_before='shadow',
+                    ruby_shadow_before_offset_x=0, ruby_shadow_before_offset_y=4, ruby_glow_after_radius_px=6)
+    ir = ir_for(binary, (track, style))
+    feature = 'p06_vertical_ruby_decoration'
+    assert {feature, 'p06_ruby_shadow', 'p06_ruby_glow'} <= set(ir['required_features'])
+    assert ('p06_vertical_shadow' in ir['required_features']) == body_shadow
+    unit, = ir['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    start, end = unit['interval_ms']
+    times = [start - 1, (start + end) // 2, end + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+    assert np.array_equal(frames[1], replay[0])
+
+    def rows(frame, channel):
+        return (frame[..., channel].astype(float) * frame[..., 3]).sum(axis=1)
+
+    def center(weights):
+        assert weights.sum() > 0
+        return np.average(np.arange(weights.size), weights=weights)
+
+    assert rows(frames[0], 0).any() and not rows(frames[0], 2).any()
+    assert rows(frames[2], 2).any() and not rows(frames[2], 0).any()
+    assert center(rows(frames[1], 2)) + 3 < center(rows(frames[1], 0))
+    assert all(bool(rows(frame, 1).any()) == body_shadow for frame in frames)
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        diff = abs(premultiplied(np.stack(frames)) - premultiplied(np.stack(raster)))
+        assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 def ink_bounds(mask):
     y, x = np.nonzero(mask)
     return np.array([x.min(), y.min(), x.max(), y.max()]) if x.size else np.array([])

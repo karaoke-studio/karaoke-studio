@@ -382,6 +382,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p05_vertical_rotated_ruby')
         if vertical_ruby.get('ruby_solid_outline_schema'):
             ir['required_features'] += ['p06_ruby_solid_outline', 'p06_vertical_ruby_outline']
+        ir['required_features'].extend(f'p06_ruby_{kind}' for kind in ('shadow', 'glow')
+                                       if vertical_ruby.get(f'ruby_{kind}_schema'))
     secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
                             for item in plan.lines)
     if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
@@ -422,13 +424,19 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     decorations = [kind for kind in ('shadow', 'glow') if any(
         _uses_decoration(item.layout_style, kind) for item in plan.lines)]
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
-    if style.vertical and decorations:
-        if (style.dual_line_layout or track.rubies or any(line.wipe_reverse for line in track.lines)
+    ruby_decorations = vertical_ruby is not None and any(
+        vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('shadow', 'glow'))
+    if style.vertical and (decorations or ruby_decorations):
+        if (style.dual_line_layout or any(line.wipe_reverse for line in track.lines)
                 or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') != 'none'
                        or line.get('exit_anim') != 'none' or line.get('scanline')
                        or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
-            raise ValueError('Skia 竖排静态装饰暂支持无注音的正向单列基础走字')
+            raise ValueError('Skia 竖排静态装饰暂支持正向单列基础走字')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
+        if vertical_ruby is not None:
+            if any(len(line['ruby_groups']) > 1 for line in lines):
+                raise ValueError('Skia 竖排静态装饰暂不支持同列多组注音')
+            ir['required_features'].append('p06_vertical_ruby_decoration')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         if _validate_stroke_flash(track, style, ir['track']['lines']):
             ir['required_features'].append('p07_composed_stroke_flash')

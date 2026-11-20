@@ -144,9 +144,10 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
     const bool before = std::ranges::all_of(cells_, [=](const auto& cell) { return timeMs <= cell.startMs; });
     const bool complete = !before && lineWipeComplete(cells_, timeMs);
     if (after ? before : complete) return;
-    const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, bounds_.left()));
+    const auto edge = before || complete ? std::nullopt
+        : std::optional(frontAt(timeMs, vertical_ ? bounds_.top() : bounds_.left()));
     for (std::size_t i = 0; i < cells_.size(); ++i)
-        glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity);
+        glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity, vertical_);
 }
 
 void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
@@ -162,11 +163,11 @@ void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& 
 
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
     if (!shadow_.visible() || bounds_.isEmpty()) return;
-    const float edge = frontAt(timeMs, bounds_.left());
+    const float edge = frontAt(timeMs, vertical_ ? bounds_.top() : bounds_.left());
     const bool complete = lineWipeComplete(cells_, timeMs);
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
     if (!scale.active) {
-        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad);
+        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_);
         return;
     }
     shadow_.drawAnimated(canvas, cells_, bounds_, edge, complete, pad, [&](std::size_t index) {

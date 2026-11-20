@@ -85,11 +85,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     std::vector<::subtitle::skia::ResolvedRubyGroup> groups;
     const auto& line = scene.lines[lineIndex];
     const bool vertical = scene.lineStyles[lineIndex].vertical;
-    const bool allowOutlines = ir.value("required_features").toArray().contains("p06_ruby_solid_outline");
-    const bool allowShadow = ir.value("required_features").toArray().contains("p06_ruby_shadow")
-        && !vertical && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
-        && line.entryAnimation == "none" && line.exitAnimation == "none";
     const auto features = ir.value("required_features").toArray();
+    const bool allowOutlines = features.contains("p06_ruby_solid_outline");
+    const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
+        && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+        && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+    const bool allowShadow = features.contains("p06_ruby_shadow")
+        && (!vertical || allowVerticalDecoration) && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
+        && line.entryAnimation == "none" && line.exitAnimation == "none";
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
@@ -99,7 +102,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.entryAnimation == "noise" || line.exitAnimation == "noise");
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool allowGlow = features.contains("p06_ruby_glow")
-        && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
+        && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
@@ -156,7 +159,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
             if (!allowShadow || kind != "shadow" || decor.mode != "solid" || !std::isfinite(x) || !std::isfinite(y))
-                throw BackendError("Skia 当前仅支持横排上注音的实色阴影");
+                throw BackendError("Skia 上注音实色阴影缺少对应布局能力");
             return {true, x, y, argb(decor.color)};
         };
         const ::subtitle::skia::StaticShadow shadow{
@@ -166,7 +169,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
             if (!allowGlow || decor.mode != "solid" || !std::isfinite(radius) || radius > 532.f)
-                throw BackendError("Skia 当前仅支持横排上注音的实色光晕与普通唱字放大");
+                throw BackendError("Skia 上注音实色光晕缺少对应布局能力");
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
         };
         const ::subtitle::skia::StaticGlow glow{
