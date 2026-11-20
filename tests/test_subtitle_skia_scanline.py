@@ -340,6 +340,7 @@ SCANLINE_MOTIONS = [
     ('band', 'slide_in', 'slide_out'), ('band', 'rise', 'rise'), ('band', 'fade', 'fade'),
     ('flame', 'slide_in', 'slide_out'), ('bubble', 'rise', 'rise'), ('animated', 'fade', 'fade'),
 ]
+SHAPED_SCANLINE_SINGING = [('flame', 'note'), ('bubble', 'flame'), ('animated', 'lightning')]
 
 
 def ruby_band_source(reading, softness, utopia=False):
@@ -393,6 +394,56 @@ def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, applicati
                    style=replace(base.style, entry_anim=entry, exit_anim=leave))
     assert_ruby_transition_gpu_parity(binary, case, (950, 1120, 1260, 1380, 1550, 2600,
                                                     4110, 4280, 4450, 4530, 4610, 4650))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('shape,singing', SHAPED_SCANLINE_SINGING)
+def test_upper_ruby_shaped_scanline_and_singing_particles_keep_their_clocks(binary, reading, target, shape, singing):
+    track, style = ruby_band_source(reading, 10, True)
+    if shape == 'animated':
+        image = Path(__file__).with_name('data') / 'guide_anim_3frames.gif'
+        style = replace(style, scanline_shape='image', scanline_image_path=str(image))
+    else:
+        style = replace(style, scanline_shape=shape)
+    style = replace(style, sing_fx=singing, fx_particle_count=24, fx_particle_speed_pct=200)
+    ir = upper_ir(binary, (track, style), 1)
+    plain = upper_ir(binary, (track, replace(style, sing_fx='none')), 1)
+    feature = 'p07_shaped_scanline_singing_particles'
+    assert feature in ir['required_features'] and feature not in plain['required_features']
+    assert ir['skia_layout']['sing_twinkle_schema'] == 13
+    bursts = ir['track']['lines'][0]['fx_bursts']
+    assert singing in {b['kind'] for b in bursts} and all(b['kind'] != 'scanline' for b in bursts)
+    assert any(not b['front'] for b in bursts) == (singing != 'note')
+    burst_samples = {b['start_ms'] + (b['end_ms'] - b['start_ms']) // fraction
+                     for b in bursts if b['kind'] == singing for fraction in (2, 4, 8)}
+    times = sorted({199, 450, 550, 899, 1100, 1550, 1900, 2100, 2300} | burst_samples)
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [1550], generation=2)
+        configure(process, plain)
+        without_particles, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames[times.index(550)], frames[-1])
+    assert np.array_equal(frames[times.index(1550)], replay[0])
+    assert np.array_equal(frames[times.index(199)], without_particles[times.index(199)])
+    assert sum(not np.array_equal(a, b) for a, b in zip(frames[:-1], without_particles, strict=True)) >= 3
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape,singing', SHAPED_SCANLINE_SINGING)
+def test_upper_ruby_shaped_scanline_and_singing_particles_match_actual_gpu(binary, application, tmp_path, shape, singing):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == f'scanline_{shape}')
+    case = replace(base, case_id=f'scanline_{shape}_sing_{singing}',
+                   style=replace(base.style, sing_fx=singing, fx_particle_count=24, fx_particle_speed_pct=200))
+    assert_ruby_transition_gpu_parity(binary, case, (1100, 1210, 1230, 1250, 1300, 1500, 1580,
+                                                    1760, 1780, 1900, 2200, 2600, 3700, 4400, 4700))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

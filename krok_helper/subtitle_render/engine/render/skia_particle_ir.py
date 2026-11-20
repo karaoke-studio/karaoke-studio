@@ -45,6 +45,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
         annotated = bool(track.rubies)
+        singing_under_shape = (annotated and band and not animated and look.scanline_shape != 'band'
+                               and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         scaled_singing = annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
@@ -62,7 +64,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             kind = burst['kind']
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not band)
-                    or (annotated and band and kind != 'scanline')
+                    or (annotated and band and kind != 'scanline' and not singing_under_shape)
+                    or (singing_under_shape and kind == 'scanline')
                     or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
                     or 'paint_id' in burst or 'char_color_ids' in burst):

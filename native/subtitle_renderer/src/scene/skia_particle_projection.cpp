@@ -20,7 +20,10 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
-    const bool rubyScanline = features.contains("p07_ruby_scanline_particles");
+    const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
+        && !animated && source.scanlineEnabled && rubyParticles && style.scanlineMode == "color"
+        && (style.scanlineShape == "flame" || style.scanlineShape == "bubble" || style.scanlineShape == "image");
+    const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || shapedSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit,
         features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"),
         features.contains("p07_ruby_energy_pair"));
@@ -85,9 +88,10 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
-            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && !rubyParticles);
+            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && (!rubyParticles || shapedSinging));
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (rubyParticles && version == 12 && !star && !ripple)
+            || (scanline && shapedSinging)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
             || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite

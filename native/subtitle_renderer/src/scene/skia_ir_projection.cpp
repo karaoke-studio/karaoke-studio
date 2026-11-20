@@ -187,11 +187,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         // The band follows the posed unit during forward Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
+        const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles") && staticScanline
+            && std::ranges::none_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
             && resolved.scanlineMode == "color" && !source.wipeReverse
-            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
+            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && (source.fxBursts.empty() || shapedSinging);
         const bool movingScanline = features.contains("p07_scanline_line_animation") && utopiaSinging
             && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)

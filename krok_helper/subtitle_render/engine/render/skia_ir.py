@@ -150,16 +150,18 @@ def _validate_scanline_band(track, style, lines):
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     shapes = set()
-    moving_shapes = False
+    moving_shapes = shaped_singing = False
     for source, line in zip(track.lines, lines, strict=True):
         if not line.get('scanline'):
             continue
         look = style_for_line(style, source)
         ordinary = {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
-        solid_shape = (look.scanline_shape in {'flame', 'bubble', 'image'}
-                 and look.scanline_mode == 'color'
-                 and not (source.wipe_reverse or line.get('zoom_pulse')
-                          or line.get('stroke_flash') or line.get('fx_bursts')))
+        bursts = line.get('fx_bursts', ())
+        shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
+        shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
+                              and all(burst['kind'] != 'scanline' for burst in bursts))
+        solid_shape = (shape_style and not (source.wipe_reverse or line.get('zoom_pulse') or line.get('stroke_flash'))
+                       and (not bursts or shape_with_singing))
         motion = (not ordinary and _ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and look.scanline_mode != 'role'
                   and line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
@@ -185,7 +187,24 @@ def _validate_scanline_band(track, style, lines):
         if shape:
             shapes.add(look.scanline_shape)
             moving_shapes = moving_shapes or motion
-    return composed, role_layers, shapes, line_motion, moving_shapes
+            shaped_singing = shaped_singing or shape_with_singing
+    features = []
+    if shapes:
+        features.append('p07_scanline_shape')
+    if 'image' in shapes:
+        features.append('p07_scanline_image')
+    if composed:
+        features.append('p07_composed_scanline')
+    if line_motion:
+        features.append('p07_scanline_line_animation')
+    if moving_shapes:
+        features.append('p07_scanline_shape_line_animation')
+    if shaped_singing:
+        features.append('p07_shaped_scanline_singing_particles')
+    if role_layers:
+        features.append('p07_role_scanline_layers')
+    features.append('p07_scanline_band')
+    return features
 
 
 def _validate_stroke_flash(track, style, lines):
@@ -429,21 +448,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         if fade_lines:
             ir['required_features'].append('p07_character_entry_fade_composition')
     if any(line.get('scanline') for line in ir['track']['lines']):
-        composed, role_layers, shapes, scanline_motion, moving_shapes = _validate_scanline_band(
-            track, style, ir['track']['lines'])
-        if shapes:
-            ir['required_features'].append('p07_scanline_shape')
-        if 'image' in shapes:
-            ir['required_features'].append('p07_scanline_image')
-        if composed:
-            ir['required_features'].append('p07_composed_scanline')
-        if scanline_motion:
-            ir['required_features'].append('p07_scanline_line_animation')
-        if moving_shapes:
-            ir['required_features'].append('p07_scanline_shape_line_animation')
-        if role_layers:
-            ir['required_features'].append('p07_role_scanline_layers')
-        ir['required_features'].append('p07_scanline_band')
+        ir['required_features'] += _validate_scanline_band(track, style, ir['track']['lines'])
     decorations = [kind for kind in ('shadow', 'glow') if any(
         _uses_decoration(item.layout_style, kind) for item in plan.lines)]
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
