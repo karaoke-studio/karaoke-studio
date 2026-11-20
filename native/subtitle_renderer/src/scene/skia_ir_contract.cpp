@@ -76,6 +76,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_line_band_outer_stroke",
         "p08_line_band_stroke_position",
         "p08_line_band_blur",
+        "p08_line_band_animated_decoration",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",
@@ -428,10 +429,13 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool tintedBand = features.contains("p08_tinted_line_band");
     const bool outerBandStroke = features.contains("p08_line_band_outer_stroke");
     const bool positionedBandStroke = features.contains("p08_line_band_stroke_position");
-    if ((outerBandStroke || positionedBandStroke || features.contains("p08_line_band_blur"))
-        && (!features.contains("p08_static_line_band") || simpleBandAnimation
-            || features.contains("p08_animated_staff_line_band") || (outerBandStroke && positionedBandStroke)))
-        throw BackendError("Skia 行背景带描边缺少对应布局能力");
+    const bool blurredBand = features.contains("p08_line_band_blur");
+    const bool decoratedBand = outerBandStroke || positionedBandStroke || blurredBand;
+    const bool animatedBand = simpleBandAnimation || features.contains("p08_animated_staff_line_band");
+    if ((decoratedBand && !features.contains("p08_static_line_band")) || (outerBandStroke && positionedBandStroke)
+        || (customBandSequence && blurredBand)
+        || features.contains("p08_line_band_animated_decoration") != (decoratedBand && animatedBand))
+        throw BackendError("Skia 行背景带装饰缺少对应布局能力");
     if (features.contains("p08_line_band_with_effects")
         && (!features.contains("p08_static_line_band")
             || (!features.contains("p07_scanline_band") && !features.contains("p07_sing_twinkle"))))

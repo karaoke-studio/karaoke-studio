@@ -29,14 +29,15 @@ def write_line_band(ir, style, prepared, *, width, height):
     stroke = style.line_band_stroke_enabled and style.line_band_stroke_size_px > 0
     shadow = style.line_band_shadow_enabled and style.line_band_shadow_size_px > 0
     glow = style.line_band_glow_enabled and style.line_band_glow_size_px > 0
+    if sequence and preset is None and (shadow or glow):
+        raise ValueError('Skia 自定义动态行背景带暂不支持阴影或发光')
     geometry = prepared.geometry
     ruby = geometry.ruby
     if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.vertical or style.right_to_left
             or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
-            or (sequence and (shadow or glow))
-            or (stroke and (sequence or style.line_band_stroke_position not in {'outside', 'inside', 'center'}))
+            or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})
             or style.volume_enabled or style.lit_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
@@ -110,6 +111,8 @@ def write_line_band(ir, style, prepared, *, width, height):
                                        else 'p08_line_band_stroke_position')
     if shadow or glow:
         ir['required_features'].append('p08_line_band_blur')
+    if sequence and (stroke or shadow or glow):
+        ir['required_features'].append('p08_line_band_animated_decoration')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
     if sliced:
