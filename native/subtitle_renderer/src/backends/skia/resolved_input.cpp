@@ -173,8 +173,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (features.contains("p07_ruby_character_stretch_exit") && line.exitAnimation == "stretch_out"));
         const bool waveScatter = features.contains("p07_ruby_character_wave_scatter")
             && line.entryAnimation == "wave_in" && line.exitAnimation == "scatter_out" && line.entryDurationMs > 0;
-        const bool affineComposition = transformedRuby && line.bursts.empty() && line.exitDurationMs > 0
-            && (affineExit || waveScatter);
+        const bool stretchEntry = features.contains("p07_ruby_character_stretch_entry")
+            && line.entryAnimation == "stretch_in" && line.exitAnimation == "none" && line.entryDurationMs > 0;
+        const bool affineComposition = transformedRuby && line.bursts.empty()
+            && ((line.exitDurationMs > 0 && (affineExit || waveScatter)) || stretchEntry);
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none"))

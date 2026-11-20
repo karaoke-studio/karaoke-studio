@@ -293,6 +293,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     translation_lines = set()
     affine_lines = set()
     stretch_lines = set()
+    stretch_entry_lines = set()
     paired_geometry_lines = set()
     assembly_lines = set()
     particle_fade_lines = set()
@@ -325,11 +326,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if (source.get('entry_anim') == 'none' and source.get('exit_anim') == 'stretch_out'
                     and source.get('exit_duration_ms', 0) > 0):
                 stretch_lines.add(index)
+            if (source.get('entry_anim') == 'stretch_in' and source.get('exit_anim') == 'none'
+                    and source.get('entry_duration_ms', 0) > 0):
+                stretch_entry_lines.add(index)
             if (source.get('entry_anim') == 'wave_in' and source.get('exit_anim') == 'scatter_out'
                     and source.get('entry_duration_ms', 0) > 0 and source.get('exit_duration_ms', 0) > 0):
                 paired_geometry_lines.add(index)
     composed_particle_lines = assembly_lines | particle_fade_lines
-    affine_geometry_lines = affine_lines | stretch_lines | paired_geometry_lines
+    affine_geometry_lines = affine_lines | stretch_lines | stretch_entry_lines | paired_geometry_lines
     composed_geometry_lines = translation_lines | affine_geometry_lines | composed_particle_lines
     lines = []
     if vertical_ruby is None:
@@ -481,6 +485,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p07_ruby_character_affine_exit')
         if stretch_lines:
             ir['required_features'].append('p07_ruby_character_stretch_exit')
+        if stretch_entry_lines:
+            ir['required_features'].append('p07_ruby_character_stretch_entry')
         if paired_geometry_lines:
             ir['required_features'].append('p07_ruby_character_wave_scatter')
         if assembly_lines:

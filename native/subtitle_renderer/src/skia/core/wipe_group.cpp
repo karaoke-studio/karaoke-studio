@@ -253,8 +253,10 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
                 auto unitPose = pose;
                 if (affine_) {
                     // The same affine motion acts around each reading's own
-                    // pivot, shifted by the host's translation.
-                    const SkVector delta{cell.pivot.layoutLeft - ownerPivot.x(), cell.pivot.centerY - ownerPivot.y()};
+                    // pivot, shifted by the host's translation. Utopia singing
+                    // replaces layoutLeft with its scale origin; layoutRight
+                    // keeps the unit's layout center (zoom lines never pose).
+                    const SkVector delta{cell.pivot.layoutRight - ownerPivot.x(), cell.pivot.centerY - ownerPivot.y()};
                     const auto mapped = pose.mapVector(delta.x(), delta.y());
                     unitPose.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
                 }

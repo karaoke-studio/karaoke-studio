@@ -134,14 +134,14 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('animation', [
     'spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out', 'petal', 'note', 'scatter_out', 'converge_out',
-    'stretch_out',
+    'stretch_out', 'stretch_in',
 ])
 def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, target, animation):
     from test_subtitle_skia_static_glow import glowing_ruby
 
     track, style = glowing_ruby(reading, 'inherited')
     spinning = animation == 'spin_flip'
-    affine = animation in {'scatter_out', 'converge_out', 'stretch_out'}
+    affine = animation in {'scatter_out', 'converge_out', 'stretch_out', 'stretch_in'}
     exiting = spinning or animation.endswith('_out') or animation in {'petal', 'note'}
     style = replace(style, entry_anim='none' if exiting else animation,
                     exit_anim=animation if exiting else 'none', entry_lead_ms=600, exit_fade_ms=600,
@@ -153,7 +153,7 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
         'assemble_in': 'p07_ruby_particle_assembly', 'dissolve_out': 'p07_ruby_particle_assembly',
         'petal': 'p07_ruby_particle_fade', 'note': 'p07_ruby_particle_fade',
         'scatter_out': 'p07_ruby_character_affine_exit', 'converge_out': 'p07_ruby_character_affine_exit',
-        'stretch_out': 'p07_ruby_character_stretch_exit',
+        'stretch_out': 'p07_ruby_character_stretch_exit', 'stretch_in': 'p07_ruby_character_stretch_entry',
     }[animation]
     assert expected in ir['required_features']
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
@@ -217,7 +217,7 @@ def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
     'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
     'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle',
     'exit_scatter_out', 'exit_converge_out',
-    'exit_stretch_out', 'line_override',
+    'exit_stretch_out', 'entry_stretch_in', 'line_override',
 ])
 def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tmp_path, case_id):
     from scripts.subtitle_gpu_baseline.cases import build_cases
