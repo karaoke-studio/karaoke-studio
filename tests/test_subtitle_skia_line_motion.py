@@ -427,3 +427,52 @@ def test_decorated_shape_signal_uses_after_palette_before_lyrics_start(binary, p
     assert np.count_nonzero(lamp) > 500
     assert np.all(frames[0][..., 3][lamp] <= 153)
     assert not np.any(frames[1][..., 3][lamp])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_volume_signal_seek_and_reconfigure(binary, project, target):
+    track, style = project
+    volume = replace(style, volume_enabled=True, volume_appearance_mode='custom',
+                     volume_fill_color='#FF00FF', volume_overlay_fill_color='#00FF00',
+                     volume_stroke_width=0, volume_flash_times=0, volume_column_count=4,
+                     volume_duration_ms=1200, volume_time_offset_ms=800)
+    ir = ir_for(binary, (track, volume))
+    line = ir['track']['lines'][0]
+    assert line['volume_head'] and 'p08_volume_signal' in ir['required_features']
+    assert 'volume_signal_anchor' in ir['skia_layout']['lines'][0]
+    times = [max(line['display_start_ms'], 0), 600, 950, max(line['display_start_ms'], 0)]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        invalid = copy.deepcopy(ir)
+        invalid['skia_layout']['lines'][0]['volume_signal_anchor'] = [0, None]
+        with pytest.raises(NativeRendererError, match='最终锚点'):
+            configure(process, invalid)
+        replay, _ = collect(process, times[:1])
+    assert np.array_equal(frames[0], frames[-1]) and np.array_equal(frames[0], replay[0])
+    covered = [np.count_nonzero((f[..., 0] < 5) & (f[..., 1] > 250) & (f[..., 2] < 5))
+               for f in frames[:3]]
+    assert covered[0] < covered[1] < covered[2]
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', [
+    'volume', 'lamp_shape_volume', 'volume_appearance_custom', 'volume_appearance_auto', 'volume_appearance_role',
+])
+def test_p00_volume_signal_matches_actual_gpu(binary, application, tmp_path, case_id):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False, track=case.track,
+                                   width=1920, height=1080, dpr=1, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+            rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, reference, *rendered, case_id, check_p00_edges=True)

@@ -14,7 +14,8 @@ class LinePosition:
     baseline_y: float
 
 
-def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, layout_width, row_frame=None):
+def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, layout_width, row_frame=None,
+                          inline_width=0):
     style = item.layout_style
     mode = style.line_horizontal_layout
     if mode not in {'center', 'asymmetric', 'per_row'}:
@@ -46,6 +47,8 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
         ascent, extra = size + edge - descent, 0
     else:
         raise ValueError('Skia 不支持此布局语义')
+    if inline_width:
+        left, right = min(left, -inline_width), max(right, 0)
     if row_frame is not None:
         ascent, descent, extra = row_frame.ascent, row_frame.descent, row_frame.ruby_extra
     row_align, row_x, row_y = row_layout_params(style, item.lane)

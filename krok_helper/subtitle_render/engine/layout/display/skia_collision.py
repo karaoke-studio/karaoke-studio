@@ -3,12 +3,15 @@ from types import SimpleNamespace
 from dataclasses import replace
 from .resolver import CollisionLineGeometry, build_measured_collision_bands
 from .schedule import collision_time_window_name, display_line_collision_time_window
+from .signal import volume_signal_head_context
 from ..line.skia_geometry import local_line_geometry, line_position, collision_bounds
 from ..page.pagination import line_center_override
 from ..page.skia_smart_horizontal import SmartHorizontalPages
 from ..plan.page_offsets import MeasuredPageLine
 from ...render_progress import report_display_measure_progress, report_render_progress
 from ...ruby.skia_geometry import ruby_line_position
+from ...style.style_semantics import auto_appearance_basis
+from ....domain.models import resolve_volume_appearance
 
 
 class SkiaCollisionGeometry:
@@ -26,9 +29,46 @@ class SkiaCollisionGeometry:
         self.indices = {id(line): i for i, line in enumerate(track.lines)}
         self.locals = (tuple(line.main for line in self.ruby.lines) if self.ruby is not None
                        else tuple(local_line_geometry(m, s) for m, s in zip(measured.lines, styles, strict=True)))
+        heads = volume_signal_head_context(track, style) or frozenset()
+        basis = auto_appearance_basis(style, track) if heads else None
+        self.volume_widths = tuple(self._volume_width(resolve_volume_appearance(s, auto_basis=basis)) if i in heads else 0
+                                   for i, s in enumerate(self.styles))
+        anchors = None
+        if any(self.volume_widths):
+            anchors = tuple(self._horizontal_anchor(i) for i in range(len(self.locals)))
+            self.identity += (self.volume_widths,)
+        elif self.ruby is not None:
+            anchors = tuple(line.anchor for line in self.ruby.lines)
         self.smart = SmartHorizontalPages(track, style, styles, self.locals,
-            anchors=tuple(line.anchor for line in self.ruby.lines) if self.ruby is not None else None)
+            anchors=anchors)
         self.cache = {}
+
+    @staticmethod
+    def _volume_width(style):
+        independent = style.volume_enabled
+        if style.vertical or not (independent or (style.lit_enabled and style.lit_style == 'volume')):
+            return 0
+        duration = style.volume_duration_ms if independent else style.signals_duration_ms
+        waiting = style.volume_waiting_time_ms if independent else style.lit_waiting_time_ms
+        if duration <= max(waiting, 0):
+            return 0
+        count = min(max(int(style.volume_column_count), 1), 16)
+        spacing = max(int(style.volume_column_spacing), 0)
+        stroke = style.volume_stroke_width if independent else style.lit_stroke_width
+        # Native volumeSignalGeometry reserves the pen on each side of a column.
+        pitch = max(int(style.volume_column_width), 1) + spacing + 2 * max(stroke, 0)
+        return count * pitch - spacing
+
+    def _horizontal_anchor(self, index):
+        local = self.locals[index]
+        if self.ruby is not None:
+            left, right = self.ruby.lines[index].anchor
+        elif self.styles[index].layout_semantics == 'n3_1074' or local.ink is None:
+            left, right = 0, max(local.layout_width, 1)
+        else:
+            left, _, right, _ = local.ink
+        width = self.volume_widths[index]
+        return (min(left, -width), max(right, 0)) if width else (left, right)
 
     def set_lanes(self, items):
         if self.smart.set_lanes(items):
@@ -36,8 +76,10 @@ class SkiaCollisionGeometry:
 
     def position(self, item, width, height):
         i = self.indices[id(item.line)]
-        position = (ruby_line_position(item, self.measured.lines[i], self.ruby.lines[i], width, height)
-                    if self.ruby is not None else line_position(item, self.measured.lines[i], self.locals[i], width, height))
+        position = (ruby_line_position(item, self.measured.lines[i], self.ruby.lines[i], width, height,
+                                      inline_width=self.volume_widths[i])
+                    if self.ruby is not None else line_position(item, self.measured.lines[i], self.locals[i], width,
+                                                               height, inline_width=self.volume_widths[i]))
         return replace(position, offset_x=position.offset_x + self.smart.shift(item, width))
 
     def geometry(self, item, width, height):

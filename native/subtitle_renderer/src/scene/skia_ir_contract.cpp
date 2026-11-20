@@ -84,6 +84,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_custom_image_signal",
         "p08_decorated_shape_signal",
         "p08_vector_shape_signal",
+        "p08_volume_signal",
         "p05_horizontal_rtl_kana_cells",
         "p05_horizontal_rtl_kana_marks",
         "p05_reverse_wipe",

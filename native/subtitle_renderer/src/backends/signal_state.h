@@ -25,6 +25,15 @@ struct VolumeSignalState {
     float opacity = 0.0f;
 };
 
+struct VolumeSignalClock {
+    int count;
+    int activeDurationMs;
+    std::int64_t endMs;
+    int flashes;
+    float flashRatio;
+    int transitionRatioPct;
+};
+
 struct ShapeSignalGeometry {
     int count = 1;
     float size = 1.0f;
@@ -53,6 +62,9 @@ struct ShapeSignalClock {
 };
 
 VolumeSignalGeometry volumeSignalGeometry(const TextStyle &style);
+
+VolumeSignalClock volumeSignalClock(int lineStartMs, const TextStyle &style);
+VolumeSignalState volumeSignalState(const VolumeSignalClock &clock, int tMs);
 
 VolumeSignalState volumeSignalState(
     int lineStartMs,

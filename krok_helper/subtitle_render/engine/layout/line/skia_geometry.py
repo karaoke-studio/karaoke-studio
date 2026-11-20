@@ -53,11 +53,11 @@ def local_line_geometry(measured, style, *, char_gaps=None):
     return LocalLineGeometry(tuple(cells), ink, cursor)
 
 
-def line_position(item, measured, local, width, height):
+def line_position(item, measured, local, width, height, *, inline_width=0):
     return place_horizontal_line(item, measured.baseline_metrics, width=width, height=height,
         ink_left=local.ink[0] if local.ink else 0,
         ink_right=local.ink[2] if local.ink else max(local.layout_width, 1), layout_width=local.layout_width,
-        row_frame=measured.row_frame)
+        row_frame=measured.row_frame, inline_width=inline_width)
 
 
 def positioned_cells(local, position):

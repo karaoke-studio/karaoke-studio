@@ -205,13 +205,15 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
     return RubyTrackGeometry(ruby_metrics, tuple(lines), identity, measured.identity)
 
 
-def ruby_line_position(item, main_metrics, prepared, width, height):
+def ruby_line_position(item, main_metrics, prepared, width, height, *, inline_width=0):
     """Place an entire prepared line using its semantic anchor, including ruby.
 
     Page/smart policies consume this same anchor width; applying a ruby-only
     shift would detach the main text and its wipe clips.
     """
     left, right = prepared.anchor
+    if inline_width:
+        left, right = min(left, -inline_width), max(right, 0)
     position = place_horizontal_line(item, main_metrics.baseline_metrics, width=width, height=height,
                                      ink_left=left, ink_right=right, layout_width=right-left,
                                      row_frame=main_metrics.row_frame)

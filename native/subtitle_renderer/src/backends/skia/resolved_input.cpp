@@ -71,7 +71,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .customShapeSignal = features.contains("p08_custom_shape_signal"),
         .imageShapeSignal = features.contains("p08_custom_image_signal"),
         .decoratedShapeSignal = features.contains("p08_decorated_shape_signal"),
-        .vectorShapeSignal = features.contains("p08_vector_shape_signal")});
+        .vectorShapeSignal = features.contains("p08_vector_shape_signal"),
+        .volumeSignal = features.contains("p08_volume_signal")});
     SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
@@ -130,6 +131,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
         prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache,
             projected.litDecorStyle ? &*projected.litDecorStyle : nullptr);
+        prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr,
+            projected.volumeDecorStyle ? &*projected.volumeDecorStyle : nullptr);
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
         const float slide = std::max(style.fontSize * .9f, 36.f) * (line.lane == 0 ? -1.f : 1.f);
         const float rise = std::max(style.fontSize * .35f, 18.f);

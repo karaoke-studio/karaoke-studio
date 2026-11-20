@@ -35,6 +35,7 @@ add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/ski
             src/skia/core/prepared_line.cpp
             src/skia/core/noise_transition.cpp src/skia/core/shape_signal.cpp src/backends/signal_state.cpp
             src/skia/core/signal_paths.cpp thirdparty/clipper2/src/clipper.engine.cpp
+            src/skia/core/volume_signal.cpp
             src/skia/core/subtitle_gradient.cpp
             src/skia/core/scanline_feather.cpp src/skia/core/scanline_shape.cpp
             src/skia/core/scanline_image.cpp src/skia/core/static_glow.cpp)

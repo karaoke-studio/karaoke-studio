@@ -18,7 +18,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     const TextStyle* role
 ) {
     const auto anchor = source.value("shape_signal_anchor");
-    if (!style.litEnabled || !line.litHead) {
+    if (!style.litEnabled || style.litStyle == "volume" || !line.litHead) {
         if (!anchor.isUndefined()) throw BackendError("Skia 指示灯锚点缺少宿主行");
         return std::nullopt;
     }
@@ -87,6 +87,84 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
     }
     signal.decoration = std::move(decoration);
+    return signal;
+}
+
+std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
+    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, const TextStyle* role
+) {
+    const auto anchor = source.value("volume_signal_anchor");
+    const bool enabled = style.volumeEnabled || (style.litEnabled && style.litStyle == "volume");
+    const auto clock = volumeSignalClock(line.startMs, style);
+    if (!enabled || !line.volumeHead || clock.activeDurationMs <= 0) {
+        if (!anchor.isUndefined()) throw BackendError("Skia 音量柱锚点缺少宿主行");
+        return std::nullopt;
+    }
+    const auto xy = anchor.toArray();
+    if (xy.size() != 2 || !std::ranges::all_of(xy, [](const auto& value) {
+            return value.isDouble() && std::isfinite(value.toDouble()) && std::abs(value.toDouble()) <= 1e6;
+        }))
+        throw BackendError("Skia 音量柱缺少有效的最终锚点");
+    if (line.entryAnimation != "none" || line.exitAnimation != "none")
+        throw BackendError("Skia 音量柱暂不支持字幕出入场组合");
+    const auto geometry = volumeSignalGeometry(style);
+    if (!std::isfinite(geometry.groupWidth) || geometry.groupWidth > 8192
+        || !std::isfinite(geometry.size) || geometry.size > 8192
+        || !std::isfinite(clock.flashRatio))
+        throw BackendError("Skia 音量柱参数超限");
+    using namespace ::subtitle::skia;
+    VolumeSignal signal{clock};
+    signal.opacity = style.volumeEnabled ? style.volumeOpacity : style.litOpacity;
+    signal.strokeWidth = geometry.strokeExtent;
+    signal.palette = {{{argb(style.volumeFill), argb(style.volumeStroke)},
+                       {argb(style.volumeOverlayFill), argb(style.volumeOverlayStroke)}}};
+    const auto& mode = style.volumeAppearanceMode;
+    signal.decorated = style.volumeEnabled && (mode == "auto" || mode == "role");
+    StaticGlow glow;
+    if (signal.decorated) {
+        if (line.zoomPulseEnabled || std::ranges::any_of(line.chars, [](const auto& cell) {
+                return cell.styleIndex >= 0 || bool(cell.vectorGlyph);
+            }))
+            throw BackendError("Skia 自动音量柱暂不支持角色字符、导唱符或整字放大");
+        const auto& palette = mode == "role" && role ? *role : style;
+        const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
+        const float maximum = std::floor(geometry.columnWidth * .5f);
+        signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maximum);
+        signal.outerWidth = std::clamp(palette.stroke2Width * ratio, 0.f, maximum);
+        for (const bool after : {false, true}) {
+            const auto& fill = after ? palette.afterFillPaint : palette.beforeFillPaint;
+            const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
+            const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
+            const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
+            if (fill.mode != "solid" || stroke.mode != "solid" || outer.mode != "solid" || decor.mode != "solid")
+                throw BackendError("Skia 自动音量柱当前仅支持实色装饰");
+            auto& paint = signal.palette[after];
+            paint = {argb(fill.color), argb(stroke.color), argb(outer.color)};
+            const auto kind = palette.decorationKindForState(after);
+            if (kind == "shadow") {
+                paint.shadowX = palette.shadowOffsetXForState(after) * ratio;
+                paint.shadowY = palette.shadowOffsetYForState(after) * ratio;
+                if (paint.shadowX || paint.shadowY) paint.shadow = argb(decor.color);
+            }
+            if (kind == "glow" && palette.glowConcentrationForState(after) >= 0) {
+                const auto radius = std::lround(std::max(0.f, (after ? palette.glowAfterRadius : palette.glowBeforeRadius) * ratio));
+                if (radius > 256) throw BackendError("Skia 音量柱的光晕半径超限");
+                (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(decor.color)};
+            }
+        }
+        glow.outlineWidth = signal.strokeWidth + signal.outerWidth;
+    }
+    const float x = float(xy[0].toDouble() * dpr) + style.volumeOffsetX - geometry.groupWidth + geometry.strokeExtent;
+    const float y = float(xy[1].toDouble() * dpr) + style.volumeOffsetY - geometry.size * .5f + geometry.alignBaseShift;
+    for (int index = 0; index < geometry.count; ++index) {
+        const float height = std::max(geometry.frontHeight + index * geometry.heightDelta, 1.f);
+        const float radius = std::max(std::min(height, geometry.columnWidth) * .22f, 1.f);
+        const auto box = SkRect::MakeXYWH(x + index * geometry.pitch, y + index * geometry.alignDeltaShift,
+                                         geometry.columnWidth, height);
+        VolumeSignal::Bar bar{SkRRect::MakeRectXY(box, radius, radius), PreparedGlow::prepare(glow)};
+        for (auto& layer : bar.glow) layer.appendCell(SkPath::RRect(bar.rect));
+        signal.bars.push_back(std::move(bar));
+    }
     return signal;
 }
 }

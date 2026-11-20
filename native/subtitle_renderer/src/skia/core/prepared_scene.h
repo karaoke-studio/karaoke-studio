@@ -83,6 +83,7 @@ private:
         bool transformedWipe = false;
         ScanlineBand scanline;
         std::optional<ShapeSignal> shapeSignal;
+        std::optional<VolumeSignal> volumeSignal;
         std::vector<SingParticleBurst> particles;
         ParticleVisibility particleVisibility;
         float inkStart = 0, inkTop = 0; // The band appears after the front enters body ink.

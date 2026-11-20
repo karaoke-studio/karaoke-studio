@@ -6,11 +6,11 @@
 namespace krok::subtitle::native {
 namespace {
 
-float volumeFlashAlpha(int elapsed, int duration, const TextStyle &style) {
+float volumeFlashAlpha(int elapsed, int duration, const VolumeSignalClock &clock) {
     if (duration <= 0 || elapsed < 0) {
         return 0.0f;
     }
-    const int times = std::max(style.volumeFlashTimes, 0);
+    const int times = clock.flashes;
     if (times == 0) {
         return 1.0f;
     }
@@ -23,7 +23,7 @@ float volumeFlashAlpha(int elapsed, int duration, const TextStyle &style) {
         phase = 2.0f - phase;
     }
     const float transition = std::clamp(
-        static_cast<float>(style.volumeTransitionRatioPct) / 100.0f,
+        static_cast<float>(clock.transitionRatioPct) / 100.0f,
         0.0f,
         1.0f
     );
@@ -168,51 +168,24 @@ ShapeSignalState shapeSignalState(
     return shapeSignalState(shapeSignalClock(lineStartMs, style), tMs);
 }
 
-VolumeSignalState volumeSignalState(
-    int lineStartMs,
-    const TextStyle &style,
-    int tMs,
-    int displayStartMs,
-    int displayEndMs,
-    bool signalHead
-) {
+VolumeSignalClock volumeSignalClock(int lineStartMs, const TextStyle &style) {
+    const int duration = std::max(style.volumeEnabled ? style.volumeDurationMs : style.signalsDurationMs, 0);
+    const int wait = style.volumeEnabled ? style.volumeWaitingTimeMs : style.litWaitingTimeMs;
+    const int offset = style.volumeEnabled ? style.volumeTimeOffsetMs : style.litTimeOffsetMs;
+    return {std::clamp(style.volumeColumnCount, 1, 16), std::max(duration - std::max(wait, 0), 0),
+            std::int64_t(lineStartMs) + offset, std::max(style.volumeFlashTimes, 0),
+            std::max(style.volumeFlashDurationRatio, 0.f), style.volumeTransitionRatioPct};
+}
+
+VolumeSignalState volumeSignalState(const VolumeSignalClock &clock, int tMs) {
     VolumeSignalState state;
-    if (!signalHead) {
-        return state;
-    }
-    const bool legacyVolume = style.litEnabled && style.litStyle == "volume";
-    if (style.vertical || (!style.volumeEnabled && !legacyVolume)) {
-        return state;
-    }
-    const int duration = std::max(
-        style.volumeEnabled ? style.volumeDurationMs : style.signalsDurationMs, 0
-    );
-    const int activeDuration = std::max(
-        duration - std::max(
-            style.volumeEnabled ? style.volumeWaitingTimeMs : style.litWaitingTimeMs,
-            0
-        ),
-        0
-    );
-    if (activeDuration <= 0) {
-        return state;
-    }
-    const int signalEnd = lineStartMs + (
-        style.volumeEnabled ? style.volumeTimeOffsetMs : style.litTimeOffsetMs
-    );
-    const int activeStart = signalEnd - activeDuration;
-    // 可见下界 = 所在行显示窗起点（特效随所在行一并入场）；闪烁段/填充
-    // 段仍从 activeStart 播放——elapsed 钳 0 即初帧柱体。
-    if (tMs < displayStartMs || tMs >= displayEndMs) {
-        return state;
-    }
-    const int elapsed = std::min(
-        std::max(tMs - activeStart, 0),
-        std::max(activeDuration - 1, 0)
-    );
-    const int count = std::clamp(style.volumeColumnCount, 1, 16);
-    const int times = std::max(style.volumeFlashTimes, 0);
-    const float flashRatio = std::max(style.volumeFlashDurationRatio, 0.0f);
+    const int activeDuration = clock.activeDurationMs;
+    if (activeDuration <= 0) return state;
+    const auto activeStart = clock.endMs - activeDuration;
+    const int elapsed = int(std::clamp<std::int64_t>(tMs - activeStart, 0, activeDuration - 1));
+    const int count = clock.count;
+    const int times = clock.flashes;
+    const float flashRatio = clock.flashRatio;
     state.visible = true;
     state.opacity = 1.0f;
     int fillElapsed = elapsed;
@@ -228,17 +201,29 @@ VolumeSignalState volumeSignalState(
             state.opacity = volumeFlashAlpha(
                 elapsed,
                 std::max(static_cast<int>(flashDuration), 1),
-                style
+                clock
             );
             return state;
         }
         fillElapsed = std::max(static_cast<int>(elapsed - flashDuration), 0);
         fillDuration = std::max(static_cast<int>(fillDurationFloat), 1);
     }
-    const float raw = static_cast<float>(count * fillElapsed)
+    const float raw = static_cast<float>(std::int64_t(count) * fillElapsed)
         / static_cast<float>(std::max(fillDuration, 1));
     state.activeIndex = std::clamp(static_cast<int>(raw), 0, count - 1);
     return state;
+}
+
+VolumeSignalState volumeSignalState(
+    int lineStartMs, const TextStyle &style, int tMs, int displayStartMs,
+    int displayEndMs, bool signalHead
+) {
+    const bool legacyVolume = style.litEnabled && style.litStyle == "volume";
+    if (!signalHead || style.vertical || (!style.volumeEnabled && !legacyVolume)
+        || tMs < displayStartMs || tMs >= displayEndMs) {
+        return {};
+    }
+    return volumeSignalState(volumeSignalClock(lineStartMs, style), tMs);
 }
 
 }  // namespace krok::subtitle::native

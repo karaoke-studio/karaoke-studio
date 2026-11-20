@@ -493,7 +493,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_zoom_pulse_decoration')
     project_reverse_wipe(ir)
-    if any(item.layout_style.lit_enabled for item in plan.lines):
+    if any(item.layout_style.lit_enabled and item.layout_style.lit_style != 'volume' for item in plan.lines):
         ir['required_features'].append('p08_custom_shape_signal')
         if any(item.layout_style.lit_enabled and item.layout_style.lit_style == 'image' for item in plan.lines):
             ir['required_features'].append('p08_custom_image_signal')
@@ -503,10 +503,19 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                for item in plan.lines):
             ir['required_features'].append('p08_vector_shape_signal')
         for item, source, final in zip(plan.lines, ir['track']['lines'], ir['skia_layout']['lines'], strict=True):
-            if item.layout_style.lit_enabled and source.get('lit_head'):
+            if item.layout_style.lit_enabled and item.layout_style.lit_style != 'volume' and source.get('lit_head'):
                 position = geometry.position(item, kwargs['width'], kwargs['height'])
                 ascent = float(measured.lines[item.track_index].baseline_metrics['ascent'])
                 final['shape_signal_anchor'] = [position.offset_x, position.baseline_y - ascent]
+    if any(item.layout_style.volume_enabled or (item.layout_style.lit_enabled and item.layout_style.lit_style == 'volume')
+           for item in plan.lines):
+        ir['required_features'].append('p08_volume_signal')
+        for item, final in zip(plan.lines, ir['skia_layout']['lines'], strict=True):
+            if geometry.volume_widths[item.track_index]:
+                position = geometry.position(item, kwargs['width'], kwargs['height'])
+                metrics = measured.lines[item.track_index].baseline_metrics
+                center = position.baseline_y + (float(metrics['descent']) - float(metrics['ascent'])) * .5
+                final['volume_signal_anchor'] = [position.offset_x, center]
     if (style.viewport_scale_pct != 100 or style.viewport_rotation_deg
             or style.viewport_offset_x or style.viewport_offset_y):
         ir['required_features'].append('p08_viewport')

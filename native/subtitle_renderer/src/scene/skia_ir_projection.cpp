@@ -88,14 +88,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     out.width = cfg.physicalWidth();
     out.height = cfg.physicalHeight();
     out.layoutReferenceScale = float(cfg.dpr);
-    if (features.contains("p08_decorated_shape_signal") && cfg.baseStyle.litAppearanceMode == "role") {
-        const auto role = cfg.baseStyle.litRoleName.trimmed();
+    const auto projectSignalRole = [&](std::optional<TextStyle>& output, const QString& roleName) {
+        const auto role = roleName.trimmed();
         if (role == "__global__" || !cfg.customStyleSchemes.value(role).toObject().isEmpty()) {
-            auto& decoration = out.litDecorStyle.emplace();
+            auto& decoration = output.emplace();
             if (role == "__global__") applyResolvedStyle(decoration, cfg.baseStyle, cfg.dpr);
             else applyResolvedStyle(decoration, protocol::resolvedStyleForRole(cfg, cfg.baseStyle, role), cfg.dpr);
         }
-    }
+    };
+    if (features.contains("p08_decorated_shape_signal") && cfg.baseStyle.litAppearanceMode == "role")
+        projectSignalRole(out.litDecorStyle, cfg.baseStyle.litRoleName);
+    if (features.contains("p08_volume_signal") && cfg.baseStyle.volumeAppearanceMode == "role")
+        projectSignalRole(out.volumeDecorStyle, cfg.baseStyle.volumeRoleName);
     if (viewport) {
         out.viewportScale = float(cfg.viewportScalePct) / 100.f;
         out.viewportRotation = float(cfg.viewportRotationDeg);
@@ -247,6 +251,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         }
         TextLine line;
         line.litHead = source.litHead;
+        line.volumeHead = source.volumeHead;
         line.wipeReverse = source.wipeReverse;
         line.entryAnimation = source.entryAnimation.toStdString();
         line.entryDurationMs = source.entryDurationMs;
