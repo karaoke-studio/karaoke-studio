@@ -50,6 +50,15 @@ bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const
     return !outline.width || (before.mode == "solid" && after.mode == "solid"
         && outline.before == argb(before.color) && outline.after == argb(after.color));
 }
+::subtitle::skia::GlowState lowerGlowState(const QJsonObject& glow, const char* phase, double dpr) {
+    if (!glow.contains(phase)) return {};
+    const auto state = glow.value(phase).toObject();
+    if (state.size() != 3)
+        throw BackendError("Skia 下方注音实色光晕参数无效");
+    const double radius = integer(state.value("radius"), 1, 532) * dpr;
+    if (radius > 532.) throw BackendError("Skia 下方注音实色光晕半径超限");
+    return {int(std::lround(radius)), integer(state.value("concentration"), 0, 2), rgbaPaint(state.value("color"))};
+}
 void validateStandaloneMark(const QString& text, const QJsonObject& cell, const QJsonObject& ir) {
     const auto code = text.toUcs4().front();
     if (!QChar::isMark(code)) return;
@@ -109,6 +118,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade)
         && scene.charStyles.empty();
+    const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
+        && features.contains("p07_ruby_singing_scale"));
+    const bool allowLowerGlow = features.contains("p06_lower_ruby_glow") && !vertical && staticLine
+        && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
+        && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const bool allowVerticalRotation = features.contains("p05_vertical_rotated_ruby");
@@ -118,6 +132,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     if (multipleVertical && allowVerticalOutlines)
         throw BackendError("Skia 竖排描边暂不支持同列多组注音");
     int previousSpanEnd = 0;
+    std::optional<::subtitle::skia::StaticGlow> lowerGlowSpec;
     double previousInkBottom = -std::numeric_limits<double>::infinity();
     if (rubyGroups.size() > 4096 - totalGroups)
         throw BackendError("Skia 注音组总数超限");
@@ -176,7 +191,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 上注音实色光晕缺少对应布局能力");
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
         };
-        const ::subtitle::skia::StaticGlow glow{
+        ::subtitle::skia::StaticGlow glow{
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
         if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"))
             throw BackendError("Skia 注音最终绘制当前仅支持实色");
@@ -208,6 +223,17 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool protectFill = (before >> 24) < 255 || (after >> 24) < 255;
         const float innerWidth = float(primary.width * glyphs.dpr);
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
+        if (object.contains("lower_glow")) {
+            const auto lowerGlow = object.value("lower_glow").toObject();
+            if (!lower || !allowLowerGlow || lowerGlow.isEmpty()
+                || lowerGlow.size() != int(lowerGlow.contains("before")) + int(lowerGlow.contains("after")))
+                throw BackendError("Skia 下方注音实色光晕缺少对应布局能力");
+            glow = {lowerGlowState(lowerGlow, "before", glyphs.dpr),
+                    lowerGlowState(lowerGlow, "after", glyphs.dpr), outerWidth};
+            if (lowerGlowSpec && *lowerGlowSpec != glow)
+                throw BackendError("Skia 同行下方注音当前仅支持相同的光晕样式");
+            lowerGlowSpec = glow;
+        }
         const double wipePad = (primary.width / 2) / glyphs.dpr;
         std::vector<::subtitle::skia::ResolvedCell> cells;
         double inkTop = std::numeric_limits<double>::infinity();
@@ -323,7 +349,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
-                          fadeOwner, spinPivot, affineComposition});
+                          fadeOwner, spinPivot, affineComposition, lower});
     }
     return groups;
 }

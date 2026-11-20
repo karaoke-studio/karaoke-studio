@@ -16,12 +16,14 @@ struct GlowState {
     int radius = 0;
     int concentration = 0;
     std::uint32_t color = 0;
+    bool operator==(const GlowState&) const = default;
 };
 
 struct StaticGlow {
     GlowState before, after;
     float outlineWidth = 0;
     SkPaint::Join join = SkPaint::kRound_Join;
+    bool operator==(const StaticGlow&) const = default;
 };
 
 class PreparedGlow {

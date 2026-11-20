@@ -71,6 +71,8 @@ private:
         StaticShadow shadow;
         std::vector<PreparedGlow> glow;
         std::vector<PreparedGlow> rubyGlow;
+        std::vector<PreparedGlow> lowerGlow;
+        bool hasRubyGlow() const { return !rubyGlow.empty() || !lowerGlow.empty(); }
         SkRect decorationInk = SkRect::MakeEmpty();
         NoiseTransition noise;
         CharacterFade characterFade;

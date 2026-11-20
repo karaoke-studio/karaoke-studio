@@ -46,7 +46,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const auto* bounds = movingCells ? nullptr : &line.paintBounds;
         // Use the destination format for vertical decoration at every opacity
         // so the blur result itself stays independent of the line fade.
-        if (!line.vertical && (!line.glow.empty() || !line.rubyGlow.empty())) {
+        if (!line.vertical && (!line.glow.empty() || line.hasRubyGlow())) {
             // Keep the halo coverage and the line opacity at float precision
             // until the composed line is written to the 8-bit output.
             SkPaint fade;
@@ -248,7 +248,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     // Accumulate faint fill, outline and halo contributions before rounding
     // the final pixel to the destination's 8-bit channels.
-    const bool hasGlow = !line.glow.empty() || !line.rubyGlow.empty();
+    const bool hasGlow = !line.glow.empty() || line.hasRubyGlow();
     const bool highPrecisionFade = (line.characterFade.active() || rubyGeometryPhase)
         && (hasGlow || !line.rubyGroups.empty())
         && std::ranges::any_of(states, [](const State& state) {
@@ -260,21 +260,23 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     }
     // Tracking and wave restore static glow as each unit settles. Spin keeps
     // a separate blurred source for moving glyphs.
-    for (const auto& layer : line.rubyGlow) {
+    const auto drawRubyGlow = [&](const PreparedGlow& layer, bool lower) {
         const bool after = layer.visible(true);
-        if (!after && !layer.visible(false)) continue;
+        if (!after && !layer.visible(false)) return;
         const auto source = layer.createSource(canvas);
         if (source.surface) {
             for (const auto& group : line.rubyGroups)
-                if (rubyPose(group).isIdentity())
+                if (group.lower() == lower && rubyPose(group).isIdentity())
                     group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
                                          rubyScale, line.rubySingingOrigin, rubyOpacity(group));
             layer.composite(canvas, source);
         }
         for (const auto& group : line.rubyGroups)
-            if (const auto pose = rubyPose(group); !rubyGeometryPhase && !pose.isIdentity())
+            if (const auto pose = rubyPose(group); group.lower() == lower && !rubyGeometryPhase && !pose.isIdentity())
                 group.compositeSpinGlow(canvas, layer, tMs, after, rubyOpacity(group), pose);
-    }
+    };
+    for (const auto& layer : line.rubyGlow) drawRubyGlow(layer, false);
+    for (const auto& layer : line.lowerGlow) drawRubyGlow(layer, true);
     for (const auto& layer : line.glow) {
         const bool before = layer.visible(false), after = layer.visible(true);
         if (std::ranges::none_of(states, [=](const State& state) {

@@ -44,6 +44,7 @@ struct ResolvedRubyGroup {
     std::optional<std::size_t> fadeOwner;
     std::optional<SkPoint> spinPivot;
     bool affine = false;
+    bool lower = false;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

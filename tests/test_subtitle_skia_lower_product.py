@@ -40,6 +40,71 @@ def independent(source):
                                    'after': {'text': {'mode': 'solid', 'color': '#80FFFF00'}}}}), resolve
 
 
+@pytest.fixture
+def glowing_lower(independent):
+    track, style, resolve = independent
+    return track, replace(style, decoration_before_sync=False, lower_ruby_style={
+        **style.lower_ruby_style, 'ruby_decoration_kind': 'glow',
+        'ruby_glow_before_radius_px': 3, 'ruby_glow_after_radius_px': 7,
+        'ruby_glow_before_concentration_level': 0, 'ruby_glow_concentration_level': 2,
+        'ruby_karaoke_colors': {
+            'before': {'text': {'color': '#800000FF'}, 'shadow': {'color': '#FF00FF'}},
+            'after': {'text': {'color': '#80FFFF00'}, 'shadow': {'color': '#00FFFF'}},
+        },
+    }), resolve
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_independent_lower_glow_tracks_its_own_phase(binary, glowing_lower, target):
+    ir = ir_for(binary, glowing_lower)
+    assert 'p06_lower_ruby_glow' in ir['required_features']
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    lower = [g for g in groups if g.get('lower')]
+    assert len(lower) == 3 and 'lower_glow' not in groups[0]
+    expected = {'before': {'radius': 3, 'color': [255, 0, 255, 255], 'concentration': 0},
+                'after': {'radius': 7, 'color': [0, 255, 255, 255], 'concentration': 2}}
+    assert all(g['lower_glow'] == expected for g in lower)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        track, style, _ = glowing_lower
+        process.configure(track, style, width=900, height=600, fps=60)
+        frames, _ = collect(process, [199, 900, 1900, 199])
+    assert np.array_equal(frames[0], frames[-1])
+    for frame, channel in ((frames[0], 0), (frames[2], 1)):
+        r, g, b, a = np.moveaxis(frame, -1, 0)
+        near_glow = (a > 15) & (a < 115) & (b > 200)
+        match = near_glow & ((r > 200) & (g < 20) if channel == 0 else (g > 200) & (r < 20))
+        wrong_phase = near_glow & ((g > 200) & (r < 20) if channel == 0 else (r > 200) & (g < 20))
+        assert np.count_nonzero(match) > 100 and not np.any(wrong_phase)
+
+
+@pytest.mark.parametrize('mutation', ['feature', 'schema', 'radius', 'phase', 'upper'])
+def test_invalid_lower_glow_keeps_previous_scene(binary, glowing_lower, mutation):
+    valid = ir_for(binary, glowing_lower)
+    bad = copy.deepcopy(valid)
+    groups = bad['skia_layout']['lines'][0]['ruby_groups']
+    glow = next(g['lower_glow'] for g in groups if g.get('lower'))
+    if mutation == 'feature': bad['required_features'].remove('p06_lower_ruby_glow')
+    elif mutation == 'schema': bad['skia_layout']['lower_ruby_glow_schema'] = 2
+    elif mutation == 'radius': glow['before']['radius'] = float('nan')
+    elif mutation == 'phase': glow['else'] = glow['before']
+    elif mutation == 'upper': groups[0]['lower_glow'] = glow
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, valid)
+        before, _ = collect(process, [900])
+        with pytest.raises(NativeRendererError): configure(process, bad)
+        after, _ = collect(process, [900], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_lower_glow_matches_p00_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    assert_ruby_transition_gpu_parity(binary, case, tuple(sorted((*case.timestamps_ms, 3175, 3575, 4125))))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_product_lower_preserves_source_and_uses_independent_alpha_paints(binary, independent, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.ruby import lower, style as qt_ruby

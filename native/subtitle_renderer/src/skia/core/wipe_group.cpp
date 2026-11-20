@@ -62,7 +62,7 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
     : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
-      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot), affine_(group.affine) {
+      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();

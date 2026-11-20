@@ -7,7 +7,7 @@ from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positio
 from krok_helper.subtitle_render.engine.ruby.skia_timing import prepare_ruby_wipe_timing, wipe_points_to_ir
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import prepare_overlap_wipes
-from .skia_lower_ir import lower_solid_paint
+from .skia_lower_ir import lower_solid_appearance
 from .skia_ruby_paint_ir import ruby_decoration_kinds, solid_ruby_outlines
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
@@ -36,6 +36,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     run_offset = len(measured.runs)
     lines = []
     has_outlines, has_shadow, has_glow = False, False, False
+    has_lower_glow = False
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
         singing = line_index in singing_lines
@@ -103,8 +104,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 serialized['outlines'] = outlines
                 has_outlines = True
             if group.target.lower:
-                serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index],
-                                  paint=lower_solid_paint(group.target.style))
+                serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index])
+                serialized.update(lower_solid_appearance(group.target.style))
+                has_lower_glow = has_lower_glow or 'lower_glow' in serialized
             else:
                 decorations = ruby_decoration_kinds(group.target.style)
                 has_shadow = has_shadow or 'shadow' in decorations
@@ -123,4 +125,5 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
             **({'ruby_shadow_schema': 1} if has_shadow else {}),
             **({'ruby_glow_schema': 1} if has_glow else {}),
+            **({'lower_ruby_glow_schema': 1} if has_lower_glow else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}

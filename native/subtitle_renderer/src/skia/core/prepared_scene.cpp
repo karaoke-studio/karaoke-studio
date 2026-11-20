@@ -142,7 +142,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             }
         }
         if (verticalFade) includeShadowPaint(line.paintBounds, line.shadow);
-        std::size_t rubyGlowCells = 0;
+        std::size_t rubyGlowCells = 0, lowerGlowCells = 0;
         for (const auto& group : source.rubyGroups) {
             if (group.fadeOwner && *group.fadeOwner >= line.cells.size())
                 throw std::runtime_error("Skia 注音逐字淡化索引超限");
@@ -150,11 +150,14 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
             std::optional<std::size_t> glowOffset;
             if (group.glow) {
-                // Static ruby glow uses one source per phase for all groups in the line style.
-                if (line.rubyGlow.empty()) line.rubyGlow = PreparedGlow::prepare(*group.glow, false);
-                glowOffset = rubyGlowCells;
-                rubyGlowCells += group.cells.size();
-                for (auto& layer : line.rubyGlow)
+                // Group the phases within each reading lane. The lower
+                // reading's blur colors, radius and outline are independent.
+                auto& layers = group.lower ? line.lowerGlow : line.rubyGlow;
+                auto& cellCount = group.lower ? lowerGlowCells : rubyGlowCells;
+                if (layers.empty()) layers = PreparedGlow::prepare(*group.glow, false);
+                glowOffset = cellCount;
+                cellCount += group.cells.size();
+                for (auto& layer : layers)
                     for (const auto& cell : group.cells)
                         layer.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             }
@@ -169,6 +172,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         if (line.characterFade.active() || verticalFade) {
             for (const auto& layer : line.glow) line.paintBounds.join(layer.sourceBounds());
             for (const auto& layer : line.rubyGlow) line.paintBounds.join(layer.sourceBounds());
+            for (const auto& layer : line.lowerGlow) line.paintBounds.join(layer.sourceBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
         if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {

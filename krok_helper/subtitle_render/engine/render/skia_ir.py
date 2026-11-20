@@ -520,6 +520,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p06_ruby_shadow')
         if 'ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_glow')
+        if 'lower_ruby_glow_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_glow')
         if spin_lines:
             ir['required_features'].append('p07_ruby_character_exit_spin')
         if translation_lines:

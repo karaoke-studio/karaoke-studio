@@ -10,6 +10,7 @@ public:
                                std::optional<std::size_t> glowOffset = std::nullopt);
     std::optional<std::size_t> fadeOwner() const { return fadeOwner_; }
     bool spins() const { return spinPivot_.has_value(); }
+    bool lower() const { return lower_; }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
               const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {}) const;
@@ -32,5 +33,6 @@ private:
     bool vertical_ = false;
     std::optional<SkPoint> spinPivot_;
     bool affine_ = false;
+    bool lower_ = false;
 };
 }
