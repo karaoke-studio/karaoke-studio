@@ -75,6 +75,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_line_motion",
         "p07_ruby_line_animation",
         "p07_lower_ruby_decoration_line_animation",
+        "p07_lower_ruby_no_wipe_decoration",
         "p07_singing_scale",
         "p07_singing_glow",
         "p07_ruby_singing_scale",
@@ -438,8 +439,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_composed_stroke_flash")
         && (!features.contains("p07_stroke_flash") || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 描边闪光组合缺少对应布局能力");
+    const bool lowerNoWipeDecoration = features.contains("p07_lower_ruby_no_wipe_decoration");
+    if (lowerNoWipeDecoration && (!features.contains("p07_no_wipe") || !features.contains("p05_lower_ruby")
+            || !(features.contains("p06_lower_ruby_glow") || features.contains("p06_lower_ruby_shadow"))))
+        throw BackendError("Skia 下方注音整字变色缺少装饰能力声明");
     if (features.contains("p07_no_wipe_decoration")
-        && (!features.contains("p07_no_wipe") || features.contains("p05_lower_ruby")
+        && (!features.contains("p07_no_wipe") || (features.contains("p05_lower_ruby") && !lowerNoWipeDecoration)
             || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow")
                  || features.contains("p07_composed_stroke_flash"))))
         throw BackendError("Skia 整字变色装饰缺少对应布局能力");

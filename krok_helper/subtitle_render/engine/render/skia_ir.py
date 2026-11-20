@@ -600,7 +600,12 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['skia_layout']['zero_ruby_no_wipe_schema'] = 1
         ir["required_features"].append("p07_no_wipe")
         ir["skia_layout"]["no_wipe_schema"] = 1
-        if 'p05_lower_ruby' not in ir['required_features'] and any(
+        lower_decoration = any(source.get('karaoke_anim') == 'no_wipe' and any(
+            'lower_glow' in group or 'lower_shadow' in group for group in final.get('ruby_groups', ()))
+            for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True))
+        if lower_decoration:
+            ir['required_features'].append('p07_lower_ruby_no_wipe_decoration')
+        if ('p05_lower_ruby' not in ir['required_features'] or lower_decoration) and any(
                 source.get('karaoke_anim') == 'no_wipe' and (source.get('stroke_flash')
                 or _uses_decoration(item.layout_style, 'glow') or 'p06_ruby_glow' in ir['required_features'])
                 for source, item in zip(ir['track']['lines'], plan.lines, strict=True)):

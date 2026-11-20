@@ -226,6 +226,48 @@ def test_lower_decoration_line_animation_matches_actual_gpu(binary, application,
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('shadow', [False, True])
+def test_lower_decoration_no_wipe_switches_only_at_clock_boundaries(binary, glowing_lower, target, shadow):
+    track, style, resolve = glowing_lower
+    style = lower_shadow_style(style, 'after') if shadow else style
+    ir = ir_for(binary, (track, replace(style, karaoke_anim='no_wipe'), resolve))
+    final, = ir['skia_layout']['lines']
+    source, = ir['track']['lines']
+    feature = 'p07_lower_ruby_no_wipe_decoration'
+    assert feature in ir['required_features']
+    intervals = [interval for interval in source['resolved_intervals']]
+    intervals += [unit['interval_ms'] for group in final['ruby_groups'] for unit in group['units']]
+    boundaries = sorted({source['display_start_ms'], source['display_end_ms'],
+                         *(time for interval in intervals for time in interval),
+                         *(knot['time_ms'] for cell in final['cells'] for knot in cell.get('wipe_points', ()))})
+    times = [time for start, end in zip(boundaries, boundaries[1:]) if end - start > 2
+             for time in (start + 1, end - 1)]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[-1], times[0]], generation=2)
+    assert all(np.array_equal(a, b) for a, b in zip(frames[::2], frames[1::2], strict=True))
+    assert not np.array_equal(frames[0], frames[-1])
+    assert np.array_equal(frames[-1], replay[0]) and np.array_equal(frames[0], replay[1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shadow', [None, 'after'])
+def test_lower_decoration_no_wipe_matches_actual_gpu(binary, application, tmp_path, shadow):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    style = lower_shadow_style(base.style, shadow) if shadow else base.style
+    case = replace(base, case_id=f'lower_decoration_no_wipe_{shadow}', style=replace(style, karaoke_anim='no_wipe'))
+    assert_ruby_transition_gpu_parity(binary, case, (600, 1450, 1750, 2050, 2600, 3175, 3575, 4125, 4400, 4500, 4501))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_product_lower_preserves_source_and_uses_independent_alpha_paints(binary, independent, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.ruby import lower, style as qt_ruby
     from krok_helper.subtitle_render.engine.render.elements.horizontal import layout

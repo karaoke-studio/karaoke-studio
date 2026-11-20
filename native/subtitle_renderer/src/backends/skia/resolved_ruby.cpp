@@ -131,7 +131,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade)
         && scene.charStyles.empty();
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
-        && features.contains("p07_ruby_singing_scale"));
+        && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
+        && staticLine && features.contains("p07_lower_ruby_no_wipe_decoration"));
     const bool lowerLineAnimation = features.contains("p07_lower_ruby_decoration_line_animation")
         && line.karaokeAnimation == "utopia"
         && (line.entryAnimation == "none" || line.entryAnimation == "fade"
