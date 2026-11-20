@@ -388,7 +388,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (fadeComposition || particleComposition) rubyTransition = RubyTransition::Fade;
         if (spinComposition) rubyTransition = RubyTransition::Spin;
         if (translationComposition) rubyTransition = RubyTransition::Translation;
-        if (affineComposition || (particleComposition && exitParticleKind == "flame"))
+        if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))
             rubyTransition = RubyTransition::Affine;
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
                                                     rubyTransition, totalCells, totalGroups);

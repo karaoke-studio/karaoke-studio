@@ -134,17 +134,19 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('animation', [
     'spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out', 'petal', 'note', 'scatter_out', 'converge_out',
-    'stretch_out', 'stretch_in', 'glow_in', 'glow_out', 'lightning', 'flame',
+    'stretch_out', 'stretch_in', 'glow_in', 'glow_out', 'lightning', 'flame', 'entry_flame',
 ])
 def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, target, animation):
     from test_subtitle_skia_static_glow import glowing_ruby
 
     track, style = glowing_ruby(reading, 'inherited')
     spinning = animation == 'spin_flip'
-    affine = animation in {'scatter_out', 'converge_out', 'stretch_out', 'stretch_in', 'glow_in', 'glow_out', 'flame'}
+    affine = animation in {'scatter_out', 'converge_out', 'stretch_out', 'stretch_in',
+                           'glow_in', 'glow_out', 'flame', 'entry_flame'}
     exiting = spinning or animation.endswith('_out') or animation in {'petal', 'note', 'lightning', 'flame'}
-    style = replace(style, entry_anim='none' if exiting else animation,
-                    exit_anim=animation if exiting else 'none', entry_lead_ms=600, exit_fade_ms=600,
+    effect = 'flame' if animation == 'entry_flame' else animation
+    style = replace(style, entry_anim='none' if exiting else effect,
+                    exit_anim=effect if exiting else 'none', entry_lead_ms=600, exit_fade_ms=600,
                     karaoke_anim='utopia')
     ir = upper_ir(binary, (track, style), 1)
     expected = {
@@ -153,6 +155,7 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
         'assemble_in': 'p07_ruby_particle_assembly', 'dissolve_out': 'p07_ruby_particle_assembly',
         'petal': 'p07_ruby_particle_fade', 'note': 'p07_ruby_particle_fade',
         'lightning': 'p07_ruby_particle_fade', 'flame': 'p07_ruby_particle_fade',
+        'entry_flame': 'p07_ruby_particle_fade',
         'scatter_out': 'p07_ruby_character_affine_exit', 'converge_out': 'p07_ruby_character_affine_exit',
         'stretch_out': 'p07_ruby_character_stretch_exit', 'stretch_in': 'p07_ruby_character_stretch_entry',
         'glow_in': 'p07_ruby_character_glow_transition', 'glow_out': 'p07_ruby_character_glow_transition',
@@ -170,6 +173,8 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
         'spin_pivot' if spinning else 'affine_pivot_y' if affine else 'fade_owner']
     line = ir['track']['lines'][0]
     moving = line['display_end_ms']-400 if exiting else line['display_start_ms']+170
+    if animation == 'entry_flame':
+        moving = line['display_start_ms'] + line['entry_duration_ms'] * 7 // 8
     steady = line['display_end_ms']-600 if exiting else line['display_start_ms']+600
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
@@ -218,7 +223,7 @@ def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
 @pytest.mark.parametrize('case_id', [
     'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
     'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle', 'exit_lightning',
-    'exit_flame',
+    'exit_flame', 'entry_flame',
     'exit_scatter_out', 'exit_converge_out',
     'exit_stretch_out', 'entry_stretch_in', 'entry_glow_in', 'exit_glow_out', 'line_override',
 ])
@@ -231,6 +236,8 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
     times = case.timestamps_ms
     if case_id == 'exit_flame':
         times = tuple(sorted({*times, 5240, 5305, 5370, 5440}))
+    elif case_id == 'entry_flame':
+        times = tuple(sorted({*times, 735, 780, 840}))
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, case.style, times, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
