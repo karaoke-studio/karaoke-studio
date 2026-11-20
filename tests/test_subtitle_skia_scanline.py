@@ -18,7 +18,7 @@ from test_subtitle_skia_sing_particles import assert_particle_region, blue_cover
 from test_subtitle_skia_vector_guides import guide_source
 from test_subtitle_skia_vertical import vertical_ruby_source
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_source, upper_ir, bands
-from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -67,6 +67,43 @@ def scanline_source(project, kind='plain'):
     if kind == 'reverse':
         return reverse_band(track, style)
     return track, style
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multitrack_scanline_tracks_each_source_clock(binary, project, target):
+    track, style = scanline_source(project)
+    line = replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=2700)
+    track = replace(track, lines=[line])
+    side = replace(track, lines=[replace(line, layout_index=1)], meta=replace(track.meta, offset_ms=500))
+    style = replace(style, line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=65)])
+    ir = ir_for(binary, (track, style), extra_tracks=[side])
+    assert all('p07_scanline_band' in source['required_features'] for source in (ir, *ir['skia_extra_sources']))
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [350, 750, 850, 350, 850])
+    assert np.array_equal(frames[0], frames[3]) and np.array_equal(frames[2], frames[4])
+    assert band_mask(frames[0][180:]).any() and not frames[0][:180, :, 3].any()
+    assert band_mask(frames[2][:180]).any()
+    assert not np.array_equal(frames[1][:180], frames[2][:180])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape', ['band', 'image'])
+def test_multitrack_scanline_and_particles_match_actual_gpu(binary, application, tmp_path, shape):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'combined_effects')
+    style = replace(base.style, entry_anim='none', exit_anim='none', scanline_shape=shape,
+                    scanline_effect='star' if shape == 'band' else 'none',
+                    line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=160)])
+    side = replace(base.track, lines=[replace(base.track.lines[0], layout_index=1)],
+                   meta=replace(base.track.meta, offset_ms=900))
+    case = replace(base, case_id=f'multitrack_scanline_{shape}', style=style)
+    times = (299, 400, 1199, 1280, 1500, 2200, 2600, 3700, 4700, 5499, 5500, 6399, 6400)
+    assert_ruby_transition_gpu_parity(binary, case, times, extra_tracks=[side])
 
 
 def band_mask(frame):
