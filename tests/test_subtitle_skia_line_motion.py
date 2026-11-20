@@ -13,6 +13,7 @@ from test_subtitle_skia_line_fade import (
 )
 from test_subtitle_skia_outline_ruby import (
     annotated, annotated_paint, lower_ir, mixed, outlined, pages, prepared_source, reading, source, upper_ir, upper_source,
+    assert_annotated_parity,
 )
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -191,7 +192,7 @@ def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
     'entry_fade', 'entry_slide_in', 'entry_rise', 'exit_fade', 'exit_slide_out', 'exit_rise',
-    'entry_char_fade',
+    'entry_char_fade', 'viewport',
 ])
 def test_p00_glowing_ruby_line_motion_matches_actual_gpu(binary, application, case_id, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases
@@ -210,6 +211,38 @@ def test_p00_glowing_ruby_line_motion_matches_actual_gpu(binary, application, ca
             frames, _ = collect(process, case.timestamps_ms)
         rendered.append(frames)
     assert_glow_parity(case.timestamps_ms, refs, *rendered, case_id, check_p00_edges=True)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_viewport_translation_moves_body_and_ruby_without_retiming(binary, reading, target, tmp_path):
+    track, style = upper_source(reading, 2)
+    plain = upper_ir(binary, (track, style), 1.5)
+    moved = upper_ir(binary, (track, replace(style, viewport_offset_x=12, viewport_offset_y=-8)), 1.5)
+    assert 'p08_viewport' in moved['required_features']
+    assert moved['skia_layout']['lines'] == plain['skia_layout']['lines']
+    assert moved['track']['lines'] == plain['track']['lines']
+    invalid = copy.deepcopy(moved)
+    invalid['required_features'].remove('p08_viewport')
+    times = [299, 550, 1400, 2300]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, plain)
+        original, _ = collect(process, times)
+        configure(process, moved)
+        translated, _ = collect(process, [*times, 550], generation=2)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, [550], generation=3)
+    expected = []
+    for source in original:
+        shifted = np.zeros_like(source)
+        shifted[:-12, 18:] = source[12:, :-18]
+        expected.append(shifted)
+    assert_annotated_parity(times, expected, translated[:len(times)], ('viewport', target), 2)
+    assert np.array_equal(translated[1], translated[-1])
+    assert np.array_equal(translated[1], replay[0])
+    if target == 'gpu':
+        payload = {key: value for key, value in moved['style'].items() if key.startswith('viewport_')}
+        (tmp_path / 'viewport-layout.json').write_text(json.dumps(payload, sort_keys=True), encoding='utf-8')
 
 
 def test_glowing_ruby_fade_preserves_first_nonzero_alpha_on_both_targets(binary, reading):

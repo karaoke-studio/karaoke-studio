@@ -81,8 +81,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
 }
 }
 void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabilities caps) {
-    if (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
-        || scene.viewportOffsetY != 0 || scene.lineBand.enabled || (!canonical && !scene.charStyles.empty())
+    if ((!canonical && (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
+            || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || scene.lineBand.enabled
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
     if (caps.outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");
@@ -110,6 +110,20 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
                 throw BackendError("Skia 字符样式引用无效");
         }
     }
+}
+
+SkMatrix skiaViewport(const RenderScene& scene) {
+    const auto& align = scene.viewportAlign;
+    const auto anchor = [&align](const char* low, const char* high, int extent) {
+        return align.find(low) != std::string::npos ? 0.f
+            : align.find(high) != std::string::npos ? float(extent) : float(extent) * .5f;
+    };
+    const float x = anchor("left", "right", scene.width), y = anchor("top", "bottom", scene.height);
+    SkMatrix viewport;
+    viewport.setRotate(scene.viewportRotation, x, y);
+    viewport.postScale(scene.viewportScale, scene.viewportScale, x, y);
+    viewport.postTranslate(scene.viewportOffsetX, scene.viewportOffsetY);
+    return viewport;
 }
 
 ::subtitle::skia::StaticShadow skiaStaticShadow(const TextStyle& style) {

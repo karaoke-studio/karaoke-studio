@@ -1,9 +1,25 @@
 #pragma once
 
 #include "../../effects/wipe_clock.h"
+#include "include/core/SkCanvas.h"
 #include <cmath>
 
 namespace subtitle::skia {
+inline void clipViewportWipe(SkCanvas& canvas, SkRect clip, float viewportHeight, bool antialias) {
+    if (viewportHeight == 0.f) {
+        canvas.clipRect(clip, SkClipOp::kIntersect, antialias);
+        return;
+    }
+    // Direct2D clips each wipe side to the device-aligned bounds of its
+    // transformed rectangle. Glow sources keep their own unrotated clips.
+    clip.fTop = -2.f * viewportHeight;
+    clip.fBottom = 2.f * viewportHeight;
+    const SkMatrix transform = canvas.getTotalMatrix();
+    canvas.resetMatrix();
+    canvas.clipRect(transform.mapRect(clip), SkClipOp::kIntersect, antialias);
+    canvas.setMatrix(transform);
+}
+
 // The transformed glyph uses the original authored curve, without the
 // static-ink overlap endpoint applied to ordinary horizontal coverage.
 inline float transformedWipeRatio(std::span<const krok::subtitle::native::WipePoint> points,

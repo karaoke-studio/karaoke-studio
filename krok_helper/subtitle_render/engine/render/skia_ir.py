@@ -481,4 +481,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_zoom_pulse_decoration')
     project_reverse_wipe(ir)
+    if (style.viewport_scale_pct != 100 or style.viewport_rotation_deg
+            or style.viewport_offset_x or style.viewport_offset_y):
+        ir['required_features'].append('p08_viewport')
     return ir

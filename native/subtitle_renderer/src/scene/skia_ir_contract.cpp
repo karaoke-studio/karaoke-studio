@@ -78,6 +78,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_composed_stroke_flash",
         "p07_no_wipe_decoration",
         "p07_noise_transition",
+        "p08_viewport",
         "p05_horizontal_rtl_kana_cells",
         "p05_horizontal_rtl_kana_marks",
         "p05_reverse_wipe",
@@ -124,6 +125,23 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             throw BackendError("Skia IR: unknown required feature");
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
+    if (features.contains("p08_viewport")) {
+        integer(style, "viewport_scale_pct", 1, 400);
+        integer(style, "viewport_rotation_deg", -180, 180);
+        integer(style, "viewport_offset_x", -4000, 4000);
+        integer(style, "viewport_offset_y", -4000, 4000);
+        const QJsonArray anchors{"top_left", "top_center", "top_right", "center_left", "center", "center_right",
+                                 "bottom_left", "bottom_center", "bottom_right"};
+        if (!anchors.contains(style.value("viewport_align")))
+            throw BackendError("Skia 字幕视口锚点无效");
+        const QJsonArray incompatible{"p06_image_fill", "p06_body_gradient", "p06_static_shadow",
+            "p06_ruby_shadow", "p07_noise_transition", "p07_scanline_band", "p07_sing_twinkle", "p07_stroke_flash",
+            "p07_character_transform", "p07_character_fade", "p07_utopia_transition"};
+        for (const auto& capability : incompatible) {
+            if (features.contains(capability))
+                throw BackendError("Skia 字幕视口变换暂不支持此材质或特效");
+        }
+    }
     if (features.contains("p05_overlap_wipe")
         && layout.value("overlap_schema").toDouble(-1) != 1)
         throw BackendError("Skia 重叠走字布局版本无效");

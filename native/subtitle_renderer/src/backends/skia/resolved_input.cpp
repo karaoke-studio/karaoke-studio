@@ -109,6 +109,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     for (const auto& [name, shape] : projected.fxSprites)
         particleSprites.emplace(name, vectorGlyphPath(shape, 1000.0));
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
+    out.viewport = skiaViewport(projected);
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     for (int index = 0; index < lines.size(); ++index) {
         const auto source = lines[index].toObject();

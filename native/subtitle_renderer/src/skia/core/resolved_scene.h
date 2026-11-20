@@ -74,5 +74,6 @@ struct ResolvedLine {
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;
     std::vector<ResolvedLine> lines;
+    SkMatrix viewport = SkMatrix::I();
 };
 }

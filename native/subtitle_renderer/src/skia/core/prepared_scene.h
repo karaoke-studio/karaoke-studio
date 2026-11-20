@@ -91,6 +91,7 @@ private:
     };
     void drawLine(SkCanvas&, const Line&, int time, bool textVisible) const;
     int width_, height_;
+    SkMatrix viewport_ = SkMatrix::I();
     std::vector<Line> lines_;
 };
 }

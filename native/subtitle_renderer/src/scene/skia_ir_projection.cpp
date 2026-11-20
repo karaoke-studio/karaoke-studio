@@ -78,13 +78,23 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || features.contains("p05_reverse_wipe")
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应横排布局能力");
-    if (cfg.lineBand.enabled
-        || cfg.viewportScalePct != 100 || cfg.viewportRotationDeg || cfg.viewportOffsetX || cfg.viewportOffsetY)
-        throw BackendError("Skia P04: annotations, line bands and viewport transforms require later phases");
+    if (cfg.lineBand.enabled)
+        throw BackendError("Skia 当前布局暂不支持行背景带");
+    const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
+        || cfg.viewportOffsetX || cfg.viewportOffsetY;
+    if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
+        throw BackendError("Skia 字幕视口变换缺少横排布局能力声明");
     RenderScene out;
     out.width = cfg.physicalWidth();
     out.height = cfg.physicalHeight();
     out.layoutReferenceScale = float(cfg.dpr);
+    if (viewport) {
+        out.viewportScale = float(cfg.viewportScalePct) / 100.f;
+        out.viewportRotation = float(cfg.viewportRotationDeg);
+        out.viewportOffsetX = float(cfg.viewportOffsetX * cfg.dpr);
+        out.viewportOffsetY = float(cfg.viewportOffsetY * cfg.dpr);
+        out.viewportAlign = cfg.viewportAlign.toStdString();
+    }
     // Pointers refer to the immutable parser cache for this projection only.
     // Materialize a role once, rather than copying a full style into each cell.
     std::map<const protocol::ResolvedStyle*, int> roleStyles;

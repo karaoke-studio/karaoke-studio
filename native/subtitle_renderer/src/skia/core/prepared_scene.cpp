@@ -21,9 +21,12 @@ void includeCellPaint(SkRect& bounds, const ResolvedCell& cell) {
 }
 }
 
-PreparedScene::PreparedScene(const ResolvedSubtitleInput& input) : width_(input.width), height_(input.height) {
+PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
+    : width_(input.width), height_(input.height), viewport_(input.viewport) {
     if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
         throw std::runtime_error("Skia: invalid resolved canvas size");
+    if (!viewport_.isFinite())
+        throw std::runtime_error("Skia 字幕视口变换无效");
     std::size_t totalPoints = 0, totalCells = 0, totalGroups = 0;
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
@@ -219,6 +222,8 @@ PreparedScene::PreparedScene(const SubtitleInput& input) : width_(input.width), 
 }
 void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     canvas.clear(SK_ColorTRANSPARENT);
+    SkAutoCanvasRestore restore(&canvas, !viewport_.isIdentity());
+    if (!viewport_.isIdentity()) canvas.concat(viewport_);
     for (const auto& line : lines_) {
         const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
         if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs))

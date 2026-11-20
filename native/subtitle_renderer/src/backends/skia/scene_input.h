@@ -11,6 +11,7 @@ struct SkiaPaintCapabilities {
     bool staticGlow = false;
 };
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
+SkMatrix skiaViewport(const RenderScene&);
 ::subtitle::skia::SubtitleInput skiaSceneInput(const RenderScene& scene);
 ::subtitle::skia::StaticShadow skiaStaticShadow(const TextStyle& style);
 ::subtitle::skia::StaticGlow skiaStaticGlow(const TextStyle& style);

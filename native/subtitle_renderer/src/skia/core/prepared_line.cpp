@@ -78,6 +78,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto band = [&](float from, float to) {
         return line.vertical ? SkRect::MakeLTRB(-1e6f, from, 1e6f, to) : SkRect::MakeLTRB(from, -1e6f, to, 1e6f);
     };
+    const float wipeViewportHeight = viewport_.rectStaysRect() ? 0.f : float(height_);
     enum class Phase { Before, After, Wiping };
     struct State {
         float progress, edge;
@@ -194,22 +195,22 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             if (transform.transformed) canvas.concat(transform.matrix); // Clips stay in line space.
             canvas.drawPath(path, paint);
         };
-        // Two disjoint clips avoid painting translucent after color over before color.
+        // Each phase owns its wipe clip, including the viewport's device bounds.
         if (!after) {
             canvas.save();
-            canvas.clipRect(line.wipeRightToLeft
+            clipViewportWipe(canvas, line.wipeRightToLeft
                 ? band(-1e6f, before ? 1e6f : clipEdge)
                 : band(before ? -1e6f : clipEdge, 1e6f),
-                            SkClipOp::kIntersect, cell.adjustedWipeEnd || animatedClip);
+                wipeViewportHeight, cell.adjustedWipeEnd || animatedClip);
             draw(false);
             canvas.restore();
         }
         if (!before) {
             canvas.save();
-            canvas.clipRect(line.wipeRightToLeft
+            clipViewportWipe(canvas, line.wipeRightToLeft
                 ? band(after ? -1e6f : clipEdge, 1e6f)
                 : band(-1e6f, after ? 1e6f : clipEdge),
-                            SkClipOp::kIntersect, cell.adjustedWipeEnd || animatedClip);
+                wipeViewportHeight, cell.adjustedWipeEnd || animatedClip);
             draw(true);
             canvas.restore();
         }
@@ -353,7 +354,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawStrokeFlash(canvas, ink ? *ink : cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
         }
     for (const auto& group : line.rubyGroups)
-        group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group));
+        group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group), wipeViewportHeight);
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
     if (line.scanline.upperRuby && line.scanline.repaintsGlyphs()

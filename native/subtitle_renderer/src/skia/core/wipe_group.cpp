@@ -84,7 +84,7 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
     }
 }
 void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
-                                   float originX, bool afterVisible, float opacity) const {
+                                   float originX, bool afterVisible, float opacity, float viewportHeight) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     std::vector<std::optional<ResolvedCell>> animated(cells_.size());
@@ -106,7 +106,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
                 const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
                 const auto clip = after ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
                                         : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
-                canvas.clipRect(clip, SkClipOp::kIntersect, true);
+                clipViewportWipe(canvas, clip, viewportHeight, true);
             }
             paintRubyCell(canvas, paint, cell, after, opacity);
         }
@@ -213,12 +213,13 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
     }
 }
 
-void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX, float opacity) const {
+void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX,
+                             float opacity, float viewportHeight) const {
     if (bounds_.isEmpty() || opacity <= 0) return;
     const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
     const float edge = frontAt(timeMs, startEdge);
     if (scale.active) {
-        drawSinging(canvas, timeMs, scale, originX, edge > startEdge, opacity);
+        drawSinging(canvas, timeMs, scale, originX, edge > startEdge, opacity, viewportHeight);
         return;
     }
     SkPaint paint;
@@ -231,9 +232,9 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     const auto clip = [&](bool after) {
         const float low = after ? -1e6f : edge;
         const float high = after ? edge : 1e6f;
-        canvas.clipRect(vertical_ ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
-                                  : SkRect::MakeLTRB(low, -1e6f, high, 1e6f),
-                        SkClipOp::kIntersect, antialiasClip_);
+        clipViewportWipe(canvas, vertical_ ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
+                                           : SkRect::MakeLTRB(low, -1e6f, high, 1e6f),
+                         viewportHeight, antialiasClip_);
     };
     if (before) {
         draw(false);
@@ -252,8 +253,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
         return;
     }
     if (complete) { draw(true); return; }
-    // Disjoint clips preserve translucent alpha; completed groups release
-    // their clip so overhangs keep the established full-after appearance.
+    // Completed groups release the wipe clip so overhangs stay fully sung.
     canvas.save();
     clip(false);
     draw(false);
