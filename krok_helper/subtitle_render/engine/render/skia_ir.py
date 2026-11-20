@@ -497,6 +497,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].append('p08_custom_shape_signal')
         if any(item.layout_style.lit_enabled and item.layout_style.lit_style == 'image' for item in plan.lines):
             ir['required_features'].append('p08_custom_image_signal')
+        if any(item.layout_style.lit_enabled and item.layout_style.lit_appearance_mode != 'custom' for item in plan.lines):
+            ir['required_features'].append('p08_decorated_shape_signal')
         for item, source, final in zip(plan.lines, ir['track']['lines'], ir['skia_layout']['lines'], strict=True):
             if item.layout_style.lit_enabled and source.get('lit_head'):
                 position = geometry.position(item, kwargs['width'], kwargs['height'])

@@ -339,14 +339,19 @@ def test_custom_shape_signal_countdown(binary, project, target, shape):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case_id', ['lit_appearance_custom', 'lamp_shape_image'])
-def test_p00_custom_shape_signal_matches_actual_gpu(binary, application, tmp_path, case_id):
+@pytest.mark.parametrize('case_id,appearance', [
+    ('lit_appearance_custom', None), ('lamp_shape_image', 'custom'),
+    ('lamp', None), ('lamp_shape_circle', None), ('lamp_shape_square', None),
+    ('lamp_shape_rounded', None), ('lamp_shape_image', None),
+    ('lit_appearance_auto', None), ('lit_appearance_role', None),
+])
+def test_p00_shape_signal_matches_actual_gpu(binary, application, tmp_path, case_id, appearance):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
-    style = replace(case.style, lit_appearance_mode='custom')
+    style = case.style if appearance is None else replace(case.style, lit_appearance_mode=appearance)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, case.timestamps_ms, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
@@ -393,3 +398,30 @@ def test_custom_image_signal_contains_asset_and_falls_back(binary, project, tmp_
     assert abs(int(ys.max()-ys.min()+1) - 14) <= 1
     assert np.unique(xs).size > 14
     assert all(np.array_equal(a, b) for a, b in zip(missing, circles, strict=True))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('role', [None, '__global__', 'signal-palette'])
+def test_decorated_shape_signal_uses_after_palette_before_lyrics_start(binary, project, target, role):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_roles import colors
+
+    track, style = project
+    named = role == 'signal-palette'
+    style = replace(style, karaoke_colors=colors('#FF0000', '#00FF00'),
+                    custom_style_schemes={'signal-palette': SubtitleStyleScheme(
+                        karaoke_colors=colors('#FFFFFF', '#0000FF'))},
+                    lit_enabled=True, lit_appearance_mode='role' if role else 'auto', lit_role_name=role or '',
+                    lit_style='square', lit_offset_y=-15, lit_size=28, lit_number=4,
+                    lit_edge_brightness_pct=0, lit_opacity_pct=60, lit_transition_mode='none',
+                    decoration_kind='none', stroke_width_px=0, stroke2_enabled=False)
+    ir = ir_for(binary, (track, style))
+    start = ir['track']['lines'][0]['display_start_ms']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [start, 201, start])
+    assert np.array_equal(frames[0], frames[2])
+    lamp = (frames[0][..., 2 if named else 1] > 250) & (frames[0][..., 0] < 5)
+    assert np.count_nonzero(lamp) > 500
+    assert np.all(frames[0][..., 3][lamp] <= 153)
+    assert not np.any(frames[1][..., 3][lamp])

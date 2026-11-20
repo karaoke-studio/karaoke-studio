@@ -76,7 +76,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
         || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight))
         || s.volumeEnabled || (s.litEnabled && (!caps.customShapeSignal || s.vertical || s.rightToLeft
-            || s.litAppearanceMode != "custom"
+            || (s.litAppearanceMode != "custom" && (!caps.decoratedShapeSignal
+                || (s.litAppearanceMode != "auto" && s.litAppearanceMode != "role")))
             || (s.litStyle != "circle" && s.litStyle != "square" && s.litStyle != "rounded"
                 && (s.litStyle != "image" || !caps.imageShapeSignal)))))
         throw BackendError(canonical ? "Skia 当前仅支持固定网格横排、实色填充与基础走字" :

@@ -88,6 +88,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     out.width = cfg.physicalWidth();
     out.height = cfg.physicalHeight();
     out.layoutReferenceScale = float(cfg.dpr);
+    if (features.contains("p08_decorated_shape_signal") && cfg.baseStyle.litAppearanceMode == "role") {
+        const auto role = cfg.baseStyle.litRoleName.trimmed();
+        if (role == "__global__" || !cfg.customStyleSchemes.value(role).toObject().isEmpty()) {
+            auto& decoration = out.litDecorStyle.emplace();
+            if (role == "__global__") applyResolvedStyle(decoration, cfg.baseStyle, cfg.dpr);
+            else applyResolvedStyle(decoration, protocol::resolvedStyleForRole(cfg, cfg.baseStyle, role), cfg.dpr);
+        }
+    }
     if (viewport) {
         out.viewportScale = float(cfg.viewportScalePct) / 100.f;
         out.viewportRotation = float(cfg.viewportRotationDeg);
