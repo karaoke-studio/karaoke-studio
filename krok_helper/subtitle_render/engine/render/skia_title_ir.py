@@ -4,6 +4,7 @@ from functools import partial
 
 from ...domain.models import Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, title_line_units
 from ...domain.paint import KaraokeColorState, KaraokeColors, PaintFill
+from ...serialization.timing import guide_symbol_from_dict
 from ..layout.line.skia_placement import LinePosition
 
 
@@ -50,9 +51,12 @@ def _title_color(title):
 
 def solid_title_style(title):
     roles = title['role_styles']
-    if (title['guide_symbols'] or title['inline_guide_symbols']
-            or any(paint[part]['mode'] != 'solid' for paint in (title, *roles.values())
+    if (any(paint[part]['mode'] != 'solid' for paint in (title, *roles.values())
                    for part in ('fill', 'stroke', 'stroke2', 'shadow'))):
+        return None
+    guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
+    if guides and (roles or any(guide['kind'] != 'vector' for guide in guides)
+                   or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
         return None
     if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
                      or paint['letter_spacing_px'] != title['letter_spacing_px']
@@ -94,6 +98,33 @@ def title_rows(title):
         yield list(zip(title_line_units(text), labels, strict=True))
 
 
+def _title_lines(title, rows):
+    prefixes = {row: guide for row, guide in title['guide_symbols'] if guide}
+    replacements = {(row, column): guide for row, column, guide in title['inline_guide_symbols'] if guide}
+    for row, cells in enumerate(rows):
+        chars = []
+        prefix = prefixes.get(row)
+        if prefix:
+            if not 1 <= prefix['count'] <= 64:
+                raise ValueError('Skia 标题的行首导唱符数量超限')
+            symbol = guide_symbol_from_dict(prefix['vector_glyph'])
+            if symbol is None:
+                raise ValueError('Skia 标题导唱符轮廓无效')
+            chars.extend(TimingChar('\uFFFC', row, vector_glyph=symbol) for _ in range(prefix['count']))
+        for column, (unit, label) in enumerate(cells):
+            inline = replacements.get((row, column))
+            if inline:
+                symbol = guide_symbol_from_dict(inline['vector_glyph'])
+                if symbol is None:
+                    raise ValueError('Skia 标题导唱符轮廓无效')
+                chars.append(TimingChar('\uFFFC', row, role_label=label, vector_glyph=symbol))
+            else:
+                chars.append(TimingChar(unit, row, role_label=label))
+        if chars:
+            yield TimingLine(chars=chars, track_line_index=row, end_ms=row + 1,
+                             display_start_override_ms=row, display_end_override_ms=row + 1)
+
+
 def build_title_sources(titles, build_source, **kwargs):
     sources = []
     for title in titles:
@@ -106,10 +137,7 @@ def build_title_sources(titles, build_source, **kwargs):
         rows = list(title_rows(title))
         if len(rows) > 32:
             raise ValueError('Skia 单个标题最多支持 32 行')
-        lines = [TimingLine(chars=[TimingChar(unit, row, role_label=label) for unit, label in cells],
-                            track_line_index=row, end_ms=row + 1,
-                            display_start_override_ms=row, display_end_override_ms=row + 1)
-                 for row, cells in enumerate(rows) if cells]
+        lines = list(_title_lines(title, rows))
         position = partial(_title_position, title=title, row_count=len(rows))
         source = build_source(TimingTrack(lines=lines), style, adjust_position=position,
                               **{**kwargs, 'roll_shift_ms': 0})

@@ -23,7 +23,7 @@ QJsonObject bandOptions(const QJsonObject& source) {
     return result;
 }
 
-void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize& size) {
+void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize& size, bool title = false) {
     if (source.value("screen") != screen || source.contains("skia_extra_sources"))
         throw BackendError("Skia 多轨尺寸不一致或包含嵌套来源");
     // These features carry only source-local geometry. Other combinations need
@@ -55,7 +55,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p08_line_band_blur", "p08_line_band_animated_decoration"
     };
     for (const auto& feature : source.value("required_features").toArray())
-        if (!allowed.contains(feature))
+        if (!allowed.contains(feature) && !(title && feature == QJsonValue("p05_vector_guides")))
             throw BackendError("Skia 多轨暂不支持此绘制能力 " + feature.toString().toStdString());
     const auto layout = source.value("skia_layout").toObject().value("lines").toArray();
     if ((size.lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");
@@ -153,7 +153,7 @@ std::vector<::subtitle::skia::ResolvedLine::TitleWindow> titleWindows(const QJso
         const auto title = titles.at(index - 1).toObject();
         const auto source = title.value("source").toObject();
         auto windows = titleWindows(title.value("windows"));
-        countSource(source, ir.value("screen"), size);
+        countSource(source, ir.value("screen"), size, true);
         auto prepared = resolvedSkiaSource(source, images);
         if (prepared.lines.empty() || prepared.lines.size() > 32
             || !prepared.viewport.isIdentity() || prepared.lineBand.image)

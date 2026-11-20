@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QImage
 
 from krok_helper.subtitle_render.domain.models import (
-    LyricsLayout, Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, TitleOverlay, TitleTimeWindow,
+    GuideSymbol, LyricsLayout, Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, TitleOverlay, TitleTimeWindow,
 )
 from krok_helper.subtitle_render.domain.paint import KaraokeColorState, KaraokeColors, PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess, SharedFrameRingReader
@@ -198,6 +198,43 @@ def test_title_roles_match_actual_d2d_gpu(binary):
     track, style = role_title()
     assert_ruby_transition_gpu_parity(
         binary, SimpleNamespace(track=track, style=style, case_id='title_roles'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
+def vector_guide_title():
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, offset_ms=5000))
+    triangle = GuideSymbol(path_commands=(('M', 10, -110), ('L', 490, -750), ('L', 770, -110), ('Z',)),
+                           advance_width=900, count=2, duration_ms=500)
+    title = replace(solid_title(style), text_template='Skia', anchor='top_right',
+                    guide_symbols={0: triangle}, inline_guide_symbols={(0, 2): triangle})
+    return track, replace(style, title_overlays=[title], custom_style_schemes={})
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_title_vector_guides_use_prefix_count_and_fixed_frame(binary, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = vector_guide_title()
+    source = ir_for(binary, (track, style))['skia_titles'][0]['source']
+    assert 'p05_vector_guides' in source['required_features']
+    line = source['skia_layout']['lines'][0]['cells']
+    assert [index for index, cell in enumerate(line) if cell['metrics'].get('vector_glyph_id')] == [0, 1, 4]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [500, 1600, 1400, 1000, 500])
+    assert frames[0].any() and not frames[3].any()
+    assert all(np.array_equal(frames[0], frames[i]) for i in (1, 2, 4))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_vector_guides_match_actual_d2d_gpu(binary):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = vector_guide_title()
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_vector_guides'),
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
