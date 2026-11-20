@@ -313,7 +313,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
                               else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
                     if effect in {'assemble_in', 'dissolve_out'}:
                         assembly_lines.add(index)
-                    if effect == 'flame' or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
+                    if effect in {'flame', 'lightning'} or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
                         particle_fade_lines.add(index)
                         if effect == 'flame':
                             particle_affine_lines.add(index)
