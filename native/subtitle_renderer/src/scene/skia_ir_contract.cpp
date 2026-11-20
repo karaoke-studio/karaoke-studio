@@ -139,7 +139,8 @@ bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
     const auto& kind = exit.isEmpty() ? entry : exit;
     if (kind == "assemble" || kind == "dissolve") return allowAssembly;
     return allowFade && entry.isEmpty() && (kind == "petal" || kind == "feather"
-        || kind == "snow_solid" || kind == "note" || kind == "heart" || kind == "sparkle" || kind == "lightning");
+        || kind == "snow_solid" || kind == "note" || kind == "heart" || kind == "sparkle"
+        || kind == "lightning" || kind == "flame");
 }
 
 bool isSkiaTransitionLayer(const QString& transition, const QString& kind, bool entry) {
