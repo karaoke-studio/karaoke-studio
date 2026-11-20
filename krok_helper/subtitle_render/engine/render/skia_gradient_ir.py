@@ -26,21 +26,24 @@ def write_body_gradient_bounds(ir, plan):
     by the line's visual outline pad (applied natively at the reference scale).
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
-    enabled = outlined_gradient = images = ruby_paint = False
+    enabled = outlined_gradient = images = ruby_paint = singing_paint = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
         if not modes & (_GRADIENTS | {'image'}):
             continue
         source = ir['track']['lines'][item.track_index]
+        annotated = bool(final.get('ruby_groups'))
+        singing = source.get('karaoke_anim') == 'utopia' and annotated and not source.get('zoom_pulse')
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or look.vertical or look.right_to_left or item.line.wipe_reverse
                 or source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
                 or source.get('scanline') or source.get('fx_bursts') or source.get('stroke_flash')
-                or source.get('karaoke_anim') != 'none' or look.lower_ruby_enabled
+                or (source.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
-        ruby_paint = ruby_paint or bool(final.get('ruby_groups'))
+        ruby_paint = ruby_paint or annotated
+        singing_paint = singing_paint or singing
         images = images or 'image' in modes
         if not modes & _GRADIENTS:
             continue
@@ -58,6 +61,7 @@ def write_body_gradient_bounds(ir, plan):
     for enabled_feature, feature in (
         (enabled, 'p06_body_gradient'), (outlined_gradient, 'p06_outline_gradient'),
         (images, 'p06_image_fill'), (ruby_paint, 'p06_ruby_main_paint'),
+        (singing_paint, 'p06_utopia_main_paint'),
     ):
         if enabled_feature:
             ir['required_features'].append(feature)

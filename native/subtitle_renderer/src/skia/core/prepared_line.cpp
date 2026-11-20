@@ -186,9 +186,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const bool after = !atFront && progress == 1;
         const auto draw = [&](bool sung) {
             if (drawOutline && stroke->protectBody) {
-                canvas.clipPath(cell.path, SkClipOp::kDifference, true);
-                if (layer == Layer::OuterOutline && cell.outline)
-                    canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+                const auto& body = animatedInk ? *animatedInk : cell.path;
+                canvas.clipPath(body, SkClipOp::kDifference, true);
+                if (layer == Layer::OuterOutline && cell.outline) {
+                    const auto inner = animatedInk ? prepareOutlinePath(body, cell.outline->width) : cell.outline->path;
+                    canvas.clipPath(inner, SkClipOp::kDifference, true);
+                }
             }
             const auto& shader = shaders[sung];
             paint.setShader(shader);

@@ -44,16 +44,18 @@ def gradient_source(project, mode, translucent=False):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target):
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target, karaoke):
     track, style = reading
-    style = replace(style, karaoke_anim='none')
+    style = replace(style, karaoke_anim=karaoke)
     gradient = PaintFill(mode='gradient_horizontal', start_color='#FFFFAA00', end_color='#FF0044FF')
     colors = replace(style.karaoke_colors, before=replace(style.karaoke_colors.before, text=gradient))
     ir = upper_ir(binary, (track, replace(style, karaoke_colors=colors)), 1)
     plain = upper_ir(binary, (track, style), 1)
     assert 'p06_ruby_main_paint' in ir['required_features']
+    assert ('p06_utopia_main_paint' in ir['required_features']) == (karaoke == 'utopia')
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_ruby_main_paint')
+    bad['required_features'].remove('p06_utopia_main_paint' if karaoke == 'utopia' else 'p06_ruby_main_paint')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, plain)
         ruby, _ = collect(process, [150])
@@ -70,13 +72,14 @@ def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target):
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('mode', [*MODES, 'image'])
-def test_p00_ruby_with_main_paint_matches_actual_gpu(binary, application, tmp_path, mode):
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_p00_ruby_with_main_paint_matches_actual_gpu(binary, application, tmp_path, mode, karaoke):
     from scripts.subtitle_gpu_baseline.cases import build_cases, representative_style
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == f'paint_{mode}')
-    style = replace(case.style, karaoke_anim='none', ruby_colors_follow_main=False,
+    style = replace(case.style, karaoke_anim=karaoke, ruby_colors_follow_main=False,
                     ruby_karaoke_colors=representative_style().karaoke_colors)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, case.timestamps_ms, force_warp=False,
@@ -89,6 +92,24 @@ def test_p00_ruby_with_main_paint_matches_actual_gpu(binary, application, tmp_pa
             frames, _ = collect(process, case.timestamps_ms)
             rendered.append(frames)
     assert_glow_parity(case.timestamps_ms, reference, *rendered, case.case_id, check_p00_edges=True)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_utopia_transparent_body_image_keeps_its_cutouts_between_outlines(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases, representative_style
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'paint_image')
+    texture = write_png(tmp_path / 'paint-with-alpha.png', pattern('transparent'))
+    colors = base.style.karaoke_colors
+    before = replace(colors.before, text=replace(colors.before.text, image_path=str(texture)))
+    after = replace(colors.after, text=replace(colors.after.text, image_path=str(texture)))
+    style = replace(base.style, karaoke_anim='utopia', ruby_colors_follow_main=False,
+                    karaoke_colors=replace(colors, before=before, after=after),
+                    ruby_karaoke_colors=representative_style().karaoke_colors)
+    case = replace(base, case_id='utopia_paint_image_with_alpha', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (600, 1230, 1500, 2350, 2600, 3550, 4250, 4600))
 
 
 @pytest.mark.parametrize('mode', MODES)

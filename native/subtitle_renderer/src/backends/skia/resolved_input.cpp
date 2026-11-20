@@ -376,8 +376,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     const auto opaque = [](const ::subtitle::skia::SolidOutline& stroke) {
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
                     };
-                    if ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
-                        || (glyph.outerOutline && !opaque(*glyph.outerOutline)))
+                    const bool paintedSinging = singingScale && !transforms && !line.zoomPulseEnabled
+                        && features.contains("p06_utopia_main_paint");
+                    if (!paintedSinging && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
+                        || (glyph.outerOutline && !opaque(*glyph.outerOutline))))
                         throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");
                     const auto ink = glyph.path.computeTightBounds();
                     glyph.pivot.inkLeft = ink.fLeft;
@@ -476,6 +478,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_no_wipe_decoration");
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
+        const bool singingMainPaint = rubyMainPaint && singingScale && !line.zoomPulseEnabled
+            && features.contains("p06_utopia_main_paint");
         const bool paintedGlow = rubyMainPaint && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
@@ -503,7 +507,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (gradient || image) {
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
-                || style.vertical || style.rightToLeft || line.wipeReverse || utopia
+                || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
                 || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
                 || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint) || !projected.charStyles.empty())
