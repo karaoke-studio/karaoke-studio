@@ -133,6 +133,49 @@ def test_static_line_band_caps_share_the_width_when_the_band_is_tall(binary, app
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_static_line_band_can_include_the_upper_reading_box(binary, reading, target, tmp_path):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, line_band_enabled=True, line_band_fill_mode='stretch',
+                    line_band_image=str(static_band_image(tmp_path)), line_band_pad_top_px=2)
+    body = upper_ir(binary, (track, replace(style, line_band_include_ruby=False)), 1)
+    annotated = upper_ir(binary, (track, replace(style, line_band_include_ruby=True)), 1)
+    feature = 'p08_ruby_line_band'
+    assert feature in body['required_features'] and feature in annotated['required_features']
+    source = annotated['skia_layout']['lines'][0]
+    rect = source['line_band_rect']
+    body_rect = body['skia_layout']['lines'][0]['line_band_rect']
+    assert rect[0] == body_rect[0] and rect[2:] == body_rect[2:]
+    assert rect[1] < body_rect[1] and rect[1] < min(u['baseline_y'] for u in source['ruby_groups'][0]['units'])
+    bad = copy.deepcopy(annotated)
+    bad['required_features'].remove(feature)
+    t = annotated['track']['lines'][0]['display_start_ms']+170
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, annotated)
+        before, _ = collect(process, [t])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        after, _ = collect(process, [t], generation=2)
+    assert before[0].any() and np.array_equal(before[0], after[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('include_ruby', [False, True])
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+def test_static_line_band_with_ruby_matches_actual_gpu(binary, application, tmp_path, include_ruby, semantics):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    style = replace(base.style, line_band_image=str(static_band_image(tmp_path)), line_band_include_ruby=include_ruby,
+                    line_band_cap_left_px=5, line_band_cap_right_px=9, layout_semantics=semantics,
+                    entry_anim='slide_in', exit_anim='slide_out')
+    case = replace(base, case_id=f'static_line_band_ruby_{semantics}_{include_ruby}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 450, 650, 1000, 1500, 2600, 4950, 5300, 5450, 5500))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')
