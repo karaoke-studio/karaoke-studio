@@ -34,6 +34,11 @@ struct LineBandTexture {
         SkColor color = SK_ColorWHITE;
         Position position = Position::Outside;
     };
+    struct Blur {
+        float size = 0, spread = 0, range = .5f;
+        SkColor color = SK_ColorWHITE;
+        float dx = 0, dy = 0;
+    };
 
     sk_sp<SkImage> image;
     float opacity = 0;
@@ -43,14 +48,15 @@ struct LineBandTexture {
     sk_sp<SkImage> staffLines, staffClef;
     std::vector<Frame> animation;
     std::optional<Stroke> stroke;
+    std::optional<Blur> shadow, glow;
 
     void prepareMiddle();
-    void validateStrokeBounds(const SkRect&) const;
+    void validateEffectBounds(const SkRect&) const;
     void draw(SkCanvas&, const SkRect& destination, float alpha, int timeMs) const;
 
 private:
     void drawContent(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
-    void drawStroke(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
+    void drawDecorated(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
     void drawLayer(SkCanvas&, const sk_sp<SkImage>&, const sk_sp<SkImage>& middle,
                    const SkRect& destination, float alpha) const;
 };

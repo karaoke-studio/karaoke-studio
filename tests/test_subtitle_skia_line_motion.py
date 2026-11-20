@@ -516,6 +516,61 @@ def test_line_band_stroke_inside_stays_in_image_alpha(binary, project, tmp_path,
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_line_band_blur_uses_independent_shadow_and_glow_layers(binary, project, tmp_path, target):
+    track, style = motion_project(project, entry='none', exit='none')
+    style = replace(style, line_band_enabled=True, line_band_image=str(transparent_band_image(tmp_path)),
+                    line_band_fill_mode='stretch', line_band_shadow_enabled=True, line_band_shadow_size_px=4,
+                    line_band_shadow_distance_px=15, line_band_shadow_angle_deg=0,
+                    line_band_shadow_color='#0000FF', line_band_glow_enabled=True, line_band_glow_size_px=3,
+                    line_band_glow_color='#FF0000')
+    ir = ir_for(binary, (track, style))
+    feature = 'p08_line_band_blur'
+    assert feature in ir['required_features']
+    no_glow = ir_for(binary, (track, replace(style, line_band_glow_enabled=False)))
+    no_shadow = ir_for(binary, (track, replace(style, line_band_shadow_enabled=False)))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    t = ir['track']['lines'][0]['display_start_ms'] + 250
+    oversized = copy.deepcopy(ir)
+    oversized['style']['line_band_glow_size_px'] = 512
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        both, _ = collect(process, [t])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        with pytest.raises(NativeRendererError, match='阴影或发光尺寸超限'):
+            configure(process, oversized)
+        replay, _ = collect(process, [t], generation=2)
+        configure(process, no_glow)
+        shadow, _ = collect(process, [t], generation=3)
+        configure(process, no_shadow)
+        glow, _ = collect(process, [t], generation=4)
+    assert np.array_equal(both[0], replay[0])
+    composite = premultiplied(both[0])
+    assert np.count_nonzero(composite[..., 0] - premultiplied(shadow[0])[..., 0] > 4) > 50
+    assert np.count_nonzero(composite[..., 2] - premultiplied(glow[0])[..., 2] > 4) > 50
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['shadow', 'glow', 'both'])
+def test_line_band_blur_matches_actual_gpu(binary, application, tmp_path, effect):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    style = replace(base.style, line_band_image=str(transparent_band_image(tmp_path)), line_band_fill_mode='stretch',
+                    line_band_shadow_enabled=effect in {'shadow', 'both'}, line_band_shadow_size_px=2,
+                    line_band_shadow_spread_pct=35, line_band_shadow_distance_px=11, line_band_shadow_angle_deg=40,
+                    line_band_shadow_color='#B65225', line_band_glow_enabled=effect in {'glow', 'both'},
+                    line_band_glow_size_px=3, line_band_glow_spread_pct=25, line_band_glow_range_pct=65,
+                    line_band_glow_color='#1DD8F6', line_band_stroke_enabled=effect == 'both',
+                    line_band_stroke_position='center', line_band_stroke_size_px=2,
+                    entry_anim='fade', exit_anim='slide_out')
+    case = replace(base, case_id=f'line_band_blur_{effect}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 450, 600, 1500, 2600, 4400, 5200, 5499, 5500))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')

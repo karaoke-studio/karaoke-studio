@@ -170,6 +170,16 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
         texture.stroke = ::subtitle::skia::LineBandTexture::Stroke{
             band.stroke.size, SkColorSetARGB(color.alpha, color.red, color.green, color.blue), position};
     }
+    const auto resolveBlur = [](const LineBandStyle::Effect& style, bool shadow)
+            -> std::optional<::subtitle::skia::LineBandTexture::Blur> {
+        if (!style.enabled) return {};
+        const auto& color = style.color;
+        return ::subtitle::skia::LineBandTexture::Blur{style.size, style.spreadPx, shadow ? .5f : style.range,
+            SkColorSetARGB(color.alpha, color.red, color.green, color.blue),
+            shadow ? style.offsetX : 0.f, shadow ? style.offsetY : 0.f};
+    };
+    texture.shadow = resolveBlur(band.shadow, true);
+    texture.glow = resolveBlur(band.glow, false);
     return texture;
 }
 }

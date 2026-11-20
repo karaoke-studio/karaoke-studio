@@ -10,6 +10,7 @@
 #include <QtGui/QColor>
 #include <map>
 #include <algorithm>
+#include <cmath>
 
 namespace krok::subtitle::native::scene {
 namespace {
@@ -96,6 +97,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool positionedStrokeBand = features.contains("p08_line_band_stroke_position");
     const bool strokeBand = features.contains("p08_line_band_outer_stroke") || positionedStrokeBand;
     const bool hasStrokeBand = band.stroke.enabled && band.stroke.sizePx > 0;
+    const bool blurBand = features.contains("p08_line_band_blur");
+    const bool hasBlurBand = (band.shadow.enabled && band.shadow.sizePx > 0) || (band.glow.enabled && band.glow.sizePx > 0);
     const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
     const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
@@ -109,7 +112,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || !bandImageSupported
             || cfg.vertical || cfg.rightToLeft || (tintedBand == band.tint.isEmpty())
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
-            || !bandLayersSupported || band.edgeKind != "none" || band.shadow.enabled || band.glow.enabled
+            || !bandLayersSupported || band.edgeKind != "none" || blurBand != hasBlurBand
             || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")
                 || band.stroke.sizePx > 512)))))
         throw BackendError("Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设");
@@ -138,6 +141,24 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             stroke.position = band.stroke.position.toStdString();
             const QColor paint(band.stroke.color);
             if (paint.isValid()) stroke.color = color(paint);
+        }
+        if (blurBand) {
+            const auto projectBlur = [&](const auto& config, LineBandStyle::Effect& effect) {
+                if (!config.enabled || config.sizePx <= 0) return;
+                effect.enabled = true;
+                effect.size = float(config.sizePx * cfg.dpr);
+                effect.spreadPx = effect.size * config.spreadPct / 100.f;
+                effect.range = float(config.rangePct) / 100.f;
+                const QColor paint(config.color);
+                if (paint.isValid()) effect.color = color(paint);
+                const double radians = config.angleDeg * 3.14159265358979323846 / 180.;
+                const double x = config.distancePx > 0 ? std::cos(radians) * config.distancePx : config.offsetXPx;
+                const double y = config.distancePx > 0 ? std::sin(radians) * config.distancePx : config.offsetYPx;
+                effect.offsetX = float(x * cfg.dpr);
+                effect.offsetY = float(y * cfg.dpr);
+            };
+            projectBlur(band.shadow, out.lineBand.shadow);
+            projectBlur(band.glow, out.lineBand.glow);
         }
         if (tintedBand) {
             const QColor tint(band.tint);

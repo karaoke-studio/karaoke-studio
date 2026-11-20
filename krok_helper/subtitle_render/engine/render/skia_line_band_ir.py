@@ -27,13 +27,15 @@ def write_line_band(ir, style, prepared, *, width, height):
         return
     sequence = bool(material and material.lower().endswith(('.webp', '.gif')))
     stroke = style.line_band_stroke_enabled and style.line_band_stroke_size_px > 0
+    shadow = style.line_band_shadow_enabled and style.line_band_shadow_size_px > 0
+    glow = style.line_band_glow_enabled and style.line_band_glow_size_px > 0
     geometry = prepared.geometry
     ruby = geometry.ruby
     if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.vertical or style.right_to_left
             or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
-            or style.line_band_shadow_enabled or style.line_band_glow_enabled
+            or (sequence and (shadow or glow))
             or (stroke and (sequence or style.line_band_stroke_position not in {'outside', 'inside', 'center'}))
             or style.volume_enabled or style.lit_enabled
             or any(char.role_label or char.vector_glyph is not None
@@ -106,6 +108,8 @@ def write_line_band(ir, style, prepared, *, width, height):
     if stroke:
         ir['required_features'].append('p08_line_band_outer_stroke' if style.line_band_stroke_position == 'outside'
                                        else 'p08_line_band_stroke_position')
+    if shadow or glow:
+        ir['required_features'].append('p08_line_band_blur')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
     if sliced:
