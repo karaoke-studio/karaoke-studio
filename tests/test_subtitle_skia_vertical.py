@@ -166,12 +166,13 @@ def decorated_columns(project, kind, *, reverse=False, outline=False, mixed_dire
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('kind', ['glow', 'shadow', 'shadow_to_glow'])
-@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('directions', ['forward', 'reverse', 'mixed'])
 @pytest.mark.parametrize('outline', [False, True])
-def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, project, target, kind, reverse, outline):
+def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, project, target, kind, directions, outline):
     from test_subtitle_skia_outline_ruby import premultiplied
 
-    track, style, plain = decorated_columns(project, kind, reverse=reverse, outline=outline)
+    track, style, plain = decorated_columns(project, kind, reverse=directions == 'reverse', outline=outline,
+                                            mixed_directions=directions == 'mixed')
     ir = ir_for(binary, (track, style))
     undecorated = ir_for(binary, (track, plain))
     feature = 'p06_vertical_columns_decoration'
@@ -180,8 +181,9 @@ def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, proj
     assert ('p06_vertical_columns_outline' in features) == outline
     assert ('p06_vertical_glow' in features) == (kind != 'shadow')
     assert ('p06_vertical_shadow' in features) == (kind != 'glow')
-    assert ('p06_vertical_reverse_glow' in features) == (reverse and kind != 'shadow')
-    assert ('p06_vertical_reverse_shadow' in features) == (reverse and kind != 'glow')
+    assert ('p06_vertical_reverse_glow' in features) == (directions != 'forward' and kind != 'shadow')
+    assert ('p06_vertical_reverse_shadow' in features) == (directions != 'forward' and kind != 'glow')
+    assert ('p06_vertical_mixed_column_decoration' in features) == (directions == 'mixed')
     assert feature not in undecorated['required_features']
     # Decoration does not move the columns, the page windows or the clocks.
     assert ir['skia_layout']['lines'] == undecorated['skia_layout']['lines']
@@ -216,8 +218,8 @@ def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, proj
             assert weights.sum() > 0
             return np.average(np.arange(weights.size), weights=weights)
 
-        direction = -1 if reverse else 1
-        for column in columns:
+        for column, line in zip(columns, track.lines, strict=True):
+            direction = -1 if line.wipe_reverse else 1
             assert rows(frames[0], 0, column).any() and not rows(frames[0], 2, column).any()
             middle, late = rows(frames[1], 2, column), rows(frames[2], 2, column)
             assert 0 < middle.sum() < late.sum()
@@ -232,22 +234,21 @@ def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, proj
         assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('change', ['mixed_directions', 'ruby'])
-def test_vertical_column_decoration_stays_single_direction_without_ruby(binary, project, change):
-    track, style, _ = decorated_columns(project, 'glow', mixed_directions=change == 'mixed_directions')
-    if change == 'ruby':
-        track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=360, target_line_index=0,
-                                                      target_char_start=0, target_char_end=1)])
+def test_vertical_column_decoration_rejects_ruby_layout(binary, project):
+    track, style, _ = decorated_columns(project, 'glow')
+    track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=360, target_line_index=0,
+                                                  target_char_start=0, target_char_end=1)])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('reverse', [False, True])
-def test_vertical_column_decoration_fades_each_line_independently(binary, project, target, reverse):
+@pytest.mark.parametrize('directions', ['forward', 'reverse', 'mixed'])
+def test_vertical_column_decoration_fades_each_line_independently(binary, project, target, directions):
     from test_subtitle_skia_outline_ruby import premultiplied
 
-    track, style, _ = decorated_columns(project, 'shadow_to_glow', reverse=reverse, outline=True)
+    track, style, _ = decorated_columns(project, 'shadow_to_glow', reverse=directions == 'reverse', outline=True,
+                                        mixed_directions=directions == 'mixed')
     # Separate the two glow footprints so a column crop has one source alpha.
     style = replace(style, line_gap_px=100)
     track = replace(track, lines=[track.lines[0], replace(track.lines[1], display_start_override_ms=100,
@@ -286,22 +287,12 @@ def test_vertical_column_decoration_fades_each_line_independently(binary, projec
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_native_rejects_mixed_direction_column_decoration(binary, project, target):
-    def spliced(decorated):
-        irs = []
-        for reverse in (False, True):
-            track, style, plain = decorated_columns(project, 'glow', reverse=reverse)
-            irs.append(ir_for(binary, (track, style if decorated else plain)))
-        forward, backward = irs
-        mixed = copy.deepcopy(forward)
-        mixed['track']['lines'][1] = backward['track']['lines'][1]
-        mixed['skia_layout'] = {**forward['skia_layout'], **backward['skia_layout'],
-                                'lines': [forward['skia_layout']['lines'][0], backward['skia_layout']['lines'][1]]}
-        mixed['required_features'] = list(dict.fromkeys(forward['required_features'] + backward['required_features']))
-        return forward, mixed
-
-    _, plain_mixed = spliced(False)
-    ir, mixed = spliced(True)
+def test_native_rejects_mixed_direction_column_decoration_without_capability(binary, project, target):
+    track, style, plain = decorated_columns(project, 'glow', mixed_directions=True)
+    plain_mixed = ir_for(binary, (track, plain))
+    ir = ir_for(binary, (track, style))
+    mixed = copy.deepcopy(ir)
+    mixed['required_features'].remove('p06_vertical_mixed_column_decoration')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         # Mixed directions remain valid for undecorated (transparent) columns.
         configure(process, plain_mixed)

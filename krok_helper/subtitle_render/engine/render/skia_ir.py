@@ -473,6 +473,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
         if columns:
             ir['required_features'].append('p06_vertical_columns_decoration')
+            if reverse_vertical and any(not line.wipe_reverse for line in track.lines):
+                ir['required_features'].append('p06_vertical_mixed_column_decoration')
         if reverse_vertical:
             ir['required_features'].extend(f'p06_vertical_reverse_{kind}' for kind in decorations)
         if 'p07_line_fade' in ir['required_features']:

@@ -51,6 +51,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_vertical_reverse_outline",
         "p06_vertical_columns_outline",
         "p06_vertical_columns_decoration",
+        "p06_vertical_mixed_column_decoration",
         "p07_vertical_columns_decoration_fade",
         "p06_vertical_ruby_outline",
         "p05_vertical_ruby_groups",
@@ -298,6 +299,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_columns_decoration_fade")
         && (!features.contains("p06_vertical_columns_decoration") || !features.contains("p07_vertical_decoration_fade")))
         throw BackendError("Skia 多列竖排装饰淡化缺少对应能力");
+    if (features.contains("p06_vertical_mixed_column_decoration")
+        && (!features.contains("p06_vertical_columns_decoration") || !reverseVertical))
+        throw BackendError("Skia 正反混合竖排列缺少相应走字装饰能力");
     if (verticalRubyDecoration
         && (!features.contains("p05_vertical_ruby") || features.contains("p05_vertical_ruby_groups")
             || !(verticalGlow || verticalShadow || features.contains("p06_ruby_glow") || features.contains("p06_ruby_shadow"))))
