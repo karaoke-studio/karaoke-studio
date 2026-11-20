@@ -2542,6 +2542,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_ruby_particle_assembly` 接通单行正向横排的粒子拼接入场或消散退场。正文与上注音共用宿主字的过渡透明度，保留粒子时钟、像素块图形及消散收尾规则。绘制端在几何过渡窗口结束后恢复原有走字。
 - 原样 `entry_assemble_in`、`exit_dissolve_out` 共 12 个采样帧通过既定 1080p 画面预算，可配置增至 80/129。Windows 18 项通过，WSL Wayland 12 项通过、6 项跳过，Windows/Linux 独立 Raster 各 2 项通过。四份原生构建各通过 3 项 CTest。
+- 同一批在 WSL X11 也通过 12 项、跳过 6 项。对 `4cad806c` 的 80 个原样场景整批复跑，346 个 1080p 采样帧均通过。
 - 音量柱和正文画笔批次的 macOS 托管 Metal [44676103617](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44676103617) 五项作业均通过，两架构各通过 1654 项产品用例、229 项干净打包用例，98 组规范快照一致。
 
 ## 15. 前期探针清理范围
