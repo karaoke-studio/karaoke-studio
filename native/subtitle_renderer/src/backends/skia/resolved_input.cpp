@@ -167,11 +167,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
             && line.bursts.empty() && line.exitAnimation == "none" && line.entryDurationMs > 0;
-        const bool affineComposition = transformedRuby && line.bursts.empty()
-            && line.entryAnimation == "none" && line.exitDurationMs > 0
+        const bool affineExit = line.entryAnimation == "none"
             && ((features.contains("p07_ruby_character_affine_exit")
                     && (line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"))
                 || (features.contains("p07_ruby_character_stretch_exit") && line.exitAnimation == "stretch_out"));
+        const bool waveScatter = features.contains("p07_ruby_character_wave_scatter")
+            && line.entryAnimation == "wave_in" && line.exitAnimation == "scatter_out" && line.entryDurationMs > 0;
+        const bool affineComposition = transformedRuby && line.bursts.empty() && line.exitDurationMs > 0
+            && (affineExit || waveScatter);
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none"))

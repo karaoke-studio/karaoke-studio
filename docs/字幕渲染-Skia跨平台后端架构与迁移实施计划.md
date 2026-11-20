@@ -581,6 +581,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 六种粒子退场与上注音、双描边、光晕和普通 Utopia，见 §14.137。
   - [x] 散开与收拢退场，正文和上注音各自绕规范轴心变换，见 §14.138。
   - [x] 拉伸退场与上注音、双描边、光晕和普通 Utopia，见 §14.139。
+  - [x] 同一行按局部覆盖组合波浪入场和散开退场，见 §14.140。
   - [x] 正向横排无描边正文的拉伸、辉光及其入退场背层，见 §14.78。
   - [x] 正向横排实色正文的噪声遮罩、拖影及入退场回跳，见 §14.84。
   - [x] 正向横排的噪声出入场与上注音、光晕及普通 Utopia 唱字叠加，见 §14.126。
@@ -2567,6 +2568,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 原样 `exit_stretch_out` 的 6 个 1080p 采样帧通过实际 D2D GPU 对 Skia Vulkan、Vulkan 对 Raster 的原画面预算。原样 `entry_stretch_in` 在 650ms 的边界差为 32px，`entry_glow_in` 在 450ms 的平均通道误差约 6.26，`exit_glow_out` 在 5100ms 的 alpha mask IoU 约 0.9698，均超出原预算，仍待验收。
 - P00 原样可配置范围增至 **89/129**。Windows 相关用例 **34 通过**，X11、Wayland 各 **20 通过、14 项 Windows 专用跳过**，Windows/Linux 独立 Raster 各 **10 通过**，四份构建各通过 3 项 CTest。
 - Claude 在独立构建中定位到 `entry_spin_flip` 301ms 的差异来自低透明度描边覆盖量的取整。D2D 与 Vulkan 总 alpha 均为 221，Raster 为 228，峰值 2/255。独立纹理 alpha 阶梯探针在 1/255 画笔透明度下测得 Vulkan/Raster 首个输出为 1 的 texel alpha 分别为 143/128。同一阈值在其他 Vulkan 设备或 Metal 上尚待验证。探针为 `build/p07-entry-spin-claude-repro.patch`，产品门禁保持。
+
+### 14.140 P07.2 波浪入场与散开退场的逐行覆盖（2026-11-20）
+
+- `p07_ruby_character_wave_scatter` 按最终序列化的逐行样式识别 `wave_in` 和 `scatter_out`。注音入场跟随宿主字的平移，退场绕各自规范轴心旋转、缩放，两段之间使用原走字时钟。删除能力声明后拒绝配置，上一场景仍可顺序和回跳绘制。
+- 原样 `line_override` 的 4 个 1080p 帧通过实际 D2D GPU 对 Skia Vulkan、Vulkan 对 Raster 的原有画面预算。Windows 新组合 **3 通过**，X11 和 Wayland 各 **22 通过、15 项 Windows 专用跳过**，独立 Windows Raster 新组合 **1 通过**、独立 Linux Raster 相关 **11 通过**，四份原生构建各通过 3 项 CTest。
+- §14.136 拼接与消散的 `4cad806c` 阶段 Mac CI [44686416567](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44686416567) 五项成功。arm64/x64 各 **1664 通过、1187 跳过**，双架构干净包各 **229 通过**，98 份规范样例严格一致。托管虚拟 Metal 的硬件门槛仍待实机复验。
 
 ## 15. 前期探针清理范围
 

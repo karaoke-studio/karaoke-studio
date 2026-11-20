@@ -13,6 +13,7 @@ from test_subtitle_skia_line_fade import (
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_ir
 from test_subtitle_skia_rtl_flow import rtl_source
 from test_subtitle_skia_vertical import vertical_ruby_source
+from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -178,12 +179,45 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
     assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[0])
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    override = LineAnimationOverride(entry_anim='wave_in', exit_anim='scatter_out',
+                                     entry_duration_ms=600, exit_duration_ms=600)
+    track = replace(track, lines=[replace(track.lines[0], animation_override=override)])
+    style = replace(style, entry_anim='fade', exit_anim='fade', karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_character_wave_scatter'
+    line, = ir['track']['lines']
+    assert (line['entry_anim'], line['exit_anim']) == ('wave_in', 'scatter_out')
+    assert feature in ir['required_features']
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert np.isfinite(group['affine_pivot_y'])
+    assert all(np.isfinite(unit['affine_pivot_x']) for unit in group['units'])
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    entering = line['display_start_ms'] + 150
+    leaving = line['display_end_ms'] - 350
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [entering, leaving, entering])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [leaving, entering], generation=2)
+    assert frames[0].any() and frames[1].any()
+    assert not np.array_equal(frames[0], frames[1])
+    assert np.array_equal(frames[0], frames[2])
+    assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[0], replay[1])
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
     'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
     'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle',
     'exit_scatter_out', 'exit_converge_out',
-    'exit_stretch_out',
+    'exit_stretch_out', 'line_override',
 ])
 def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tmp_path, case_id):
     from scripts.subtitle_gpu_baseline.cases import build_cases
