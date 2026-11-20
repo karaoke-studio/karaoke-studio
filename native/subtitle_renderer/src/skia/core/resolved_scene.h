@@ -17,6 +17,7 @@
 #include "singing_scale.h"
 #include "utopia_transition.h"
 #include "../../model/wipe_point.h"
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -45,6 +46,7 @@ struct ResolvedRubyGroup {
     std::optional<SkPoint> spinPivot;
     bool affine = false;
     bool lower = false;
+    std::array<sk_sp<SkShader>, 2> fillGradients;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

@@ -34,5 +34,6 @@ private:
     std::optional<SkPoint> spinPivot_;
     bool affine_ = false;
     bool lower_ = false;
+    std::array<sk_sp<SkShader>, 2> fillGradients_;
 };
 }

@@ -50,6 +50,33 @@ bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const
     return !outline.width || (before.mode == "solid" && after.mode == "solid"
         && outline.before == argb(before.color) && outline.after == argb(after.color));
 }
+bool rubyFillGradientMode(const PaintStyle& fill) {
+    return fill.mode == "gradient_horizontal" || fill.mode == "gradient_vertical" || fill.mode == "split_vertical";
+}
+
+std::array<sk_sp<SkShader>, 2> rubyFillGradients(const TextStyle& paint, const QJsonObject& line,
+    const std::vector<::subtitle::skia::ResolvedCell>& cells, float outlinePad, double dpr) {
+    SkRect local = SkRect::MakeEmpty();
+    for (const auto& cell : cells)
+        if (!cell.path.isEmpty()) local.join(cell.path.computeTightBounds());
+    std::array<sk_sp<SkShader>, 2> result;
+    if (local.isEmpty()) return result;
+    const PaintStyle* fills[] = {&paint.rubyBeforeFillPaint, &paint.rubyAfterFillPaint};
+    for (int phase = 0; phase < 2; ++phase) {
+        const auto& fill = *fills[phase];
+        if (!rubyFillGradientMode(fill)) continue;
+        auto bounds = local;
+        if (fill.mode == "gradient_horizontal" && paint.rubyHorizontalGradientWithMain) {
+            const auto domain = line.value("body_gradient_bounds").toArray();
+            if (domain.size() != 4) throw BackendError("Skia 上注音共享横向渐变缺少正文范围");
+            bounds.fLeft = float(pivotCoordinate(domain[0]) * dpr);
+            bounds.fRight = float(pivotCoordinate(domain[2]) * dpr);
+            if (bounds.fRight <= bounds.fLeft) throw BackendError("Skia 上注音共享横向渐变范围无效");
+        }
+        result[phase] = ::subtitle::skia::lineGradient(fill, bounds, outlinePad);
+    }
+    return result;
+}
 bool validPhases(const QJsonObject& layer) {
     return !layer.isEmpty() && layer.size() == int(layer.contains("before")) + int(layer.contains("after"));
 }
@@ -214,8 +241,15 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         };
         ::subtitle::skia::StaticGlow glow{
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
-        if (!lower && (paint.rubyBeforeFillPaint.mode != "solid" || paint.rubyAfterFillPaint.mode != "solid"))
-            throw BackendError("Skia 注音最终绘制当前仅支持实色");
+        const bool gradientFill = !lower && (rubyFillGradientMode(paint.rubyBeforeFillPaint)
+                                           || rubyFillGradientMode(paint.rubyAfterFillPaint));
+        const bool allowGradientFill = gradientFill && features.contains("p06_ruby_fill_gradient")
+            && !vertical && staticLine && lowerWipe && line.karaokeAnimation != "no_wipe"
+            && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
+            && line.bursts.empty() && scene.charStyles.empty();
+        const auto validFill = [&](const auto& fill) { return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill)); };
+        if (!lower && (!validFill(paint.rubyBeforeFillPaint) || !validFill(paint.rubyAfterFillPaint)))
+            throw BackendError("Skia 注音最终绘制缺少对应画笔能力");
         const auto fill = object.value("paint").toObject();
         const auto before = lower ? rgbaPaint(fill.value("before")) : argb(paint.rubyBeforeFillPaint.color);
         const auto after = lower ? rgbaPaint(fill.value("after")) : argb(paint.rubyAfterFillPaint.color);
@@ -241,7 +275,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                                    width2, glyphs.dpr))
                 throw BackendError("Skia 上注音描边与实色样式不一致");
         }
-        const bool protectFill = (before >> 24) < 255 || (after >> 24) < 255;
+        const bool protectFill = (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
+            && (::subtitle::skia::paintNeedsBodyProtection(paint.rubyBeforeFillPaint)
+                || ::subtitle::skia::paintNeedsBodyProtection(paint.rubyAfterFillPaint)));
         const float innerWidth = float(primary.width * glyphs.dpr);
         const float secondaryWidth = float(secondary.width * glyphs.dpr);
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
@@ -378,8 +414,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 竖排同列注音的墨迹范围重叠");
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
+        auto gradients = gradientFill ? rubyFillGradients(paint, source, cells,
+            ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr)), glyphs.dpr)
+            : std::array<sk_sp<SkShader>, 2>{};
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
-                          fadeOwner, spinPivot, affineComposition, lower});
+                          fadeOwner, spinPivot, affineComposition, lower, std::move(gradients)});
     }
     return groups;
 }

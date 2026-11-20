@@ -112,6 +112,47 @@ def test_utopia_transparent_body_image_keeps_its_cutouts_between_outlines(binary
     assert_ruby_transition_gpu_parity(binary, case, (600, 1230, 1500, 2350, 2600, 3550, 4250, 4600))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('mode', MODES)
+def test_p00_inherited_ruby_gradients_match_actual_gpu(binary, application, tmp_path, mode):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == f'paint_{mode}')
+    times = tuple(sorted({*case.timestamps_ms, 3300, 3430, 3520, 3750, 4111, 4490, 4520}))
+    assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_gradient_can_use_its_ink_or_the_shared_body_domain(binary, reading, target):
+    track, style = reading
+    shades = PaintFill(mode='gradient_horizontal', start_color='#FFDD1100', end_color='#FF2211DD')
+    body = replace(style.karaoke_colors, before=replace(style.karaoke_colors.before, text=shades))
+    ruby = replace(style.ruby_karaoke_colors, before=replace(style.ruby_karaoke_colors.before, text=shades))
+    style = replace(style, karaoke_anim='utopia', karaoke_colors=body, ruby_karaoke_colors=ruby)
+    layout = [upper_ir(binary, (track, replace(style, ruby_horizontal_gradient_with_main=share)), 1)
+              for share in (False, True)]
+    feature = 'p06_ruby_fill_gradient'
+    assert all(feature in ir['required_features'] for ir in layout)
+    assert layout[0]['skia_layout']['lines'] == layout[1]['skia_layout']['lines']
+    units = layout[0]['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    cutoff = round(max(unit['baseline_y'] + unit['metrics']['ink'][3] for unit in units)) + 2
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, layout[0])
+        local, _ = collect(process, [150])
+        configure(process, layout[1])
+        shared, _ = collect(process, [150, 500, 150], generation=2)
+        bad = copy.deepcopy(layout[1])
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [150], generation=2)
+    assert np.array_equal(shared[0], shared[-1]) and np.array_equal(shared[0], replay[0])
+    assert np.array_equal(local[0][..., 3], shared[0][..., 3])
+    assert np.array_equal(local[0][cutoff:], shared[0][cutoff:])
+    assert not np.array_equal(local[0][:cutoff], shared[0][:cutoff])
+
+
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_gradient_uses_one_domain_and_replays(binary, project, mode, target, tmp_path):

@@ -1,6 +1,6 @@
 """Project the line-wide coordinates needed by Skia body and outline gradients and image paints."""
 
-from ..style.style_semantics import effective_karaoke_colors
+from ..style.style_semantics import effective_karaoke_colors, effective_ruby_karaoke_colors
 
 
 _GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
@@ -26,7 +26,7 @@ def write_body_gradient_bounds(ir, plan):
     by the line's visual outline pad (applied natively at the reference scale).
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
-    enabled = outlined_gradient = images = ruby_paint = singing_paint = False
+    enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
@@ -44,6 +44,9 @@ def write_body_gradient_bounds(ir, plan):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint = ruby_paint or annotated
         singing_paint = singing_paint or singing
+        if annotated and modes & _GRADIENTS:
+            colors = effective_ruby_karaoke_colors(look)
+            ruby_gradient = ruby_gradient or bool({colors.before.text.mode, colors.after.text.mode} & _GRADIENTS)
         images = images or 'image' in modes
         if not modes & _GRADIENTS:
             continue
@@ -62,6 +65,7 @@ def write_body_gradient_bounds(ir, plan):
         (enabled, 'p06_body_gradient'), (outlined_gradient, 'p06_outline_gradient'),
         (images, 'p06_image_fill'), (ruby_paint, 'p06_ruby_main_paint'),
         (singing_paint, 'p06_utopia_main_paint'),
+        (ruby_gradient, 'p06_ruby_fill_gradient'),
     ):
         if enabled_feature:
             ir['required_features'].append(feature)

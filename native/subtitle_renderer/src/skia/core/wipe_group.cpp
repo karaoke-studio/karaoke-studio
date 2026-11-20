@@ -10,9 +10,10 @@ namespace subtitle::skia {
 namespace {
 template <class Color>
 void paintRubyLayer(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, int layer, Color&& color,
-                    float opacity = 1.f) {
+                    float opacity = 1.f, sk_sp<SkShader> shader = {}) {
     const auto paint = [&](const SkPath& path, std::uint32_t before, std::uint32_t after) {
-        brush.setColor(color(before, after));
+        brush.setShader(shader);
+        brush.setColor(shader ? SK_ColorWHITE : color(before, after));
         if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
         canvas.drawPath(path, brush);
     };
@@ -30,9 +31,11 @@ void paintRubyLayer(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, 
     paint(stroke->path, stroke->before, stroke->after);
 }
 
-void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after, float opacity) {
+void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after, float opacity,
+                   const sk_sp<SkShader>& fillGradient) {
     for (int layer = 0; layer < 3; ++layer)
-        paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; }, opacity);
+        paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; },
+                       opacity, layer == 2 ? fillGradient : nullptr);
 }
 
 // Protected ruby rings scale with the glyph. Opaque outlines keep their width.
@@ -62,7 +65,8 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
     : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
-      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower) {
+      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
+      fillGradients_(group.fillGradients) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -118,7 +122,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
                                         : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
                 clipViewportWipe(canvas, clip, viewportHeight, true);
             }
-            paintRubyCell(canvas, paint, cell, after, opacity);
+            paintRubyCell(canvas, paint, cell, after, opacity, fillGradients_[after]);
         }
     }
 }
@@ -249,7 +253,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     const auto draw = [&](bool after) {
         for (const auto& cell : cells_) {
             if (pose.isIdentity()) {
-                paintRubyCell(canvas, paint, cell, after, opacity);
+                paintRubyCell(canvas, paint, cell, after, opacity, fillGradients_[after]);
             } else {
                 auto unitPose = pose;
                 if (affine_) {
@@ -262,7 +266,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
                     unitPose.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
                 }
                 const auto posed = posedUnit(cell, {opacity, unitPose, true});
-                paintRubyCell(canvas, paint, *posed, after, opacity);
+                paintRubyCell(canvas, paint, *posed, after, opacity, fillGradients_[after]);
             }
         }
     };
