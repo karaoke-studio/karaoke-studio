@@ -447,10 +447,10 @@ def test_upper_ruby_shaped_scanline_and_singing_particles_match_actual_gpu(binar
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('speed', [50, 200])
-def test_upper_ruby_band_singing_and_scanline_particles_use_separate_speed(binary, reading, target, speed):
-    track, style = ruby_band_source(reading, 10, True)
-    style = replace(style, sing_fx='flame', scanline_effect='star', fx_particle_speed_pct=speed,
+@pytest.mark.parametrize('speed,fx', [(50, 'flame'), (200, 'flame'), (200, 'twinkle')])
+def test_upper_ruby_band_singing_and_scanline_particles_use_separate_speed(binary, reading, target, speed, fx):
+    track, style = glow_band_source(reading, 'inherited', utopia=True) if fx == 'twinkle' else ruby_band_source(reading, 10, True)
+    style = replace(style, sing_fx=fx, scanline_effect='star', fx_particle_speed_pct=speed,
                     fx_particle_count=24)
     ir = upper_ir(binary, (track, style), 1)
     scan_only = upper_ir(binary, (track, replace(style, sing_fx='none')), 1)
@@ -461,7 +461,8 @@ def test_upper_ruby_band_singing_and_scanline_particles_use_separate_speed(binar
     scan = [b for b in bursts if b['kind'] == 'scanline']
     singing = [b for b in bursts if b['kind'] != 'scanline']
     assert scan and singing and all(b['emit_ms'] > 0 and b.get('time_scale', 1) == 1 for b in scan)
-    assert {'flame', 'flame_glow'} <= {b['kind'] for b in singing}
+    expected = {'flame', 'flame_glow'} if fx == 'flame' else {'twinkle'}
+    assert expected <= {b['kind'] for b in singing}
     assert all(b.get('emit_ms', 0) == 0 and b.get('time_scale', 1) != 1 for b in singing)
     times = [299, 340, 450, 550, 899, 1100, 1450, 1550, 1900, 2100, 2250, 2400]
     bad = copy.deepcopy(ir)
@@ -1051,7 +1052,6 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
     {'scanline_mode': 'role', 'scanline_role_name': '__global__', 'scanline_effect': 'star'},
     {'entry_anim': 'fade', 'entry_lead_ms': 400},
     {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
-    {'scanline_effect': 'star', 'sing_fx': 'twinkle'},
 ])
 def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
     track, style = glow_band_source(reading, 'inherited')
