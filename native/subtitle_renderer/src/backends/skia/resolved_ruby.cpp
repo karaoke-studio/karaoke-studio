@@ -6,6 +6,7 @@
 #include <QtCore/QJsonArray>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace krok::subtitle::native {
 namespace {
@@ -107,9 +108,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (lineGlow || transition != RubyTransition::None || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
-    if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
+    const auto rubyGroups = source.value("ruby_groups").toArray();
+    const bool multipleVertical = vertical && rubyGroups.size() > 1;
+    int previousSpanEnd = 0;
+    double previousInkBottom = -std::numeric_limits<double>::infinity();
+    if (rubyGroups.size() > 4096 - totalGroups)
         throw BackendError("Skia 注音组总数超限");
-    for (const auto& value : source.value("ruby_groups").toArray()) {
+    for (const auto& value : rubyGroups) {
         if (!value.isObject() || ++totalGroups > 4096 || line.chars.empty())
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
@@ -139,6 +144,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音整字放大轴心与布局不一致");
         const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
+        if (object.contains("span_end_cell") != multipleVertical || (multipleVertical && index < previousSpanEnd))
+            throw BackendError("Skia 竖排同列注音的正文范围无效");
+        if (multipleVertical)
+            previousSpanEnd = integer(object.value("span_end_cell"), index + 1, int(line.chars.size()));
         const auto& paint = line.chars[index].styleIndex >= 0
             ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
         const auto shadowState = [&](bool after) -> ::subtitle::skia::ShadowState {
@@ -194,6 +203,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
         const double wipePad = (primary.width / 2) / glyphs.dpr;
         std::vector<::subtitle::skia::ResolvedCell> cells;
+        double inkTop = std::numeric_limits<double>::infinity();
+        double inkBottom = -std::numeric_limits<double>::infinity();
         for (const auto& unit : units.toArray()) {
             if (!unit.isObject()) throw BackendError("Skia 注音最终单元必须为对象");
             const auto cell = unit.toObject();
@@ -273,6 +284,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                     throw BackendError("Skia 竖排注音要求直立读音单元及有效墨迹边界");
                 glyph.top = float(top.toDouble() * glyphs.dpr);
                 glyph.bottom = float(bottom.toDouble() * glyphs.dpr);
+                inkTop = std::min(inkTop, top.toDouble());
+                inkBottom = std::max(inkBottom, bottom.toDouble());
             } else if (cell.contains("wipe_top") || cell.contains("wipe_bottom")) {
                 throw BackendError("Skia 横排注音单元不能携带竖排范围");
             }
@@ -282,6 +295,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             }
             cells.push_back(std::move(glyph));
         }
+        if (multipleVertical && inkTop < previousInkBottom)
+            throw BackendError("Skia 竖排同列注音的墨迹范围重叠");
+        previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition});

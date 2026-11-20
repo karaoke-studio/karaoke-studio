@@ -266,11 +266,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.vertical = style.vertical;
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;
         if (style.vertical) {
+            const auto rubyGroups = source.value("ruby_groups").toArray();
             if (!ir.value("required_features").toArray().contains("p05_vertical_solid")
                 || !source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical"
-                || (!source.value("ruby_groups").toArray().isEmpty()
+                || (!rubyGroups.isEmpty()
                     && (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
-                        || source.value("ruby_groups").toArray().size() != 1)))
+                        || (rubyGroups.size() > 1 && !features.contains("p05_vertical_ruby_groups")))))
                 throw BackendError("Skia 竖排缺少能力声明或最终方向无效");
         } else if (style.rightToLeft || source.contains("text_flow")) {
             if (!ir.value("required_features").toArray().contains("p05_horizontal_rtl")

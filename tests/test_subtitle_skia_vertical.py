@@ -323,14 +323,16 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['combined_unit', 'small_kana', 'latin', 'two_groups', 'reverse', 'lower', 'role'])
+@pytest.mark.parametrize('change', ['combined_unit', 'small_kana', 'latin', 'overlap_groups', 'reverse', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     reading = {'combined_unit': 'か\u309a', 'small_kana': 'ゃ', 'latin': 'A'}.get(change, '字')
     extra = None
-    if change == 'two_groups':
-        extra = [RubyAnnotation('字', '字', pos_start_ms=900, pos_end_ms=1400, target_line_index=0,
-                                target_char_start=2, target_char_end=3)]
-    track, style = vertical_ruby_source(project, reading=reading, extra=extra)
+    span = (0, 1)
+    if change == 'overlap_groups':
+        span = (0, 2)
+        other, _ = vertical_ruby_source(project, span=(1, 3))
+        extra = other.rubies
+    track, style = vertical_ruby_source(project, reading=reading, span=span, extra=extra)
     if change == 'reverse':
         track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
     elif change == 'lower':
@@ -341,6 +343,74 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
                         replace(track.lines[0].chars[1], role_label='lead'), *track.lines[0].chars[2:]])])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_vertical_ruby_groups_in_one_column_keep_independent_clocks(binary, project, target):
+    # Reverse source order to exercise top-to-bottom placement by authored span.
+    track, style = vertical_ruby_source(project, span=(0, 1), reading='字한')
+    other, _ = vertical_ruby_source(project, span=(2, 3), reading='字')
+    ir = ir_for(binary, (replace(track, rubies=other.rubies + track.rubies), style))
+    feature = 'p05_vertical_ruby_groups'
+    assert feature in ir['required_features']
+    assert ir['skia_layout']['vertical_ruby_schema'] == 2
+    first, second = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert [(g['style_cell'], g['span_end_cell']) for g in (first, second)] == [(0, 1), (2, 3)]
+    assert max(u['wipe_bottom'] for u in first['units']) < second['units'][0]['wipe_top']
+    assert first['units'][0]['interval_ms'][0] == track.rubies[0].pos_start_ms
+    assert first['units'][-1]['interval_ms'][1] == track.rubies[0].pos_end_ms
+    assert second['units'][0]['interval_ms'] == [other.rubies[0].pos_start_ms, other.rubies[0].pos_end_ms]
+
+    def visible_rows(frame, group, *, lit):
+        units = group['units']
+        x0, x1 = int(min(u['wipe_left'] for u in units)), int(max(u['wipe_right'] for u in units)) + 1
+        y0, y1 = int(min(u['wipe_top'] for u in units)), int(max(u['wipe_bottom'] for u in units)) + 1
+        pixels = frame[y0:y1, x0:x1]
+        red = pixels[..., 0] > 200 if lit else pixels[..., 0] < 50
+        return np.nonzero(red & (pixels[..., 2] > 200) & (pixels[..., 3] > 16))[0]
+
+    early = track.rubies[0].pos_start_ms - 1
+    between = track.rubies[0].pos_end_ms + 1
+    middle = (other.rubies[0].pos_start_ms + other.rubies[0].pos_end_ms) // 2
+    late = other.rubies[0].pos_end_ms + 1
+    times = [early, between, middle, late]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        for mutation in ('feature', 'missing_span', 'overlapping_span', 'overlapping_ink'):
+            bad = copy.deepcopy(ir)
+            upper, lower = bad['skia_layout']['lines'][0]['ruby_groups']
+            if mutation == 'feature':
+                bad['required_features'].remove(feature)
+            elif mutation == 'missing_span':
+                del lower['span_end_cell']
+            elif mutation == 'overlapping_span':
+                upper['span_end_cell'] = lower['style_cell'] + 1
+            else:
+                unit = lower['units'][0]
+                unit['baseline_y'] = upper['units'][0]['baseline_y']
+                unit['wipe_top'] = unit['baseline_y'] + unit['metrics']['ink'][1]
+                unit['wipe_bottom'] = unit['baseline_y'] + unit['metrics']['ink'][3]
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+        replay, _ = collect(process, [late, early, middle, between], generation=2)
+    assert visible_rows(frames[0], first, lit=True).size == 0
+    assert visible_rows(frames[1], first, lit=True).size > 0
+    assert visible_rows(frames[1], second, lit=True).size == 0
+    sung = visible_rows(frames[2], second, lit=True)
+    unsung = visible_rows(frames[2], second, lit=False)
+    assert sung.size > 0 and unsung.size > 0 and sung.max() <= unsung.min()
+    assert visible_rows(frames[3], second, lit=True).size > 0
+    assert all(np.array_equal(a, b) for a, b in zip(frames, (replay[1], replay[3], replay[2], replay[0]), strict=True))
+    if target == 'gpu':
+        from test_subtitle_skia_outline_ruby import premultiplied
+
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        for gpu, cpu in zip(frames, raster, strict=True):
+            difference = abs(premultiplied(gpu) - premultiplied(cpu))
+            assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'unit_top', 'unit_box', 'unit_ink', 'two_units',
