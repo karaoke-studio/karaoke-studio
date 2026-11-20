@@ -2573,6 +2573,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_ruby_character_wave_scatter` 按最终序列化的逐行样式识别 `wave_in` 和 `scatter_out`。注音入场跟随宿主字的平移，退场绕各自规范轴心旋转、缩放，两段之间使用原走字时钟。删除能力声明后拒绝配置，上一场景仍可顺序和回跳绘制。
 - 原样 `line_override` 的 4 个 1080p 帧通过实际 D2D GPU 对 Skia Vulkan、Vulkan 对 Raster 的原有画面预算。Windows 新组合 **3 通过**，X11 和 Wayland 各 **22 通过、15 项 Windows 专用跳过**，独立 Windows Raster 新组合 **1 通过**、独立 Linux Raster 相关 **11 通过**，四份原生构建各通过 3 项 CTest。
+- P00 原样可配置范围增至 **90/129**，整批 **404** 个 1080p 帧通过原预算。证据为 `build/p00-skia-coverage/ruby-override-p00-original-pixels.json`，阶段 Mac CI 为 [44692087961](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44692087961)。
 - §14.136 拼接与消散的 `4cad806c` 阶段 Mac CI [44686416567](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44686416567) 五项成功。arm64/x64 各 **1664 通过、1187 跳过**，双架构干净包各 **229 通过**，98 份规范样例严格一致。托管虚拟 Metal 的硬件门槛仍待实机复验。
 
 ## 15. 前期探针清理范围
