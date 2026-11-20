@@ -456,14 +456,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('shadow', 'glow'))
     if style.vertical and (decorations or ruby_decorations):
         reverse_vertical = any(line.wipe_reverse for line in track.lines)
-        if (style.dual_line_layout or (reverse_vertical and (decorations != ['glow'] or vertical_ruby is not None))
+        if (style.dual_line_layout or (reverse_vertical and vertical_ruby is not None)
                 or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') not in {'none', 'fade'}
                        or line.get('exit_anim') not in {'none', 'fade'} or line.get('scanline')
                        or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
             raise ValueError('Skia 竖排静态装饰超出已支持的单列走字组合')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
         if reverse_vertical:
-            ir['required_features'].append('p06_vertical_reverse_glow')
+            ir['required_features'].extend(f'p06_vertical_reverse_{kind}' for kind in decorations)
         if 'p07_line_fade' in ir['required_features']:
             ir['required_features'].append('p07_vertical_decoration_fade')
         if vertical_ruby is not None:

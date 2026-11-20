@@ -71,8 +71,10 @@ def test_fade_scales_the_composed_outline_stack_and_keeps_timing(binary, project
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('with_ruby,reverse', [(False, False), (True, False), (False, True)])
-def test_vertical_decoration_fades_as_a_complete_layer(binary, project, target, with_ruby, reverse):
+@pytest.mark.parametrize('with_ruby,reverse,before_kind', [
+    (False, False, 'shadow'), (True, False, 'shadow'), (False, True, 'glow'), (False, True, 'shadow'),
+])
+def test_vertical_decoration_fades_as_a_complete_layer(binary, project, target, with_ruby, reverse, before_kind):
     from krok_helper.subtitle_render.domain.paint import PaintFill
     from test_subtitle_skia_roles import colors
 
@@ -84,7 +86,7 @@ def test_vertical_decoration_fades_as_a_complete_layer(binary, project, target, 
     after = replace(blank.after, shadow=PaintFill(color='#FF0000FF'))
     style = replace(style, karaoke_colors=replace(blank, before=before, after=after),
                     ruby_karaoke_colors=replace(blank, before=after, after=after),
-                    decoration_kind_before='glow' if reverse else 'shadow',
+                    decoration_kind_before=before_kind,
                     decoration_kind='glow', decoration_before_sync=False,
                     shadow_before_offset_x=-36, shadow_before_offset_y=4,
                     glow_after_radius_px=8, ruby_decoration_kind='glow', ruby_decoration_kind_before='glow',

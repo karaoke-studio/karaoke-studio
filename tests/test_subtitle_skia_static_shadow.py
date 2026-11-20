@@ -75,11 +75,14 @@ def test_shadow_palette_keeps_geometry_and_replays(binary, project, case, target
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('before_kind,after_kind', [('shadow', 'none'), ('none', 'shadow'),
                                                   ('shadow', 'shadow'), ('shadow', 'glow')])
-def test_vertical_static_shadow_respects_y_wipe_and_screen_offsets(binary, project, target, before_kind, after_kind):
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_static_shadow_respects_y_wipe_and_screen_offsets(binary, project, target, before_kind, after_kind, reverse):
     from test_subtitle_skia_roles import colors
     from test_subtitle_skia_vertical import vertical_source
 
     track, style = vertical_source(project, texts=['字'], position='top')
+    if reverse:
+        track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
     palette = colors('#00000000', '#00000000')
     palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#FFFF0000')),
                       after=replace(palette.after, shadow=PaintFill(color='#FF0000FF')))
@@ -88,7 +91,7 @@ def test_vertical_static_shadow_respects_y_wipe_and_screen_offsets(binary, proje
                     shadow_before_offset_x=-12, shadow_before_offset_y=4,
                     shadow_offset_x=12, shadow_offset_y=7, glow_after_radius_px=6)
     ir = ir_for(binary, (track, style))
-    feature = 'p06_vertical_shadow'
+    feature = 'p06_vertical_reverse_shadow' if reverse else 'p06_vertical_shadow'
     assert feature in ir['required_features']
     assert ('p06_vertical_glow' in ir['required_features']) == (after_kind == 'glow')
     (start, end), = ir['track']['lines'][0]['resolved_intervals']
@@ -111,16 +114,17 @@ def test_vertical_static_shadow_respects_y_wipe_and_screen_offsets(binary, proje
         return np.average(np.arange(row_weights.size), weights=row_weights)
 
     early = weights(frames[0], 0, 1)
+    direction = -1 if reverse else 1
     assert bool(early.any()) == (before_kind == 'shadow')
     if after_kind == 'none':
         middle = weights(frames[1], 0, 1)
         assert 0 < middle.sum() < early.sum()
-        assert center(middle) > center(early)
+        assert direction * (center(middle) - center(early)) > 0
         assert not frames[2].any()
     else:
         middle, late = (weights(frame, 2, 1) for frame in frames[1:])
         assert 0 < middle.sum() < late.sum()
-        assert center(middle) + 3 < center(late)
+        assert direction * (center(late) - center(middle)) > 3
     if after_kind == 'shadow' and before_kind == 'shadow':
         assert center(weights(frames[2], 2, 0)) - center(weights(frames[0], 0, 0)) == pytest.approx(24, abs=1)
     if target == 'gpu':
@@ -129,6 +133,30 @@ def test_vertical_static_shadow_respects_y_wipe_and_screen_offsets(binary, proje
             raster, _ = collect(process, times)
         diff = abs(premultiplied(np.stack(frames)) - premultiplied(np.stack(raster)))
         assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_reverse_vertical_shadow_starts_on_the_bottom_cell(binary, project, target):
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, texts=['字', '字'], position='top')
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
+    blank = colors('#00000000', '#00000000')
+    palette = replace(blank, after=replace(blank.after, shadow=PaintFill(color='#FF0000FF')))
+    style = replace(style, karaoke_colors=palette, decoration_before_sync=False,
+                    decoration_kind_before='none', decoration_kind='shadow', shadow_offset_x=12, shadow_offset_y=7)
+    ir = ir_for(binary, (track, style))
+    intervals = ir['track']['lines'][0]['resolved_intervals']
+    start, end = min(intervals)
+    times = [start - 1, (start + end) // 2, max(end for _, end in intervals) + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+    assert not frames[0].any()
+    row_masks = [(frame[..., 3] > 16).any(axis=1) for frame in frames[1:]]
+    assert row_masks[0].any() and row_masks[1].any()
+    assert np.flatnonzero(row_masks[0]).min() > np.flatnonzero(row_masks[1]).mean()
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

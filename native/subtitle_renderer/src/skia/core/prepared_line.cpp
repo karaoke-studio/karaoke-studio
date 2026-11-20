@@ -326,7 +326,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                     state.phase == Phase::Wiping ? std::optional<float>(transformedEdge(index)) : std::nullopt};
             });
     } else {
-        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical);
+        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft);
     }
     for (const auto& group : line.rubyGroups)
         group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin);
