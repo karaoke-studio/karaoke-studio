@@ -78,6 +78,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_composed_stroke_flash",
         "p07_no_wipe_decoration",
         "p07_noise_transition",
+        "p07_noise_composition",
         "p08_viewport",
         "p05_horizontal_rtl_kana_cells",
         "p05_horizontal_rtl_kana_marks",
@@ -125,6 +126,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             throw BackendError("Skia IR: unknown required feature");
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
+    if (features.contains("p07_noise_composition")
+        && (!features.contains("p07_noise_transition") || features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 噪声出入场组合缺少对应布局能力");
     if (features.contains("p08_viewport")) {
         integer(style, "viewport_scale_pct", 1, 400);
         integer(style, "viewport_rotation_deg", -180, 180);

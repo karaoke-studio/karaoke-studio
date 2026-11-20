@@ -142,6 +142,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
             || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out";
         const bool noiseEntry = line.entryAnimation == "noise", noiseExit = line.exitAnimation == "noise";
+        const bool noiseComposition = (noiseEntry || noiseExit) && features.contains("p07_noise_composition");
         const bool singingScale = line.karaokeAnimation == "utopia";
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
@@ -166,7 +167,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit
                 || (line.zoomPulseEnabled && !features.contains("p07_composed_scanline"))))
-            || (!lineAnimation && !fadeComposition && ((!utopiaEntry && line.entryAnimation != "none")
+            || (!lineAnimation && !fadeComposition && !noiseComposition && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
@@ -400,7 +401,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool lineGlow = (lineAnimation || fadeComposition)
+        const bool lineGlow = (lineAnimation || fadeComposition || noiseComposition)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_composed_stroke_flash");

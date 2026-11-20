@@ -99,10 +99,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && line.karaokeAnimation == "utopia"
         && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
     const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
+    const bool noiseGlow = features.contains("p07_noise_composition")
+        && (line.entryAnimation == "noise" || line.exitAnimation == "noise");
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || fadeComposition || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+        && (lineGlow || fadeComposition || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)

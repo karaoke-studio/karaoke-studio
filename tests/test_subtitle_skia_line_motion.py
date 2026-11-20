@@ -192,7 +192,7 @@ def test_animated_outlined_ruby_matches_actual_gpu(binary, reading, entry, exit_
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
     'entry_fade', 'entry_slide_in', 'entry_rise', 'exit_fade', 'exit_slide_out', 'exit_rise',
-    'entry_char_fade', 'viewport',
+    'entry_char_fade', 'viewport', 'entry_noise', 'exit_noise',
 ])
 def test_p00_glowing_ruby_line_motion_matches_actual_gpu(binary, application, case_id, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases

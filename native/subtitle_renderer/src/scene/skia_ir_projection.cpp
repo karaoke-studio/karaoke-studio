@@ -141,8 +141,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
+        const bool composedNoise = features.contains("p07_noise_composition");
         if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
-                || !cfg.rubies.empty() || features.contains("p05_resolved_ruby") || source.scanlineEnabled
+                || ((!cfg.rubies.empty() || features.contains("p05_resolved_ruby") || singingScale) && !composedNoise)
+                || source.scanlineEnabled || source.zoomPulseEnabled
                 || (source.entryAnimation != "none" && source.entryAnimation != "noise")
                 || (source.exitAnimation != "none" && source.exitAnimation != "noise")
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
