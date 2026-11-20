@@ -59,6 +59,8 @@ private:
         std::vector<Cell> cells;
         int startMs, endMs;
         std::vector<ResolvedLine::Translation> translations;
+        SkPoint translationAt(int timeMs) const;
+        SkRect lineBand = SkRect::MakeEmpty();
         std::vector<PreparedWipeGroup> rubyGroups;
         bool noWipe = false;
         bool wipeRightToLeft = false;
@@ -98,8 +100,11 @@ private:
         SkRect paintBounds = SkRect::MakeEmpty();
     };
     void drawLine(SkCanvas&, const Line&, int time, bool textVisible) const;
+    void drawLineBands(SkCanvas&, int time) const;
     int width_, height_;
     SkMatrix viewport_ = SkMatrix::I();
+    sk_sp<SkImage> lineBandImage_;
+    float lineBandOpacity_ = 0;
     std::vector<Line> lines_;
 };
 }

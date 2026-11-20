@@ -37,6 +37,65 @@ def bounds(frame):
     return np.array([x.min(), y.min(), x.max(), y.max()]) if x.size else np.array([])
 
 
+def static_band_image(tmp_path):
+    from test_subtitle_skia_image_fills import write_png
+
+    pixels = np.full((12, 32, 4), [49, 117, 240, 255], dtype=np.uint8)
+    pixels[:, :8] = [250, 92, 42, 255]
+    return write_png(tmp_path / 'line-band.png', pixels)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_static_line_bands_stay_below_active_rows_and_follow_line_motion(binary, project, tmp_path, target):
+    track, style = motion_project(project, two_lanes=True)
+    band = replace(style, line_band_enabled=True, line_band_image=str(static_band_image(tmp_path)),
+                   line_band_fill_mode='stretch', line_band_opacity_pct=65,
+                   line_band_pad_top_px=25, line_band_pad_bottom_px=30)
+    valid = ir_for(binary, (track, band), dpr=1.5)
+    plain = ir_for(binary, (track, style), dpr=1.5)
+    missing = ir_for(binary, (track, replace(band, line_band_image=str(tmp_path / 'missing.png'))), dpr=1.5)
+    feature = 'p08_static_line_band'
+    assert feature in valid['required_features']
+    assert feature not in plain['required_features'] and feature not in missing['required_features']
+    windows = [(line['display_start_ms'], line['display_end_ms']) for line in valid['track']['lines']]
+    first, last = min(s for s, _ in windows), max(e for _, e in windows)
+    overlap = (max(s for s, _ in windows) + min(e for _, e in windows)) // 2
+    assert all(s < overlap < e for s, e in windows)
+    times = [first - 1, first + 150, overlap, last - 150, last + 1]
+    invalid = copy.deepcopy(valid)
+    invalid['skia_layout']['lines'][0]['line_band_rect'][0] = float('nan')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, valid)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, list(reversed(times)), generation=2)
+        configure(process, plain)
+        text, _ = collect(process, times, generation=3)
+        configure(process, missing)
+        fallback, _ = collect(process, times, generation=4)
+    assert not frames[0].any() and not frames[-1].any()
+    assert all(np.array_equal(a, b) for a, b in zip(text, fallback, strict=True))
+    assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+    for frame, baseline in zip(frames[1:-1], text[1:-1], strict=True):
+        assert np.count_nonzero((frame[..., 3] > 0) & (baseline[..., 3] == 0)) > 200
+    opaque = text[2][..., 3] == 255
+    assert opaque.any() and np.array_equal(frames[2][opaque], text[2][opaque])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,leave', [('none', 'none'), ('slide_in', 'slide_out')])
+def test_static_line_band_stretch_matches_actual_gpu(binary, application, tmp_path, entry, leave):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    case = replace(base, case_id=f'static_line_band_{entry}', track=replace(base.track, rubies=[]),
+                   style=replace(base.style, entry_anim=entry, exit_anim=leave, line_band_fill_mode='stretch',
+                                 line_band_image=str(static_band_image(tmp_path)), line_band_include_ruby=False))
+    assert_ruby_transition_gpu_parity(binary, case, (299, 450, 650, 1000, 1500, 2600, 4950, 5300, 5450, 5500))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):

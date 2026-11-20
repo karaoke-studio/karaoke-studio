@@ -14,6 +14,15 @@ class LinePosition:
     baseline_y: float
 
 
+def legacy_ruby_allowance(style):
+    ruby_size = max(int(style.ruby_font_size_px), 1)
+    ruby_edge = style.ruby_stroke_width_px
+    if ruby_edge is None:
+        edge = max(int(style.stroke_width_px), 0)
+        ruby_edge = math.floor(edge * ruby_size / max(int(style.font_size_px), 1) + 0.5)
+    return max(style.ruby_gap_px + ruby_size + max(int(ruby_edge), 0), 0)
+
+
 def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, layout_width, row_frame=None,
                           inline_width=0):
     style = item.layout_style
@@ -33,11 +42,7 @@ def place_horizontal_line(item, metrics, *, width, height, ink_left, ink_right, 
         visual_pad = math.ceil((edge + edge2) / 2)
         ascent += visual_pad
         descent += visual_pad
-        ruby_size = max(int(style.ruby_font_size_px), 1)
-        ruby_edge = style.ruby_stroke_width_px
-        if ruby_edge is None:
-            ruby_edge = math.floor(edge * ruby_size / max(int(style.font_size_px), 1) + 0.5)
-        extra = max(style.ruby_gap_px + ruby_size + max(int(ruby_edge), 0), 0)
+        extra = legacy_ruby_allowance(style)
     elif style.layout_semantics == 'n3_1074':
         left, right = 0, max(layout_width, 1)
         size = max(int(style.font_size_px), 1)

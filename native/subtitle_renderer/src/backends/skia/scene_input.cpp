@@ -90,7 +90,7 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
 }
 void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabilities caps) {
     if ((!canonical && (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
-            || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || scene.lineBand.enabled
+            || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || (scene.lineBand.enabled && !caps.staticLineBand)
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
     if (caps.outlineLayers > 0 && !scene.charStyles.empty()) throw BackendError("Skia 实色描边暂不支持行内样式");

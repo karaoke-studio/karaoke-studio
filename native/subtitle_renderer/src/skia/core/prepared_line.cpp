@@ -18,12 +18,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     SkAutoCanvasRestore restore(&canvas, true);
     if (animation.dx != 0 || animation.dy != 0)
         canvas.translate(animation.dx, animation.dy);
-    for (const auto& translation : line.translations) {
-        if (translation.startMs <= tMs && tMs < translation.endMs) {
-            canvas.translate(translation.x, translation.y);
-            break;
-        }
-    }
+    const auto placement = line.translationAt(tMs);
+    if (placement.x() != 0 || placement.y() != 0) canvas.translate(placement.x(), placement.y());
     if (!textVisible) {
         drawSingParticles(canvas, line.particles, tMs, false);
         drawSingParticles(canvas, line.particles, tMs, true);

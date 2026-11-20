@@ -28,7 +28,8 @@ void includeShadowPaint(SkRect& bounds, const StaticShadow& shadow) {
 }
 
 PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
-    : width_(input.width), height_(input.height), viewport_(input.viewport) {
+    : width_(input.width), height_(input.height), viewport_(input.viewport),
+      lineBandImage_(input.lineBandImage), lineBandOpacity_(input.lineBandOpacity) {
     if (width_ < 1 || height_ < 1 || width_ > 8192 || height_ > 8192)
         throw std::runtime_error("Skia: invalid resolved canvas size");
     if (!viewport_.isFinite())
@@ -42,6 +43,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
         line.animation = source.animation;
+        line.lineBand = source.lineBand;
         line.beforeGradient = source.beforeGradient;
         line.afterGradient = source.afterGradient;
         line.beforeOutlineGradient = source.beforeOutlineGradient;
@@ -246,10 +248,42 @@ PreparedScene::PreparedScene(const SubtitleInput& input) : width_(input.width), 
         lines_.push_back(std::move(line));
     }
 }
+
+SkPoint PreparedScene::Line::translationAt(int timeMs) const {
+    for (const auto& translation : translations)
+        if (translation.startMs <= timeMs && timeMs < translation.endMs) return {translation.x, translation.y};
+    return {0, 0};
+}
+
+void PreparedScene::drawLineBands(SkCanvas& canvas, int timeMs) const {
+    if (!lineBandImage_ || lineBandOpacity_ <= 0) return;
+    struct PaintedBand { SkRect bounds; float alpha; };
+    std::vector<PaintedBand> painted;
+    SkPaint paint;
+    for (const auto& line : lines_) {
+        if (timeMs < line.startMs || timeMs >= line.endMs || line.lineBand.isEmpty()) continue;
+        const auto animation = line.animation.at(timeMs, line.startMs, line.endMs);
+        if (animation.opacity <= 0) continue;
+        const auto origin = line.translationAt(timeMs);
+        const auto bounds = line.lineBand.makeOffset(origin.x() + animation.dx, origin.y() + animation.dy);
+        const float alpha = lineBandOpacity_ * animation.opacity;
+        if (std::ranges::any_of(painted, [&](const auto& other) {
+                SkRect overlap;
+                if (alpha > other.alpha + 0.02f || !overlap.intersect(bounds, other.bounds)) return false;
+                const float smaller = std::min(bounds.width() * bounds.height(), other.bounds.width() * other.bounds.height());
+                return overlap.width() * overlap.height() > 0.55f * smaller;
+            })) continue;
+        painted.push_back({bounds, alpha});
+        paint.setAlphaf(alpha);
+        canvas.drawImageRect(lineBandImage_, bounds, SkSamplingOptions(SkFilterMode::kLinear), &paint);
+    }
+}
+
 void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     canvas.clear(SK_ColorTRANSPARENT);
     SkAutoCanvasRestore restore(&canvas, !viewport_.isIdentity());
     if (!viewport_.isIdentity()) canvas.concat(viewport_);
+    drawLineBands(canvas, tMs);
     for (const auto& line : lines_) {
         const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
         if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs))

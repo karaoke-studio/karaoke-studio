@@ -72,7 +72,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .imageShapeSignal = features.contains("p08_custom_image_signal"),
         .decoratedShapeSignal = features.contains("p08_decorated_shape_signal"),
         .vectorShapeSignal = features.contains("p08_vector_shape_signal"),
-        .volumeSignal = features.contains("p08_volume_signal")});
+        .volumeSignal = features.contains("p08_volume_signal"),
+        .staticLineBand = features.contains("p08_static_line_band")});
     SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
@@ -116,6 +117,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         particleSprites.emplace(name, vectorGlyphPath(shape, 1000.0));
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
+    if (projected.lineBand.enabled) {
+        out.lineBandImage = imageCache.staticImage(projected.lineBand.imagePath, 0, 0);
+        out.lineBandOpacity = projected.lineBand.opacity;
+    }
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     const bool columnDecoration = !features.contains("p05_vertical_columns")
         || (features.contains("p06_vertical_columns_decoration")
@@ -135,6 +140,17 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (cells.size() != int(line.chars.size()) || intervals.size() != cells.size() || (totalCells += cells.size()) > 65536)
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
+        if (projected.lineBand.enabled) {
+            const auto rect = source.value("line_band_rect").toArray();
+            if (rect.size() != 4 || std::ranges::any_of(rect, [](const auto& value) {
+                    return !value.isDouble() || !std::isfinite(value.toDouble()) || std::abs(value.toDouble()) > 1e6;
+                }))
+                throw BackendError("Skia 行背景带缺少有效的目标矩形");
+            const auto px = [&](int i) { return float(rect[i].toDouble() * glyphs.dpr); };
+            prepared.lineBand = SkRect::MakeLTRB(px(0), px(1), px(2), px(3));
+        } else if (source.contains("line_band_rect")) {
+            throw BackendError("Skia 行背景带缺少能力声明");
+        }
         prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache,
             projected.litDecorStyle ? &*projected.litDecorStyle : nullptr);
         prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr,

@@ -18,6 +18,7 @@ from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import declare_bitmap_guides, validate_bitmap_guides
 from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from .skia_lower_ir import lower_sources
+from .skia_line_band_ir import write_static_line_band
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, RUBY_PARTICLE_EXITS, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
@@ -694,6 +695,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if (style.viewport_scale_pct != 100 or style.viewport_rotation_deg
             or style.viewport_offset_x or style.viewport_offset_y):
         ir['required_features'].append('p08_viewport')
+    write_static_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])
     declare_bitmap_guides(plan.lines, ir)
     return ir

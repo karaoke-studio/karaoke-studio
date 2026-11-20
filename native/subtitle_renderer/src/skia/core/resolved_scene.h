@@ -83,10 +83,13 @@ struct ResolvedLine {
     std::optional<VolumeSignal> volumeSignal;
     std::vector<SingParticleBurst> particles;
     ParticleVisibility particleVisibility;
+    SkRect lineBand = SkRect::MakeEmpty();
 };
 struct ResolvedSubtitleInput {
     int width = 0, height = 0;
     std::vector<ResolvedLine> lines;
     SkMatrix viewport = SkMatrix::I();
+    sk_sp<SkImage> lineBandImage;
+    float lineBandOpacity = 0;
 };
 }

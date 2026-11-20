@@ -81,13 +81,25 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             || (features.contains("p05_reverse_wipe") && !reverseVerticalOutline)
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应布局能力");
-    if (cfg.lineBand.enabled)
-        throw BackendError("Skia 当前布局暂不支持行背景带");
+    const auto& band = cfg.lineBand;
+    const bool staticBand = features.contains("p08_static_line_band");
+    if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
+        || (staticBand && (band.fillMode != "stretch" || !band.imagePath.endsWith(".png", Qt::CaseInsensitive)
+            || cfg.vertical || cfg.rightToLeft || !cfg.rubies.empty() || !band.tint.isEmpty()
+            || features.contains("p05_resolved_ruby")
+            || !band.linesPath.isEmpty() || !band.clefPath.isEmpty() || band.edgeKind != "none"
+            || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
+        throw BackendError("Skia 行背景带当前支持静态横排 PNG 拉伸");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
         throw BackendError("Skia 字幕视口变换缺少横排布局能力声明");
     RenderScene out;
+    if (staticBand) {
+        out.lineBand.enabled = true;
+        out.lineBand.imagePath = band.imagePath.toStdWString();
+        out.lineBand.opacity = float(std::clamp(band.opacityPct, 0, 100)) / 100.f;
+    }
     out.width = cfg.physicalWidth();
     out.height = cfg.physicalHeight();
     out.layoutReferenceScale = float(cfg.dpr);
@@ -158,6 +170,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
+        if (staticBand && (!plainLineAnimation(source.entryAnimation, true)
+                || !plainLineAnimation(source.exitAnimation, false) || source.scanlineEnabled || !source.fxBursts.empty()
+                || resolved.litEnabled || resolved.volumeEnabled))
+            throw BackendError("Skia 行背景带缺少对应行出入场能力");
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
         const bool composedNoise = features.contains("p07_noise_composition");
         if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
@@ -321,6 +337,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
+            if (staticBand && (cell.vectorGlyph || cell.bitmapGuide || &cellStyle != &resolved))
+                throw BackendError("Skia 行背景带暂不支持导唱符或行内角色");
             if (source.scanlineEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (source.strokeFlashEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
