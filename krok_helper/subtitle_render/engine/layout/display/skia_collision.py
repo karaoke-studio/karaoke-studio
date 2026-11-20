@@ -96,9 +96,13 @@ class SkiaCollisionGeometry:
                 # the same cell boxes and lane pitch as final layout.
                 column, top, cell_height, _ = vertical_line_box(
                     placement, self.measured.lines[i], len(local.cells), width, height)
-                half_width = float(style.font_size_px) / 2
+                primary = max(0, style.stroke_width_px)
+                secondary = max(0, style.stroke2_width_px) if style.stroke2_enabled else 0
+                outline_radius = (primary + secondary) / 2
+                half_width = float(style.font_size_px) / 2 + outline_radius
                 self.cache[key] = None if local.ink is None else CollisionLineGeometry(
-                    column - half_width, column + half_width, top, top + cell_height * len(local.cells),
+                    column - half_width, column + half_width,
+                    top - outline_radius, top + cell_height * len(local.cells) + outline_radius,
                     column, float(style.line_gap_px))
                 return self.cache[key]
             position = self.position(placement, width, height)

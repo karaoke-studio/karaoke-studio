@@ -554,7 +554,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['primary_solid_outline_schema'] = 1
         if style.vertical:
             if style.dual_line_layout:
-                raise ValueError('Skia 竖排描边暂支持单列正文')
+                ir['required_features'].append('p06_vertical_columns_outline')
             if any(line.wipe_reverse for line in track.lines):
                 ir['required_features'].append('p06_vertical_reverse_outline')
             if vertical_ruby is not None:

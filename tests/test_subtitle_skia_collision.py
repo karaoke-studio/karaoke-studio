@@ -139,21 +139,44 @@ def test_lifted_pages_keep_manual_windows_and_seek_stable(binary,collisions,sema
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_overlapping_vertical_pages_shift_as_columns(binary, collisions, target):
+@pytest.mark.parametrize('with_outline', [False, True])
+def test_overlapping_vertical_pages_shift_as_columns(binary, collisions, target, with_outline):
+    from test_subtitle_skia_outline_ruby import outlined
+
     track, style = pinned_pages(collisions)
     style = replace(style, vertical=True, line_gap_px=18, line_y_position='top', layout_semantics='n3_1074')
+    if with_outline:
+        plain = ir_for(binary, (track, style))
+        style = outlined(style, 2)
     ir = ir_for(binary, (track, style))
+    assert ('p06_vertical_columns_outline' in ir['required_features']) == with_outline
     lines = ir['track']['lines']
     windows = [line['layout_offset_windows'] for line in lines]
     assert windows[0] == windows[1] and windows[2] == windows[3]
     assert windows[2] and windows[2][0]['offset_x'] < 0
+    if with_outline:
+        plain_offset = plain['track']['lines'][2]['layout_offset_windows'][0]['offset_x']
+        assert windows[2][0]['offset_x'] < plain_offset
     assert all(window['offset_y'] == 0 for group in windows for window in group)
     assert [line['display_start_ms'] for line in lines] == [0] * 4
     assert [line['display_end_ms'] for line in lines] == [6000] * 4
+    times = [2200, 800, 6000, 2200]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
-        frames, _ = collect(process, [2200, 800, 6000, 2200])
+        frames, _ = collect(process, times)
     assert frames[0].any() and not frames[2].any() and np.array_equal(frames[0], frames[-1])
+    if with_outline:
+        outer_color = (frames[0][..., :3] == [0, 255, 255]).all(axis=-1)
+        assert (outer_color & (frames[0][..., 3] == 255)).any()
+        if target == 'gpu':
+            from test_subtitle_skia_outline_ruby import premultiplied
+
+            with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+                process.configure(track, style, width=640, height=360, fps=60)
+                raster, _ = collect(process, times)
+            for gpu_frame, raster_frame in zip(frames, raster, strict=True):
+                diff = abs(premultiplied(gpu_frame) - premultiplied(raster_frame))
+                assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
 @pytest.mark.parametrize('mode',['lift','displace'])
