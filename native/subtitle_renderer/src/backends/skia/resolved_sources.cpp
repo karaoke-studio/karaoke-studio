@@ -12,6 +12,14 @@ struct SceneSize {
     qsizetype readings = 0;
 };
 
+QJsonObject bandOptions(const QJsonObject& source) {
+    const auto style = source.value("style").toObject();
+    QJsonObject result;
+    for (auto it = style.constBegin(); it != style.constEnd(); ++it)
+        if (it.key().startsWith(QLatin1String("line_band_"))) result.insert(it.key(), it.value());
+    return result;
+}
+
 void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize& size) {
     if (source.value("screen") != screen || source.contains("skia_extra_sources"))
         throw BackendError("Skia 多轨尺寸不一致或包含嵌套来源");
@@ -27,7 +35,12 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_multi_lane_outline",
         "p06_outline_ruby", "p06_ruby_solid_outline", "p07_ruby_line_animation",
         "p07_singing_scale", "p07_ruby_singing_scale",
-        "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p08_viewport"
+        "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p08_viewport",
+        "p08_static_line_band", "p08_line_band_fit", "p08_line_band_slices",
+        "p08_ruby_line_band", "p08_lower_ruby_line_band", "p08_tinted_line_band",
+        "p08_staff_line_band", "p08_animated_staff_line_band", "p08_animated_line_band",
+        "p08_line_band_image_sequence", "p08_line_band_outer_stroke", "p08_line_band_stroke_position",
+        "p08_line_band_blur", "p08_line_band_animated_decoration"
     };
     for (const auto& feature : source.value("required_features").toArray())
         if (!allowed.contains(feature))
@@ -62,17 +75,23 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     primary.insert("required_features", features);
 
     const auto screen = primary.value("screen");
+    const auto sharedBand = bandOptions(primary);
+    const bool hasBand = features.contains("p08_static_line_band");
     SceneSize size;
     countSource(primary, screen, size);
     for (const auto& value : extras) {
         if (!value.isObject()) throw BackendError("Skia 附加轨道格式无效");
-        countSource(value.toObject(), screen, size);
+        const auto source = value.toObject();
+        if (source.value("required_features").toArray().contains("p08_static_line_band") != hasBand
+            || (hasBand && bandOptions(source) != sharedBand))
+            throw BackendError("Skia 多轨行背景带必须共享场景素材与装饰");
+        countSource(source, screen, size);
     }
 
     auto result = resolvedSkiaSource(primary);
     result.lines.reserve(size.lines);
     for (const auto& value : extras) {
-        auto source = resolvedSkiaSource(value.toObject());
+        auto source = resolvedSkiaSource(value.toObject(), hasBand ? &result.lineBand : nullptr);
         if (source.viewport != result.viewport)
             throw BackendError("Skia 多轨字幕视口不一致");
         result.lines.insert(result.lines.end(), std::make_move_iterator(source.lines.begin()),

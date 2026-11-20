@@ -58,7 +58,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     }
 }
 }
-::subtitle::skia::ResolvedSubtitleInput resolvedSkiaSource(const QJsonObject& ir) {
+::subtitle::skia::ResolvedSubtitleInput resolvedSkiaSource(
+    const QJsonObject& ir, const ::subtitle::skia::LineBandTexture* sharedBand) {
     auto projected = scene::skiaSceneFromIr(ir);
     const auto features = ir.value("required_features").toArray();
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
@@ -119,7 +120,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
     if (projected.lineBand.enabled)
-        out.lineBand = resolveLineBandTexture(projected.lineBand, imageCache,
+        out.lineBand = sharedBand ? *sharedBand : resolveLineBandTexture(projected.lineBand, imageCache,
             features.contains("p08_animated_staff_line_band") || features.contains("p08_animated_line_band")
                 || features.contains("p08_line_band_image_sequence"));
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;

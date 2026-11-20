@@ -17,6 +17,7 @@ from test_subtitle_skia_outline_ruby import (
     annotated, annotated_paint, lower_ir, mixed, outlined, pages, prepared_source, reading, source, upper_ir, upper_source,
     assert_annotated_parity,
 )
+from krok_helper.subtitle_render.domain.models import LyricsLayout
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -577,6 +578,60 @@ def animated_alpha_band(tmp_path):
         'R0lGODlhCQAIAIEAAAAAAP+lQAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQJCgAAACwAAAAACQAIAAAIGAAB'
         'CBxIsCDBAAgNIgygMGHBhQYjShQYEAAh+QQJDwAAACwFAAIAAwAEAIEAAABJyf8AAAAAAAAICAADCBxIUGBAADs='))
     return str(path)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multitrack_line_bands_share_material_and_keep_each_window(binary, project, tmp_path, target):
+    track, style = motion_project(project, entry='none', exit='none')
+    line = replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=5000)
+    track = replace(track, lines=[line])
+    side = replace(track, lines=[replace(line, layout_index=1)], meta=replace(track.meta, offset_ms=1000))
+    style = replace(style, line_y_position='bottom', layouts=[LyricsLayout(layout_id='top', line_y_position='top')],
+                    line_band_enabled=True, line_band_image=animated_alpha_band(tmp_path),
+                    line_band_fill_mode='stretch', line_band_opacity_pct=60)
+    ir = ir_for(binary, (track, style), extra_tracks=[side])
+    bad = copy.deepcopy(ir)
+    bad['skia_extra_sources'][0]['style']['line_band_opacity_pct'] = 70
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        output, _ = collect(process, [0, 1000, 5000, 6000, 1000])
+        with pytest.raises(NativeRendererError, match='必须共享'):
+            configure(process, bad)
+        replay, _ = collect(process, [1000], generation=2)
+    bottom, both, top, hidden, seek = output
+    assert bottom.any() and top.any() and not hidden.any()
+    assert not np.any((bottom[..., 3] > 0) & (top[..., 3] > 0))
+    assert np.array_equal(both, seek) and np.array_equal(both, replay[0])
+    assert np.any((both[..., 3] > 0) & (bottom[..., 3] > 0))
+    assert np.any((both[..., 3] > 0) & (top[..., 3] > 0))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU comparison')
+@pytest.mark.parametrize('overlap', [False, True])
+def test_multitrack_line_bands_match_actual_d2d_gpu(binary, application, tmp_path, overlap):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    track = case.track
+    other = replace(track, lines=[replace(track.lines[0], layout_index=0 if overlap else 1)],
+                    meta=replace(track.meta, offset_ms=900))
+    style = replace(case.style, layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=140)],
+                    decoration_kind='none', line_band_opacity_pct=60, line_band_glow_enabled=True,
+                    line_band_glow_size_px=2, line_band_glow_color='#7438DF')
+    times = (299, 600, 1199, 1200, 1500, 2600, 4400, 5500, 6399, 6400)
+    with NativeRendererProcess() as d2d:
+        _, raw = _render_g1_frames(d2d, style, times, track=track, extra_tracks=[other], force_warp=False,
+                                   width=1920, height=1080, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    output = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, style, extra_tracks=[other], width=1920, height=1080, fps=60)
+            frames, _ = collect(process, times)
+            output.append(frames)
+    assert_glow_parity(times, reference, *output, f'multitrack_line_bands_{overlap}', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
