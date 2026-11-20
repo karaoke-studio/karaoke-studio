@@ -9,7 +9,7 @@ from ..ruby.style_semantics import ruby_stroke2_width, ruby_stroke_width
 _BAND_TRANSITIONS = {'char_fade', 'flame', 'lightning'}
 
 
-def _upper_reading_ink_top(group, ink_top):
+def _reading_ink_top(group, ink_top):
     edge = int(ruby_stroke_width(group.target.style))
     edge2 = int(ruby_stroke2_width(group.target.style))
     # The final horizontal fill bounds use the placed ink and both pens.
@@ -33,7 +33,7 @@ def write_line_band(ir, style, prepared, *, width, height):
             or style.vertical or style.right_to_left
             or (animated and style.line_band_tint) or style.line_band_edge_kind != 'none'
             or style.line_band_shadow_enabled or style.line_band_stroke_enabled or style.line_band_glow_enabled
-            or style.volume_enabled or style.lit_enabled or style.lower_ruby_enabled
+            or style.volume_enabled or style.lit_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
         raise ValueError('Skia 行背景带当前支持横排静态 PNG 和内置预设')
@@ -65,17 +65,17 @@ def write_line_band(ir, style, prepared, *, width, height):
         if local.ink and local.ink[3] - local.ink[1] + 2 * pad >= (bottom - top) / 2:
             left, top, right, bottom = (local.ink[0] - pad, local.ink[1] - pad,
                                        local.ink[2] + pad, local.ink[3] + pad)
-        if ruby is not None and style.line_band_include_ruby:
-            for group in ruby.lines[item.track_index].rubies:
-                if group.target.lower:
-                    raise ValueError('Skia 行背景带暂不支持下方注音')
+        readings = ruby.lines[item.track_index].rubies if ruby is not None else ()
+        if style.line_band_include_ruby:
+            for group in readings:
                 boxes = [cell['metrics']['ink'] for cell in group.cells]
                 ink_top = min((top for left, top, right, bottom in boxes if right > left and bottom > top), default=None)
                 if ink_top is not None:
-                    top = min(top, _upper_reading_ink_top(group, ink_top))
+                    top = min(top, _reading_ink_top(group, ink_top))
         y = at.baseline_y + style.line_band_offset_y_px
         if (look.layout_semantics == 'legacy' and look.line_y_position == 'center'
-                and not look.dual_line_layout and measured.row_frame is None):
+                and not look.dual_line_layout and measured.row_frame is None
+                and not any(group.target.lower for group in readings)):
             # Direct2D centers the single-row band on the font box. The subtitle
             # itself includes the style's upper reading allowance when centered.
             y -= legacy_ruby_allowance(look) / 2
@@ -89,6 +89,8 @@ def write_line_band(ir, style, prepared, *, width, height):
     ir['required_features'].append('p08_static_line_band')
     if ruby is not None:
         ir['required_features'].append('p08_ruby_line_band')
+        if 'p05_lower_ruby' in ir['required_features']:
+            ir['required_features'].append('p08_lower_ruby_line_band')
     if staff:
         ir['required_features'].append('p08_staff_line_band')
         if animated:

@@ -65,6 +65,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_line_band_fit",
         "p08_line_band_slices",
         "p08_ruby_line_band",
+        "p08_lower_ruby_line_band",
         "p08_staff_line_band",
         "p08_animated_staff_line_band",
         "p08_animated_line_band",
@@ -431,10 +432,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         || (simpleBandAnimation && features.contains("p08_staff_line_band"))
         || (tintedBand && (simpleBandAnimation || features.contains("p08_animated_staff_line_band"))))
         throw BackendError("Skia 行背景带缺少对应动画或着色能力");
-    if (features.contains("p08_ruby_line_band")
-        && (!features.contains("p08_static_line_band") || !features.contains("p05_resolved_ruby")
-            || features.contains("p05_lower_ruby")))
-        throw BackendError("Skia 行背景带上注音缺少对应布局能力");
+    const bool lowerRubyBand = features.contains("p08_lower_ruby_line_band");
+    if ((lowerRubyBand && !features.contains("p08_ruby_line_band"))
+        || (features.contains("p08_ruby_line_band")
+            && (!features.contains("p08_static_line_band") || !features.contains("p05_resolved_ruby")
+                || lowerRubyBand != features.contains("p05_lower_ruby"))))
+        throw BackendError("Skia 行背景带注音缺少对应布局能力");
     if (((fittedLineBand || slicedLineBand) && !features.contains("p08_static_line_band"))
         || (fittedLineBand && slicedLineBand)
         || (features.contains("p08_static_line_band")

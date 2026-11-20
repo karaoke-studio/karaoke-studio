@@ -105,6 +105,46 @@ def test_lower_glow_matches_p00_actual_gpu(binary, application, tmp_path):
     assert_ruby_transition_gpu_parity(binary, case, tuple(sorted((*case.timestamps_ms, 3175, 3575, 4125))))
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_lower_reading_line_band_preserves_reading_geometry(binary, source, tmp_path, target):
+    from test_subtitle_skia_line_motion import static_band_image
+
+    track, style, resolve = source
+    plain = ir_for(binary, (track, style, resolve))
+    style = replace(style, line_band_enabled=True, line_band_fill_mode='stretch',
+                    line_band_image=str(static_band_image(tmp_path)), line_band_include_ruby=True)
+    ir = ir_for(binary, (track, style, resolve))
+    feature = 'p08_lower_ruby_line_band'
+    assert feature in ir['required_features']
+    assert len(ir['skia_layout']['lines']) == len(plain['skia_layout']['lines'])
+    for line, normal in zip(ir['skia_layout']['lines'], plain['skia_layout']['lines'], strict=True):
+        assert {key: value for key, value in line.items() if key != 'line_band_rect'} == normal
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    t = ir['track']['lines'][0]['display_start_ms'] + 50
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [t])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [t], generation=2)
+    assert frames[0].any() and np.array_equal(frames[0], replay[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('image', ['static', 'staff'])
+def test_lower_reading_line_band_matches_actual_gpu(binary, application, tmp_path, image):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_line_motion import static_band_image
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    path = str(static_band_image(tmp_path)) if image == 'static' else 'preset:staff_scroll'
+    style = replace(base.style, line_band_enabled=True, line_band_image=path, line_band_include_ruby=True)
+    case = replace(base, case_id=f'lower_reading_line_band_{image}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (*case.timestamps_ms, 3175, 3575, 4125, 5499))
+
+
 def lower_shadow_style(style, phase):
     return replace(style, lower_ruby_follow_upper=False, decoration_before_sync=False,
         lower_ruby_style={**style.lower_ruby_style,
