@@ -57,6 +57,8 @@ struct ResolvedLine {
     int startMs = 0, endMs = 0;
     struct Translation { int startMs, endMs; float x, y; };
     std::vector<Translation> translations;
+    struct TitleWindow { int startMs, endMs, fadeInMs, fadeOutMs; };
+    std::vector<TitleWindow> titleWindows;
     // One continuous wipe front clips every path in the group. Unit clocks
     // are final values; neither grouping nor timing is resolved while drawing.
     std::vector<ResolvedRubyGroup> rubyGroups;

@@ -59,6 +59,7 @@ private:
         std::vector<Cell> cells;
         int startMs, endMs;
         std::vector<ResolvedLine::Translation> translations;
+        std::vector<ResolvedLine::TitleWindow> titleWindows;
         SkPoint translationAt(int timeMs) const;
         SkRect lineBand = SkRect::MakeEmpty();
         LineBandTransition lineBandTransition;
@@ -100,7 +101,7 @@ private:
         std::optional<float> rubyInkTop;       // Highest reading ink; scanline shapes reach up to it.
         SkRect paintBounds = SkRect::MakeEmpty();
     };
-    void drawLine(SkCanvas&, const Line&, int time, bool textVisible) const;
+    void drawLine(SkCanvas&, const Line&, int time, bool textVisible, float titleOpacity = 1.f) const;
     void drawLineBands(SkCanvas&, int time) const;
     int width_, height_;
     SkMatrix viewport_ = SkMatrix::I();

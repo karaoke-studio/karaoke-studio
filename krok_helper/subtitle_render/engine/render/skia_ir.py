@@ -3,6 +3,7 @@
 Font discovery and process IPC are injected configuration capabilities. No Qt
 measurement or rendering is used here, and frame draws never call this module.
 """
+from dataclasses import replace
 from hashlib import sha256
 
 from krok_helper.subtitle_render.domain.models import style_for_track
@@ -22,6 +23,7 @@ from krok_helper.subtitle_render.engine.guide.skia_bitmap import declare_bitmap_
 from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from .skia_lower_ir import lower_sources
 from .skia_line_band_ir import write_line_band
+from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, RUBY_PARTICLE_EXITS, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
@@ -301,19 +303,29 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
         raise ValueError('Skia 规范布局最多支持 15 条附加轨道')
     with font_snapshot(resolve_font):
         ir = _build_source_ir(track, style, measure=measure, resolve_font=resolve_font, **kwargs)
-        if not sources:
+        titles = ir['titles']
+        if not sources and not titles:
             return ir
-        extras = [_build_source_ir(source, style_for_track(style, source),
-                                  measure=measure, resolve_font=resolve_font, **kwargs)
+        extras = [_build_source_ir(source, replace(style_for_track(style, source), title_overlays=[]),
+                                   measure=measure, resolve_font=resolve_font, **kwargs)
                   for source in sources]
-    ir['skia_extra_sources'] = extras
-    ir['required_features'].append('p08_multiple_sources')
-    identities = (source['skia_layout']['metrics_identity'] for source in (ir, *extras))
+        title_sources = build_title_sources(titles, _build_source_ir, measure=measure, resolve_font=resolve_font, **kwargs)
+    ir['titles'] = []
+    if not extras and not title_sources:
+        return ir
+    if extras:
+        ir['skia_extra_sources'] = extras
+        ir['required_features'].append('p08_multiple_sources')
+    if title_sources:
+        ir['skia_titles'] = title_sources
+        ir['required_features'].append('p08_solid_title')
+    identities = (source['skia_layout']['metrics_identity']
+                  for source in (ir, *extras, *(title['source'] for title in title_sources)))
     ir['skia_layout']['metrics_identity'] = sha256(''.join(identities).encode('ascii')).hexdigest()
     return ir
 
 
-def _build_source_ir(track, style, *, measure, resolve_font, **kwargs):
+def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
     prepared = []
 
     def build_plan(source, source_style, **plan_kwargs):
@@ -417,6 +429,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, **kwargs):
                 lines.append(line)
                 continue
             position = geometry.position(item, kwargs['width'], kwargs['height'])
+            if adjust_position is not None:
+                position = adjust_position(position, item.layout_style, measured, item.track_index, kwargs['height'])
             cells = positioned_cells(geometry.locals[index], position)
             ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
                                      dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,

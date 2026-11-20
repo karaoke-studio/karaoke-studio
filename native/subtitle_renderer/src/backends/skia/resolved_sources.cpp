@@ -3,7 +3,9 @@
 #include "../../model/backend_caps.h"
 #include <QtCore/QJsonArray>
 #include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <limits>
 
 namespace krok::subtitle::native {
 namespace {
@@ -68,12 +70,9 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
             throw BackendError("Skia 多轨字形单元总数超限");
     }
 }
-}
-
-::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
+::subtitle::skia::ResolvedSubtitleInput resolvedLyricsInput(const QJsonObject& ir, SkiaImageFillCache& images) {
     auto features = ir.value("required_features").toArray();
     const auto feature = std::find(features.begin(), features.end(), QJsonValue("p08_multiple_sources"));
-    SkiaImageFillCache images; // One decoded-resource budget for all sources in the configure.
     if (feature == features.end()) return resolvedSkiaSource(ir, images);
 
     const auto input = ir.value("skia_extra_sources");
@@ -108,6 +107,64 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         result.lines.insert(result.lines.end(), std::make_move_iterator(source.lines.begin()),
                             std::make_move_iterator(source.lines.end()));
     }
+    return result;
+}
+
+std::vector<::subtitle::skia::ResolvedLine::TitleWindow> titleWindows(const QJsonValue& value) {
+    const auto windows = value.toArray();
+    if (windows.isEmpty() || windows.size() > 256) throw BackendError("Skia 标题显示窗数量无效");
+    std::vector<::subtitle::skia::ResolvedLine::TitleWindow> result;
+    result.reserve(windows.size());
+    const auto integer = [](const QJsonValue& field) {
+        const auto n = field.toDouble(std::numeric_limits<double>::quiet_NaN());
+        if (!std::isfinite(n) || std::floor(n) != n || n < 0 || n > std::numeric_limits<int>::max())
+            throw BackendError("Skia 标题显示窗时间无效");
+        return int(n);
+    };
+    for (const auto& item : windows) {
+        const auto window = item.toArray();
+        if (window.size() != 4) throw BackendError("Skia 标题显示窗格式无效");
+        const auto start = integer(window[0]), end = integer(window[1]);
+        if (start >= end) throw BackendError("Skia 标题显示窗长度无效");
+        result.push_back({start, end, integer(window[2]), integer(window[3])});
+    }
+    return result;
+}
+}
+
+::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
+    SkiaImageFillCache images;
+    auto features = ir.value("required_features").toArray();
+    const auto feature = std::find(features.begin(), features.end(), QJsonValue("p08_solid_title"));
+    if (feature == features.end()) return resolvedLyricsInput(ir, images);
+    const auto titles = ir.value("skia_titles").toArray();
+    if (titles.isEmpty() || titles.size() > 16) throw BackendError("Skia 标题数量无效");
+    auto lyrics = ir;
+    lyrics.remove("skia_titles");
+    features.erase(feature);
+    lyrics.insert("required_features", features);
+    auto result = resolvedLyricsInput(lyrics, images);
+
+    std::vector<::subtitle::skia::ResolvedLine> lines;
+    lines.reserve(titles.size() + result.lines.size());
+    // The existing GPU paints later title entries below earlier ones.
+    SceneSize size;
+    for (qsizetype index = titles.size(); index > 0; --index) {
+        const auto title = titles.at(index - 1).toObject();
+        const auto source = title.value("source").toObject();
+        auto windows = titleWindows(title.value("windows"));
+        countSource(source, ir.value("screen"), size);
+        auto prepared = resolvedSkiaSource(source, images);
+        if (prepared.lines.size() != 1 || !prepared.viewport.isIdentity() || prepared.lineBand.image)
+            throw BackendError("Skia 标题布局无效");
+        auto& line = prepared.lines.front();
+        if (line.cells.empty() || line.animation.active() || !line.rubyGroups.empty() || !line.particles.empty())
+            throw BackendError("Skia 标题必须使用静态文字布局");
+        line.titleWindows = std::move(windows);
+        lines.push_back(std::move(line));
+    }
+    lines.insert(lines.end(), std::make_move_iterator(result.lines.begin()), std::make_move_iterator(result.lines.end()));
+    result.lines = std::move(lines);
     return result;
 }
 }

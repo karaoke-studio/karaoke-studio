@@ -14,7 +14,8 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QImage
 
-from krok_helper.subtitle_render.domain.models import LyricsLayout, Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.models import LyricsLayout, Style, TimingChar, TimingLine, TimingTrack, TitleOverlay, TitleTimeWindow
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess, SharedFrameRingReader
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
 
@@ -35,6 +36,73 @@ def sample():
                   smart_horizontal="none", entry_anim="none", exit_anim="none", karaoke_anim="none")
     track = TimingTrack(lines=[TimingLine(chars=[TimingChar(c, 200 + i * 100) for i, c in enumerate("Skia P04")], end_ms=1200)])
     return track, style
+
+
+def solid_title(style):
+    return TitleOverlay(enabled=True, text_template='{artist}', layout_index=None, anchor='top_left',
+                        font_family=style.font_family, font_family_latin=None, font_size_px=80, font_weight=400,
+                        fill=PaintFill(color='#61BEF8'), stroke_width_px=0, stroke2_width_px=0,
+                        decoration_kind='none', offset_x=100, offset_y=60,
+                        custom_windows=[TitleTimeWindow(300, 1000, 200, 200), TitleTimeWindow(1400, 1800, 0, 0)])
+
+
+def test_scene_prewarm_includes_title_slots_and_extra_tracks():
+    from krok_helper.subtitle_render.native.skia_font_preparation import scene_fallback_requests
+
+    track, style = sample()
+    side = TimingTrack(lines=[TimingLine(chars=[TimingChar('字', 0)], end_ms=1000)])
+    title = replace(solid_title(style), text_template='Z', font_family_latin='Title Latin')
+    style = replace(style, title_overlays=[title], custom_style_schemes={})
+    requests = scene_fallback_requests(track, style, [side])
+    assert 'Z' in requests['Title Latin', 400, False]
+    assert '字' in requests[style.font_family, style.font_weight, style.italic]
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_solid_title_windows_follow_media_clock_and_seek(binary, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, artist='Skia', offset_ms=5000))
+    title = solid_title(style)
+    lower = replace(title, fill=PaintFill(color='#E22B22'))
+    style = replace(style, title_overlays=[title, lower], custom_style_schemes={},
+                    timing_offset_ms=600, viewport_offset_y=120)
+    ir = ir_for(binary, (track, style), roll_shift_ms=800)
+    assert ir['titles'] == [] and 'p08_solid_title' in ir['required_features']
+    invalid = copy.deepcopy(ir)
+    invalid['skia_titles'][0]['windows'][0] = [400, 100, 0, 0]
+    times = [299, 300, 400, 500, 900, 1000, 1400, 1800, 1801, 500]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process._send({'cmd': 'configure', 'ir': ir})
+        process._expect_ok(process._read_until_event('configured'))
+        frames, _ = collect(process, times)
+        process._send({'cmd': 'configure', 'ir': invalid})
+        with pytest.raises(NativeRendererError):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [500], generation=2)
+    assert all(not frames[i].any() for i in (0, 1, 5, 8))
+    assert frames[2][..., 3].max() in (191, 192) and np.array_equal(frames[2], frames[4])
+    assert np.array_equal(frames[3], frames[6]) and np.array_equal(frames[6], frames[7])
+    assert np.array_equal(frames[3], frames[-1]) and np.array_equal(frames[3], replay[0])
+    y, x = np.where(frames[3][..., 3] == 255)
+    assert y.size and y.max() < 180 and x.min() >= 100
+    pixels = frames[3][y, x, :3]
+    assert (pixels[:, 2] > 200).sum() > 100
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_solid_title_matches_actual_d2d_gpu(binary):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, artist='Skia', offset_ms=5000))
+    style = replace(style, title_overlays=[solid_title(style)], custom_style_schemes={},
+                    timing_offset_ms=600, viewport_offset_y=120)
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='solid_title'),
+        (299, 300, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
 @pytest.fixture

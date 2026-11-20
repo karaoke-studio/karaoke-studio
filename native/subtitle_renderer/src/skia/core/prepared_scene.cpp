@@ -39,6 +39,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
+        line.titleWindows = source.titleWindows;
         line.noWipe = source.noWipe;
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
@@ -59,7 +60,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             || std::ranges::any_of(source.rubyGroups, [](const auto& group) { return group.shadow.visible() || group.glow; }));
         line.noise = source.noise;
         line.characterFade = source.characterFade;
-        const bool needsPaintBounds = line.animation.active() || line.characterFade.active() || line.isolateVerticalDecoration;
+        const bool needsPaintBounds = line.animation.active() || line.characterFade.active()
+            || line.isolateVerticalDecoration || !line.titleWindows.empty();
         line.characterGeometry = source.characterGeometry;
         line.rubyGeometryComposition = source.rubyGeometryComposition;
         line.singingScale = source.singingScale;
@@ -282,10 +284,26 @@ void PreparedScene::drawLineBands(SkCanvas& canvas, int timeMs) const {
 
 void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     canvas.clear(SK_ColorTRANSPARENT);
+    if (lineBand_.image) {
+        SkAutoCanvasRestore restoreBand(&canvas, !viewport_.isIdentity());
+        if (!viewport_.isIdentity()) canvas.concat(viewport_);
+        drawLineBands(canvas, tMs);
+    }
+    for (const auto& line : lines_) {
+        if (line.titleWindows.empty()) break;
+        float opacity = 0.f;
+        for (const auto& window : line.titleWindows) {
+            if (tMs < window.startMs || tMs > window.endMs) continue;
+            const float head = window.fadeInMs ? float(tMs - window.startMs) / window.fadeInMs : 1.f;
+            const float tail = window.fadeOutMs ? float(window.endMs - tMs) / window.fadeOutMs : 1.f;
+            opacity = std::max(opacity, std::min({1.f, head, tail}));
+        }
+        if (opacity > 0.f) drawLine(canvas, line, 0, true, opacity);
+    }
     SkAutoCanvasRestore restore(&canvas, !viewport_.isIdentity());
     if (!viewport_.isIdentity()) canvas.concat(viewport_);
-    drawLineBands(canvas, tMs);
     for (const auto& line : lines_) {
+        if (!line.titleWindows.empty()) continue;
         const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
         if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs))
             continue;

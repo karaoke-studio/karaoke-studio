@@ -9,11 +9,12 @@
 #include <array>
 
 namespace subtitle::skia {
-void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible) const {
+void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible, float titleOpacity) const {
     SkPaint paint;
     paint.setAntiAlias(true);
-    const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
-                                       : LineAnimation::State{1.f, 0.f, 0.f};
+    auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
+                                 : LineAnimation::State{1.f, 0.f, 0.f};
+    animation.opacity *= titleOpacity;
     if (animation.opacity <= 0.f) return;
     SkAutoCanvasRestore restore(&canvas, true);
     if (animation.dx != 0 || animation.dy != 0)
