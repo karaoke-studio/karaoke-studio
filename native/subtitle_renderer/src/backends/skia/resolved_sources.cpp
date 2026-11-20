@@ -1,4 +1,5 @@
 #include "resolved_input.h"
+#include "image_fill_cache.h"
 #include "../../model/backend_caps.h"
 #include <QtCore/QJsonArray>
 #include <algorithm>
@@ -34,6 +35,8 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
         "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_multi_lane_outline",
         "p06_outline_ruby", "p06_ruby_solid_outline", "p07_ruby_line_animation",
+        "p06_body_gradient", "p06_outline_gradient", "p06_image_fill",
+        "p06_ruby_main_paint", "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_fill_image",
         "p07_singing_scale", "p07_ruby_singing_scale",
         "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p08_viewport",
         "p08_static_line_band", "p08_line_band_fit", "p08_line_band_slices",
@@ -63,7 +66,8 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
     auto features = ir.value("required_features").toArray();
     const auto feature = std::find(features.begin(), features.end(), QJsonValue("p08_multiple_sources"));
-    if (feature == features.end()) return resolvedSkiaSource(ir);
+    SkiaImageFillCache images; // One decoded-resource budget for all sources in the configure.
+    if (feature == features.end()) return resolvedSkiaSource(ir, images);
 
     const auto input = ir.value("skia_extra_sources");
     const auto extras = input.toArray();
@@ -88,10 +92,10 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         countSource(source, screen, size);
     }
 
-    auto result = resolvedSkiaSource(primary);
+    auto result = resolvedSkiaSource(primary, images);
     result.lines.reserve(size.lines);
     for (const auto& value : extras) {
-        auto source = resolvedSkiaSource(value.toObject(), hasBand ? &result.lineBand : nullptr);
+        auto source = resolvedSkiaSource(value.toObject(), images, hasBand ? &result.lineBand : nullptr);
         if (source.viewport != result.viewport)
             throw BackendError("Skia 多轨字幕视口不一致");
         result.lines.insert(result.lines.end(), std::make_move_iterator(source.lines.begin()),

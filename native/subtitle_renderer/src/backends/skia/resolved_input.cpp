@@ -59,7 +59,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
 }
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaSource(
-    const QJsonObject& ir, const ::subtitle::skia::LineBandTexture* sharedBand) {
+    const QJsonObject& ir, SkiaImageFillCache& imageCache, const ::subtitle::skia::LineBandTexture* sharedBand) {
     auto projected = scene::skiaSceneFromIr(ir);
     const auto features = ir.value("required_features").toArray();
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
@@ -76,7 +76,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .vectorShapeSignal = features.contains("p08_vector_shape_signal"),
         .volumeSignal = features.contains("p08_volume_signal"),
         .staticLineBand = features.contains("p08_static_line_band")});
-    SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;

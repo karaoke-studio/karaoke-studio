@@ -11,7 +11,7 @@ from PyQt6.QtGui import QImage
 
 from test_subtitle_skia_line_fade import application, binary, project, ir_for, collect, configure, selection
 from test_subtitle_skia_gradients import TIMES, assert_text_parity, gradient_source, layer_paint
-from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -85,6 +85,67 @@ def image_source(project, images, case):
 
 
 CASES = ('body', 'mixed', 'outlines', 'missing')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multitrack_paints_keep_independent_domains(binary, project, images, target):
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = image_source(project, images, 'mixed')
+    style = replace(style, line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=55)])
+    line = replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=2700)
+    track = replace(track, lines=[line])
+    side = replace(track, lines=[replace(line, chars=line.chars[:2], layout_index=1)],
+                   meta=replace(track.meta, offset_ms=500))
+    primary_ir = ir_for(binary, (track, style))
+    secondary_ir = ir_for(binary, (side, style))
+    combined_ir = ir_for(binary, (track, style), extra_tracks=[side])
+    for separate, merged in ((primary_ir, combined_ir), (secondary_ir, combined_ir['skia_extra_sources'][0])):
+        assert separate['skia_layout']['lines'] == merged['skia_layout']['lines']
+    times = [0, 499, 500, 1200, 2500, 2700, 3200, 1200]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        outputs = []
+        for generation, (main, extras) in enumerate(((track, []), (side, []), (track, [side])), 1):
+            process.configure(main, style, width=640, height=360, fps=60, extra_tracks=extras)
+            frames, _ = collect(process, times, generation=generation)
+            outputs.append(np.stack(frames))
+    primary, secondary, combined = outputs
+    assert primary[0].any() and not secondary[:2].any() and secondary[2].any()
+    assert not np.any((primary[..., 3] > 0) & (secondary[..., 3] > 0))
+    expected = np.maximum(primary, secondary)
+    if target == 'raster':
+        assert np.array_equal(combined, expected)
+    else:
+        assert_glow_parity(times, expected, combined, combined, 'paint domains', check_p00_edges=True)
+    assert np.array_equal(combined[3], combined[-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU comparison')
+@pytest.mark.parametrize('mode', ['image', 'gradient_vertical'])
+def test_multitrack_paints_match_actual_d2d_gpu(binary, application, tmp_path, mode):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == f'paint_{mode}')
+    track = case.track
+    style = replace(case.style, decoration_kind='none',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=140)])
+    side_line = replace(track.lines[0], chars=track.lines[0].chars[2:], layout_index=1)
+    side = replace(track, lines=[side_line], meta=replace(track.meta, offset_ms=900))
+    times = (299, 600, 1199, 1200, 1500, 2600, 4400, 5500, 6399, 6400)
+    with NativeRendererProcess() as d2d:
+        _, raw = _render_g1_frames(d2d, style, times, track=track, extra_tracks=[side], force_warp=False,
+                                   width=1920, height=1080, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    output = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, style, extra_tracks=[side], width=1920, height=1080, fps=60)
+            frames, _ = collect(process, times)
+            output.append(frames)
+    assert_glow_parity(times, reference, *output, f'multitrack_paints_{mode}', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('case', CASES)
