@@ -2,7 +2,7 @@
 from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
-from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius
+from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius, ruby_shadow_dx, ruby_shadow_dy
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
@@ -24,23 +24,32 @@ def lower_sources(prepared):
 def lower_solid_appearance(style):
     before, after = ruby_decoration_kinds(style)
     colors = effective_ruby_karaoke_colors(style)
-    if (not {before, after} <= {'none', 'glow'}
-            or colors.before.text.mode != 'solid' or colors.after.text.mode != 'solid'):
-        raise ValueError('Skia 下方注音当前仅支持实色文字和实色光晕')
+    if colors.before.text.mode != 'solid' or colors.after.text.mode != 'solid':
+        raise ValueError('Skia 下方注音文字当前仅支持实色')
     result = {'paint': {'before': list(rgba(colors.before.text.color)),
                         'after': list(rgba(colors.after.text.color))}}
-    glow = {}
+    glow, shadow = {}, {}
     for phase, kind in (('before', before), ('after', after)):
-        if kind != 'glow':
+        if kind == 'none':
+            continue
+        sung = phase == 'after'
+        radius = ruby_glow_radius(style, after=sung) if kind == 'glow' else 0
+        if kind == 'glow' and radius <= 0:
             continue
         layer = getattr(colors, phase).shadow
-        radius = ruby_glow_radius(style, after=phase == 'after')
-        if radius <= 0:
-            continue
         if layer.mode != 'solid':
-            raise ValueError('Skia 下方注音光晕当前仅支持实色')
-        glow[phase] = {'radius': radius, 'color': list(rgba(layer.color)),
-                       'concentration': ruby_glow_concentration_level(style, after=phase == 'after')}
+            raise ValueError('Skia 下方注音装饰当前仅支持实色')
+        color = list(rgba(layer.color))
+        if kind == 'glow':
+            glow[phase] = {'radius': radius, 'color': color,
+                           'concentration': ruby_glow_concentration_level(style, after=sung)}
+        elif kind == 'shadow':
+            shadow[phase] = {'offset': [ruby_shadow_dx(style, after=sung), ruby_shadow_dy(style, after=sung)],
+                             'color': color}
+        else:
+            raise ValueError('Skia 下方注音装饰类型无效')
     if glow:
         result['lower_glow'] = glow
+    if shadow:
+        result['lower_shadow'] = shadow
     return result

@@ -105,6 +105,74 @@ def test_lower_glow_matches_p00_actual_gpu(binary, application, tmp_path):
     assert_ruby_transition_gpu_parity(binary, case, tuple(sorted((*case.timestamps_ms, 3175, 3575, 4125))))
 
 
+def lower_shadow_style(style, phase):
+    return replace(style, lower_ruby_follow_upper=False, decoration_before_sync=False,
+        lower_ruby_style={**style.lower_ruby_style,
+            'ruby_decoration_kind_before': 'shadow' if phase == 'before' else 'glow',
+            'ruby_decoration_kind': 'shadow' if phase == 'after' else 'glow',
+            'ruby_glow_before_radius_px': 4, 'ruby_glow_after_radius_px': 6,
+            'ruby_shadow_before_offset_x': -12, 'ruby_shadow_before_offset_y': 9,
+            'ruby_shadow_offset_x': 10, 'ruby_shadow_offset_y': 12,
+            'ruby_colors_follow_main': False,
+            'ruby_karaoke_colors': {
+                'before': {'text': {'color': '#1446D0'}, 'shadow': {'color': '#FF8000'}},
+                'after': {'text': {'color': '#F0FF23'}, 'shadow': {'color': '#00FFFF'}},
+            },
+        })
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('phase', ['before', 'after'])
+def test_lower_shadow_keeps_its_own_wipe_phase_and_offset(binary, independent, target, phase):
+    track, style, resolve = independent
+    style = lower_shadow_style(style, phase)
+    ir = ir_for(binary, (track, style, resolve), dpr=1.5)
+    assert {'p06_lower_ruby_shadow', 'p06_lower_ruby_glow'} <= set(ir['required_features'])
+    lower = [g for g in ir['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower')]
+    offset = [-12, 9] if phase == 'before' else [10, 12]
+    color = [255, 128, 0, 255] if phase == 'before' else [0, 255, 255, 255]
+    assert len(lower) == 3 and all(g['lower_shadow'] == {phase: {'color': color, 'offset': offset}} for g in lower)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [199, 900, 1900, 199])
+    assert np.array_equal(frames[0], frames[-1])
+    selected, other = (frames[0], frames[2]) if phase == 'before' else (frames[2], frames[0])
+    def coverage(frame, paint):
+        return (frame[..., 3] > 235) & np.all(frame[..., :3] == paint[:3], axis=-1)
+    y, x = np.where(coverage(selected, color))
+    fill_y, fill_x = np.where(coverage(selected, [20, 70, 208] if phase == 'before' else [240, 255, 35]))
+    assert len(y) > 300 and len(fill_y) > 300 and not coverage(other, color).any()
+    # A half-pixel shift can land the last fully covered row on either side.
+    assert abs(y.max() - fill_y.max() - offset[1] * 1.5) <= .5
+    # The before-only shadow's wipe clips its leading edge at the fixed front.
+    assert abs(x.max() - fill_x.max() - offset[0] * 1.5) <= 1
+
+
+def test_lower_shadow_cannot_replace_valid_scene_with_two_decorations_in_same_phase(binary, independent):
+    track, style, resolve = independent
+    valid = ir_for(binary, (track, lower_shadow_style(style, 'after'), resolve))
+    bad = copy.deepcopy(valid)
+    group = next(g for g in bad['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower'))
+    group['lower_shadow']['before'] = group['lower_shadow']['after']
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, valid)
+        before, _ = collect(process, [900])
+        with pytest.raises(NativeRendererError): configure(process, bad)
+        after, _ = collect(process, [900], generation=2)
+    assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('phase', ['before', 'after'])
+def test_lower_shadow_and_glow_match_actual_gpu(binary, application, tmp_path, phase):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    case = replace(base, case_id=f'lower_shadow_{phase}', style=lower_shadow_style(base.style, phase))
+    assert_ruby_transition_gpu_parity(binary, case, (600, 1450, 2600, 3175, 3575, 4125, 4400))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_product_lower_preserves_source_and_uses_independent_alpha_paints(binary, independent, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.ruby import lower, style as qt_ruby
@@ -212,7 +280,8 @@ def test_invalid_lower_contract_keeps_previous_scene(binary, independent, mutati
     assert np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', [{'ruby_decoration_kind': 'shadow'},
+@pytest.mark.parametrize('change', [{'ruby_decoration_kind': 'shadow', 'ruby_karaoke_colors': {
+        'before': {'shadow': {'mode': 'gradient_horizontal'}}}},
     {'ruby_karaoke_colors': {'before': {'text': {'mode': 'gradient_horizontal'}}}}])
 def test_unsupported_independent_lower_appearance_is_explicit(binary, independent, change):
     track, style, _ = independent

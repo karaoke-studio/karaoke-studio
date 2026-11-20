@@ -50,6 +50,9 @@ bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const
     return !outline.width || (before.mode == "solid" && after.mode == "solid"
         && outline.before == argb(before.color) && outline.after == argb(after.color));
 }
+bool validPhases(const QJsonObject& layer) {
+    return !layer.isEmpty() && layer.size() == int(layer.contains("before")) + int(layer.contains("after"));
+}
 ::subtitle::skia::GlowState lowerGlowState(const QJsonObject& glow, const char* phase, double dpr) {
     if (!glow.contains(phase)) return {};
     const auto state = glow.value(phase).toObject();
@@ -58,6 +61,15 @@ bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const
     const double radius = integer(state.value("radius"), 1, 532) * dpr;
     if (radius > 532.) throw BackendError("Skia 下方注音实色光晕半径超限");
     return {int(std::lround(radius)), integer(state.value("concentration"), 0, 2), rgbaPaint(state.value("color"))};
+}
+::subtitle::skia::ShadowState lowerShadowState(const QJsonObject& shadow, const char* phase, double dpr) {
+    if (!shadow.contains(phase)) return {};
+    const auto state = shadow.value(phase).toObject();
+    const auto offset = state.value("offset").toArray();
+    if (state.size() != 2 || offset.size() != 2)
+        throw BackendError("Skia 下方注音实色阴影参数无效");
+    return {true, float(integer(offset[0], -4096, 4096) * dpr),
+            float(integer(offset[1], -4096, 4096) * dpr), rgbaPaint(state.value("color"))};
 }
 void validateStandaloneMark(const QString& text, const QJsonObject& cell, const QJsonObject& ir) {
     const auto code = text.toUcs4().front();
@@ -120,7 +132,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && scene.charStyles.empty();
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale"));
-    const bool allowLowerGlow = features.contains("p06_lower_ruby_glow") && !vertical && staticLine
+    const bool allowLowerDecoration = !vertical && staticLine
         && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
         && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
@@ -181,7 +193,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 上注音实色阴影缺少对应布局能力");
             return {true, x, y, argb(decor.color)};
         };
-        const ::subtitle::skia::StaticShadow shadow{
+        ::subtitle::skia::StaticShadow shadow{
             shadowState(false), shadowState(true), paint.rubyStrokeWidth, paint.rubyStroke2Width};
         const auto glowState = [&](bool after) -> ::subtitle::skia::GlowState {
             if (lower || paint.rubyDecorationKindForState(after) != "glow") return {};
@@ -222,17 +234,26 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         const bool protectFill = (before >> 24) < 255 || (after >> 24) < 255;
         const float innerWidth = float(primary.width * glyphs.dpr);
+        const float secondaryWidth = float(secondary.width * glyphs.dpr);
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
+        const auto lowerGlow = object.value("lower_glow").toObject();
         if (object.contains("lower_glow")) {
-            const auto lowerGlow = object.value("lower_glow").toObject();
-            if (!lower || !allowLowerGlow || lowerGlow.isEmpty()
-                || lowerGlow.size() != int(lowerGlow.contains("before")) + int(lowerGlow.contains("after")))
+            if (!lower || !allowLowerDecoration || !features.contains("p06_lower_ruby_glow") || !validPhases(lowerGlow))
                 throw BackendError("Skia 下方注音实色光晕缺少对应布局能力");
             glow = {lowerGlowState(lowerGlow, "before", glyphs.dpr),
                     lowerGlowState(lowerGlow, "after", glyphs.dpr), outerWidth};
             if (lowerGlowSpec && *lowerGlowSpec != glow)
                 throw BackendError("Skia 同行下方注音当前仅支持相同的光晕样式");
             lowerGlowSpec = glow;
+        }
+        if (object.contains("lower_shadow")) {
+            const auto lowerShadow = object.value("lower_shadow").toObject();
+            if (!lower || !allowLowerDecoration || !features.contains("p06_lower_ruby_shadow") || !validPhases(lowerShadow)
+                || (lowerGlow.contains("before") && lowerShadow.contains("before"))
+                || (lowerGlow.contains("after") && lowerShadow.contains("after")))
+                throw BackendError("Skia 下方注音实色阴影缺少对应布局能力或同一阶段重复装饰");
+            shadow = {lowerShadowState(lowerShadow, "before", glyphs.dpr),
+                      lowerShadowState(lowerShadow, "after", glyphs.dpr), innerWidth, secondaryWidth};
         }
         const double wipePad = (primary.width / 2) / glyphs.dpr;
         std::vector<::subtitle::skia::ResolvedCell> cells;

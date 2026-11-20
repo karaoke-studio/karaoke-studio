@@ -68,6 +68,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_static_glow",
         "p06_ruby_glow",
         "p06_lower_ruby_glow",
+        "p06_lower_ruby_shadow",
         "p07_line_fade",
         "p07_line_motion",
         "p07_ruby_line_animation",
@@ -388,6 +389,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_lower_ruby_glow")
         && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_glow_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音光晕缺少版本化布局或注音能力声明");
+    if (features.contains("p06_lower_ruby_shadow")
+        && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_shadow_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音阴影缺少版本化布局或注音能力声明");
     if (features.contains("p07_singing_glow")
         && (!features.contains("p07_singing_scale")
             || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
