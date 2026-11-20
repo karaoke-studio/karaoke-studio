@@ -79,7 +79,7 @@ static bool verticalRubyScalar(const QString& text) {
 }
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
-        const RenderScene& scene, int lineIndex, int offset, bool fadeComposition,
+    const RenderScene& scene, int lineIndex, int offset, bool fadeComposition, bool spinComposition,
         std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
@@ -104,7 +104,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && !vertical && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || fadeComposition || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+        && (lineGlow || fadeComposition || spinComposition || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     if (source.value("ruby_groups").toArray().size() > 4096 - totalGroups)
@@ -114,11 +114,21 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
-        if ((fadeComposition && lower) || object.contains("fade_owner") != fadeComposition)
+        const bool animatedOwner = fadeComposition || spinComposition;
+        if ((animatedOwner && lower) || object.contains("fade_owner") != animatedOwner)
             throw BackendError("Skia 注音缺少有效的逐字淡化归属");
         std::optional<std::size_t> fadeOwner;
-        if (fadeComposition)
+        if (animatedOwner)
             fadeOwner = integer(object.value("fade_owner"), 0, int(line.chars.size()) - 1);
+        std::optional<SkPoint> spinPivot;
+        if (object.contains("spin_pivot") != spinComposition)
+            throw BackendError("Skia 注音翻转缺少最终轴心");
+        if (spinComposition) {
+            const auto pivot = object.value("spin_pivot").toArray();
+            if (pivot.size() != 2) throw BackendError("Skia 注音翻转轴心无效");
+            spinPivot = SkPoint::Make(float(pivotCoordinate(pivot[0]) * glyphs.dpr),
+                                      float(pivotCoordinate(pivot[1]) * glyphs.dpr));
+        }
         if ((zoom && lower) || object.contains("zoom_pivot_y") != zoom)
             throw BackendError("Skia 注音整字放大轴心与布局不一致");
         const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
@@ -260,7 +270,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             cells.push_back(std::move(glyph));
         }
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
-        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt, fadeOwner});
+        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt, fadeOwner, spinPivot});
     }
     return groups;
 }

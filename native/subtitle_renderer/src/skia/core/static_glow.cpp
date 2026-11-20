@@ -67,9 +67,16 @@ PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas) const {
     const float margin = 3.f * radius_ + 2.f;
     auto sampled = canvas.getLocalClipBounds().makeOutset(margin, margin);
     if (source.isEmpty() || !source.intersect(sampled)) return {};
-    const auto bounds = source.roundOut();
-    auto target = canvas.makeSurface(SkImageInfo::MakeN32Premul(bounds.width(), bounds.height(),
-                                                                canvas.imageInfo().refColorSpace()));
+    return makeSource(canvas, source, false);
+}
+
+PreparedGlow::Source PreparedGlow::makeSource(SkCanvas& canvas, const SkRect& rectangle, bool canonical) const {
+    const auto bounds = rectangle.roundOut();
+    const auto colorSpace = canvas.imageInfo().refColorSpace();
+    auto target = canonical
+        ? SkSurfaces::Raster(SkImageInfo::Make(bounds.width(), bounds.height(), kRGBA_F16_SkColorType,
+                                              kPremul_SkAlphaType, colorSpace))
+        : canvas.makeSurface(SkImageInfo::MakeN32Premul(bounds.width(), bounds.height(), colorSpace));
     if (!target) throw std::runtime_error("Skia 字幕光晕临时表面分配失败");
     auto& layer = *target->getCanvas();
     layer.clear(SK_ColorTRANSPARENT);
@@ -106,5 +113,25 @@ void PreparedGlow::composite(SkCanvas& canvas, const Source& source) const {
         paint.setImageFilter(filter);
         canvas.drawImage(image, float(source.origin.x()), float(source.origin.y()), SkSamplingOptions(), &paint);
     }
+}
+
+void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index, bool after,
+                                            std::optional<float> edge, const SkMatrix& transform, float opacity) const {
+    const auto& path = cells_[index];
+    if (!visible(after) || opacity <= 0 || path.isEmpty()) return;
+    const float margin = 3.f * radius_ + 2.f;
+    const auto bounds = path.getBounds().makeOutset(margin, margin);
+    // Blur in glyph space first. A floating-point source keeps the
+    // early and late alpha ramps consistent across Skia devices.
+    auto mask = makeSource(canvas, bounds, true);
+    drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, opacity);
+    auto blurred = makeSource(canvas, bounds, true);
+    composite(*blurred.surface->getCanvas(), mask);
+    auto pixels = blurred.surface->makeImageSnapshot();
+    if (!pixels) throw std::runtime_error("Skia 逐字光晕临时表面无法取样");
+    SkAutoCanvasRestore restore(&canvas, true);
+    canvas.concat(transform);
+    canvas.drawImage(pixels, float(blurred.origin.x()), float(blurred.origin.y()),
+                     SkSamplingOptions(SkFilterMode::kLinear));
 }
 }

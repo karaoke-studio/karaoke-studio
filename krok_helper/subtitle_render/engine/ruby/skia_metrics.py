@@ -55,7 +55,7 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
         main, _ = font_style_for_ruby_cell(style, '')
         baseline_run = batch.instance(main)
         zoom_reference = None
-        if effective_karaoke_zoom_pulse(style):
+        if effective_karaoke_zoom_pulse(style) or style.exit_anim == 'spin_flip':
             slot, stretch = font_style_for_ruby_cell(style, reading)
             zoom_reference = (batch.instance(slot, stretch), slot.font_size_px)
         units = []
@@ -83,7 +83,7 @@ def measure_readings(readings, *, resolve_font, measure, visual_units=None) -> M
         if zoom_reference is not None:
             run, size = zoom_reference
             font = measured[run]['font_metrics']
-            # The zoom pivot uses the integer reference font box, shared by
+            # The transform pivot uses the integer reference font box, shared by
             # the whole reading even when its cells use different faces.
             center = int(size * font['descent'] / max(font['ascent'] + font['descent'], 1)) - size / 2
         results.append(MeasuredRubyReading(tuple(cells), tuple(indices), tuple(layouts),

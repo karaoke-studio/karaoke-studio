@@ -42,6 +42,7 @@ struct ResolvedRubyGroup {
     StaticShadow shadow;
     std::optional<StaticGlow> glow;
     std::optional<std::size_t> fadeOwner;
+    std::optional<SkPoint> spinPivot;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

@@ -130,6 +130,50 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
             json.dumps(layout, sort_keys=True), encoding='utf-8')
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_character_exit_spin_owns_its_anchor_and_replays(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, entry_anim='none', exit_anim='spin_flip', exit_fade_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    assert 'p07_ruby_character_exit_spin' in ir['required_features']
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert group['fade_owner'] == 0
+    assert len(group['spin_pivot']) == 2 and np.isfinite(group['spin_pivot']).all()
+    bad = copy.deepcopy(ir)
+    del bad['skia_layout']['lines'][0]['ruby_groups'][0]['spin_pivot']
+    end = ir['track']['lines'][0]['display_end_ms']
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [end-400, end-600, end-400])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [end-400])
+    assert frames[0].any() and not np.array_equal(frames[0], frames[1])
+    assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_p00_ruby_character_exit_spin_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_spin_flip')
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
+    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, case.timestamps_ms)
+            rendered.append(frames)
+    assert_glow_parity(case.timestamps_ms, reference, *rendered, case.case_id, check_p00_edges=True)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case,dpr', [('plain', 1), ('outlines', 1.5), ('guide', 1.5), ('reverse', 1.5), ('mixed', 1)])
 def test_character_fade_matches_actual_gpu(binary, project, case, dpr):

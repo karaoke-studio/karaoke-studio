@@ -39,10 +39,13 @@ public:
     void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                   const SkPath* posed = nullptr, float opacity = 1.f) const;
     void composite(SkCanvas&, const Source&) const;
+    void compositeTransformedCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
+                                  const SkMatrix&, float opacity) const;
 
 private:
     PreparedGlow(const StaticGlow&, const GlowState&, std::optional<bool> phase);
     SkPaint strokePaint() const;
+    Source makeSource(SkCanvas&, const SkRect&, bool canonical) const;
     std::uint32_t before_, after_;
     int radius_;
     float strokeWidth_;

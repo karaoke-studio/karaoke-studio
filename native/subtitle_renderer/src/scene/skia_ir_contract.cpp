@@ -80,6 +80,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_no_wipe_decoration",
         "p07_noise_transition",
         "p07_noise_composition",
+        "p07_ruby_character_exit_spin",
         "p08_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",

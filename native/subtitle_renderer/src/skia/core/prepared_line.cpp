@@ -35,6 +35,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // The opacity-only character transition owns the entry window.
     const bool utopia = (line.singingScale.active || line.utopiaTransition.active())
         && line.characterFade.side(tMs, line.startMs, line.endMs) == 0;
+    const bool fadeActive = line.characterFade.side(tMs, line.startMs, line.endMs) != 0;
+    const bool compositingSpin = fadeActive
+        && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.spins(); });
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     if (animation.opacity < 1.f && (movingCells || !line.paintBounds.isEmpty())) {
@@ -234,6 +237,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const auto owner = group.fadeOwner();
         return owner ? states[*owner].transform.opacity : 1.f;
     };
+    const auto rubyPose = [&](const PreparedWipeGroup& group) {
+        const auto owner = group.fadeOwner();
+        return fadeActive && owner ? group.spinMatrix(states[*owner].transform) : SkMatrix::I();
+    };
     // Accumulate faint fill, outline and halo contributions before rounding
     // the final pixel to the destination's 8-bit channels.
     const bool hasGlow = !line.glow.empty() || !line.rubyGlow.empty();
@@ -243,17 +250,23 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             return state.transform.opacity > 0.f && state.transform.opacity < 1.f;
         });
     if (highPrecisionFade) {
-        canvas.saveLayer(SkCanvas::SaveLayerRec(&line.paintBounds, nullptr, SkCanvas::kF16ColorType));
+        const auto* bounds = line.characterFade.transforms() ? nullptr : &line.paintBounds;
+        canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
     for (const auto& layer : line.rubyGlow) {
         const bool after = layer.visible(true);
         if (!after && !layer.visible(false)) continue;
         const auto source = layer.createSource(canvas);
-        if (!source.surface) continue;
+        if (source.surface) {
+            for (const auto& group : line.rubyGroups)
+                if (rubyPose(group).isIdentity())
+                    group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
+                                         rubyScale, line.rubySingingOrigin, rubyOpacity(group));
+            layer.composite(canvas, source);
+        }
         for (const auto& group : line.rubyGroups)
-            group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
-                                 rubyScale, line.rubySingingOrigin, rubyOpacity(group));
-        layer.composite(canvas, source);
+            if (const auto pose = rubyPose(group); !pose.isIdentity())
+                group.compositeSpinGlow(canvas, layer, tMs, after, rubyOpacity(group), pose);
     }
     for (const auto& layer : line.glow) {
         const bool before = layer.visible(false), after = layer.visible(true);
@@ -265,6 +278,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (!source.surface) continue;
         auto& glowCanvas = *source.surface->getCanvas();
         inPhaseOrder([&](std::size_t index, Phase phase) {
+            if (compositingSpin && states[index].transform.transformed) return;
             const auto& ink = states[index].animatedInk;
             const auto* posed = ink ? &*ink : nullptr;
             const float opacity = states[index].transform.opacity;
@@ -277,6 +291,21 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             }
         });
         layer.composite(canvas, source);
+        if (compositingSpin)
+            inPhaseOrder([&](std::size_t index, Phase phase) {
+                const auto& state = states[index];
+                if (!state.transform.transformed) return;
+                const auto draw = [&](bool afterPhase, std::optional<float> edge) {
+                    layer.compositeTransformedCell(canvas, index, afterPhase, edge,
+                                                   state.transform.matrix, state.transform.opacity);
+                };
+                if (phase == Phase::Wiping) {
+                    draw(false, state.edge);
+                    draw(true, state.edge);
+                } else {
+                    draw(phase == Phase::After, std::nullopt);
+                }
+            });
     }
     if (utopia && line.shadow.visible()) {
         const float edge = lineWipeFront(line.cells, tMs, line.decorationInk.left(),
@@ -354,7 +383,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawStrokeFlash(canvas, ink ? *ink : cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
         }
     for (const auto& group : line.rubyGroups)
-        group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group), wipeViewportHeight);
+        group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group), wipeViewportHeight, rubyPose(group));
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
     if (line.scanline.upperRuby && line.scanline.repaintsGlyphs()

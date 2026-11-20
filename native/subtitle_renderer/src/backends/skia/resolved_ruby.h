@@ -5,6 +5,6 @@
 namespace krok::subtitle::native {
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const QJsonObject& line, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
-    const RenderScene& scene, int lineIndex, int timingOffset, bool fadeComposition,
+    const RenderScene& scene, int lineIndex, int timingOffset, bool fadeComposition, bool spinComposition,
     std::size_t& totalCells, std::size_t& totalGroups);
 }

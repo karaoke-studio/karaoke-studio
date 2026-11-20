@@ -56,12 +56,13 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
         : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
     return transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad);
 }
+
 }
 
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
     : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
-      noWipe_(noWipe), vertical_(vertical) {
+      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -83,6 +84,15 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
         bounds_.join(cell.path.getBounds());
     }
 }
+
+SkMatrix PreparedWipeGroup::spinMatrix(const CharacterTransformState& owner) const {
+    if (!spinPivot_ || !owner.transformed || owner.opacity <= 0.f) return SkMatrix::I();
+    const float scale = owner.matrix.getScaleX(), shear = owner.matrix.getSkewY();
+    const auto [x, y] = *spinPivot_;
+    return SkMatrix::MakeAll(scale, 0, x * (1.f - scale),
+                             shear, scale, y * (1.f - scale) - shear * x, 0, 0, 1);
+}
+
 void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
                                    float originX, bool afterVisible, float opacity, float viewportHeight) const {
     SkPaint paint;
@@ -137,6 +147,17 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
     const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, bounds_.left()));
     for (std::size_t i = 0; i < cells_.size(); ++i)
         glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity);
+}
+
+void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
+                                         float opacity, const SkMatrix& pose) const {
+    if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
+    const bool before = timeMs <= cells_.front().startMs;
+    const bool complete = !before && lineWipeComplete(cells_, timeMs);
+    if (after ? before : complete) return;
+    const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, bounds_.left()));
+    for (std::size_t index = 0; index < cells_.size(); ++index)
+        glow.compositeTransformedCell(canvas, *glowOffset_ + index, after, edge, pose, opacity);
 }
 
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
@@ -214,7 +235,7 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
 }
 
 void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX,
-                             float opacity, float viewportHeight) const {
+                             float opacity, float viewportHeight, const SkMatrix& pose) const {
     if (bounds_.isEmpty() || opacity <= 0) return;
     const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
     const float edge = frontAt(timeMs, startEdge);
@@ -225,7 +246,14 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto draw = [&](bool after) {
-        for (const auto& cell : cells_) paintRubyCell(canvas, paint, cell, after, opacity);
+        for (const auto& cell : cells_) {
+            if (pose.isIdentity()) {
+                paintRubyCell(canvas, paint, cell, after, opacity);
+            } else {
+                const auto posed = posedUnit(cell, {opacity, pose, true});
+                paintRubyCell(canvas, paint, *posed, after, opacity);
+            }
+        }
     };
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = lineWipeComplete(cells_, timeMs);
