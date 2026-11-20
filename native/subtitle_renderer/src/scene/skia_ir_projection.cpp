@@ -7,6 +7,7 @@
 #include "../protocol/render_config_parser.h"
 #include "../model/backend_caps.h"
 #include <QtCore/QJsonArray>
+#include <QtGui/QColor>
 #include <map>
 #include <algorithm>
 
@@ -86,14 +87,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     const bool fittedBand = features.contains("p08_line_band_fit");
     const bool slicedBand = features.contains("p08_line_band_slices");
     const bool rubyBand = features.contains("p08_ruby_line_band");
+    const bool staffBand = features.contains("p08_staff_line_band");
+    const auto isPng = [](const QString& path) { return path.endsWith(".png", Qt::CaseInsensitive); };
+    const bool bandLayersSupported = staffBand ? isPng(band.linesPath) && isPng(band.clefPath)
+        : band.linesPath.isEmpty() && band.clefPath.isEmpty();
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
         || (staticBand && (!bandFitSupported
-            || !band.imagePath.endsWith(".png", Qt::CaseInsensitive)
+            || !isPng(band.imagePath)
             || cfg.vertical || cfg.rightToLeft || !band.tint.isEmpty()
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
-            || !band.linesPath.isEmpty() || !band.clefPath.isEmpty() || band.edgeKind != "none"
+            || !bandLayersSupported || band.edgeKind != "none"
             || band.shadow.enabled || band.stroke.enabled || band.glow.enabled)))
         throw BackendError("Skia 行背景带当前支持横排静态 PNG");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
@@ -111,6 +116,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         out.lineBand.srcCapLeft = band.srcCapLeftPx;
         out.lineBand.srcCapRight = band.srcCapRightPx;
         out.lineBand.opacity = float(std::clamp(band.opacityPct, 0, 100)) / 100.f;
+        if (staffBand) {
+            const auto color = [](const QColor& value) {
+                return RgbaColor{std::uint8_t(value.red()), std::uint8_t(value.green()), std::uint8_t(value.blue()), 255};
+            };
+            out.lineBand.linesPath = band.linesPath.toStdWString();
+            out.lineBand.clefPath = band.clefPath.toStdWString();
+            const QColor lines(band.lineColor), clef(band.clefColor);
+            out.lineBand.hasLineColor = lines.isValid();
+            out.lineBand.hasClefColor = clef.isValid();
+            if (out.lineBand.hasLineColor) out.lineBand.lineColor = color(lines);
+            if (out.lineBand.hasClefColor) out.lineBand.clefColor = color(clef);
+        }
     }
     out.width = cfg.physicalWidth();
     out.height = cfg.physicalHeight();

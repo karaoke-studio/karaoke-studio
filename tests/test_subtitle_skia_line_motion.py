@@ -176,6 +176,47 @@ def test_static_line_band_with_ruby_matches_actual_gpu(binary, application, tmp_
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_static_staff_line_band_resolves_colored_layers_and_note_toggle(binary, project, target):
+    track, style = motion_project(project)
+    style = replace(style, line_band_enabled=True, line_band_image='preset:staff_scroll',
+                    line_band_dynamic_notes_enabled=False, line_band_cap_left_px=190, line_band_cap_right_px=160,
+                    line_band_line_color='#FD6262', line_band_clef_color='#50F078')
+    modes = [ir_for(binary, (track, replace(style, line_band_static_notes_enabled=enabled))) for enabled in (True, False)]
+    for ir, asset in zip(modes, ('staff_scroll_static.png', 'staff_scroll_no_notes.png'), strict=True):
+        assert 'p08_staff_line_band' in ir['required_features']
+        assert ir['style']['line_band_image'].endswith(asset)
+        assert ir['style']['line_band_lines_image'].endswith('staff_scroll_lines.png')
+        assert ir['style']['line_band_clef_image'].endswith('staff_scroll_clef.png')
+    bad = copy.deepcopy(modes[0])
+    bad['required_features'].remove('p08_staff_line_band')
+    t = modes[0]['track']['lines'][0]['display_start_ms'] + 550
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, modes[0])
+        notes, _ = collect(process, [t])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [t], generation=2)
+        configure(process, modes[1])
+        without, _ = collect(process, [t], generation=3)
+    assert notes[0].any() and np.array_equal(notes[0], replay[0])
+    assert np.count_nonzero(notes[0] != without[0]) > 100
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('notes', [False, True])
+def test_static_staff_line_band_matches_actual_gpu(binary, application, tmp_path, notes):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    style = replace(base.style, line_band_dynamic_notes_enabled=False, line_band_static_notes_enabled=notes,
+                    line_band_cap_left_px=190, line_band_cap_right_px=160,
+                    line_band_line_color='#F86262', line_band_clef_color='#50E878')
+    case = replace(base, case_id=f'static_staff_line_band_{notes}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (*case.timestamps_ms, 5499, 5500))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):
     entry, exit = ('slide_in', 'slide_out') if axis == 'slide' else ('rise', 'rise')

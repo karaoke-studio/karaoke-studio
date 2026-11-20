@@ -16,11 +16,13 @@ def _upper_reading_ink_top(group, ink_top):
 def write_static_line_band(ir, style, prepared, *, width, height):
     if not style.line_band_enabled or not style.line_band_image:
         return
-    if not style.line_band_image.startswith('preset:') and not ir['style'].get('line_band_image'):
+    preset = style.line_band_image.startswith('preset:')
+    staff = style.line_band_image == 'preset:staff_scroll' and not style.line_band_dynamic_notes_enabled
+    if not preset and not ir['style'].get('line_band_image'):
         return
     geometry = prepared.geometry
     ruby = geometry.ruby
-    if (not style.line_band_image.lower().endswith('.png') or style.line_band_image.startswith('preset:')
+    if ((not staff and (preset or not style.line_band_image.lower().endswith('.png')))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.vertical or style.right_to_left
             or style.line_band_tint or style.line_band_edge_kind != 'none'
@@ -28,7 +30,10 @@ def write_static_line_band(ir, style, prepared, *, width, height):
             or style.volume_enabled or style.lit_enabled or style.lower_ruby_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
-        raise ValueError('Skia 行背景带当前支持横排静态 PNG')
+        raise ValueError('Skia 行背景带当前支持横排静态 PNG 和静态五线谱')
+    if staff and any(not ir['style'].get(key) for key in
+                     ('line_band_image', 'line_band_lines_image', 'line_band_clef_image')):
+        raise ValueError('Skia 五线谱背景带缺少预设图层')
     if any(source.get('entry_anim') not in {'none', 'fade', 'slide_in', 'rise'}
            or source.get('exit_anim') not in {'none', 'fade', 'slide_out', 'rise'}
            or source.get('scanline') or source.get('fx_bursts')
@@ -72,6 +77,8 @@ def write_static_line_band(ir, style, prepared, *, width, height):
     ir['required_features'].append('p08_static_line_band')
     if ruby is not None:
         ir['required_features'].append('p08_ruby_line_band')
+    if staff:
+        ir['required_features'].append('p08_staff_line_band')
     if fitted:
         ir['required_features'].append('p08_line_band_fit')
     if sliced:

@@ -2,6 +2,7 @@
 #include "resolved_wipe.h"
 #include "resolved_glyph.h"
 #include "resolved_bitmap_guide.h"
+#include "resolved_line_band.h"
 #include "resolved_ruby.h"
 #include "resolved_signal.h"
 #include "image_fill_cache.h"
@@ -117,19 +118,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         particleSprites.emplace(name, vectorGlyphPath(shape, 1000.0));
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
-    if (projected.lineBand.enabled) {
-        using Fit = ::subtitle::skia::LineBandTexture::Fit;
-        const auto& band = projected.lineBand;
-        const auto fit = [](const std::string& mode) {
-            return mode == "cover" ? Fit::Cover : mode == "repeat" ? Fit::Repeat : Fit::Stretch;
-        };
-        out.lineBand = {imageCache.staticImage(band.imagePath, 0, 0), band.opacity, fit(band.fillMode)};
-        if (band.fillMode == "three_slice") {
-            out.lineBand.slices = ::subtitle::skia::LineBandTexture::Slices{
-                band.capLeft, band.capRight, band.srcCapLeft, band.srcCapRight, fit(band.midMode)};
-            out.lineBand.prepareMiddle();
-        }
-    }
+    if (projected.lineBand.enabled) out.lineBand = resolveLineBandTexture(projected.lineBand, imageCache);
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
     const bool columnDecoration = !features.contains("p05_vertical_columns")
         || (features.contains("p06_vertical_columns_decoration")
