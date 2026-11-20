@@ -74,10 +74,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
     // Upper and lower annotations over solid main outlines need their own capability.
     const bool outlineRuby = features.contains("p06_outline_ruby");
     const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
+    const bool reverseVerticalOutline = cfg.vertical && features.contains("p06_vertical_reverse_outline");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
             || cfg.rightToLeft || (cfg.dualLineLayout && !multiLaneOutline)
-            || features.contains("p05_reverse_wipe")
+            || (features.contains("p05_reverse_wipe") && !reverseVerticalOutline)
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应布局能力");
     if (cfg.lineBand.enabled)

@@ -137,15 +137,17 @@ def test_vertical_columns_use_page_lanes_and_switch_without_moving_the_clocks(bi
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('layers', [1, 2])
-def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, project, kana, target, layers):
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, project, kana, target, layers, reverse):
     from test_subtitle_skia_outline_ruby import outlined, premultiplied
 
-    track, style = vertical_source(project, texts=['ー'], position='top')
+    track, style = vertical_source(project, texts=['ー'], position='top', reverse=reverse)
     track = replace(track, lines=[replace(track.lines[0], chars=track.lines[0].chars[:1])])
     style = outlined(replace(style, font_family=kana), layers, '80')
     ir = ir_for(binary, (track, style), dpr=1.5)
     feature = 'p06_vertical_outline'
     assert feature in ir['required_features']
+    assert ('p06_vertical_reverse_outline' in ir['required_features']) == reverse
     assert ('p06_secondary_solid_outline' in ir['required_features']) == (layers == 2)
     line, = ir['track']['lines']
     (start, end), = line['resolved_intervals']
@@ -154,7 +156,7 @@ def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, proje
         configure(process, ir)
         frames, _ = collect(process, times)
         bad = copy.deepcopy(ir)
-        bad['required_features'].remove(feature)
+        bad['required_features'].remove('p06_vertical_reverse_outline' if reverse else feature)
         with pytest.raises(NativeRendererError):
             configure(process, bad)
         replay, _ = collect(process, [times[1]], generation=2)
@@ -169,7 +171,13 @@ def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, proje
     assert pixels(frames[0], [0, 255, 255], 255).any() == (layers == 2)
     green = pixels(frames[1], [0, 255, 0], 128)
     red = pixels(frames[1], [255, 0, 0], 128)
-    assert red.any() and green.any() and np.nonzero(green)[0].max() < np.nonzero(red)[0].min()
+    assert red.any() and green.any()
+    ys_sung, ys_unsung = np.nonzero(green)[0], np.nonzero(red)[0]
+    top, bottom = (ys_unsung, ys_sung) if reverse else (ys_sung, ys_unsung)
+    assert top.max() < bottom.min()
+    if layers == 2:
+        assert pixels(frames[1], [255, 0, 255], 255).any()
+        assert pixels(frames[1], [0, 255, 255], 255).any()
     assert pixels(frames[2], [0, 255, 0], 128).any()
     assert np.array_equal(frames[1], replay[0])
     if target == 'gpu':
@@ -179,6 +187,29 @@ def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, proje
         for gpu, cpu in zip(frames, raster, strict=True):
             difference = abs(premultiplied(gpu) - premultiplied(cpu))
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_vertical_reverse_outline_uses_bottom_cells_first(binary, project, target):
+    from test_subtitle_skia_outline_ruby import outlined
+
+    track, style = vertical_source(project, texts=['字', '字'], position='top', reverse=True)
+    ir = ir_for(binary, (track, outlined(style, 2)))
+    cells = ir['skia_layout']['lines'][0]['cells']
+    assert [cell['clock_index'] for cell in cells] == [1, 0]
+    first, second = ir['track']['lines'][0]['resolved_intervals']
+    times = [(first[0] + first[1]) // 2, second[1] + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        first_frame, finished = collect(process, times)[0]
+
+    def sung_rows(frame):
+        outer = (frame[..., :3] == [255, 0, 255]).all(axis=-1) & (frame[..., 3] == 255)
+        return np.nonzero(outer)[0]
+
+    front = cells[1]['wipe_top'] + (cells[1]['wipe_bottom'] - cells[1]['wipe_top']) / 2
+    assert sung_rows(first_frame).size and sung_rows(first_frame).min() >= int(front)
+    assert sung_rows(finished).min() < cells[1]['wipe_top']
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',

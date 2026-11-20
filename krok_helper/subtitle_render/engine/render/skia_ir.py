@@ -553,8 +553,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     if 'p06_primary_solid_outline' in ir['required_features']:
         ir['skia_layout']['primary_solid_outline_schema'] = 1
         if style.vertical:
-            if style.dual_line_layout or any(line.wipe_reverse for line in track.lines):
-                raise ValueError('Skia 竖排描边暂支持正向单列正文')
+            if style.dual_line_layout:
+                raise ValueError('Skia 竖排描边暂支持单列正文')
+            if any(line.wipe_reverse for line in track.lines):
+                ir['required_features'].append('p06_vertical_reverse_outline')
             if vertical_ruby is not None:
                 if any(len(line['ruby_groups']) > 1 for line in lines):
                     raise ValueError('Skia 竖排描边暂不支持同列多组注音')
