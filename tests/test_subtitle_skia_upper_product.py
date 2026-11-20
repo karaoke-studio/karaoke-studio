@@ -12,7 +12,7 @@ from test_subtitle_skia_resolved import ir_for as product_ir
 from test_subtitle_skia_protocol import collect, selection
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
-from krok_helper.subtitle_render.domain.models import TimingChar
+from krok_helper.subtitle_render.domain.models import LyricsLayout, TimingChar
 from krok_helper.subtitle_render.engine.ruby.timing import ruby_visual_units_and_intervals
 from krok_helper.subtitle_render.engine.ruby.skia_timing import prepare_ruby_wipe_timing
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -20,6 +20,59 @@ from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
 from krok_helper.subtitle_render.native.skia_fonts import resolve_skia_font
 from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_multitrack_ruby_keeps_annotation_identity_source_local(binary, reading, target):
+    track, style = reading
+    style = replace(style, line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=90)])
+    side_line = replace(track.lines[0], layout_index=1)
+    other = replace(track, lines=[side_line],
+                    meta=replace(track.meta, offset_ms=850),
+                    rubies=[replace(track.rubies[0], reading='A', reading_parts=['A'],
+                                    reading_part_ms=[], target_line_index=0)])
+    kwargs = dict(width=640, height=720, fps=60)
+    times = [400, 849, 850, 1150, 3000, 5100, 5850, 850]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        frames = []
+        for generation, (main, extras) in enumerate(((track, []), (other, []), (track, [other])), 1):
+            process.configure(main, style, extra_tracks=extras, **kwargs)
+            output, _ = collect(process, times, generation=generation)
+            frames.append(output)
+    regular, shifted, both = (np.stack(output) for output in frames)
+    assert regular[0].any() and not shifted[:2].any() and shifted[2].any()
+    assert shifted[-3].any() and not shifted[-2].any() and not regular[-3].any()
+    assert not np.any((regular[..., 3] > 0) & (shifted[..., 3] > 0))
+    assert np.array_equal(both, np.maximum(regular, shifted))
+    assert np.array_equal(both[2], both[-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU comparison')
+@pytest.mark.parametrize('lower', [False, True])
+def test_multitrack_ruby_layers_match_actual_d2d_gpu(binary, application, tmp_path, lower):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'lower_ruby')
+    track = case.track
+    style = replace(case.style, decoration_kind='none', lower_ruby_enabled=lower,
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=140)])
+    other = replace(track, meta=replace(track.meta, offset_ms=900),
+                    lines=[replace(track.lines[0], layout_index=1)])
+    times = (299, 600, 1199, 1200, 1500, 2600, 4400, 5500, 6399, 6400)
+    with NativeRendererProcess() as d2d:
+        _, raw = _render_g1_frames(d2d, style, times, track=track, extra_tracks=[other],
+                                   force_warp=False, width=1920, height=1080, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    output = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, style, extra_tracks=[other], width=1920, height=1080, fps=60)
+            frames, _ = collect(process, times)
+            output.append(frames)
+    assert_glow_parity(times, reference, *output, f'multitrack_ruby_layers_{lower}', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

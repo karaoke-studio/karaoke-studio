@@ -6,7 +6,13 @@
 
 namespace krok::subtitle::native {
 namespace {
-void countSource(const QJsonObject& source, const QJsonValue& screen, qsizetype& lines, qsizetype& cells) {
+struct SceneSize {
+    qsizetype lines = 0;
+    qsizetype cells = 0;
+    qsizetype readings = 0;
+};
+
+void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize& size) {
     if (source.value("screen") != screen || source.contains("skia_extra_sources"))
         throw BackendError("Skia 多轨尺寸不一致或包含嵌套来源");
     // These features carry only source-local geometry. Other combinations need
@@ -16,15 +22,28 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, qsizetype&
         "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal",
         "p05_segmented_wipe", "p05_overlap_wipe", "p05_font_fallback",
         "p05_mixed_fonts", "p05_reverse_wipe", "p05_reverse_overlap",
+        "p05_resolved_ruby", "p05_upper_ruby", "p05_lower_ruby",
+        "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
+        "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_multi_lane_outline",
+        "p06_outline_ruby", "p06_ruby_solid_outline", "p07_ruby_line_animation",
+        "p07_singing_scale", "p07_ruby_singing_scale",
         "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p08_viewport"
     };
     for (const auto& feature : source.value("required_features").toArray())
-        if (!allowed.contains(feature)) throw BackendError("Skia 多轨暂不支持此绘制组合");
+        if (!allowed.contains(feature))
+            throw BackendError("Skia 多轨暂不支持此绘制能力 " + feature.toString().toStdString());
     const auto layout = source.value("skia_layout").toObject().value("lines").toArray();
-    if ((lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");
-    for (const auto& line : layout)
-        if ((cells += line.toObject().value("cells").toArray().size()) > 65536)
+    if ((size.lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");
+    for (const auto& value : layout) {
+        const auto line = value.toObject();
+        const auto readings = line.value("ruby_groups").toArray();
+        if ((size.readings += readings.size()) > 4096) throw BackendError("Skia 多轨注音组总数超限");
+        size.cells += line.value("cells").toArray().size();
+        for (const auto& reading : readings)
+            size.cells += reading.toObject().value("units").toArray().size();
+        if (size.cells > 65536)
             throw BackendError("Skia 多轨字形单元总数超限");
+    }
 }
 }
 
@@ -43,15 +62,15 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, qsizetype&
     primary.insert("required_features", features);
 
     const auto screen = primary.value("screen");
-    qsizetype lineCount = 0, cellCount = 0;
-    countSource(primary, screen, lineCount, cellCount);
+    SceneSize size;
+    countSource(primary, screen, size);
     for (const auto& value : extras) {
         if (!value.isObject()) throw BackendError("Skia 附加轨道格式无效");
-        countSource(value.toObject(), screen, lineCount, cellCount);
+        countSource(value.toObject(), screen, size);
     }
 
     auto result = resolvedSkiaSource(primary);
-    result.lines.reserve(lineCount);
+    result.lines.reserve(size.lines);
     for (const auto& value : extras) {
         auto source = resolvedSkiaSource(value.toObject());
         if (source.viewport != result.viewport)
