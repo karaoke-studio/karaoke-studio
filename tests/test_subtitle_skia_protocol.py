@@ -12,8 +12,9 @@ import uuid
 import numpy as np
 import pytest
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QImage
 
-from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.models import LyricsLayout, Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess, SharedFrameRingReader
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
 
@@ -282,7 +283,8 @@ def test_cancel_and_reconfigure_remain_usable(binary):
 
 
 @pytest.mark.parametrize("gpu,missing_loader", [(True, False), (False, False), (True, True)])
-def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader):
+def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader,
+                                                     *, side_track=None):
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.skia_async import SkiaAsyncSubtitleRenderer
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
@@ -302,6 +304,8 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
         canvas.show()
         canvas.set_output_size(640, 360)
         canvas.set_style(supported_project[1])
+        if side_track is not None:
+            canvas.set_extra_tracks([side_track])
         # Installing a track queues work immediately. Give the fixture its
         # explicit font first, rather than briefly rendering the user's style.
         canvas.set_track(supported_project[0])
@@ -313,6 +317,12 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
         assert not errors, errors
         assert frames and frames[-1][1] == 550 and not frames[-1][0].isNull()
         assert canvas._subtitle_item._async_image is not None
+        if side_track is not None:
+            image = frames[-1][0].convertToFormat(QImage.Format.Format_RGBA8888)
+            pixels = np.frombuffer(image.constBits().asstring(image.sizeInBytes()), dtype=np.uint8)
+            rows = pixels.reshape(image.height(), image.bytesPerLine())[:, :image.width() * 4]
+            top, bottom = np.split(rows.reshape(image.height(), image.width(), 4)[..., 3], [image.height() // 2])
+            assert top.max() > 200 and bottom.max() > 200
         assert "Skia" in canvas.render_backend_label()
         assert canvas._async_renderer.current_backend_mode == ("gpu" if gpu and not missing_loader else "cpu")
         canvas.set_gpu_preview_enabled(not gpu)
@@ -324,7 +334,8 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
 
 
 @pytest.mark.parametrize("gpu,missing_loader", [(True, False), (False, False), (True, True)])
-def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader):
+def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader,
+                                            *, side_track=None):
     from krok_helper.subtitle_render.engine import renderer
     from krok_helper.subtitle_render.engine.export.render_job import RenderJob
     from krok_helper.subtitle_render.domain.background import BackgroundSource
@@ -344,7 +355,8 @@ def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, suppo
     track, style = supported_project
     job = RenderJob(track, style, tmp_path / "unused", tmp_path / "p04.mp4", width=640, height=360,
                     background_source=BackgroundSource(kind="solid", color="#183048"), fps=60,
-                    duration_ms=1500, include_audio=False, gpu_export_enabled=gpu, preset="ultrafast")
+                    duration_ms=1500, include_audio=False, gpu_export_enabled=gpu, preset="ultrafast",
+                    extra_tracks=() if side_track is None else (side_track,))
     logs = []
     result = renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent, logger=logs.append)
     assert any("Skia 字幕后端" in line and ("GPU" if gpu and not missing_loader else "Raster CPU") in line for line in logs)
@@ -355,6 +367,24 @@ def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, suppo
     frames = np.frombuffer(decoded.stdout, np.uint8).reshape(-1, 360, 640, 3)
     assert len(frames) == 90
     assert np.mean(frames[33].max(axis=-1) > 150) > 0.003
+    if side_track is not None:
+        bright = frames[33].max(axis=-1) > 150
+        assert bright[:180].sum() > 150 and bright[180:].sum() > 150
+
+
+@pytest.mark.parametrize('gpu', [True, False], ids=['gpu', 'raster'])
+@pytest.mark.parametrize('surface', ['preview', 'mp4'])
+def test_multitrack_product_preview_and_export(binary, monkeypatch, tmp_path, supported_project, gpu, surface):
+    track, style = supported_project
+    track = replace(track, lines=[replace(line, display_start_override_ms=0, display_end_override_ms=1200)
+                                  for line in track.lines])
+    side = replace(track, lines=[replace(line, layout_index=1) for line in track.lines],
+                   meta=replace(track.meta, offset_ms=100))
+    style = replace(style, line_y_position='bottom', line_y_margin_px=80,
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=80)])
+    check = (test_actual_g5_preview_uses_skia_even_when_gpu_off if surface == 'preview'
+             else test_product_export_short_mp4_uses_skia)
+    check(binary, monkeypatch, tmp_path, (track, style), gpu, False, side_track=side)
 
 
 def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monkeypatch, tmp_path, supported_project):
