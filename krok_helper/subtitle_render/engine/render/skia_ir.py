@@ -463,7 +463,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         reverse_vertical = any(line.wipe_reverse for line in track.lines)
         # Columns: body-only static decoration with one wipe direction for the whole track.
         columns = style.dual_line_layout
-        if (columns and (vertical_ruby is not None or 'p07_line_fade' in ir['required_features']
+        if (columns and (vertical_ruby is not None
                          or len({bool(line.wipe_reverse) for line in track.lines}) > 1)
                 or (reverse_vertical and vertical_ruby is not None)
                 or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') not in {'none', 'fade'}
@@ -477,6 +477,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].extend(f'p06_vertical_reverse_{kind}' for kind in decorations)
         if 'p07_line_fade' in ir['required_features']:
             ir['required_features'].append('p07_vertical_decoration_fade')
+            if columns:
+                ir['required_features'].append('p07_vertical_columns_decoration_fade')
         if vertical_ruby is not None:
             if any(len(line['ruby_groups']) > 1 for line in lines):
                 raise ValueError('Skia 竖排静态装饰暂不支持同列多组注音')

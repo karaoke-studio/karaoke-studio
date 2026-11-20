@@ -232,16 +232,57 @@ def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, proj
         assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('change', ['mixed_directions', 'line_fade', 'ruby'])
+@pytest.mark.parametrize('change', ['mixed_directions', 'ruby'])
 def test_vertical_column_decoration_stays_single_direction_without_ruby(binary, project, change):
     track, style, _ = decorated_columns(project, 'glow', mixed_directions=change == 'mixed_directions')
-    if change == 'line_fade':
-        style = replace(style, entry_anim='fade', exit_anim='fade')
-    elif change == 'ruby':
+    if change == 'ruby':
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=360, target_line_index=0,
                                                       target_char_start=0, target_char_end=1)])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_column_decoration_fades_each_line_independently(binary, project, target, reverse):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, style, _ = decorated_columns(project, 'shadow_to_glow', reverse=reverse, outline=True)
+    # Separate the two glow footprints so a column crop has one source alpha.
+    style = replace(style, line_gap_px=100)
+    track = replace(track, lines=[track.lines[0], replace(track.lines[1], display_start_override_ms=100,
+                                                        display_end_override_ms=1500)])
+    animated = replace(style, entry_anim='fade', exit_anim='fade', entry_lead_ms=200, exit_fade_ms=400)
+    valid = ir_for(binary, (track, animated))
+    baseline = ir_for(binary, (track, style))
+    feature = 'p07_vertical_columns_decoration_fade'
+    assert feature in valid['required_features'] and feature not in baseline['required_features']
+    assert valid['skia_layout']['lines'] == baseline['skia_layout']['lines']
+    first, second = valid['track']['lines']
+    times = [second['display_start_ms'] + second['entry_duration_ms'] // 2,
+             second['display_end_ms'] - second['exit_duration_ms'] // 2]
+    boundary = round(sum(line['cells'][0]['origin_x'] for line in valid['skia_layout']['lines']) / 2
+                     + style.font_size_px / 2)
+    bad = copy.deepcopy(valid)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, valid)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, list(reversed(times)), generation=2)
+        configure(process, baseline)
+        full, _ = collect(process, times, generation=3)
+    assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+    for t, actual, original in zip(times, frames, full, strict=True):
+        for column, line in ((slice(boundary, None), first), (slice(None, boundary), second)):
+            entry = min((t - line['display_start_ms']) / line['entry_duration_ms'], 1)
+            leave = min((line['display_end_ms'] - t) / line['exit_duration_ms'], 1)
+            opacity = (1 - (1 - entry) ** 2) * leave ** 2
+            assert 0 < opacity <= 1 and original[:, column, 3].max() > 16
+            delta = abs(premultiplied(actual[:, column]) - premultiplied(original[:, column]) * opacity)
+            y, x, _ = np.unravel_index(delta.argmax(), delta.shape)
+            assert delta.max() <= 2, (t, opacity, delta.max(), actual[:, column][y, x], original[:, column][y, x])
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

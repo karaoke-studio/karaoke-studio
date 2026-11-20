@@ -50,10 +50,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.images = source.images;
         line.shadow = source.shadow;
         line.glow = PreparedGlow::prepare(source.glow);
+        line.isolateVerticalDecoration = line.vertical && (line.shadow.visible() || !line.glow.empty()
+            || std::ranges::any_of(source.rubyGroups, [](const auto& group) { return group.shadow.visible() || group.glow; }));
         line.noise = source.noise;
         line.characterFade = source.characterFade;
-        const bool needsPaintBounds = line.animation.active() || line.characterFade.active();
-        const bool verticalFade = line.vertical && line.animation.active();
+        const bool needsPaintBounds = line.animation.active() || line.characterFade.active() || line.isolateVerticalDecoration;
         line.characterGeometry = source.characterGeometry;
         line.rubyGeometryComposition = source.rubyGeometryComposition;
         line.singingScale = source.singingScale;
@@ -141,7 +142,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 if (!cell.path.isEmpty()) next = &cell;
             }
         }
-        if (verticalFade) includeShadowPaint(line.paintBounds, line.shadow);
+        if (line.isolateVerticalDecoration) includeShadowPaint(line.paintBounds, line.shadow);
         std::size_t rubyGlowCells = 0, lowerGlowCells = 0;
         for (const auto& group : source.rubyGroups) {
             if (group.fadeOwner && *group.fadeOwner >= line.cells.size())
@@ -165,11 +166,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             if (needsPaintBounds) {
                 SkRect groupBounds = SkRect::MakeEmpty();
                 for (const auto& cell : group.cells) includeCellPaint(groupBounds, cell);
-                if (verticalFade) includeShadowPaint(groupBounds, group.shadow);
+                if (line.isolateVerticalDecoration) includeShadowPaint(groupBounds, group.shadow);
                 line.paintBounds.join(groupBounds);
             }
         }
-        if (line.characterFade.active() || verticalFade) {
+        if (line.characterFade.active() || line.isolateVerticalDecoration) {
             for (const auto& layer : line.glow) line.paintBounds.join(layer.sourceBounds());
             for (const auto& layer : line.rubyGlow) line.paintBounds.join(layer.sourceBounds());
             for (const auto& layer : line.lowerGlow) line.paintBounds.join(layer.sourceBounds());

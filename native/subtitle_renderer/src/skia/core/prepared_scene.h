@@ -61,6 +61,7 @@ private:
         bool noWipe = false;
         bool wipeRightToLeft = false;
         bool vertical = false;
+        bool isolateVerticalDecoration = false;
         bool hasOutline = false;
         bool hasOuterOutline = false;
         bool hasStrokeFlash = false;
