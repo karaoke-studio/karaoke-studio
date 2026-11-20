@@ -436,7 +436,6 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool decoratedBand = outerBandStroke || positionedBandStroke || blurredBand;
     const bool animatedBand = simpleBandAnimation || features.contains("p08_animated_staff_line_band");
     if ((decoratedBand && !features.contains("p08_static_line_band")) || (outerBandStroke && positionedBandStroke)
-        || (customBandSequence && blurredBand)
         || features.contains("p08_line_band_animated_decoration") != (decoratedBand && animatedBand))
         throw BackendError("Skia 行背景带装饰缺少对应布局能力");
     if (features.contains("p08_line_band_with_effects")

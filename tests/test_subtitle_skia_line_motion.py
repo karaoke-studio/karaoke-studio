@@ -580,17 +580,21 @@ def animated_alpha_band(tmp_path):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_animated_line_band_decoration_uses_current_frame_alpha(binary, project, tmp_path, target):
+@pytest.mark.parametrize('wide_blur', [False, True], ids=['stroke', 'wide_blur'])
+def test_animated_line_band_decoration_uses_current_frame_alpha(binary, project, tmp_path, target, wide_blur):
     track, style = motion_project(project, entry='none', exit='none')
     track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=6000)])
     style = replace(style, line_band_enabled=True, line_band_image=animated_alpha_band(tmp_path),
                     line_band_fill_mode='stretch', line_band_stroke_enabled=True,
-                    line_band_stroke_size_px=1, line_band_stroke_color='#AC1A60')
-    with pytest.raises(ValueError, match='自定义动态行背景带'):
-        ir_for(binary, (track, replace(style, line_band_glow_enabled=True, line_band_glow_size_px=1)))
+                    line_band_stroke_size_px=1, line_band_stroke_color='#AC1A60',
+                    line_band_glow_enabled=wide_blur, line_band_glow_size_px=4,
+                    line_band_glow_spread_pct=50, line_band_glow_color='#B526E2')
     ir = ir_for(binary, (track, style))
     feature = 'p08_line_band_animated_decoration'
     assert feature in ir['required_features']
+    if wide_blur:
+        band = ir['skia_layout']['lines'][0]['line_band_rect']
+        assert (band[3] - band[1]) * 4 / 8 >= 15.5
     bad = copy.deepcopy(ir)
     bad['required_features'].remove(feature)
     times = [2500, 2600, 2750, 2850, 2500]
@@ -606,18 +610,18 @@ def test_animated_line_band_decoration_uses_current_frame_alpha(binary, project,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('material', ['gif', 'staff_scroll', 'stars', 'bubbles'])
+@pytest.mark.parametrize('material', ['gif', 'gif_blur', 'staff_scroll', 'stars', 'bubbles'])
 def test_animated_line_band_decoration_matches_actual_gpu(binary, application, tmp_path, material):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
-    custom = material == 'gif'
-    path = animated_alpha_band(tmp_path) if custom else f'preset:{material}'
+    blur = material != 'gif'
+    path = animated_alpha_band(tmp_path) if material.startswith('gif') else f'preset:{material}'
     style = replace(base.style, line_band_image=path, line_band_fill_mode='stretch',
-                    line_band_shadow_enabled=not custom, line_band_shadow_size_px=2,
+                    line_band_shadow_enabled=blur, line_band_shadow_size_px=2,
                     line_band_shadow_distance_px=14, line_band_shadow_angle_deg=15,
-                    line_band_shadow_color='#21508F', line_band_glow_enabled=not custom,
+                    line_band_shadow_color='#21508F', line_band_glow_enabled=blur,
                     line_band_glow_size_px=2, line_band_glow_color='#C028B8',
                     line_band_glow_range_pct=65, line_band_stroke_enabled=True,
                     line_band_stroke_size_px=1, line_band_stroke_position='inside',

@@ -29,8 +29,6 @@ def write_line_band(ir, style, prepared, *, width, height):
     stroke = style.line_band_stroke_enabled and style.line_band_stroke_size_px > 0
     shadow = style.line_band_shadow_enabled and style.line_band_shadow_size_px > 0
     glow = style.line_band_glow_enabled and style.line_band_glow_size_px > 0
-    if sequence and preset is None and (shadow or glow):
-        raise ValueError('Skia 自定义动态行背景带暂不支持阴影或发光')
     geometry = prepared.geometry
     ruby = geometry.ruby
     if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
