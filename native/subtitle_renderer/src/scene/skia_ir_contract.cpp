@@ -68,6 +68,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_band",
         "p07_composed_scanline",
         "p07_ruby_scanline",
+        "p07_ruby_scanline_particles",
         "p07_character_transform",
         "p07_sing_twinkle",
         "p07_stroke_flash",
@@ -228,6 +229,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_resolved_ruby")
             || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 注音粒子缺少上注音或唱字粒子能力声明");
+    if (features.contains("p07_ruby_scanline_particles")
+        && (twinkleVersion < 13 || !features.contains("p07_ruby_scanline")))
+        throw BackendError("Skia 注音扫字线粒子缺少高亮带或粒子能力声明");
     if (features.contains("p06_outline_ruby")
         && (!features.contains("p06_primary_solid_outline") || !features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 描边正文与注音组合缺少描边或注音能力声明");

@@ -5,5 +5,6 @@
 
 namespace krok::subtitle::native::scene {
 void projectSkiaParticles(const protocol::RenderConfig&, const protocol::TimingLine&,
-                          const protocol::ResolvedStyle&, int timingOffset, int version, RenderScene&, TextLine&);
+                          const protocol::ResolvedStyle&, int timingOffset, int version, bool rubyScanline,
+                          RenderScene&, TextLine&);
 }

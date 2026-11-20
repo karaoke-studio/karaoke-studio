@@ -373,6 +373,41 @@ def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, utopi
         }, sort_keys=True), encoding='utf-8')
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_upper_ruby_scanline_particles_keep_clocks_and_seek(binary, reading, target, tmp_path):
+    track, style = ruby_band_source(reading, 10, utopia=True)
+    plain = upper_ir(binary, (track, style), 1.5)
+    style = replace(style, scanline_effect='star', scanline_effect_speed_pct=-250)
+    ir = upper_ir(binary, (track, style), 1.5)
+    profile = 'p07_ruby_scanline_particles'
+    assert profile in ir['required_features']
+    final, = ir['skia_layout']['lines']
+    source, = ir['track']['lines']
+    assert final['ruby_groups'] == plain['skia_layout']['lines'][0]['ruby_groups']
+    assert source['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
+    bursts = source['fx_bursts']
+    assert bursts and all(b['kind'] == 'scanline' and b['sprite'] == 'star4' and b['emit_ms'] > 0
+                          and 'time_scale' not in b for b in bursts)
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(profile)
+    times = [299, 550, 1100, 1900, 2300]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        again, _ = collect(process, [550], generation=2)
+        configure(process, plain)
+        baseline, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames[0], baseline[0])
+    assert not np.array_equal(frames[1], baseline[1])
+    assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
+    if target == 'gpu':
+        (tmp_path / 'ruby-scanline-particles-layout.json').write_text(json.dumps({
+            'features': ir['required_features'], 'groups': final['ruby_groups'], 'bursts': bursts,
+        }, sort_keys=True), encoding='utf-8')
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('softness,dpr,utopia', [(0, 1, False), (10, 1, False), (10, 1.5, False),
                                                  (0, 1, True), (0, 1.5, True), (10, 1.5, True)])
@@ -778,6 +813,7 @@ def test_combined_particle_layers_match_actual_d2d_and_gpu_raster(binary, projec
 P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_brighten',
                       'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none',
                       'karaoke_scanline', 'karaoke_utopia_scanline', 'karaoke_zoom_pulse_scanline']
+P00_SCANLINE_CASES += [f'scanline_particles_{kind}' for kind, _ in SCANLINE_PARTICLE_SPRITES]
 
 
 def glow_band_source(reading, case, utopia=False):
@@ -853,7 +889,7 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
     {'scanline_mode': 'role', 'scanline_role_name': '__global__'},
     {'entry_anim': 'fade', 'entry_lead_ms': 400},
     {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
-    {'scanline_effect': 'star'},
+    {'scanline_effect': 'star', 'sing_fx': 'twinkle'},
 ])
 def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
     track, style = glow_band_source(reading, 'inherited')

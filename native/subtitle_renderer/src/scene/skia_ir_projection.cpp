@@ -227,7 +227,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;
-        projectSkiaParticles(cfg, source, resolved, offset, twinkleVersion, out, line);
+        projectSkiaParticles(cfg, source, resolved, offset, twinkleVersion,
+                             features.contains("p07_ruby_scanline_particles"), out, line);
         if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});

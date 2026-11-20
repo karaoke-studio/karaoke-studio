@@ -8,7 +8,8 @@
 
 namespace krok::subtitle::native::scene {
 void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
-                          const protocol::ResolvedStyle& style, int offset, int version, RenderScene& scene, TextLine& line) {
+                          const protocol::ResolvedStyle& style, int offset, int version, bool rubyScanline,
+                          RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
     const auto animationKind = [version](const QString& animation, bool entry) {
         if (isSkiaEnergyTransition(animation) && version < 11) return QString{};
@@ -28,7 +29,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
         || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled))
-        || (!cfg.rubies.empty() && (!rubyParticles || animated || source.scanlineEnabled))
+        || (!cfg.rubies.empty() && (!rubyParticles || animated || (source.scanlineEnabled && !rubyScanline)))
         || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
@@ -79,7 +80,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
-            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse);
+            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && !rubyParticles);
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly || impact) || fx.anchor != "char"
             || (rubyParticles && version == 12 && !star && !ripple)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())

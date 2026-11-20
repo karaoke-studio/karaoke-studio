@@ -32,6 +32,7 @@ def _transition_layers(kind, entry):
 def write_particle_anchors(track, ir, plan, measured) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
+    ruby_scanline = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -51,7 +52,7 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or band or look.sing_fx != 'none'))
-                or look.lower_ruby_enabled or (annotated and (animated or band))
+                or look.lower_ruby_enabled or (annotated and animated)
                 or (not annotated and (look.stroke_width_px > 0
                     or (look.stroke2_enabled and look.stroke2_width_px > 0)))
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
@@ -60,6 +61,7 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
             kind = burst['kind']
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not band)
+                    or (annotated and band and kind != 'scanline')
                     or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
                     or 'paint_id' in burst or 'char_color_ids' in burst):
@@ -79,6 +81,7 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
                 version = max(version, 6)
             if kind == 'scanline':
                 version = max(version, 7)
+                ruby_scanline = ruby_scanline or annotated
             elif band:
                 version = 8
         if animated:
@@ -92,4 +95,6 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
             max(float(run['ascent']) for run in metrics.slot_metrics)
             + max(float(run['descent']) for run in metrics.slot_metrics)
         )
+    if ruby_scanline:
+        ir['required_features'].append('p07_ruby_scanline_particles')
     return 13 if track.rubies else version
