@@ -422,6 +422,14 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     for kind in ('shadow', 'glow'):
         if any(_uses_decoration(item.layout_style, kind) for item in plan.lines):
             ir['required_features'].append(f'p06_static_{kind}')
+    if style.vertical and 'p06_static_glow' in ir['required_features']:
+        if (style.dual_line_layout or track.rubies or 'p06_static_shadow' in ir['required_features']
+                or any(line.wipe_reverse for line in track.lines)
+                or any(line.get('karaoke_anim') != 'none' or line.get('entry_anim') != 'none'
+                       or line.get('exit_anim') != 'none' or line.get('scanline')
+                       or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
+            raise ValueError('Skia 竖排光晕暂支持无注音的正向单列基础走字')
+        ir['required_features'].append('p06_vertical_glow')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
         if _validate_stroke_flash(track, style, ir['track']['lines']):
             ir['required_features'].append('p07_composed_stroke_flash')

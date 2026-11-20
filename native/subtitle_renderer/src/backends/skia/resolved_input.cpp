@@ -466,8 +466,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
         const bool paintedGlow = rubyMainPaint && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
+        const bool verticalGlow = style.vertical && features.contains("p06_vertical_glow")
+            && !annotated && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
+            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if (hasDecoration
-            && (style.vertical || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
+            && ((style.vertical && !verticalGlow) || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !noWipeGlow)
                 || (!lineGlow && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)

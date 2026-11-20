@@ -89,13 +89,14 @@ bool PreparedGlow::visible(bool after) const {
 }
 
 void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std::optional<float> edge,
-                            const SkPath* posed, float opacity) const {
+                            const SkPath* posed, float opacity, bool vertical) const {
     const auto& path = posed ? *posed : cells_[index];
     if (!visible(after) || path.isEmpty() || opacity <= 0) return;
     SkAutoCanvasRestore restore(&canvas, edge.has_value());
     if (edge) {
-        const auto clip = after ? SkRect::MakeLTRB(-1e6f, -1e6f, *edge, 1e6f)
-                                : SkRect::MakeLTRB(*edge, -1e6f, 1e6f, 1e6f);
+        const float low = after ? -1e6f : *edge, high = after ? *edge : 1e6f;
+        const auto clip = vertical ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
+                                   : SkRect::MakeLTRB(low, -1e6f, high, 1e6f);
         canvas.clipRect(clip, SkClipOp::kIntersect, true);
     }
     auto paint = posed ? strokePaint() : SkPaint{};

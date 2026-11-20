@@ -289,8 +289,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const float opacity = states[index].transform.opacity;
             if (phase == Phase::Wiping) {
                 const float edge = utopia ? transformedEdge(index) : states[index].edge;
-                layer.drawCell(glowCanvas, index, false, edge, posed, opacity);
-                layer.drawCell(glowCanvas, index, true, edge, posed, opacity);
+                layer.drawCell(glowCanvas, index, false, edge, posed, opacity, line.vertical);
+                layer.drawCell(glowCanvas, index, true, edge, posed, opacity, line.vertical);
             } else {
                 layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt, posed, opacity);
             }
