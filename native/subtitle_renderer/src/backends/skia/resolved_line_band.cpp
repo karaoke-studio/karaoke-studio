@@ -162,6 +162,11 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
             band.capLeft, band.capRight, band.srcCapLeft, band.srcCapRight, fit(band.midMode)};
         if (texture.animation.empty()) texture.prepareMiddle();
     }
+    if (band.stroke.enabled) {
+        const auto& color = band.stroke.color;
+        texture.outerStroke = ::subtitle::skia::LineBandTexture::Stroke{
+            band.stroke.size, SkColorSetARGB(color.alpha, color.red, color.green, color.blue)};
+    }
     return texture;
 }
 }

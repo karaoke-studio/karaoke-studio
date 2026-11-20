@@ -1,6 +1,7 @@
 #pragma once
 
 #include "include/core/SkImage.h"
+#include "include/core/SkColor.h"
 #include "include/core/SkRect.h"
 #include <cstdint>
 #include <optional>
@@ -26,6 +27,10 @@ struct LineBandTexture {
         sk_sp<SkImage> image;
         std::int64_t endMs = 0;
     };
+    struct Stroke {
+        float size = 0;
+        SkColor color = SK_ColorWHITE;
+    };
 
     sk_sp<SkImage> image;
     float opacity = 0;
@@ -34,11 +39,15 @@ struct LineBandTexture {
     sk_sp<SkImage> repeatedMiddle;
     sk_sp<SkImage> staffLines, staffClef;
     std::vector<Frame> animation;
+    std::optional<Stroke> outerStroke;
 
     void prepareMiddle();
+    void validateStrokeBounds(const SkRect&) const;
     void draw(SkCanvas&, const SkRect& destination, float alpha, int timeMs) const;
 
 private:
+    void drawContent(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
+    void drawOuterStroke(SkCanvas&, const SkRect&, float alpha, int timeMs) const;
     void drawLayer(SkCanvas&, const sk_sp<SkImage>&, const sk_sp<SkImage>& middle,
                    const SkRect& destination, float alpha) const;
 };

@@ -34,6 +34,11 @@ void LineBandTexture::prepareMiddle() {
 }
 
 void LineBandTexture::draw(SkCanvas& canvas, const SkRect& destination, float alpha, int timeMs) const {
+    if (outerStroke) drawOuterStroke(canvas, destination, alpha, timeMs);
+    else drawContent(canvas, destination, alpha, timeMs);
+}
+
+void LineBandTexture::drawContent(SkCanvas& canvas, const SkRect& destination, float alpha, int timeMs) const {
     if (animation.empty()) {
         drawLayer(canvas, image, repeatedMiddle, destination, alpha);
         return;

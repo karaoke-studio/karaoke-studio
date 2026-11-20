@@ -434,6 +434,59 @@ def test_line_band_character_transition_matches_actual_gpu(binary, application, 
     assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms)
 
 
+def transparent_band_image(tmp_path):
+    from test_subtitle_skia_image_fills import write_png
+
+    y, x = np.ogrid[:32, :96]
+    pixels = np.zeros((32, 96, 4), dtype=np.uint8)
+    pixels[(x - 47.5)**2 / 40**2 + (y - 15.5)**2 / 10**2 < 1] = [60, 140, 245, 255]
+    return write_png(tmp_path / 'transparent-band.png', pixels)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_line_band_outer_stroke_expands_transparent_alpha(binary, project, tmp_path, target):
+    track, style = motion_project(project, entry='none', exit='none')
+    style = replace(style, line_band_enabled=True, line_band_image=str(transparent_band_image(tmp_path)),
+                    line_band_fill_mode='stretch', line_band_stroke_size_px=7, line_band_stroke_color='#F4CE00')
+    plain = ir_for(binary, (track, style))
+    outlined = ir_for(binary, (track, replace(style, line_band_stroke_enabled=True)))
+    feature = 'p08_line_band_outer_stroke'
+    assert feature not in plain['required_features'] and feature in outlined['required_features']
+    t = outlined['track']['lines'][0]['display_start_ms'] + 250
+    bad = copy.deepcopy(outlined)
+    bad['style']['line_band_stroke_position'] = 'inside'
+    oversized = copy.deepcopy(outlined)
+    oversized['skia_layout']['lines'][0]['line_band_rect'][2] = 9000
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, plain)
+        bare, _ = collect(process, [t])
+        configure(process, outlined)
+        outline, _ = collect(process, [t], generation=2)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        with pytest.raises(NativeRendererError, match='行背景带描边尺寸超限'):
+            configure(process, oversized)
+        replay, _ = collect(process, [t], generation=3)
+    extended = (bare[0][..., 3] == 0) & (outline[0][..., 3] > 100)
+    assert np.count_nonzero(extended) > 200
+    assert np.mean(outline[0][extended, 2]) < 4
+    assert np.array_equal(outline[0], replay[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry, leave', [('none', 'none'), ('fade', 'slide_out')])
+def test_line_band_outer_stroke_matches_actual_gpu(binary, application, tmp_path, entry, leave):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'band')
+    style = replace(base.style, line_band_image=str(transparent_band_image(tmp_path)), line_band_fill_mode='stretch',
+                    line_band_stroke_enabled=True, line_band_stroke_size_px=3, line_band_stroke_color='#4FD5FD',
+                    entry_anim=entry, exit_anim=leave)
+    case = replace(base, case_id=f'line_band_outer_stroke_{entry}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 450, 600, 1500, 2600, 4400, 5200, 5499, 5500))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('axis', ['slide', 'rise'])
 def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path):

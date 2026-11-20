@@ -44,6 +44,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.vertical = source.vertical;
         line.animation = source.animation;
         line.lineBand = source.lineBand;
+        lineBand_.validateStrokeBounds(line.lineBand);
         line.lineBandTransition = source.lineBandTransition;
         line.beforeGradient = source.beforeGradient;
         line.afterGradient = source.afterGradient;
