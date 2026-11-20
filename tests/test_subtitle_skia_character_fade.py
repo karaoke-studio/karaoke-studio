@@ -219,25 +219,41 @@ def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
     assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[0], replay[1])
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case_id', [
-    'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
-    'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle', 'exit_lightning',
-    'exit_flame', 'entry_flame', 'entry_lightning',
-    'exit_scatter_out', 'exit_converge_out',
-    'exit_stretch_out', 'entry_stretch_in', 'entry_glow_in', 'exit_glow_out', 'line_override',
-])
-def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tmp_path, case_id):
-    from scripts.subtitle_gpu_baseline.cases import build_cases
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('entry,exit_', [('flame', 'lightning'), ('lightning', 'flame')])
+def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target, entry, exit_):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, entry_anim=entry, exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600,
+                    karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_energy_pair'
+    assert feature in ir['required_features']
+    source, = ir['track']['lines']
+    assert (source['entry_anim'], source['exit_anim']) == (entry, exit_)
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert group['fade_owner'] == 0 and np.isfinite(group['affine_pivot_y'])
+    entering = source['display_start_ms'] + source['entry_duration_ms'] * 7 // 8
+    leaving = source['display_end_ms'] - 120
+    times = [entering, leaving, entering]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        invalid = copy.deepcopy(ir)
+        invalid['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, [leaving, entering], generation=2)
+    assert frames[0].any() and frames[1].any() and not np.array_equal(frames[0], frames[1])
+    assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[1])
+    assert np.array_equal(frames[1], replay[0])
+
+
+def assert_ruby_transition_gpu_parity(binary, case, times):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
-    times = case.timestamps_ms
-    if case_id == 'exit_flame':
-        times = tuple(sorted({*times, 5240, 5305, 5370, 5440}))
-    elif case_id == 'entry_flame':
-        times = tuple(sorted({*times, 735, 780, 840}))
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, case.style, times, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
@@ -249,6 +265,38 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
             frames, _ = collect(process, times)
             rendered.append(frames)
     assert_glow_parity(times, reference, *rendered, case.case_id, check_p00_edges=True)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,exit_', [('flame', 'lightning'), ('lightning', 'flame')])
+def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entry, exit_):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    source = next(case for case in build_cases(tmp_path) if case.case_id == 'entry_flame')
+    style = replace(source.style, entry_anim=entry, exit_anim=exit_)
+    case = replace(source, case_id=f'{entry}_in_{exit_}_out', style=style)
+    times = (100, 299, 301, 450, 735, 840, 1000, 1500, 4500, 4900, 5100, 5370, 5499, 5900)
+    assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', [
+    'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
+    'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle', 'exit_lightning',
+    'exit_flame', 'entry_flame', 'entry_lightning',
+    'exit_scatter_out', 'exit_converge_out',
+    'exit_stretch_out', 'entry_stretch_in', 'entry_glow_in', 'exit_glow_out', 'line_override',
+])
+def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tmp_path, case_id):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
+    times = case.timestamps_ms
+    if case_id == 'exit_flame':
+        times = tuple(sorted({*times, 5240, 5305, 5370, 5440}))
+    elif case_id == 'entry_flame':
+        times = tuple(sorted({*times, 735, 780, 840}))
+    assert_ruby_transition_gpu_parity(binary, case, times)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

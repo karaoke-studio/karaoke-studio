@@ -102,6 +102,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_character_wave_scatter",
         "p07_ruby_particle_assembly",
         "p07_ruby_particle_fade",
+        "p07_ruby_energy_pair",
         "p08_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",
@@ -134,11 +135,12 @@ bool isSkiaEnergyTransition(const QString& animation) {
 }
 
 bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
-                                      bool allowAssembly, bool allowFade) {
-    if (entry.isEmpty() == exit.isEmpty()) return false;
+                                      bool allowAssembly, bool allowFade, bool allowEnergyPair) {
+    if (entry.isEmpty() == exit.isEmpty())
+        return allowEnergyPair && entry != exit && isSkiaEnergyTransition(entry) && isSkiaEnergyTransition(exit);
     const auto& kind = exit.isEmpty() ? entry : exit;
     if (kind == "assemble" || kind == "dissolve") return allowAssembly;
-    if (kind == "flame" || kind == "lightning") return allowFade;
+    if (isSkiaEnergyTransition(kind)) return allowFade;
     return allowFade && entry.isEmpty() && (kind == "petal" || kind == "feather"
         || kind == "snow_solid" || kind == "note" || kind == "heart" || kind == "sparkle");
 }

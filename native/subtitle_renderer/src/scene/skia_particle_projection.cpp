@@ -22,7 +22,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles");
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit,
-        features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"));
+        features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"),
+        features.contains("p07_ruby_energy_pair"));
     const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;

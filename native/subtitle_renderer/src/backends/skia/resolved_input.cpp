@@ -180,11 +180,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.entryAnimation == "none" && line.exitAnimation == "glow_out" && line.exitDurationMs > 0));
         const bool affineComposition = transformedRuby && line.bursts.empty()
             && ((line.exitDurationMs > 0 && (affineExit || waveScatter)) || stretchEntry || glowTransition);
+        const bool pairedEnergy = features.contains("p07_ruby_energy_pair")
+            && line.entryDurationMs > 0 && line.exitDurationMs > 0;
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
-                || (line.exitDurationMs > 0 && line.entryAnimation == "none"))
+                || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedEnergy)
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind,
-                features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"));
+                features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"),
+                pairedEnergy);
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         const bool fadeComposition = features.contains("p07_character_entry_fade_composition")
             && line.entryAnimation == "char_fade" && line.exitAnimation == "none"

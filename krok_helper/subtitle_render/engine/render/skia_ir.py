@@ -299,6 +299,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     assembly_lines = set()
     particle_fade_lines = set()
     particle_affine_lines = set()
+    energy_pair_lines = set()
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
@@ -309,11 +310,15 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if source.get('fx_bursts'):
                 if len(plan.lines) == 1 and item.layout_style.sing_fx == 'none':
                     entry, leave = source.get('entry_anim'), source.get('exit_anim')
+                    if ({entry, leave} == ENERGY_TRANSITIONS
+                            and source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0):
+                        energy_pair_lines.add(index)
+                        particle_affine_lines.add(index)
                     effect = (entry if leave == 'none' and source['entry_duration_ms'] > 0
                               else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
                     if effect in {'assemble_in', 'dissolve_out'}:
                         assembly_lines.add(index)
-                    if effect in {'flame', 'lightning'} or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
+                    if effect in ENERGY_TRANSITIONS or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
                         particle_fade_lines.add(index)
                         if effect == 'flame':
                             particle_affine_lines.add(index)
@@ -341,7 +346,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if (source.get('entry_anim') == 'wave_in' and source.get('exit_anim') == 'scatter_out'
                     and source.get('entry_duration_ms', 0) > 0 and source.get('exit_duration_ms', 0) > 0):
                 paired_geometry_lines.add(index)
-    composed_particle_lines = assembly_lines | particle_fade_lines
+    composed_particle_lines = assembly_lines | particle_fade_lines | energy_pair_lines
     affine_geometry_lines = (affine_lines | stretch_lines | stretch_entry_lines | glow_lines
                              | paired_geometry_lines | particle_affine_lines)
     composed_geometry_lines = translation_lines | affine_geometry_lines | composed_particle_lines
@@ -533,6 +538,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p07_ruby_particle_assembly')
         if particle_fade_lines:
             ir['required_features'].append('p07_ruby_particle_fade')
+        if energy_pair_lines:
+            ir['required_features'].append('p07_ruby_energy_pair')
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
             track, ir, plan, measured, spin_lines, composed_geometry_lines)
