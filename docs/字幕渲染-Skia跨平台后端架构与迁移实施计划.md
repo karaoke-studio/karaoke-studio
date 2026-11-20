@@ -577,6 +577,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
   - [x] 正向横排无描边正文的字距展开、波浪、散开和收拢，含不同入退场时长和走字重叠，见 §14.76。
   - [x] 字距展开与波浪入场叠加上注音、双描边、光晕和普通 Utopia，见 §14.135。
+  - [x] 拼接入场、消散退场与上注音、双描边、光晕和普通 Utopia，见 §14.136。
   - [x] 正向横排无描边正文的拉伸、辉光及其入退场背层，见 §14.78。
   - [x] 正向横排实色正文的噪声遮罩、拖影及入退场回跳，见 §14.84。
   - [x] 正向横排的噪声出入场与上注音、光晕及普通 Utopia 唱字叠加，见 §14.126。
@@ -2535,6 +2536,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_ruby_character_translation` 令每个上注音组复用其宿主字的位移和透明度。字符落位时恢复自身光晕，入场结束后按原时钟回到普通走字或 Utopia。正文不透明实色双描边跟随位移。GPU 与 Raster 共享绘制与时序。
 - 原样 `entry_tracking_in`、`entry_wave_in` 共 12 个 1080p 采样帧通过 Direct2D GPU、Vulkan 和 Raster 的既定画面预算，可配置增至 78/129。Windows 聚焦 9 项通过，WSL X11 和 Wayland 各 57 通过、33 跳过，Windows/Linux 各 3 项独立 Raster 测试通过。四份原生构建各通过 3 项 CTest。
+- 78 个原样场景共 334 个 1080p 采样帧复跑通过。
+
+### 14.136 P07.2 粒子拼接、消散与上注音（2026-11-20）
+
+- `p07_ruby_particle_assembly` 接通单行正向横排的粒子拼接入场或消散退场。正文与上注音共用宿主字的过渡透明度，保留粒子时钟、像素块图形及消散收尾规则。绘制端在几何过渡窗口结束后恢复原有走字。
+- 原样 `entry_assemble_in`、`exit_dissolve_out` 共 12 个采样帧通过既定 1080p 画面预算，可配置增至 80/129。Windows 18 项通过，WSL Wayland 12 项通过、6 项跳过，Windows/Linux 独立 Raster 各 2 项通过。四份原生构建各通过 3 项 CTest。
+- 音量柱和正文画笔批次的 macOS 托管 Metal [44676103617](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44676103617) 五项作业均通过，两架构各通过 1654 项产品用例、229 项干净打包用例，98 组规范快照一致。
 
 ## 15. 前期探针清理范围
 

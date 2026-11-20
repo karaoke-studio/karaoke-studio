@@ -8,7 +8,7 @@
 
 namespace krok::subtitle::native::scene {
 void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
-                          const protocol::ResolvedStyle& style, int offset, int version, bool rubyScanline,
+                          const protocol::ResolvedStyle& style, int offset, int version, bool rubyScanline, bool rubyAssembly,
                           RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
     const auto animationKind = [version](const QString& animation, bool entry) {
@@ -20,6 +20,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
+    const bool composedAssembly = rubyAssembly && rubyParticles
+        && ((entry == "assemble" && exit.isEmpty()) || (exit == "dissolve" && entry.isEmpty()));
     const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
@@ -29,7 +31,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
         || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled))
-        || (!cfg.rubies.empty() && (!rubyParticles || animated || (source.scanlineEnabled && !rubyScanline)))
+        || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedAssembly)
+            || (source.scanlineEnabled && !rubyScanline)))
         || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
@@ -40,7 +43,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool ripple = version >= 4 && fx.kind == "ripple";
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic")
             || (version >= 10 && animated && fx.kind == "sparkle");
-        const bool assembly = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
+        const bool assemblySprite = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
         const bool validSweep = animated
             ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
@@ -58,7 +61,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         QString defaultSprite = QStringLiteral("star4");
         if (symbol || falling || flame) defaultSprite = fx.kind;
         if (ripple) defaultSprite = QStringLiteral("ring");
-        if (assembly) defaultSprite = QStringLiteral("pixel");
+        if (assemblySprite) defaultSprite = QStringLiteral("pixel");
         if (lightning) defaultSprite = QStringLiteral("bolt");
         if (fx.kind == "flame_glow") defaultSprite = QStringLiteral("flame");
         if (fx.kind == "ember" || fx.kind == "spark") defaultSprite = QStringLiteral("dot");
@@ -81,7 +84,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && !rubyParticles);
-        if (!(star || symbol || ripple || falling || lightning || flame || scanline || assembly || impact) || fx.anchor != "char"
+        if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (rubyParticles && version == 12 && !star && !ripple)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep

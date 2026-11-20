@@ -159,14 +159,19 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && !line.scanlineEnabled && !line.strokeFlashEnabled
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool spinComposition = transformedRuby && features.contains("p07_ruby_character_exit_spin")
-            && line.entryAnimation == "none" && line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
+            && line.bursts.empty() && line.entryAnimation == "none" && line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
-            && line.exitAnimation == "none" && line.entryDurationMs > 0;
+            && line.bursts.empty() && line.exitAnimation == "none" && line.entryDurationMs > 0;
+        const bool assemblyComposition = transformedRuby && features.contains("p07_ruby_particle_assembly")
+            && !line.bursts.empty()
+            && ((line.entryAnimation == "assemble_in" && line.entryDurationMs > 0 && line.exitAnimation == "none")
+                || (line.exitAnimation == "dissolve_out" && line.exitDurationMs > 0 && line.entryAnimation == "none"));
+        const bool geometryComposition = translationComposition || assemblyComposition;
         const bool fadeComposition = features.contains("p07_character_entry_fade_composition")
             && line.entryAnimation == "char_fade" && line.exitAnimation == "none"
             && (line.karaokeAnimation == "none" || (singingScale && !line.zoomPulseEnabled))
@@ -187,7 +192,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit
                 || (line.zoomPulseEnabled && !features.contains("p07_composed_scanline"))))
-            || (!lineAnimation && !fadeComposition && !noiseComposition && !spinComposition && !translationComposition
+            || (!lineAnimation && !fadeComposition && !noiseComposition && !spinComposition && !geometryComposition
                 && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
@@ -220,9 +225,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool geometry = prepared.characterGeometry.active();
         prepared.particleVisibility = {particleEntry ? effects::fallEntryLeadMs(line.entryAnimation) : 0,
                                        particleExit && exitParticleKind != "dissolve"};
-        if (geometry && !translationComposition && (style.strokeWidth > 0 || style.stroke2Width > 0))
+        if (geometry && !geometryComposition && (style.strokeWidth > 0 || style.stroke2Width > 0))
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
-        prepared.rubyTranslation = translationComposition;
+        prepared.rubyGeometryComposition = geometryComposition;
         const bool transforms = prepared.characterFade.transforms() || geometry;
         prepared.transformedWipe = transforms && allowTransformedWipe;
         const bool pivots = transforms || utopia || !line.bursts.empty();
@@ -364,13 +369,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         auto rubyTransition = RubyTransition::None;
-        if (fadeComposition) rubyTransition = RubyTransition::Fade;
+        if (fadeComposition || assemblyComposition) rubyTransition = RubyTransition::Fade;
         if (spinComposition) rubyTransition = RubyTransition::Spin;
         if (translationComposition) rubyTransition = RubyTransition::Translation;
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
                                                     rubyTransition, totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
-                || (geometry && !translationComposition)) && !prepared.rubyGroups.empty())
+                || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
         // Each burst anchors at its character pivot; the box is
         // the wipe extent by the line's metric ascent + descent (glyph runs, never ink).
@@ -428,7 +433,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool lineGlow = (lineAnimation || fadeComposition || noiseComposition || spinComposition || translationComposition)
+        const bool lineGlow = (lineAnimation || fadeComposition || noiseComposition || spinComposition || geometryComposition)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_composed_stroke_flash");

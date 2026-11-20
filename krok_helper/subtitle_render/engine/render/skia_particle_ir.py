@@ -29,11 +29,11 @@ def _transition_layers(kind, entry):
     return _TRANSITION_LAYERS.get((kind, entry), {kind})
 
 
-def write_particle_anchors(track, ir, plan, measured) -> int:
+def write_particle_anchors(track, ir, plan, measured, assembly_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = False
-    for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
+    for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
         if not bursts:
@@ -52,7 +52,7 @@ def write_particle_anchors(track, ir, plan, measured) -> int:
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or band or look.sing_fx != 'none'))
-                or look.lower_ruby_enabled or (annotated and animated)
+                or look.lower_ruby_enabled or (annotated and animated and index not in assembly_lines)
                 or (not annotated and (look.stroke_width_px > 0
                     or (look.stroke2_enabled and look.stroke2_width_px > 0)))
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):

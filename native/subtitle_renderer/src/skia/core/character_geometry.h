@@ -16,18 +16,24 @@ struct CharacterGeometry {
     bool inEntryWindow(int time, int displayStart) const {
         return entryMs > 0 && time <= displayStart + std::clamp(entryMs, 120, 3000);
     }
+    int exitStart(int displayEnd) const {
+        return std::max(singingEnd, displayEnd - std::clamp(exitMs, 120, 3000));
+    }
+    bool inWindow(int time, int displayStart, int displayEnd) const {
+        return inEntryWindow(time, displayStart) || (exitMs > 0 && time >= exitStart(displayEnd));
+    }
 
     CharacterTransformState at(int time, int displayStart, int displayEnd, int index, int count,
                                const CharacterPivot& pivot, std::optional<float> lineCenter) const {
-        const int exitStart = std::max(singingEnd, displayEnd - std::clamp(exitMs, 120, 3000));
-        const bool exiting = exitMs > 0 && time >= exitStart;
+        const int leave = exitStart(displayEnd);
+        const bool exiting = exitMs > 0 && time >= leave;
         if (!exiting && !inEntryWindow(time, displayStart))
             return {};
         const float x = (pivot.layoutLeft + pivot.layoutRight) * .5f;
         const auto& effect = exiting ? exit : entry;
         const auto value = krok::subtitle::native::effects::geoCharState(
             effect, fontPx, index, count, time,
-            exiting ? exitStart : displayStart, exiting ? exitMs : entryMs,
+            exiting ? leave : displayStart, exiting ? exitMs : entryMs,
             exiting, x, lineCenter.value_or(0.f), lineCenter.has_value());
         CharacterTransformState state;
         state.opacity = value.opacity;

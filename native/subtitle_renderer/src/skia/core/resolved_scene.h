@@ -66,7 +66,7 @@ struct ResolvedLine {
     NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
-    bool rubyTranslation = false;
+    bool rubyGeometryComposition = false;
     SingingScale singingScale;
     float rubySingingOrigin = 0;
     UtopiaTransition utopiaTransition;
