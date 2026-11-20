@@ -82,6 +82,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_noise_composition",
         "p07_ruby_character_exit_spin",
         "p07_ruby_character_translation",
+        "p07_ruby_character_affine_exit",
         "p07_ruby_particle_assembly",
         "p07_ruby_particle_fade",
         "p08_viewport",

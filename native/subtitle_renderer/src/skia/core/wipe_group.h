@@ -12,7 +12,7 @@ public:
     bool spins() const { return spinPivot_.has_value(); }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
-              const SkMatrix& pose = SkMatrix::I()) const;
+              const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {}) const;
     void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
     void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
                         const SingingScale&, float originX, float opacity) const;
@@ -31,5 +31,6 @@ private:
     bool noWipe_ = false;
     bool vertical_ = false;
     std::optional<SkPoint> spinPivot_;
+    bool affine_ = false;
 };
 }

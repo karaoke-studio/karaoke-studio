@@ -291,6 +291,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
     geometry.set_lanes(plan.lines)
     spin_lines = set()
     translation_lines = set()
+    affine_lines = set()
     assembly_lines = set()
     particle_fade_lines = set()
     if geometry.ruby is not None:
@@ -316,8 +317,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
                 translation_lines.add(index)
+            if (source.get('entry_anim') == 'none' and source.get('exit_anim') in {'scatter_out', 'converge_out'}
+                    and source.get('exit_duration_ms', 0) > 0):
+                affine_lines.add(index)
     composed_particle_lines = assembly_lines | particle_fade_lines
-    composed_geometry_lines = translation_lines | composed_particle_lines
+    composed_geometry_lines = translation_lines | affine_lines | composed_particle_lines
     lines = []
     if vertical_ruby is None:
         for index, item in enumerate(plan.lines):
@@ -434,7 +438,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
-            fade_lines=fade_lines | composed_geometry_lines, spin_lines=spin_lines)
+            fade_lines=fade_lines | composed_geometry_lines, spin_lines=spin_lines, affine_lines=affine_lines)
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if zoom_lines:
@@ -459,6 +463,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
             ir['required_features'].append('p07_ruby_character_exit_spin')
         if translation_lines:
             ir['required_features'].append('p07_ruby_character_translation')
+        if affine_lines:
+            ir['required_features'].append('p07_ruby_character_affine_exit')
         if assembly_lines:
             ir['required_features'].append('p07_ruby_particle_assembly')
         if particle_fade_lines:

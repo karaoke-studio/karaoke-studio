@@ -3,7 +3,7 @@
 #include "../../model/render_scene.h"
 
 namespace krok::subtitle::native {
-enum class RubyTransition { None, Fade, Spin, Translation };
+enum class RubyTransition { None, Fade, Spin, Translation, Affine };
 
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const QJsonObject& line, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,

@@ -116,6 +116,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool lower = object.value("lower").toBool();
         const bool animatedOwner = transition != RubyTransition::None;
         const bool spinComposition = transition == RubyTransition::Spin;
+        const bool affineComposition = transition == RubyTransition::Affine;
         if ((animatedOwner && lower) || object.contains("fade_owner") != animatedOwner)
             throw BackendError("Skia 注音缺少有效的逐字淡化归属");
         std::optional<std::size_t> fadeOwner;
@@ -130,6 +131,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             spinPivot = SkPoint::Make(float(pivotCoordinate(pivot[0]) * glyphs.dpr),
                                       float(pivotCoordinate(pivot[1]) * glyphs.dpr));
         }
+        if (object.contains("affine_pivot_y") != affineComposition)
+            throw BackendError("Skia 注音几何退场缺少纵向轴心");
+        const float affineY = affineComposition
+            ? float(pivotCoordinate(object.value("affine_pivot_y")) * glyphs.dpr) : 0.f;
         if ((zoom && lower) || object.contains("zoom_pivot_y") != zoom)
             throw BackendError("Skia 注音整字放大轴心与布局不一致");
         const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
@@ -218,6 +223,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
                 before, after, wipePad);
+            if (cell.contains("affine_pivot_x") != affineComposition)
+                throw BackendError("Skia 注音几何退场缺少横向轴心");
+            if (affineComposition) {
+                const float x = float(pivotCoordinate(cell.value("affine_pivot_x")) * glyphs.dpr);
+                glyph.pivot.layoutLeft = glyph.pivot.layoutRight = x;
+                glyph.pivot.centerY = affineY;
+            }
             if (cell.contains("utopia_layout_right") != zoom)
                 throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
             if (line.karaokeAnimation == "utopia") {
@@ -271,7 +283,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             cells.push_back(std::move(glyph));
         }
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
-        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt, fadeOwner, spinPivot});
+        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
+                          fadeOwner, spinPivot, affineComposition});
     }
     return groups;
 }

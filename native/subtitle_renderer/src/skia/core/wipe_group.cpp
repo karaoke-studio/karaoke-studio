@@ -62,7 +62,7 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
     : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
-      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot) {
+      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot), affine_(group.affine) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -235,7 +235,7 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
 }
 
 void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX,
-                             float opacity, float viewportHeight, const SkMatrix& pose) const {
+                             float opacity, float viewportHeight, const SkMatrix& pose, SkPoint ownerPivot) const {
     if (bounds_.isEmpty() || opacity <= 0) return;
     const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
     const float edge = frontAt(timeMs, startEdge);
@@ -250,7 +250,15 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
             if (pose.isIdentity()) {
                 paintRubyCell(canvas, paint, cell, after, opacity);
             } else {
-                const auto posed = posedUnit(cell, {opacity, pose, true});
+                auto unitPose = pose;
+                if (affine_) {
+                    // The same affine motion acts around each reading's own
+                    // pivot, shifted by the host's translation.
+                    const SkVector delta{cell.pivot.layoutLeft - ownerPivot.x(), cell.pivot.centerY - ownerPivot.y()};
+                    const auto mapped = pose.mapVector(delta.x(), delta.y());
+                    unitPose.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
+                }
+                const auto posed = posedUnit(cell, {opacity, unitPose, true});
                 paintRubyCell(canvas, paint, *posed, after, opacity);
             }
         }

@@ -387,8 +387,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const auto& ink = states[index].animatedInk;
             drawStrokeFlash(canvas, ink ? *ink : cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
         }
-    for (const auto& group : line.rubyGroups)
-        group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group), wipeViewportHeight, rubyPose(group));
+    for (const auto& group : line.rubyGroups) {
+        SkPoint ownerPivot{};
+        if (rubyGeometryPhase && group.fadeOwner()) {
+            const auto& pivot = line.cells[*group.fadeOwner()].pivot;
+            ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};
+        }
+        group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group), wipeViewportHeight,
+                   rubyPose(group), ownerPivot);
+    }
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
     if (line.scanline.upperRuby && line.scanline.repaintsGlyphs()

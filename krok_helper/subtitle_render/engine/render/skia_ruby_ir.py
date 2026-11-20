@@ -13,7 +13,7 @@ from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts
 
 
 def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None,
-                         singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=()):
+                         singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=(), affine_lines=()):
     geometry, measured = prepared.geometry, prepared.measured
     ruby = geometry.ruby
     if ruby is None:
@@ -77,6 +77,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                     units[-1]['utopia_layout_left'] = cell['layout_left'] + position.offset_x
                 if zoom:
                     units[-1]['utopia_layout_right'] = cell['layout_right'] + position.offset_x
+                if line_index in affine_lines:
+                    units[-1]['affine_pivot_x'] = position.offset_x + (cell['layout_left'] + cell['layout_right']) / 2
                 if unit_projection:
                     units[-1]['glyph_text'] = clock.glyph_units[unit_index]
             serialized = {'style_cell': style_cell, 'units': units}
@@ -88,6 +90,10 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 center_x = (group.cells[0]['layout_left'] + group.cells[-1]['layout_right']) / 2
                 serialized['spin_pivot'] = [position.offset_x + center_x,
                     position.baseline_y + group.baseline_offset + group.zoom_center_offset]
+            if line_index in affine_lines:
+                if group.zoom_center_offset is None:
+                    raise ValueError('Skia 注音几何退场缺少规范字体轴心')
+                serialized['affine_pivot_y'] = position.baseline_y + group.baseline_offset + group.zoom_center_offset
             if zoom:
                 if group.zoom_center_offset is None:
                     raise ValueError('Skia 注音整字放大缺少规范字体轴心')
