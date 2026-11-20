@@ -336,12 +336,53 @@ def assert_feather_profile(reference, candidate, bare_reference, bare_candidate,
 
 
 RUBY_BAND_TIMES = [299, 450, 550, 899, 1100, 1400, 1550, 1900, 2100, 2300]
+SCANLINE_MOTIONS = [('slide_in', 'slide_out'), ('rise', 'rise'), ('fade', 'fade')]
 
 
 def ruby_band_source(reading, softness, utopia=False):
     track, style = upper_source(reading, 2)
     style = replace(band(style, 42), scanline_glow_px=softness, ruby_interval_px=9)
     return track, replace(style, karaoke_anim='utopia') if utopia else style
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('entry,leave', SCANLINE_MOTIONS)
+def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, target, entry, leave):
+    track, style = ruby_band_source(reading, 10, True)
+    track = replace(track, lines=[replace(track.lines[0], display_end_override_ms=2200)])
+    style = replace(style, entry_anim=entry, exit_anim=leave, entry_lead_ms=600, exit_fade_ms=600)
+    ir = upper_ir(binary, (track, style), 1)
+    bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
+    assert 'p07_scanline_line_animation' in ir['required_features']
+    assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
+    times = [0, 450, 550, 1100, 1880, 2050, 2200]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_line_animation')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [1880], generation=2)
+        configure(process, bare)
+        plain, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames[2], frames[-1]) and np.array_equal(frames[4], replay[0])
+    assert not frames[0].any() and not frames[-2].any()
+    assert all(not np.array_equal(frames[i], plain[i]) for i in (2, 4))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,leave', SCANLINE_MOTIONS)
+def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, application, tmp_path, entry, leave):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'scanline_band')
+    line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
+    case = replace(base, case_id=f'scanline_line_{entry}', track=replace(base.track, lines=[line]),
+                   style=replace(base.style, entry_anim=entry, exit_anim=leave))
+    assert_ruby_transition_gpu_parity(binary, case, (950, 1120, 1260, 1380, 1550, 2600,
+                                                    4110, 4280, 4450, 4530, 4610, 4650))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

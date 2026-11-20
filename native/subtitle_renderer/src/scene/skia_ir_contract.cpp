@@ -82,6 +82,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_character_fade",
         "p07_character_entry_fade_composition",
         "p07_scanline_band",
+        "p07_scanline_line_animation",
         "p07_scanline_shape",
         "p07_scanline_image",
         "p07_composed_scanline",
@@ -350,6 +351,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_composed_scanline")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 扫字线组合缺少横排高亮带能力声明");
+    if (features.contains("p07_scanline_line_animation")
+        && (!features.contains("p07_scanline_band") || scanlineVersion < 5
+            || !features.contains("p07_utopia_line_animation")))
+        throw BackendError("Skia 整行出入场扫字线缺少高亮带或 Utopia 行动画能力声明");
     if (features.contains("p07_role_scanline_layers")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 角色扫字线组合缺少横排高亮带能力声明");

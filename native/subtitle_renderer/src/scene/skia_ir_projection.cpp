@@ -183,9 +183,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             && !source.strokeFlashEnabled && source.fxBursts.empty();
         // The band follows the posed unit during forward Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
+        const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
+        const bool movingScanline = features.contains("p07_scanline_line_animation") && utopiaSinging
+            && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
+            && (source.entryAnimation == "none" || source.entryAnimation == "fade"
+                || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")
+            && (source.exitAnimation == "none" || source.exitAnimation == "fade"
+                || source.exitAnimation == "slide_out" || source.exitAnimation == "rise")
+            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
-            && !source.wipeReverse && source.entryAnimation == "none" && source.exitAnimation == "none";
+            && !source.wipeReverse && (staticScanline || movingScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
@@ -205,7 +213,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
                 || (rubyScanline && (source.wipeReverse || (resolved.scanlineMode == "role" && !roleLayers)
-                    || source.entryAnimation != "none" || source.exitAnimation != "none"
+                    || !(staticScanline || movingScanline)
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前仅支持横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);
