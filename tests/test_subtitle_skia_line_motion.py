@@ -339,20 +339,57 @@ def test_custom_shape_signal_countdown(binary, project, target, shape):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_p00_custom_shape_signal_matches_actual_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('case_id', ['lit_appearance_custom', 'lamp_shape_image'])
+def test_p00_custom_shape_signal_matches_actual_gpu(binary, application, tmp_path, case_id):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    case = next(case for case in build_cases(tmp_path) if case.case_id == 'lit_appearance_custom')
+    case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
+    style = replace(case.style, lit_appearance_mode='custom')
     with NativeRendererProcess() as process:
-        _, raw = _render_g1_frames(process, case.style, case.timestamps_ms, force_warp=False,
+        _, raw = _render_g1_frames(process, style, case.timestamps_ms, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False)
     reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
     rendered = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
-            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            process.configure(case.track, style, width=1920, height=1080, fps=60)
             frames, _ = collect(process, case.timestamps_ms)
             rendered.append(frames)
     assert_glow_parity(case.timestamps_ms, reference, *rendered, case.case_id, check_p00_edges=True)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_custom_image_signal_contains_asset_and_falls_back(binary, project, tmp_path, target):
+    from PyQt6.QtGui import QImage
+
+    track, style = project
+    asset = tmp_path / 'lamp.png'
+    bitmap = QImage(12, 6, QImage.Format.Format_ARGB32)
+    bitmap.fill(0xFFFF00FF)
+    assert bitmap.save(str(asset))
+    lamp = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='image',
+                   lit_image_path=str(asset), lit_offset_y=-15, lit_size=28, lit_number=4,
+                   lit_shadow=True, lit_edge_brightness_pct=100, lit_stroke_soften=4)
+    valid = ir_for(binary, (track, lamp))
+    fallback = ir_for(binary, (track, replace(lamp, lit_style='circle', lit_shadow=False,
+                                             lit_edge_brightness_pct=0, lit_stroke_soften=0)))
+    assert 'p08_custom_image_signal' in valid['required_features']
+    start = valid['track']['lines'][0]['display_start_ms']
+    times = [start, start+1, start]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, valid)
+        images, _ = collect(process, times)
+        asset.unlink()
+        held, _ = collect(process, [start])
+        configure(process, valid)
+        missing, _ = collect(process, times, generation=2)
+        configure(process, fallback)
+        circles, _ = collect(process, times, generation=3)
+    assert np.array_equal(images[0], images[-1]) and np.array_equal(held[0], images[0])
+    colored = (images[0][..., 0] > 240) & (images[0][..., 1] < 5) & (images[0][..., 2] > 240)
+    ys, xs = np.where(colored)
+    assert abs(int(ys.max()-ys.min()+1) - 14) <= 1
+    assert np.unique(xs).size > 14
+    assert all(np.array_equal(a, b) for a, b in zip(missing, circles, strict=True))

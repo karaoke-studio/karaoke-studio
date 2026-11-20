@@ -1,6 +1,7 @@
 #include "shape_signal.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkSamplingOptions.h"
 #include <algorithm>
 
 namespace subtitle::skia {
@@ -15,6 +16,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time) const {
         paint.setStyle(width > 0 ? SkPaint::kStroke_Style : SkPaint::kFill_Style);
         paint.setStrokeWidth(width);
         switch (shape) {
+        case Shape::Image: // Missing image falls back to a solid circle.
         case Shape::Circle: canvas.drawOval(box, paint); break;
         case Shape::Square: canvas.drawRect(box, paint); break;
         case Shape::Rounded:
@@ -36,6 +38,19 @@ void ShapeSignal::draw(SkCanvas& canvas, int time) const {
             const float pad = (strokeWidth + strokeSoften) * .5f + shadowOffset + 2.f;
             const auto bounds = box.makeOutset(pad, pad);
             canvas.saveLayerAlphaf(&bounds, state.activeOpacity);
+        }
+        if (shape == Shape::Image) {
+            if (image) {
+                const float fit = size / std::max(image->width(), image->height());
+                const float width = image->width() * fit, height = image->height() * fit;
+                const auto dst = SkRect::MakeXYWH(box.centerX() - width * .5f, box.centerY() - height * .5f, width, height);
+                paint.setAlphaf(opacity);
+                canvas.drawImageRect(image, dst, SkSamplingOptions(SkFilterMode::kLinear), &paint);
+            } else {
+                drawShape(box, fill, 0);
+                if (strokeWidth > 0 && SkColorGetA(stroke) > 0) drawShape(box, stroke, strokeWidth);
+            }
+            continue;
         }
         if (shadow) drawShape(box.makeOffset(shadowOffset, shadowOffset), SkColorSetA(SK_ColorBLACK, 89), 0);
         if (strokeWidth > 0 && strokeSoften > 0) {

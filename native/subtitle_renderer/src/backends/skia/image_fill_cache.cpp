@@ -41,20 +41,22 @@ std::size_t imageBytes(int width, int height) {
     ::subtitle::skia::ImageFill result;
     if (paint.mode != "image" || paint.imagePath.empty()) return result;
     result.scale = ::subtitle::skia::ImageFill::scaleFor(paint.imageScale, layoutScale);
-    const Key key{paint.imagePath, paint.imageModifiedMs, paint.imageSize};
-    if (const auto found = images_.find(key); found != images_.end()) {
-        result.image = found->second;
-        return result;
-    }
-    if (images_.size() + scanlineImages_.size() >= kMaxImages) return result;
-    auto image = decode(paint.imagePath);
+    result.image = staticImage(paint.imagePath, paint.imageModifiedMs, paint.imageSize);
+    return result;
+}
+
+sk_sp<SkImage> SkiaImageFillCache::staticImage(const std::wstring& path, std::uint64_t modifiedMs, std::uint64_t size) {
+    if (path.empty()) return {};
+    const Key key{path, modifiedMs, size};
+    if (const auto found = images_.find(key); found != images_.end()) return found->second;
+    if (images_.size() + scanlineImages_.size() >= kMaxImages) return {};
+    auto image = decode(path);
     const std::size_t bytes = image ? imageBytes(image->width(), image->height()) : 0;
     if (bytes > kMaxBytes - bytes_) image = nullptr;
     else bytes_ += bytes;
     // Failures are remembered too, so one configure decodes each key once.
     images_.emplace(key, image);
-    result.image = image;
-    return result;
+    return image;
 }
 
 std::shared_ptr<const ::subtitle::skia::ScanlineImage> SkiaImageFillCache::scanline(

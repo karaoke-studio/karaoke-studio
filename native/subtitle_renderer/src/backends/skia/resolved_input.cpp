@@ -24,7 +24,7 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 
 std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
-    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr
+    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, SkiaImageFillCache& images
 ) {
     const auto anchor = source.value("shape_signal_anchor");
     if (!style.litEnabled || !line.litHead) {
@@ -47,14 +47,19 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     const auto geometry = shapeSignalGeometry(style);
     using Signal = ::subtitle::skia::ShapeSignal;
     using Shape = Signal::Shape;
+    auto shape = Shape::Circle;
+    if (style.litStyle == "square") shape = Shape::Square;
+    if (style.litStyle == "rounded") shape = Shape::Rounded;
+    if (style.litStyle == "image") shape = Shape::Image;
     return Signal{
         shapeSignalClock(line.startMs, style),
         SkPoint::Make(float(xy[0].toDouble() * dpr) + style.litOffsetX,
                       float(xy[1].toDouble() * dpr) + style.litOffsetY - geometry.size),
-        style.litStyle == "square" ? Shape::Square : style.litStyle == "rounded" ? Shape::Rounded : Shape::Circle,
+        shape,
         geometry.size, geometry.size * 1.5f + geometry.tracking,
         style.litStrokeWidth, style.litStrokeSoften, style.litOpacity,
         std::min(style.litEdgeBrightness * .55f, 1.f), argb(style.litFill), argb(style.litStroke), style.litShadow,
+        shape == Shape::Image ? images.staticImage(style.litImagePath, style.litImageModifiedMs, style.litImageSize) : nullptr,
     };
 }
 
@@ -102,7 +107,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
         .outlineGradients = outlineGradients, .imageFills = imageFills,
         .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow"),
-        .customShapeSignal = features.contains("p08_custom_shape_signal")});
+        .customShapeSignal = features.contains("p08_custom_shape_signal"),
+        .imageShapeSignal = features.contains("p08_custom_image_signal")});
     SkiaImageFillCache imageCache; // Scene-local: released with this configure.
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
@@ -159,7 +165,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (cells.size() != int(line.chars.size()) || intervals.size() != cells.size() || (totalCells += cells.size()) > 65536)
             throw BackendError("Skia 最终布局与解析计时单元不一致或超限");
         ::subtitle::skia::ResolvedLine prepared{{}, line.displayWindows[0].startMs, line.displayWindows[0].endMs};
-        prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr);
+        prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache);
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
         const float slide = std::max(style.fontSize * .9f, 36.f) * (line.lane == 0 ? -1.f : 1.f);
         const float rise = std::max(style.fontSize * .35f, 18.f);
