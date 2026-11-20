@@ -580,6 +580,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 拼接入场、消散退场与上注音、双描边、光晕和普通 Utopia，见 §14.136。
   - [x] 六种粒子退场与上注音、双描边、光晕和普通 Utopia，见 §14.137。
   - [x] 散开与收拢退场，正文和上注音各自绕规范轴心变换，见 §14.138。
+  - [x] 拉伸退场与上注音、双描边、光晕和普通 Utopia，见 §14.139。
   - [x] 正向横排无描边正文的拉伸、辉光及其入退场背层，见 §14.78。
   - [x] 正向横排实色正文的噪声遮罩、拖影及入退场回跳，见 §14.84。
   - [x] 正向横排的噪声出入场与上注音、光晕及普通 Utopia 唱字叠加，见 §14.126。
@@ -2558,6 +2559,14 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_ruby_character_affine_exit` 在规范布局中生成各注音单元的水平轴心和读音组的字体盒纵向轴心。帧绘制复用宿主字的平移、旋转、缩放和透明度，并把变换中心移至各注音单元。无效轴心保留上一个可用场景。
 - 原样 `exit_scatter_out`、`exit_converge_out` 共 12 个 1080p 采样帧通过原有画面预算。Windows 35 项通过，X11 和 Wayland 各 18 项通过、13 项跳过，独立 Windows/Linux Raster 各 9 项通过，四份构建各通过 3 项 CTest。
+- P00 原样可配置范围增至 **88/129**。逐帧复测覆盖 **394** 个 1080p 采样帧，均通过原预算。一次 `exit_snow_solid` 在并行构建期间等候 D2D 配置响应超时，结束并行构建后独立补测通过。证据为 `build/p00-skia-coverage/ruby-affine-p00-final-pixels.json`。
+
+### 14.139 P07.2 拉伸退场与上注音（2026-11-20）
+
+- `p07_ruby_character_stretch_exit` 接通单独 `stretch_out` 的正向横排组合。上注音复用 §14.138 的规范轴心，随宿主字的横向缩放和透明度变化。过渡白色光晕随正文轮廓绘制，注音沿用自己的静态光晕规则。
+- 原样 `exit_stretch_out` 的 6 个 1080p 采样帧通过实际 D2D GPU 对 Skia Vulkan、Vulkan 对 Raster 的原画面预算。原样 `entry_stretch_in` 在 650ms 的边界差为 32px，`entry_glow_in` 在 450ms 的平均通道误差约 6.26，`exit_glow_out` 在 5100ms 的 alpha mask IoU 约 0.9698，均超出原预算，仍待验收。
+- P00 原样可配置范围增至 **89/129**。Windows 相关用例 **34 通过**，X11、Wayland 各 **20 通过、14 项 Windows 专用跳过**，Windows/Linux 独立 Raster 各 **10 通过**，四份构建各通过 3 项 CTest。
+- Claude 在独立构建中定位到 `entry_spin_flip` 301ms 的差异来自低透明度描边覆盖量的取整。D2D 与 Vulkan 总 alpha 均为 221，Raster 为 228，峰值 2/255。独立纹理 alpha 阶梯探针在 1/255 画笔透明度下测得 Vulkan/Raster 首个输出为 1 的 texel alpha 分别为 143/128。同一阈值在其他 Vulkan 设备或 Metal 上尚待验证。探针为 `build/p07-entry-spin-claude-repro.patch`，产品门禁保持。
 
 ## 15. 前期探针清理范围
 

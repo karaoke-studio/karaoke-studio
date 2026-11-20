@@ -167,9 +167,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
             && line.bursts.empty() && line.exitAnimation == "none" && line.entryDurationMs > 0;
-        const bool affineComposition = transformedRuby && features.contains("p07_ruby_character_affine_exit")
-            && line.bursts.empty() && line.entryAnimation == "none" && line.exitDurationMs > 0
-            && (line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out");
+        const bool affineComposition = transformedRuby && line.bursts.empty()
+            && line.entryAnimation == "none" && line.exitDurationMs > 0
+            && ((features.contains("p07_ruby_character_affine_exit")
+                    && (line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"))
+                || (features.contains("p07_ruby_character_stretch_exit") && line.exitAnimation == "stretch_out"));
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none"))
