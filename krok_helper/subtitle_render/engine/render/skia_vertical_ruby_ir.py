@@ -2,14 +2,15 @@
 import hashlib
 import math
 
-from ..layout.line.skia_vertical import upright_vertical_text, vertical_cells, vertical_line_box
+from ..layout.line.skia_vertical import upright_vertical_text, vertical_cells, vertical_glyph_shift, vertical_line_box
 from ..ruby.skia_geometry import upper_ruby_targets
 from ..ruby.skia_metrics import measure_timed_readings
 from ..ruby.skia_timing import prepare_ruby_target_timing, wipe_points_to_ir
 
 
-def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_offset):
+def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_offset, font_size):
     ascent = float(reading.baseline_metrics['ascent'])
+    font_height = ascent + float(reading.baseline_metrics['descent'])
     units = []
     for index, (layout, metrics, run, interval) in enumerate(zip(
             reading.unit_layouts, reading.cells, reading.run_indices, clock.intervals, strict=True)):
@@ -17,8 +18,9 @@ def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_of
         left, ink_top, right, ink_bottom = metrics['ink']
         if right <= left or ink_bottom <= ink_top:
             raise ValueError('Skia 竖排注音需要有墨迹的矢量字形')
-        x = ruby_column + glyph_offset - cell_width / 2
-        baseline = reading_top + index * span_height / len(reading.cells) + ascent
+        shift = vertical_glyph_shift(name)
+        x = ruby_column + glyph_offset - cell_width / 2 + font_size * shift
+        baseline = reading_top + index * span_height / len(reading.cells) + ascent - font_height * shift
         units.append({'text': name, 'metrics': metrics, 'run_index': run_offset + run,
                       'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left, 'wipe_right': x + right,
                       'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
@@ -32,6 +34,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
     annotation_indices = {id(ruby): i for i, ruby in enumerate(track.rubies)}
     entries, readings = [], []
     version = 1
+    shifted = False
     for index, (line, style) in enumerate(zip(track.lines, geometry.styles, strict=True)):
         intervals = measured.snapshot.resolve_intervals(line, geometry.style)
         targets = sorted(upper_ruby_targets(track, index, line, style, intervals, annotation_indices),
@@ -43,8 +46,9 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
                 raise ValueError('Skia 竖排同列注音的正文范围不能重叠')
             previous_end = max(target.indices) + 1
             if (not clock.units or clock.units != clock.glyph_units
-                    or any(not upright_vertical_text(unit) for unit in clock.units)):
-                raise ValueError('Skia 竖排注音单元必须是单个直立字符')
+                    or any(not (upright_vertical_text(unit) or vertical_glyph_shift(unit)) for unit in clock.units)):
+                raise ValueError('Skia 竖排注音包含未验证的读音字符')
+            shifted = shifted or any(vertical_glyph_shift(unit) for unit in clock.units)
             if len(clock.units) > 1:
                 version = 2
             groups.append((target, clock, len(readings)))
@@ -78,7 +82,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
             units = _reading_units(ruby.readings[reading_index], clock, ruby_column, top + first * height_per_cell,
-                                   (end - first) * height_per_cell, len(measured.runs))
+                                   (end - first) * height_per_cell, len(measured.runs), target.style.ruby_font_size_px)
             if min(unit['wipe_top'] for unit in units) < previous_bottom:
                 raise ValueError('Skia 竖排同列注音的墨迹范围不能重叠')
             previous_bottom = max(unit['wipe_bottom'] for unit in units)
@@ -88,6 +92,9 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
             ruby_groups.append(group)
         lines.append({'cells': cells, 'text_flow': 'vertical', 'ruby_groups': ruby_groups})
 
-    return {'lines': lines, 'fonts': fonts, 'runs': [*measured.runs, *ruby.runs],
-            'metrics_identity': hashlib.sha256(f'{measured.identity}:{ruby.identity}'.encode()).hexdigest(),
-            'ruby_schema': 1, 'vertical_ruby_schema': version}
+    result = {'lines': lines, 'fonts': fonts, 'runs': [*measured.runs, *ruby.runs],
+              'metrics_identity': hashlib.sha256(f'{measured.identity}:{ruby.identity}'.encode()).hexdigest(),
+              'ruby_schema': 1, 'vertical_ruby_schema': version}
+    if shifted:
+        result['vertical_ruby_shift_schema'] = 1
+    return result

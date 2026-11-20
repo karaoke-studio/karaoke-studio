@@ -73,10 +73,10 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
 }
 }
 // The vertical profile accepts only upright CJK/Hangul/full-size kana units.
-static bool verticalRubyScalar(const QString& text) {
+static bool verticalRubyScalar(const QString& text, bool allowShift) {
     const auto scalars = text.toUcs4();
     if (scalars.size() != 1) return false;
-    return verticalUprightScalar(scalars.front());
+    return verticalUprightScalar(scalars.front()) || (allowShift && verticalShiftedScalar(scalars.front()));
 }
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
@@ -108,6 +108,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (lineGlow || transition != RubyTransition::None || noiseGlow || (line.entryAnimation == "none" && line.exitAnimation == "none"))
         && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
+    const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const auto rubyGroups = source.value("ruby_groups").toArray();
     const bool multipleVertical = vertical && rubyGroups.size() > 1;
     int previousSpanEnd = 0;
@@ -274,7 +275,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 if (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
                     || (verticalSchema != 1 && verticalSchema != 2)
                     || (verticalSchema == 1 && units.toArray().size() != 1)
-                    || lower || !verticalRubyScalar(drawingText)
+                    || lower || !verticalRubyScalar(drawingText, allowVerticalShift)
                     || cell.contains("rotation_pivot_x")
                     || !top.isDouble() || !bottom.isDouble() || !std::isfinite(top.toDouble())
                     || !std::isfinite(bottom.toDouble()) || bottom.toDouble() <= top.toDouble()

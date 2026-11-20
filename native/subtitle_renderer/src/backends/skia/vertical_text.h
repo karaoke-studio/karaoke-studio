@@ -12,4 +12,9 @@ inline bool verticalUprightScalar(char32_t code) {
         || (((code >= 0x3041 && code <= 0x3094) || (code >= 0x30a1 && code <= 0x30fa))
             && verticalSmallKana.find(code) == std::u32string_view::npos);
 }
+
+inline bool verticalShiftedScalar(char32_t code) {
+    return code == 0x3001 || code == 0x3002
+        || verticalSmallKana.find(code) != std::u32string_view::npos;
+}
 }

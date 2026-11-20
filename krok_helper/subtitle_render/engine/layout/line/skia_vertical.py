@@ -38,6 +38,12 @@ def vertical_japanese_glyphs(track):
     return any(char.text in _TRANSFORMED_GLYPHS for line in track.lines for char in line.chars)
 
 
+def vertical_glyph_shift(text):
+    if text in _CORNER_PUNCTUATION:
+        return 0.28
+    return 0.10 if text in _SMALL_KANA else 0.0
+
+
 def vertical_solid_schema(track):
     return 2 if any(_extended_text(char.text) for line in track.lines for char in line.chars) else 1
 
@@ -82,7 +88,7 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0):
     for index, cell in enumerate(local.cells):
         # The glyph keeps its offset from its own horizontal cell-box centre.
         text = item.line.chars[index].text
-        offset = 0.28 if text in _CORNER_PUNCTUATION else 0.10 if text in _SMALL_KANA else 0.0
+        offset = vertical_glyph_shift(text)
         x = column + measured.offsets[index] - measured.widths[index] / 2 + size * offset
         ink = cell['metrics']['ink']
         cell_top = top + index * cell_height

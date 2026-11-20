@@ -361,6 +361,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_ruby']
         if any(len(line['ruby_groups']) > 1 for line in lines):
             ir['required_features'].append('p05_vertical_ruby_groups')
+        if vertical_ruby.get('vertical_ruby_shift_schema'):
+            ir['required_features'].append('p05_vertical_shifted_ruby')
     secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
                             for item in plan.lines)
     if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):

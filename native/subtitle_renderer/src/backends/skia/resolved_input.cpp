@@ -32,7 +32,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     // fixed cell's clock and bounds are independent of the glyph transform.
     constexpr std::wstring_view rotate = L"\u300c\u300d\u300e\u300f\u30fc\u301c";
     const bool rotated = rotate.find(code) != rotate.npos;
-    const bool shifted = code == 0x3001 || code == 0x3002 || verticalSmallKana.find(code) != verticalSmallKana.npos;
+    const bool shifted = verticalShiftedScalar(code);
     const bool upright = verticalUprightScalar(code);
     const bool extended = text.empty() || code == L' ' || code == 0x3000
         || (code >= L'0' && code <= L'9') || (code >= L'A' && code <= L'Z') || (code >= L'a' && code <= L'z')

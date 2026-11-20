@@ -8,7 +8,7 @@ import pytest
 from PyQt6.QtGui import QFontDatabase
 
 from test_subtitle_skia_vertical import GPU, application, binary, project, vertical_ruby_source
-from test_subtitle_skia_rtl_flow import collect, configure, ir_for, selection
+from test_subtitle_skia_rtl_flow import collect, configure, ir_for, selection, kana
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -51,6 +51,62 @@ def test_previous_vertical_ruby_schema_rejects_multi_unit_groups(binary, project
             configure(process, bad)
         after, _ = collect(process, [399], generation=2)
     assert np.array_equal(before[0], after[0])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('text, factor', [('ゃ', .10), ('、', .28), ('。', .28)])
+def test_vertical_ruby_shifted_japanese_glyphs_keep_their_clock(binary, project, kana, target, text, factor):
+    from krok_helper.subtitle_render.engine.ruby.style_semantics import font_style_for_ruby_cell
+    from krok_helper.subtitle_render.engine.text.skia_width import cell_geometry
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, style = vertical_ruby_source(project, reading=text, family=kana)
+    plain_track = replace(track, rubies=[replace(track.rubies[0], reading='や')])
+    plain = ir_for(binary, (plain_track, style))
+    ir = ir_for(binary, (track, style))
+    feature = 'p05_vertical_shifted_ruby'
+    assert feature in ir['required_features'] and feature not in plain['required_features']
+    assert ir['skia_layout']['vertical_ruby_shift_schema'] == 1
+    line, = ir['skia_layout']['lines']
+    old_line, = plain['skia_layout']['lines']
+    unit, = line['ruby_groups'][0]['units']
+    normal, = old_line['ruby_groups'][0]['units']
+    assert line['cells'] == old_line['cells'] and unit['interval_ms'] == normal['interval_ms']
+    assert unit['text'] == text
+
+    def column_cell_center(unit):
+        slot, _ = font_style_for_ruby_cell(style, unit['text'])
+        width, offset = cell_geometry(unit['text'], unit['metrics'], slot, edge_size=0)
+        return unit['origin_x'] - offset + width / 2
+
+    font_height = normal['metrics']['ascent'] + normal['metrics']['descent']
+    assert column_cell_center(unit) - column_cell_center(normal) == pytest.approx(factor * style.ruby_font_size_px)
+    assert normal['baseline_y'] - unit['baseline_y'] == pytest.approx(factor * font_height)
+    assert unit['wipe_top'] == pytest.approx(unit['baseline_y'] + unit['metrics']['ink'][1])
+    assert unit['wipe_bottom'] == pytest.approx(unit['baseline_y'] + unit['metrics']['ink'][3])
+    start, end = unit['interval_ms']
+    times = [start - 1, (start + end) // 2, end + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove(feature)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+    assert replay[0].any() and np.array_equal(frames[1], replay[0])
+    x0, x1 = int(unit['wipe_left']), int(unit['wipe_right']) + 1
+    y0, y1 = int(unit['wipe_top']), int(unit['wipe_bottom']) + 1
+    before, _, after = (frame[y0:y1, x0:x1] for frame in frames)
+    assert np.any((before[..., 2] > 200) & (before[..., 0] < 50) & (before[..., 3] > 16))
+    assert np.any((after[..., 2] > 200) & (after[..., 0] > 200) & (after[..., 3] > 16))
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        for gpu, cpu in zip(frames, raster, strict=True):
+            difference = abs(premultiplied(gpu) - premultiplied(cpu))
+            assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
 def ink_bounds(mask):
