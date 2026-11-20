@@ -28,7 +28,7 @@ struct ScanlineBand {
     float restingPad = .5f;         // secondary outline width / 2 + 0.5
     float softness = 0;            // Physical pixels, limited to the band half-width.
     bool rightToLeft = false;
-    bool upperRuby = false;
+    bool rubyHighlight = false;
     ScanlineShape shape;
     std::shared_ptr<const ScanlineImage> image;
 

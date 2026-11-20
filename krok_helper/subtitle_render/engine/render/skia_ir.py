@@ -150,7 +150,7 @@ def _validate_scanline_band(track, style, lines):
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     shapes = set()
-    moving_shapes = shaped_singing = False
+    moving_shapes = shaped_singing = lower_readings = False
     for source, line in zip(track.lines, lines, strict=True):
         if not line.get('scanline'):
             continue
@@ -170,11 +170,13 @@ def _validate_scanline_band(track, style, lines):
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
                   and (ordinary or motion))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
+        lower_band = (look.lower_ruby_enabled and ordinary and look.scanline_shape == 'band'
+                      and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash or bursts))
         role_composition = look.scanline_mode == 'role' and (bool(track.rubies) or _uses_decoration(look, 'glow'))
         if ((look.scanline_shape != 'band' and not shape) or look.vertical or look.right_to_left
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
-                or look.lower_ruby_enabled
+                or (look.lower_ruby_enabled and not lower_band)
                 or _uses_decoration(look, 'shadow')
                 or (role_composition and (not ordinary or utopia or source.wipe_reverse or line.get('fx_bursts')))
                 or (track.rubies and not (ordinary or motion))
@@ -184,6 +186,7 @@ def _validate_scanline_band(track, style, lines):
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
         line_motion = line_motion or motion
+        lower_readings = lower_readings or lower_band
         if shape:
             shapes.add(look.scanline_shape)
             moving_shapes = moving_shapes or motion
@@ -201,6 +204,8 @@ def _validate_scanline_band(track, style, lines):
         features.append('p07_scanline_shape_line_animation')
     if shaped_singing:
         features.append('p07_shaped_scanline_singing_particles')
+    if lower_readings:
+        features.append('p07_lower_ruby_scanline')
     if role_layers:
         features.append('p07_role_scanline_layers')
     features.append('p07_scanline_band')

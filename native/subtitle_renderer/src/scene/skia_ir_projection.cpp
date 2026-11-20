@@ -204,6 +204,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
             && !source.wipeReverse && (staticScanline || movingScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = solidShape && (staticScanline || movingScanline);
+        const bool lowerScanline = features.contains("p07_lower_ruby_scanline") && staticScanline
+            && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
+            && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         // Horizontal band with a separately negotiated upper-annotation pass.
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
@@ -214,6 +217,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
                 || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
                     && (!composedScanline || source.wipeReverse || resolved.scanlineMode == "role"))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
+                || (features.contains("p05_lower_ruby") && !lowerScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
                 || (rubyScanline && (source.wipeReverse || (resolved.scanlineMode == "role" && !roleLayers)
                     || !(staticScanline || movingScanline)

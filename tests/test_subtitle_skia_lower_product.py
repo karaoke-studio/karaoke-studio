@@ -268,6 +268,51 @@ def test_lower_decoration_no_wipe_matches_actual_gpu(binary, application, tmp_pa
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_lower_scanline_follows_the_romanized_reading_clock(binary, glowing_lower, target, karaoke):
+    track, style, resolve = glowing_lower
+    style = replace(style, karaoke_anim=karaoke)
+    base = ir_for(binary, (track, style, resolve))
+    started = replace(style, scanline_enabled=True, scanline_forward_enabled=True,
+                      scanline_mode='color', scanline_color='#FFFFFF', scanline_width_px=18, scanline_glow_px=6)
+    ir = ir_for(binary, (track, started, resolve))
+    feature = 'p07_lower_ruby_scanline'
+    assert feature in ir['required_features'] and feature not in base['required_features']
+    assert ir['skia_layout']['lines'] == base['skia_layout']['lines']
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    units = [unit for group in groups if group.get('lower') for unit in group['units']]
+    top = int(min(unit['baseline_y'] + unit['metrics']['ink'][1] for unit in units))
+    samples = {t for unit in units for t in [sum(unit['interval_ms']) // 2]}
+    times = sorted({199, 2200, *samples})
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, list(reversed(times)), generation=2)
+        configure(process, base)
+        plain, _ = collect(process, times, generation=3)
+    assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+    assert np.array_equal(frames[0], plain[0]) and np.array_equal(frames[-1], plain[-1])
+    assert sum(not np.array_equal(a[top:], b[top:]) for a, b in zip(frames, plain, strict=True)) >= 2
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_lower_scanline_matches_actual_gpu(binary, application, tmp_path, karaoke):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    style = replace(base.style, karaoke_anim=karaoke, scanline_enabled=True, scanline_forward_enabled=True,
+                    scanline_mode='color', scanline_color='#FFFFAA', scanline_width_px=22, scanline_glow_px=6)
+    case = replace(base, case_id=f'lower_scanline_{karaoke}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (600, 1450, 1750, 2050, 2600, 3175, 3575, 4125, 4400, 4550))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_product_lower_preserves_source_and_uses_independent_alpha_paints(binary, independent, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.ruby import lower, style as qt_ruby
     from krok_helper.subtitle_render.engine.render.elements.horizontal import layout

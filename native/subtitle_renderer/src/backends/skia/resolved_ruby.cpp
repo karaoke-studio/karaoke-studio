@@ -139,9 +139,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
         && (line.exitAnimation == "none" || line.exitAnimation == "fade"
             || line.exitAnimation == "slide_out" || line.exitAnimation == "rise");
+    const bool lowerScanline = line.scanlineEnabled && staticLine && line.karaokeAnimation != "no_wipe"
+        && features.contains("p07_lower_ruby_scanline");
     const bool allowLowerDecoration = !vertical && (staticLine || lowerLineAnimation)
         && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
-        && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
+        && (!line.scanlineEnabled || lowerScanline) && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const bool allowVerticalRotation = features.contains("p05_vertical_rotated_ruby");
