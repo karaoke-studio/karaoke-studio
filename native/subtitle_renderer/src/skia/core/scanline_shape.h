@@ -13,7 +13,7 @@ namespace subtitle::skia {
 // The flame raster comes from the shared effects math; geometry, colours and
 // the display-window fade mirror the GPU exactly. Drawn after text and ruby.
 struct ScanlineShape {
-    enum class Kind : std::uint8_t { None, Flame, Bubble };
+    enum class Kind : std::uint8_t { None, Flame, Bubble, Image };
     Kind kind = Kind::None;
     float bandWidth = 1;   // Physical scanline width.
     float fontPx = 1;      // Physical font size of the line style.

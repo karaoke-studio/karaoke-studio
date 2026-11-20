@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scanline_feather.h"
+#include "scanline_image.h"
 #include "scanline_paint.h"
 #include "scanline_shape.h"
 #include "wipe_front.h"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -27,7 +29,10 @@ struct ScanlineBand {
     float softness = 0;            // Physical pixels, limited to the band half-width.
     bool rightToLeft = false;
     bool upperRuby = false;
-    ScanlineShape shape;            // Procedural flame/bubble drawn at the same front.
+    ScanlineShape shape;
+    std::shared_ptr<const ScanlineImage> image;
+
+    bool repaintsGlyphs() const { return !image || image->showBand; }
 
     // A procedural shape fades the ordinary band with its display-window fade.
     float alphaAt(int t) const { return shape ? shape.fadeAt(t) : 1.f; }
@@ -73,7 +78,7 @@ struct ScanlineBand {
     template <class Cell, class EdgeOf, class PaintLayer>
     void drawPosed(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkStart,
                    EdgeOf&& edgeOf, PaintLayer&& paintLayer) const {
-        if (!frontAt(cells, t, inkStart)) return;
+        if (!repaintsGlyphs() || !frontAt(cells, t, inkStart)) return;
         for (std::size_t i = 0; i < cells.size(); ++i) {
             const auto& c = cells[i];
             if (!sweeping(c, t)) continue;
@@ -86,7 +91,7 @@ struct ScanlineBand {
     template <class Cell, class PaintCell>
     void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkStart, float inkTop, PaintCell&& paintCell) const {
         const auto front = frontAt(cells, t, inkStart);
-        if (!front) return;
+        if (!front || !repaintsGlyphs()) return;
         const SkRect band = SkRect::MakeLTRB(*front - halfWidth, -1e6f, *front + halfWidth, 1e6f);
         SkAutoCanvasRestore restore(&canvas, false);
         SkRect layer = band.makeOutset(1.f, 0.f);

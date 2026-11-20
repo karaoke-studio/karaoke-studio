@@ -137,7 +137,8 @@ void drawBubbles(SkCanvas& canvas, const ScanlineShape& shape, int timeMs, float
 ScanlineShape ScanlineShape::make(const std::string& name, RgbaColor base, float bandWidth, float fontPx,
                                   int displayStart, int displayEnd, int lastCharEnd) {
     ScanlineShape shape;
-    shape.kind = name == "flame" ? Kind::Flame : name == "bubble" ? Kind::Bubble : Kind::None;
+    shape.kind = name == "flame" ? Kind::Flame : name == "bubble" ? Kind::Bubble
+        : name == "image" ? Kind::Image : Kind::None;
     if (!shape) return shape;
     const bool flame = shape.kind == Kind::Flame;
     // The `color` mode palette: base, then a lighter inner and core.
@@ -164,7 +165,7 @@ float ScanlineShape::fadeAt(int timeMs) const {
 
 void ScanlineShape::draw(SkCanvas& canvas, int timeMs, float front, const SkRect& bodyInk,
                          std::optional<float> rubyTop) const {
-    if (!*this || bodyInk.isEmpty()) return;
+    if (!*this || bodyInk.isEmpty() || kind == Kind::Image) return;
     const float opacity = std::clamp(fadeAt(timeMs), 0.f, 1.f);
     const float lineHeight = std::max(bodyInk.height(), 1.f);
     // Without readings the GPU's line-local target is the baseline, which never rises above the shape.

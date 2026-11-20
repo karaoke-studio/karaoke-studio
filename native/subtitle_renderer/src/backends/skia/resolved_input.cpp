@@ -220,6 +220,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 prepared.scanline.shape = ::subtitle::skia::ScanlineShape::make(
                     style.scanlineShape, style.scanlineColor, style.scanlineWidth, style.fontSize,
                     line.displayWindows[0].startMs, line.displayWindows[0].endMs, lastCharEnd);
+                if (style.scanlineShape == "image")
+                    prepared.scanline.image = imageCache.scanline(style, projected.height);
             }
         }
         // vertical_solid_schema=1: the reverse flag means bottom-to-top on a column.

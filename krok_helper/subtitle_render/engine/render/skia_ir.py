@@ -140,13 +140,14 @@ def _write_utopia_pivots(ir, plan, measured, fade_lines):
 def _validate_scanline_band(track, style, lines):
     """Validate the horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
-    composed = role_layers = shaped = False
+    composed = role_layers = False
+    shapes = set()
     for source, line in zip(track.lines, lines, strict=True):
         if not line.get('scanline'):
             continue
         look = style_for_line(style, source)
         ordinary = {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
-        shape = (look.scanline_shape in {'flame', 'bubble'}
+        shape = (look.scanline_shape in {'flame', 'bubble', 'image'}
                  and look.scanline_mode == 'color' and ordinary
                  and not (source.wipe_reverse or line.get('zoom_pulse')
                           or line.get('stroke_flash') or line.get('fx_bursts')))
@@ -166,8 +167,9 @@ def _validate_scanline_band(track, style, lines):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
-        shaped = shaped or shape
-    return composed, role_layers, shaped
+        if shape:
+            shapes.add(look.scanline_shape)
+    return composed, role_layers, shapes
 
 
 def _validate_stroke_flash(track, style, lines):
@@ -330,9 +332,11 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, **kwargs):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(track, ir, plan, measured)
         ir['required_features'].append('p07_character_transform')
     if any(line.get('scanline') for line in ir['track']['lines']):
-        composed, role_layers, shaped = _validate_scanline_band(track, style, ir['track']['lines'])
-        if shaped:
+        composed, role_layers, shapes = _validate_scanline_band(track, style, ir['track']['lines'])
+        if shapes:
             ir['required_features'].append('p07_scanline_shape')
+        if 'image' in shapes:
+            ir['required_features'].append('p07_scanline_image')
         if composed:
             ir['required_features'].append('p07_composed_scanline')
         if role_layers:

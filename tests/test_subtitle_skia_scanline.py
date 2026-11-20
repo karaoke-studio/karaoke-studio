@@ -2,6 +2,7 @@
 from dataclasses import replace
 import copy
 import json
+from pathlib import Path
 import sys
 
 import numpy as np
@@ -131,7 +132,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'flame': style = replace(style, scanline_shape='flame', scanline_mode='brighten')
-    elif case == 'image': style = replace(style, scanline_shape='image')
+    elif case == 'image': style = replace(style, scanline_shape='image', scanline_mode='follow_after')
     elif case == 'combined_particles':
         track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
     elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
@@ -813,6 +814,7 @@ def test_combined_particle_layers_match_actual_d2d_and_gpu_raster(binary, projec
 P00_SCANLINE_CASES = ['scanline_band', 'scanline_mode_color', 'scanline_mode_brighten', 'scanline_mode_role',
                       'scanline_mode_follow_before', 'scanline_mode_follow_after', 'scanline_particles_none',
                       'karaoke_scanline', 'karaoke_utopia_scanline', 'karaoke_zoom_pulse_scanline']
+P00_SCANLINE_CASES += ['scanline_image', 'scanline_animated']
 P00_SCANLINE_CASES += [f'scanline_particles_{kind}' for kind, _ in SCANLINE_PARTICLE_SPRITES]
 P00_SCANLINE_CASES += ['scanline_flame', 'scanline_bubble']
 
@@ -1012,4 +1014,36 @@ def test_scanline_shapes_negotiate_draw_and_seek(binary, project, shape, target,
         (tmp_path / f'scanline-{shape}-layout.json').write_text(json.dumps({
             'shape': ir['style']['scanline_shape'], 'schema': ir['skia_layout']['scanline_shape_schema'],
             'line': ir['skia_layout']['lines'][0],
+        }, sort_keys=True), encoding='utf-8')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_scanline_image_replays_and_missing_asset_restores_band(binary, project, target, tmp_path):
+    track, style = scanline_source(project)
+    source = Path(__file__).with_name('data') / 'guide_anim_3frames.gif'
+    look = replace(style, scanline_shape='image', scanline_image_path=str(source),
+                   scanline_image_band_enabled=False, scanline_image_scale_pct=250, scanline_image_offset_y_px=-70)
+    valid = ir_for(binary, (track, look), dpr=1.5)
+    missing = ir_for(binary, (track, replace(look, scanline_image_path=str(tmp_path/'missing.gif'))), dpr=1.5)
+    band_ir = ir_for(binary, (track, style), dpr=1.5)
+    assert 'p07_scanline_image' in valid['required_features']
+    assert valid['skia_layout']['lines'] == missing['skia_layout']['lines'] == band_ir['skia_layout']['lines']
+    times = [199, 550, 650, 750, 2200]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, valid)
+        frames, _ = collect(process, [*times, 750])
+        configure(process, missing)
+        fallback, _ = collect(process, times, generation=2)
+        configure(process, band_ir)
+        baseline, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames[3], frames[-1])
+    assert all(np.array_equal(a, b) for a, b in zip(fallback, baseline, strict=True))
+    assert np.array_equal(frames[0], fallback[0]) and np.array_equal(frames[4], fallback[4])
+    # The fixture has 100ms red, green, then blue frames on the project clock.
+    for index, channel in [(1, 2), (2, 0), (3, 1)]:
+        sprite = frames[index][(frames[index][..., 3] > 200) & (fallback[index][..., 3] == 0), :3]
+        assert len(sprite) and np.argmax(sprite.mean(axis=0)) == channel
+    if target == 'gpu':
+        (tmp_path / 'scanline-image-layout.json').write_text(json.dumps({
+            'features': valid['required_features'], 'line': valid['skia_layout']['lines'][0],
         }, sort_keys=True), encoding='utf-8')

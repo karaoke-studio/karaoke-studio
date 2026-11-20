@@ -159,10 +159,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir) {
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
             && !source.wipeReverse && source.entryAnimation == "none" && source.exitAnimation == "none";
-        // scanline_shape_schema=1: procedural flame/bubble in the solid color mode
-        // on an ordinary forward line (plain or Utopia singing).
+        // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = features.contains("p07_scanline_shape")
-            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble")
+            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
+                || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
             && resolved.scanlineMode == "color" && !source.wipeReverse
             && source.entryAnimation == "none" && source.exitAnimation == "none"
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();

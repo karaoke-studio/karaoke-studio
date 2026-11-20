@@ -1,12 +1,16 @@
 #pragma once
 #include "core/image_fill.h"
+#include "core/scanline_image.h"
 #include "../../model/paint_types.h"
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <tuple>
 
 namespace krok::subtitle::native {
+struct TextStyle;
+
 // Platform boundary for static image paints. Decodes each file once per
 // configure, keyed like the existing GPU image cache (path, mtime, size), into
 // premultiplied pixels for the Qt-free drawing core. A missing, undecodable or
@@ -14,10 +18,21 @@ namespace krok::subtitle::native {
 class SkiaImageFillCache {
 public:
     ::subtitle::skia::ImageFill fill(const PaintStyle& paint, float layoutScale);
+    std::shared_ptr<const ::subtitle::skia::ScanlineImage> scanline(const TextStyle&, int canvasHeight);
 
 private:
     using Key = std::tuple<std::wstring, std::uint64_t, std::uint64_t>;
+    struct ScanlineKey {
+        Key file;
+        int height;
+        float scale, offsetX, offsetY, stroke, stroke2, glow;
+        RgbaColor color;
+        int tintStrength;
+        bool tint, showBand;
+        bool operator==(const ScanlineKey&) const = default;
+    };
     std::map<Key, sk_sp<SkImage>> images_;
+    std::vector<std::pair<ScanlineKey, std::shared_ptr<const ::subtitle::skia::ScanlineImage>>> scanlineImages_;
     std::size_t bytes_ = 0;
 };
 }

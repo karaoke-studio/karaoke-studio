@@ -356,12 +356,17 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group));
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
-    if (line.scanline.upperRuby && line.scanline.frontAt(line.cells, tMs, line.inkStart))
+    if (line.scanline.upperRuby && line.scanline.repaintsGlyphs()
+        && line.scanline.frontAt(line.cells, tMs, line.inkStart))
         for (const auto& group : line.rubyGroups)
             group.drawScanline(canvas, line.scanline, tMs, line.singingScale, line.rubySingingOrigin);
-    // The GPU draws flame and bubble shapes after the text and readings.
-    if (line.scanline.shape)
-        if (const auto front = line.scanline.frontAt(line.cells, tMs, line.inkStart))
-            line.scanline.shape.draw(canvas, tMs, *front, line.bodyInk, line.rubyInkTop);
+    if (line.scanline.shape && !line.bodyInk.isEmpty()) {
+        if (const auto front = line.scanline.frontAt(line.cells, tMs, line.inkStart)) {
+            if (line.scanline.image)
+                line.scanline.image->draw(canvas, tMs, *front, line.bodyInk.centerY(), scanlineAlpha);
+            else
+                line.scanline.shape.draw(canvas, tMs, *front, line.bodyInk, line.rubyInkTop);
+        }
+    }
 }
 }
