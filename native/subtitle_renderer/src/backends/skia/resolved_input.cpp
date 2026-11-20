@@ -30,8 +30,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const auto code = text.empty() ? L'\0' : text.front();
     // Mirror the host's supported Japanese punctuation and small kana. The
     // fixed cell's clock and bounds are independent of the glyph transform.
-    constexpr std::wstring_view rotate = L"\u300c\u300d\u300e\u300f\u30fc\u301c";
-    const bool rotated = rotate.find(code) != rotate.npos;
+    const bool rotated = verticalRotatedScalar(code);
     const bool shifted = verticalShiftedScalar(code);
     const bool upright = verticalUprightScalar(code);
     const bool extended = text.empty() || code == L' ' || code == 0x3000

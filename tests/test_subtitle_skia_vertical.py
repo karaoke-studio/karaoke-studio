@@ -323,9 +323,9 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['combined_unit', 'rotation', 'latin', 'overlap_groups', 'reverse', 'lower', 'role'])
+@pytest.mark.parametrize('change', ['combined_unit', 'middle_dot', 'latin', 'overlap_groups', 'reverse', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
-    reading = {'combined_unit': 'か\u309a', 'rotation': '「', 'latin': 'A'}.get(change, '字')
+    reading = {'combined_unit': 'か\u309a', 'middle_dot': '・', 'latin': 'A'}.get(change, '字')
     extra = None
     span = (0, 1)
     if change == 'overlap_groups':

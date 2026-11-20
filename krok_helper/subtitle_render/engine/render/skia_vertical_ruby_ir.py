@@ -2,7 +2,9 @@
 import hashlib
 import math
 
-from ..layout.line.skia_vertical import upright_vertical_text, vertical_cells, vertical_glyph_shift, vertical_line_box
+from ..layout.line.skia_vertical import (
+    upright_vertical_text, vertical_cells, vertical_glyph_rotates, vertical_glyph_shift, vertical_line_box,
+)
 from ..ruby.skia_geometry import upper_ruby_targets
 from ..ruby.skia_metrics import measure_timed_readings
 from ..ruby.skia_timing import prepare_ruby_target_timing, wipe_points_to_ir
@@ -21,10 +23,16 @@ def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_of
         shift = vertical_glyph_shift(name)
         x = ruby_column + glyph_offset - cell_width / 2 + font_size * shift
         baseline = reading_top + index * span_height / len(reading.cells) + ascent - font_height * shift
-        units.append({'text': name, 'metrics': metrics, 'run_index': run_offset + run,
-                      'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left, 'wipe_right': x + right,
-                      'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
-                      'wipe_end_position': 1.0, 'interval_ms': list(interval)})
+        unit = {'text': name, 'metrics': metrics, 'run_index': run_offset + run,
+                'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left, 'wipe_right': x + right,
+                'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
+                'wipe_end_position': 1.0, 'interval_ms': list(interval)}
+        if vertical_glyph_rotates(name):
+            pivot_y = baseline - ascent + font_height / 2
+            unit['vertical_rotation_pivot'] = [ruby_column, pivot_y]
+            unit['wipe_top'] = pivot_y + unit['wipe_left'] - ruby_column
+            unit['wipe_bottom'] = pivot_y + unit['wipe_right'] - ruby_column
+        units.append(unit)
     return units
 
 
@@ -34,7 +42,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
     annotation_indices = {id(ruby): i for i, ruby in enumerate(track.rubies)}
     entries, readings = [], []
     version = 1
-    shifted = False
+    shifted = rotated = False
     for index, (line, style) in enumerate(zip(track.lines, geometry.styles, strict=True)):
         intervals = measured.snapshot.resolve_intervals(line, geometry.style)
         targets = sorted(upper_ruby_targets(track, index, line, style, intervals, annotation_indices),
@@ -46,9 +54,11 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
                 raise ValueError('Skia 竖排同列注音的正文范围不能重叠')
             previous_end = max(target.indices) + 1
             if (not clock.units or clock.units != clock.glyph_units
-                    or any(not (upright_vertical_text(unit) or vertical_glyph_shift(unit)) for unit in clock.units)):
+                    or any(not (upright_vertical_text(unit) or vertical_glyph_shift(unit) or vertical_glyph_rotates(unit))
+                           for unit in clock.units)):
                 raise ValueError('Skia 竖排注音包含未验证的读音字符')
             shifted = shifted or any(vertical_glyph_shift(unit) for unit in clock.units)
+            rotated = rotated or any(vertical_glyph_rotates(unit) for unit in clock.units)
             if len(clock.units) > 1:
                 version = 2
             groups.append((target, clock, len(readings)))
@@ -97,4 +107,6 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure)
               'ruby_schema': 1, 'vertical_ruby_schema': version}
     if shifted:
         result['vertical_ruby_shift_schema'] = 1
+    if rotated:
+        result['vertical_ruby_rotation_schema'] = 1
     return result

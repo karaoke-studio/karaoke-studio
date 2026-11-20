@@ -17,4 +17,9 @@ inline bool verticalShiftedScalar(char32_t code) {
     return code == 0x3001 || code == 0x3002
         || verticalSmallKana.find(code) != std::u32string_view::npos;
 }
+
+inline bool verticalRotatedScalar(char32_t code) {
+    constexpr std::u32string_view rotated = U"\u300c\u300d\u300e\u300f\u30fc\u301c";
+    return rotated.find(code) != std::u32string_view::npos;
+}
 }

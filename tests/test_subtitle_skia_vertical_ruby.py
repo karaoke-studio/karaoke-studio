@@ -109,6 +109,58 @@ def test_vertical_ruby_shifted_japanese_glyphs_keep_their_clock(binary, project,
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('text,dpr', [('「', 1.5), ('」', 1), ('ー', 1.5), ('〜', 1)])
+def test_vertical_ruby_rotated_punctuation_wipes_over_rotated_ink(binary, project, kana, target, text, dpr):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    source = vertical_ruby_source(project, reading=text, family=kana)
+    ir = ir_for(binary, source, dpr=dpr)
+    feature = 'p05_vertical_rotated_ruby'
+    assert feature in ir['required_features']
+    assert ir['skia_layout']['vertical_ruby_rotation_schema'] == 1
+    unit, = ir['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    assert unit['text'] == text
+    px, py = unit['vertical_rotation_pivot']
+    left, top, right, bottom = unit['metrics']['ink']
+    expected = np.array([px + py - unit['baseline_y'] - bottom, py + unit['origin_x'] + left - px,
+                         px + py - unit['baseline_y'] - top, py + unit['origin_x'] + right - px])
+    assert [unit['wipe_top'], unit['wipe_bottom']] == pytest.approx(expected[[1, 3]])
+
+    def mask(frame, sung):
+        red = frame[..., 0] > 200 if sung else frame[..., 0] < 50
+        return red & (frame[..., 1] < 50) & (frame[..., 2] > 200) & (frame[..., 3] > 127)
+
+    start, end = unit['interval_ms']
+    times = [start - 1, (start + end) // 2, end + 1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        for change in ('feature', 'pivot', 'clip'):
+            bad = copy.deepcopy(ir)
+            mutated = bad['skia_layout']['lines'][0]['ruby_groups'][0]['units'][0]
+            if change == 'feature':
+                bad['required_features'].remove(feature)
+            elif change == 'pivot':
+                mutated['vertical_rotation_pivot'][0] = float('nan')
+            else:
+                mutated['wipe_top'] += .25
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+        replay, _ = collect(process, [times[1]], generation=2)
+    assert np.max(abs(ink_bounds(mask(frames[0], False)) - expected * dpr)) <= 1.5
+    sung, unsung = mask(frames[1], True), mask(frames[1], False)
+    assert sung.any() and unsung.any() and np.nonzero(sung)[0].max() <= np.nonzero(unsung)[0].min()
+    assert np.array_equal(replay[0], frames[1]) and mask(frames[2], True).any()
+    if target == 'gpu':
+        with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+            configure(process, ir)
+            raster, _ = collect(process, times)
+        for gpu, cpu in zip(frames, raster, strict=True):
+            difference = abs(premultiplied(gpu) - premultiplied(cpu))
+            assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
+
+
 def ink_bounds(mask):
     y, x = np.nonzero(mask)
     return np.array([x.min(), y.min(), x.max(), y.max()]) if x.size else np.array([])

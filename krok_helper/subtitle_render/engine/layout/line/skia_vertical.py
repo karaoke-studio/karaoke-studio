@@ -44,6 +44,10 @@ def vertical_glyph_shift(text):
     return 0.10 if text in _SMALL_KANA else 0.0
 
 
+def vertical_glyph_rotates(text):
+    return text in _ROTATED_PUNCTUATION
+
+
 def vertical_solid_schema(track):
     return 2 if any(_extended_text(char.text) for line in track.lines for char in line.chars) else 1
 
@@ -96,7 +100,7 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0):
                       'wipe_left': x + ink[0], 'wipe_right': x + ink[2],
                       'wipe_top': cell_top, 'wipe_bottom': cell_top + cell_height,
                       'wipe_end_position': 1.0}
-        if text in _ROTATED_PUNCTUATION:
+        if vertical_glyph_rotates(text):
             positioned['rotation_pivot_x'] = column
         cells.append(positioned)
     return cells
