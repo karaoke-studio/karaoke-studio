@@ -17676,6 +17676,58 @@ def test_title_overlay_space_uses_n3_space_width(qapp):
     )
 
 
+def test_title_overlay_space_width_follows_referenced_layout(qapp):
+    """空格宽度归布局所有（v3）：标题引用的布局显式值优先于全局 Style。
+
+    回归：布局页把「空格宽度」写进布局后，标题只读全局 ``Style``，导致
+    改布局的空格宽度对标题完全无效（CPU 与 GPU 同病）。
+    """
+
+    title = TitleOverlay(
+        enabled=True,
+        text_template="{title} / {artist}",
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        stroke_width_px=0,
+        layout_index=1,
+    )
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="星空", artist="歌手"),
+        lines=[TimingLine(chars=[TimingChar("尾", 0)], end_ms=1_000)],
+    )
+    override = replace(
+        Style(),
+        space_width_percent=20,
+        layouts=[LyricsLayout(
+            name="标题布局", space_width_percent=80, line_alignments=["left"]
+        )],
+        title_overlays=[title],
+    )
+    layout = subtitle_painter._layout_title_overlay(
+        1280, 720, track, title, style=override
+    )
+    assert layout is not None
+    spaces = [glyph for glyph in layout.glyph_rows[0] if glyph.text == " "]
+    assert [space.advance for space in spaces] == [48 * 80 // 100] * 2
+
+    # 布局空槽继承全局：与迁移前「只改全局」的结果逐像素一致。
+    inherited = replace(
+        override,
+        layouts=[LyricsLayout(
+            name="继承空格宽度", space_width_percent=None, line_alignments=["left"]
+        )],
+    )
+    inherited_layout = subtitle_painter._layout_title_overlay(
+        1280, 720, track, title, style=inherited
+    )
+    assert inherited_layout is not None
+    inherited_spaces = [
+        glyph for glyph in inherited_layout.glyph_rows[0] if glyph.text == " "
+    ]
+    assert [space.advance for space in inherited_spaces] == [48 * 20 // 100] * 2
+
+
 # ---------------------------------------------------------------------------
 # 半透明配色的走字互斥回归（2026-10 用户反馈）
 # ---------------------------------------------------------------------------

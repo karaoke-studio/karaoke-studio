@@ -1010,6 +1010,20 @@ ResolvedStyle resolvedStyleFromTitle(
     cfg.letterSpacingPx = intValue(
         title, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx
     );
+    // 空格宽度 / 允许咬合同字间距一样是布局域字段（Python 在标题载荷里按
+    // 标题引用的布局解析好再下发）；旧 IR 缺键时沿用 sourceStyle 的全局值。
+    cfg.spaceWidthPercent = std::clamp(
+        intValue(
+            title, QStringLiteral("space_width_percent"), cfg.spaceWidthPercent
+        ),
+        10,
+        100
+    );
+    if (title.value(QStringLiteral("allow_biting")).isBool()) {
+        cfg.allowBiting = title.value(
+            QStringLiteral("allow_biting")
+        ).toBool(cfg.allowBiting);
+    }
 
     cfg.baseFill = paintFillSpec(
         title.value(QStringLiteral("fill")).toObject(), cfg.baseColor

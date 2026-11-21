@@ -84,6 +84,10 @@ def title_style(title):
     return Style(
         layout_semantics='n3_1074',
         **{key: title[key] for key in font_fields}, letter_spacing_px=title['letter_spacing_px'],
+        # 布局域字符排版：Python 已在标题载荷里按引用布局解析；旧载荷缺键时
+        # 回退 Style 默认值，保持既有渲染结果。
+        space_width_percent=int(title.get('space_width_percent', Style.space_width_percent)),
+        allow_biting=bool(title.get('allow_biting', Style.allow_biting)),
         stroke_width_px=title['stroke_width_px'], stroke2_width_px=title['stroke2_width_px'],
         stroke2_enabled=title['stroke2_width_px'] > 0, decoration_kind=title['decoration_kind'],
         decoration_before_sync=True, glow_radius_px=title['glow_radius_px'],

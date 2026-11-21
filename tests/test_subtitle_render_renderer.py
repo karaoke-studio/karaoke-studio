@@ -3458,3 +3458,53 @@ def test_title_ir_carries_the_before_state_snapshot_as_one_state() -> None:
     assert payload["glow_radius_px"] == 12
     assert payload["shadow_offset_x"] == 7
     assert payload["shadow_offset_y"] == 8
+
+
+def test_title_ir_carries_layout_space_width_and_biting() -> None:
+    """布局域字符排版必须进标题 IR：GPU 侧不能再读全局 Style 的死值。
+
+    回归：布局页把「空格宽度」写入布局后，标题 IR 不带该字段，D2D 以
+    ``sourceStyle`` 的全局值为底 → 标题空格宽度对 GPU 完全不生效（CPU
+    ``_layout_title_overlay`` 同样只读全局）。角色方案载荷也必须带同一组
+    值，否则逐字角色标题会在 D2D 上退回全局。
+    """
+    from krok_helper.subtitle_render.domain.models import (
+        LyricsLayout,
+        Style,
+        SubtitleStyleScheme,
+        TimingTrack,
+        TitleOverlay,
+        TitleTimeWindow,
+    )
+    from krok_helper.subtitle_render.engine.render.render_ir import title_to_ir
+
+    layout = LyricsLayout(
+        name="标题布局",
+        space_width_percent=80,
+        allow_biting=True,
+        line_alignments=["left"],
+    )
+    title = TitleOverlay(
+        enabled=True,
+        text_template="A B",
+        show_mode="custom",
+        custom_windows=[TitleTimeWindow(begin_ms=0, end_ms=5_000)],
+        layout_index=1,
+        char_role_labels=[["角色A", None, "角色A"]],
+    )
+    style = Style(
+        space_width_percent=20,
+        allow_biting=False,
+        layouts=[layout],
+        title_overlays=[title],
+        custom_style_schemes={"角色A": SubtitleStyleScheme(font_size_px=30)},
+    )
+
+    payload = title_to_ir(TimingTrack(), style)
+
+    assert payload is not None
+    assert payload["space_width_percent"] == 80
+    assert payload["allow_biting"] is True
+    for role_payload in payload["role_styles"].values():
+        assert role_payload["space_width_percent"] == 80
+        assert role_payload["allow_biting"] is True

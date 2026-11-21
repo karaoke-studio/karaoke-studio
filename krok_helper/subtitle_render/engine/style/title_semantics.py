@@ -38,6 +38,35 @@ def title_layout_source(style: Style, index: Optional[int]):
     return title_fallback_layout(style)
 
 
+def title_layout_char_value(style: Style, title: TitleOverlay, field_name: str):
+    """Resolve one layout-owned character-typography field for a title.
+
+    空格宽度 / 字间距 / 允许咬合自 v3 起归布局所有：标题引用某套布局时，
+    其字符排版必须与歌词同源（布局显式值优先，``None`` 继承全局
+    ``Style``）。``layout_index`` 为 ``None``（旧工程显式锚点字段）时没有
+    布局来源，退回全局样式，保持迁移前行为。
+    """
+    source = title_layout_source(style, title.layout_index)
+    if source is not None:
+        value = getattr(source, field_name, None)
+        if value is not None:
+            return value
+    return getattr(style, field_name)
+
+
+def title_space_width_percent(style: Style, title: TitleOverlay) -> int:
+    """Effective N3 ``SpaceWidth`` for one title's referenced layout."""
+    return max(
+        10,
+        min(int(title_layout_char_value(style, title, "space_width_percent")), 100),
+    )
+
+
+def title_allow_biting(style: Style, title: TitleOverlay) -> bool:
+    """Effective ``AllowBiting`` for one title's referenced layout."""
+    return bool(title_layout_char_value(style, title, "allow_biting"))
+
+
 def resolve_title_overlay(
     style: Style, overlay: Optional[TitleOverlay] = None
 ) -> Optional[TitleOverlay]:

@@ -13,10 +13,12 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_overlay,
     resolve_title_role_overlay,
     resolve_title_text,
+    title_allow_biting,
     title_layout_source,
     title_row_alignments,
     title_row_offsets_x,
     title_show_specs,
+    title_space_width_percent,
 )
 from krok_helper.subtitle_render.domain.band_presets import (
     default_clef_color_for,
@@ -137,6 +139,13 @@ def title_to_ir(
         style.custom_style_schemes.get(scheme_name),
     )
     payload["text"] = text
+    # 空格宽度 / 允许咬合与字间距同属布局域（v3）：标题引用布局时以布局
+    # 显式值为准、None 继承全局，CPU 与 GPU（D2D / Skia）必须消费同一个值。
+    # 只写进 payload 而不改 TitleOverlay 模型，旧工程/旧 IR 保持原字节语义。
+    title_space_width = title_space_width_percent(style, title)
+    title_allow = title_allow_biting(style, title)
+    payload["space_width_percent"] = title_space_width
+    payload["allow_biting"] = title_allow
     # 标题块=一页：逐行水平对齐按布局行槽位自上而下解析（不足取末行），
     # C++ 侧按行覆盖锚点缺省对齐，与 Painter 的逐行屏幕定位同口径。旧工程
     # （布局引用缺失）不下发：C++ 维持锚点水平位的既有回落，Painter 维持
@@ -172,10 +181,14 @@ def title_to_ir(
         if label
     )
     payload["role_styles"] = {
-        label: title_overlay_to_ir(
-            resolve_title_role_overlay(style, title, label),
-            style.custom_style_schemes.get(label),
-        )
+        label: {
+            **title_overlay_to_ir(
+                resolve_title_role_overlay(style, title, label),
+                style.custom_style_schemes.get(label),
+            ),
+            "space_width_percent": title_space_width,
+            "allow_biting": title_allow,
+        }
         for label in sorted(role_labels)
     }
     return payload

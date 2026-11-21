@@ -45,9 +45,11 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_overlay,
     resolve_title_role_overlay,
     resolve_title_text,
+    title_allow_biting,
     title_layout_source,
     title_row_alignments,
     title_row_offsets_x,
+    title_space_width_percent,
 )
 from krok_helper.subtitle_render.engine.text import (
     char_layout_width,
@@ -79,20 +81,20 @@ class _TitleInkMetricsStyle:
     """把 TitleOverlay 适配成 ink-cell 度量所需的 Style 字段子集。
 
     C++ 把标题投影进歌词管线（强制 n3_1074）后，公式输入的 edge 取每字
-    解析外观自己的描边宽、空格百分比与咬字许可继承全局 Style
-    （``resolvedStyleFromTitle`` 以 sourceStyle 为底）——本适配器按同一
-    取值来源供 :func:`char_layout_width` / :func:`char_path_left_offset`
-    鸭子类型读取，不构造完整 Style。
+    解析外观自己的描边宽；空格百分比与咬字许可同歌词一样归**布局**所有
+    （``title_space_width_percent`` / ``title_allow_biting``，布局未表态时
+    继承全局 Style）——本适配器按同一取值来源供 :func:`char_layout_width`
+    / :func:`char_path_left_offset` 鸭子类型读取，不构造完整 Style。
     """
 
-    def __init__(self, glyph_title, global_style, space_percent: int) -> None:
+    def __init__(
+        self, glyph_title, allow_biting: bool, space_percent: int
+    ) -> None:
         self.font_size_px = max(int(glyph_title.font_size_px), 1)
         self.stroke_width_px = max(int(glyph_title.stroke_width_px), 0)
         self.latin_font_size_px = None
         self.space_width_percent = int(space_percent)
-        self.allow_biting = bool(
-            global_style.allow_biting if global_style is not None else False
-        )
+        self.allow_biting = bool(allow_biting)
 
 
 @dataclass(frozen=True)
@@ -349,13 +351,12 @@ def layout_title_overlay(
     font_for = make_title_font_for(title, font, latin_font)
     latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
     labels = normalize_title_char_role_labels(text, title.char_role_labels)
-    title_space_percent = max(
-        10,
-        min(
-            int(style.space_width_percent if style is not None else Style.space_width_percent),
-            100,
-        ),
-    )
+    if style is not None:
+        title_space_percent = title_space_width_percent(style, title)
+        allow_biting = title_allow_biting(style, title)
+    else:
+        title_space_percent = max(10, min(int(Style.space_width_percent), 100))
+        allow_biting = bool(Style.allow_biting)
     glyph_rows: list[list[TitleGlyphLayout]] = []
     widths: list[float] = []
     line_heights: list[float] = []
@@ -442,7 +443,7 @@ def layout_title_overlay(
                 # 不是 QFontMetrics 的裸 advance——裸 advance 会随字体在
                 # Qt/DWrite 的度量差逐字累积（实测 4K 标题行末端偏 ~90px）。
                 ink_style = _TitleInkMetricsStyle(
-                    glyph_title, style, title_space_percent
+                    glyph_title, allow_biting, title_space_percent
                 )
                 advance = float(
                     char_layout_width(

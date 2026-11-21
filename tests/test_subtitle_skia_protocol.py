@@ -52,6 +52,27 @@ def solid_title(style):
                         custom_windows=[TitleTimeWindow(300, 1000, 200, 200), TitleTimeWindow(1400, 1800, 0, 0)])
 
 
+def test_solid_title_space_width_follows_referenced_layout():
+    """标题的布局域空格宽度必须进入 Skia 标题 IR 与标题样式。"""
+    from krok_helper.subtitle_render.engine.render.render_ir import title_to_ir
+    from krok_helper.subtitle_render.engine.render.skia_title_ir import title_style
+
+    track, style = sample()
+    title = replace(solid_title(style), text_template='A B', layout_index=1)
+    layout = LyricsLayout(layout_id='title-space', space_width_percent=80,
+                          allow_biting=True, line_alignments=['left'])
+    style = replace(style, title_overlays=[title], layouts=[layout],
+                    space_width_percent=20, allow_biting=False,
+                    custom_style_schemes={})
+    payload = title_to_ir(track, style)
+    assert payload is not None
+    assert payload['space_width_percent'] == 80
+    assert payload['allow_biting'] is True
+    built = title_style(payload)
+    assert built.space_width_percent == 80
+    assert built.allow_biting is True
+
+
 def test_scene_prewarm_includes_title_slots_and_extra_tracks():
     from krok_helper.subtitle_render.native.skia_font_preparation import scene_fallback_requests
 

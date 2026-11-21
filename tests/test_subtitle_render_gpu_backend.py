@@ -9012,6 +9012,7 @@ def test_gpu_line_layout_space_width_override_follows_painter(monkeypatch) -> No
         abs(actual - expected) <= 10
         for actual, expected in zip(gpu_bounds, override_bounds)
     ), (gpu_bounds, override_bounds)
+
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(
         lines=[
@@ -9048,6 +9049,69 @@ def test_gpu_line_layout_space_width_override_follows_painter(monkeypatch) -> No
         abs(actual - expected) <= 12
         for actual, expected in zip(gpu_bounds, painter_bounds)
     ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_title_space_width_follows_referenced_layout(monkeypatch) -> None:
+    """标题的空格宽度也归布局：D2D 必须消费标题载荷里的布局值。
+
+    回归：布局页把空格宽度写入布局后，标题 IR 不带该字段，D2D 用
+    ``sourceStyle``（全局 Style）当底，标题空格宽度对 GPU 完全不生效。
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def style_for(space_percent: int):
+        layout = LyricsLayout(
+            name=f"标题布局 {space_percent}",
+            space_width_percent=space_percent,
+            line_y_position="top",
+            line_y_margin_px=40,
+            line_alignments=["left"],
+            horizontal_margin_px=40,
+        )
+        title = TitleOverlay(
+            enabled=True,
+            text_template="AB CD",
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=80,
+            stroke_width_px=0,
+            stroke2_width_px=0,
+            decoration_kind="none",
+            layout_index=1,
+            show_mode="custom",
+            custom_windows=[TitleTimeWindow(begin_ms=0, end_ms=2_500)],
+        )
+        return replace(
+            _g1_style(
+                font_family="Meiryo",
+                font_family_latin="Meiryo",
+                font_size_px=80,
+                stroke_width_px=0,
+                stroke2_enabled=False,
+                decoration_kind="none",
+                line_y_position="top",
+                line_lead_in_ms=0,
+                line_tail_ms=0,
+                space_width_percent=20,
+            ),
+            layouts=[layout],
+            title_overlays=[title],
+        )
+
+    track = TimingTrack(lines=[])
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=20.0) as renderer:
+        _, frames_narrow = _render_g1_frames(
+            renderer, style_for(20), (500,), force_warp=True, track=track
+        )
+        _, frames_wide = _render_g1_frames(
+            renderer, style_for(80), (500,), force_warp=True, track=track
+        )
+
+    narrow = _payload_alpha_bounds(frames_narrow[0])
+    wide = _payload_alpha_bounds(frames_wide[0])
+    assert (wide[2] - wide[0]) > (narrow[2] - narrow[0]) + 20, (narrow, wide)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
