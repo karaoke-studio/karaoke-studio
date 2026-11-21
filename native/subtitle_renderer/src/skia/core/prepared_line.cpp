@@ -277,7 +277,20 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto drawLayer = [&](Layer layer, const ImageFill (&images)[2], PhaseShaders shaders) {
         for (std::size_t phase = 0; phase < shaders.size(); ++phase)
             if (images[phase]) shaders[phase] = images[phase].shaderAt(canvas.getTotalMatrix());
-        inPhaseOrder([&](std::size_t index, Phase) { drawCell(index, layer, shaders); });
+        std::vector<PhaseShaders> roles;
+        if (layer == Layer::Body && !line.roleBodyPaints.empty()) {
+            roles.reserve(line.roleBodyPaints.size());
+            for (const auto& paint : line.roleBodyPaints) {
+                auto pair = paint.gradients;
+                for (std::size_t phase = 0; phase < pair.size(); ++phase)
+                    if (paint.images[phase]) pair[phase] = paint.images[phase].shaderAt(canvas.getTotalMatrix());
+                roles.push_back(std::move(pair));
+            }
+        }
+        inPhaseOrder([&](std::size_t index, Phase) {
+            const int paint = line.cells[index].bodyPaintIndex;
+            drawCell(index, layer, roles.empty() || paint < 0 ? shaders : roles[paint]);
+        });
     };
     if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false);
     if (geometry)

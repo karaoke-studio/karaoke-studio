@@ -40,6 +40,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
         line.titleWindows = source.titleWindows;
+        line.roleBodyPaints = source.roleBodyPaints;
         line.noWipe = source.noWipe;
         line.wipeRightToLeft = source.wipeRightToLeft;
         line.vertical = source.vertical;
@@ -132,6 +133,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             if (cell.bitmap && (!cell.path.isEmpty() || cell.outline || cell.outerOutline || source.vertical
                                 || source.wipeRightToLeft || source.noWipe || cell.strokeFlashWidth > 0))
                 throw std::runtime_error("Skia 图片导唱符仅支持正向横排走字单元");
+            if (cell.bodyPaintIndex < -1 || cell.bodyPaintIndex >= int(line.roleBodyPaints.size()))
+                throw std::runtime_error("Skia 正文角色画笔索引无效");
             if (cell.outline) line.hasOutline = true;
             if (cell.outerOutline) line.hasOuterOutline = true;
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
@@ -142,7 +145,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth,
                                   cell.bitmap ? std::make_shared<const PreparedBitmapGuide>(*cell.bitmap, remainingBitmapHaloBytes)
-                                              : nullptr});
+                                              : nullptr, cell.bodyPaintIndex});
         }
         if (line.utopiaTransition.leave) {
             line.followingDone.resize(line.cells.size());

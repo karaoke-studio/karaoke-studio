@@ -1,9 +1,29 @@
 """Project the line-wide coordinates needed by Skia body and outline gradients and image paints."""
 
-from ..style.style_semantics import effective_karaoke_colors, effective_ruby_karaoke_colors
+from ..style.style_semantics import effective_karaoke_colors, effective_ruby_karaoke_colors, style_for_role_in_layout
 
 
 _GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+_TEXTURED = _GRADIENTS | {'image'}
+
+
+def _declare_role_body_paints(ir, plan):
+    for item in plan.lines:
+        look = item.layout_style
+        labels = {cell.role_label for cell in item.render_line.chars
+                  if cell.role_label in look.custom_style_schemes}
+        if not labels:
+            continue
+        appearances = (look, *(style_for_role_in_layout(look, label) for label in labels))
+        palettes = [effective_karaoke_colors(appearance) for appearance in appearances]
+        if not any(state.text.mode in _TEXTURED for colors in palettes for state in (colors.before, colors.after)):
+            continue
+        if any(state.stroke.mode != 'solid' or state.stroke2.mode != 'solid'
+               for colors in palettes for state in (colors.before, colors.after)):
+            raise ValueError('Skia 正文渐变暂不支持角色的复杂描边')
+        ir['required_features'].append('p06_role_body_paints')
+        return True
+    return False
 
 
 def _layer_modes(look):
@@ -26,6 +46,8 @@ def write_body_gradient_bounds(ir, plan):
     by the line's visual outline pad (applied natively at the reference scale).
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
+    if _declare_role_body_paints(ir, plan):
+        return
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     ruby_image = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):

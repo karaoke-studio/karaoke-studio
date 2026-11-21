@@ -4,6 +4,7 @@
 #include "resolved_bitmap_guide.h"
 #include "resolved_line_band.h"
 #include "resolved_ruby.h"
+#include "resolved_role_paints.h"
 #include "resolved_signal.h"
 #include "image_fill_cache.h"
 #include "scene_input.h"
@@ -65,9 +66,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const auto features = ir.value("required_features").toArray();
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
-    const bool bodyGradients = features.contains("p06_body_gradient");
+    const bool roleBodyPaints = features.contains("p06_role_body_paints");
+    const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
     const bool outlineGradients = features.contains("p06_outline_gradient");
-    const bool imageFills = features.contains("p06_image_fill");
+    const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
     validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
         .outlineGradients = outlineGradients, .imageFills = imageFills,
         .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow"),
@@ -78,7 +80,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .volumeSignal = features.contains("p08_volume_signal"),
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
-            || features.contains("p06_role_solid_outlines")});
+            || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints});
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -540,7 +542,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !projected.charStyles.empty() || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
-        if (gradient || image) {
+        if (roleBodyPaints) {
+            if (source.contains("body_gradient_bounds"))
+                throw BackendError("Skia 角色画笔不能携带整行画笔范围");
+            resolveRoleBodyPaints(prepared, line, style, projected.charStyles, imageCache, projected.layoutReferenceScale);
+        } else if (gradient || image) {
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
@@ -578,7 +584,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 }
             }
         }
-        if (!gradient && source.contains("body_gradient_bounds"))
+        if (!roleBodyPaints && !gradient && source.contains("body_gradient_bounds"))
             throw BackendError("Skia 实色正文携带了未声明的渐变范围");
         if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
         out.lines.push_back(std::move(prepared));

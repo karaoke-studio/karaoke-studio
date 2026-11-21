@@ -37,6 +37,59 @@ def role_outline_palette():
     )
 
 
+def textured_roles(track, style, tmp_path, direction):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    path = write_png(tmp_path / 'role-paint.png', pattern('transparent'))
+    palette = role_outline_palette()
+    def role(before, after, size, edge):
+        return SubtitleStyleScheme(font_size_px=size, stroke_width_px=edge,
+            stroke2_enabled=True, stroke2_width_px=3, karaoke_colors=replace(
+                palette, before=replace(palette.before, text=before), after=replace(palette.after, text=after)))
+    gradient = PaintFill(mode=direction, start_color='#EE491C', end_color='#11E8BC')
+    changed = PaintFill(mode=direction, start_color='#42ADE6', end_color='#DF0CAA')
+    image = PaintFill(mode='image', image_path=str(path), image_scale_pct=135, color='#9354A0')
+    roles = {'a': role(gradient, changed, 83, 3), 'b': role(image, image, 91, 6)}
+    line = track.lines[0]
+    chars = [replace(char, role_label=('a', 'b', None)[index % 3]) for index, char in enumerate(line.chars)]
+    track = replace(track, lines=[replace(line, chars=chars)], rubies=[])
+    return track, replace(style, custom_style_schemes=roles)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_body_role_paints_follow_the_glyphs_and_seek(binary, project, tmp_path, target):
+    track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    ir = ir_for(binary, (track, style))
+    assert 'p06_role_body_paints' in ir['required_features']
+    plain = copy.deepcopy(ir)
+    plain['required_features'].remove('p06_role_body_paints')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [300, 1000, 1500, 300])
+        process._send({'cmd': 'configure', 'ir': plain})
+        with pytest.raises(NativeRendererError):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [1000], generation=2)
+    assert frames[0].any() and np.array_equal(frames[0], frames[-1])
+    assert np.array_equal(frames[1], replay[0])
+    assert not np.array_equal(frames[0], frames[2])
+    assert np.unique(frames[2][frames[2][..., 3] == 255, :3], axis=0).shape[0] > 40
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction', ['gradient_horizontal', 'gradient_vertical'])
+def test_body_role_paints_match_actual_d2d_gpu(binary, application, tmp_path, direction):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'n3_grid')
+    style = replace(base.style, stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0,
+                    decoration_kind='none', karaoke_anim='none')
+    track, style = textured_roles(base.track, style, tmp_path, direction)
+    case = replace(base, case_id=f'role_body_paints_{direction}', track=track, style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 300, 1500, 1750, 2600, 4400, 5499, 5500))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('with_ruby', [False, True], ids=['body', 'ruby'])
 def test_body_role_outlines_follow_their_cell_clock(binary, project, target, with_ruby):

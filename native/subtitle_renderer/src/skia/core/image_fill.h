@@ -6,6 +6,7 @@
 #include "include/core/SkShader.h"
 #include "include/core/SkTileMode.h"
 #include <algorithm>
+#include <array>
 
 namespace subtitle::skia {
 // A static image paint as the existing GPU draws it: the decoded image repeats
@@ -36,5 +37,10 @@ struct ImageFill {
 // gradient or solid paint of the same layer.
 struct LineImageFills {
     ImageFill body[2], outline[2], outer[2];
+};
+
+struct BodyPaint {
+    std::array<sk_sp<SkShader>, 2> gradients;
+    std::array<ImageFill, 2> images;
 };
 }

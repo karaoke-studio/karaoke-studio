@@ -40,6 +40,7 @@ struct ResolvedCell {
     CharacterPivot pivot;
     float strokeFlashWidth = 0;
     std::optional<BitmapGuide> bitmap; // bitmap_guide_schema=1: drawn instead of the empty path.
+    int bodyPaintIndex = -1;
 };
 struct ResolvedRubyGroup {
     std::vector<ResolvedCell> cells;
@@ -71,6 +72,7 @@ struct ResolvedLine {
     sk_sp<SkShader> beforeGradient, afterGradient;
     sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
     LineImageFills images; // Device-anchored static image paints; take precedence over gradients.
+    std::vector<BodyPaint> roleBodyPaints;
     StaticShadow shadow;
     StaticGlow glow;
     NoiseTransition noise;

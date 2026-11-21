@@ -54,6 +54,7 @@ private:
         CharacterPivot pivot;
         float strokeFlashWidth = 0;
         std::shared_ptr<const PreparedBitmapGuide> bitmap;
+        int bodyPaintIndex = -1;
     };
     struct Line {
         std::vector<Cell> cells;
@@ -75,6 +76,7 @@ private:
         sk_sp<SkShader> beforeGradient, afterGradient;
         sk_sp<SkShader> beforeOutlineGradient, afterOutlineGradient, beforeOuterGradient, afterOuterGradient;
         LineImageFills images;
+        std::vector<BodyPaint> roleBodyPaints;
         StaticShadow shadow;
         std::vector<PreparedGlow> glow;
         std::vector<PreparedGlow> rubyGlow;
