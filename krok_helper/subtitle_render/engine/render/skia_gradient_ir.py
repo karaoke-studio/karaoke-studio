@@ -38,6 +38,19 @@ def _layer_modes(look):
     return modes, outlined
 
 
+def _has_textured_upper_ruby(layout, plan):
+    for final, item in zip(layout['lines'], plan.lines, strict=True):
+        for group in final.get('ruby_groups', ()):
+            if group.get('lower'):
+                continue
+            role = item.render_line.chars[group['style_cell']].role_label
+            look = style_for_role_in_layout(item.layout_style, role)
+            palette = effective_ruby_karaoke_colors(look)
+            if {palette.before.text.mode, palette.after.text.mode} & _TEXTURED:
+                return True
+    return False
+
+
 def write_body_gradient_bounds(ir, plan):
     """Write the glyph ink union and declare the corresponding paint capabilities.
 
@@ -47,6 +60,8 @@ def write_body_gradient_bounds(ir, plan):
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
     if _declare_role_body_paints(ir, plan):
+        if _has_textured_upper_ruby(ir['skia_layout'], plan):
+            ir['required_features'].append('p06_ruby_role_paints')
         return
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     ruby_image = False

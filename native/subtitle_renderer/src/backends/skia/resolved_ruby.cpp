@@ -1,5 +1,6 @@
 #include "resolved_ruby.h"
 #include "image_fill_cache.h"
+#include "resolved_role_paints.h"
 #include "resolved_wipe.h"
 #include "vertical_text.h"
 #include "../render_backend.h"
@@ -56,7 +57,8 @@ bool rubyFillGradientMode(const PaintStyle& fill) {
 }
 
 std::array<sk_sp<SkShader>, 2> rubyFillGradients(const TextStyle& paint, const QJsonObject& line,
-    const std::vector<::subtitle::skia::ResolvedCell>& cells, float outlinePad, double dpr) {
+    const std::vector<::subtitle::skia::ResolvedCell>& cells, float outlinePad, double dpr,
+    const SkRect* roleBounds) {
     SkRect local = SkRect::MakeEmpty();
     for (const auto& cell : cells)
         if (!cell.path.isEmpty()) local.join(cell.path.computeTightBounds());
@@ -68,10 +70,15 @@ std::array<sk_sp<SkShader>, 2> rubyFillGradients(const TextStyle& paint, const Q
         if (!rubyFillGradientMode(fill)) continue;
         auto bounds = local;
         if (fill.mode == "gradient_horizontal" && paint.rubyHorizontalGradientWithMain) {
-            const auto domain = line.value("body_gradient_bounds").toArray();
-            if (domain.size() != 4) throw BackendError("Skia 上注音共享横向渐变缺少正文范围");
-            bounds.fLeft = float(pivotCoordinate(domain[0]) * dpr);
-            bounds.fRight = float(pivotCoordinate(domain[2]) * dpr);
+            if (roleBounds) {
+                bounds.fLeft = roleBounds->left();
+                bounds.fRight = roleBounds->right();
+            } else {
+                const auto domain = line.value("body_gradient_bounds").toArray();
+                if (domain.size() != 4) throw BackendError("Skia 上注音共享横向渐变缺少正文范围");
+                bounds.fLeft = float(pivotCoordinate(domain[0]) * dpr);
+                bounds.fRight = float(pivotCoordinate(domain[2]) * dpr);
+            }
             if (bounds.fRight <= bounds.fLeft) throw BackendError("Skia 上注音共享横向渐变范围无效");
         }
         result[phase] = ::subtitle::skia::lineGradient(fill, bounds, outlinePad);
@@ -125,7 +132,7 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
     const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
-        std::size_t& totalCells, std::size_t& totalGroups) {
+        const RolePaintBounds* roleBounds, std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
         || ir.value("skia_layout").toObject().value("ruby_schema").toDouble(-1) != 1
@@ -219,8 +226,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 竖排同列注音的正文范围无效");
         if (multipleVertical)
             previousSpanEnd = integer(object.value("span_end_cell"), index + 1, int(line.chars.size()));
-        const auto& paint = line.chars[index].styleIndex >= 0
-            ? scene.charStyles[line.chars[index].styleIndex] : scene.lineStyles[lineIndex];
+        const int role = line.chars[index].styleIndex;
+        const auto& paint = role >= 0 ? scene.charStyles[role] : scene.lineStyles[lineIndex];
         const auto shadowState = [&](bool after) -> ::subtitle::skia::ShadowState {
             const auto kind = paint.rubyDecorationKindForState(after);
             if (lower || kind == "none" || kind == "glow") return {};
@@ -247,9 +254,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool imageFill = !lower && (paint.rubyBeforeFillPaint.mode == "image" || paint.rubyAfterFillPaint.mode == "image");
         const bool allowFillPaint = !vertical && staticLine && lowerWipe && line.karaokeAnimation != "no_wipe"
             && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
-            && line.bursts.empty() && scene.charStyles.empty();
-        const bool allowGradientFill = allowFillPaint && features.contains("p06_ruby_fill_gradient");
-        const bool allowImageFill = allowFillPaint && features.contains("p06_ruby_fill_image");
+            && line.bursts.empty();
+        const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints");
+        const bool allowGradientFill = allowFillPaint && (allowRoleFill ||
+            (scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")));
+        const bool allowImageFill = allowFillPaint && (allowRoleFill ||
+            (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
                 || (allowImageFill && fill.mode == "image");
@@ -421,7 +431,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
         auto gradients = gradientFill ? rubyFillGradients(paint, source, cells,
-            ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr)), glyphs.dpr)
+            ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr)), glyphs.dpr,
+            allowRoleFill ? &roleBounds->forRole(role) : nullptr)
             : std::array<sk_sp<SkShader>, 2>{};
         std::array<::subtitle::skia::ImageFill, 2> images;
         if (imageFill) {

@@ -5,9 +5,10 @@
 namespace krok::subtitle::native {
 enum class RubyTransition { None, Fade, Spin, Translation, Affine };
 class SkiaImageFillCache;
+struct RolePaintBounds;
 
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const QJsonObject& line, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
     const RenderScene& scene, int lineIndex, int timingOffset, RubyTransition, SkiaImageFillCache&,
-    std::size_t& totalCells, std::size_t& totalGroups);
+    const RolePaintBounds*, std::size_t& totalCells, std::size_t& totalGroups);
 }

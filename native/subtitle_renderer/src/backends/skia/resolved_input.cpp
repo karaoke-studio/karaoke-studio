@@ -439,8 +439,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (translationComposition) rubyTransition = RubyTransition::Translation;
         if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))
             rubyTransition = RubyTransition::Affine;
+        std::optional<RolePaintBounds> rolePaintBounds;
+        if (roleBodyPaints) {
+            if (source.contains("body_gradient_bounds"))
+                throw BackendError("Skia 角色画笔不能携带整行画笔范围");
+            rolePaintBounds = resolveRoleBodyPaints(prepared, line, style, projected.charStyles, imageCache,
+                                                   projected.layoutReferenceScale);
+        }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
-                                                    rubyTransition, imageCache, totalCells, totalGroups);
+            rubyTransition, imageCache, rolePaintBounds ? &*rolePaintBounds : nullptr, totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
@@ -542,11 +549,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !projected.charStyles.empty() || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
-        if (roleBodyPaints) {
-            if (source.contains("body_gradient_bounds"))
-                throw BackendError("Skia 角色画笔不能携带整行画笔范围");
-            resolveRoleBodyPaints(prepared, line, style, projected.charStyles, imageCache, projected.layoutReferenceScale);
-        } else if (gradient || image) {
+        if (!roleBodyPaints && (gradient || image)) {
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
