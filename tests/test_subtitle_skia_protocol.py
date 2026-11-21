@@ -837,6 +837,37 @@ def test_multitrack_product_preview_and_export(binary, monkeypatch, tmp_path, su
     check(binary, monkeypatch, tmp_path, (track, style), gpu, False, side_track=side)
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('fps', [60, 120, 60000 / 1001], ids=['60', '120', 'ntsc60'])
+def test_skia_export_pipe_uses_exact_frame_times(binary, monkeypatch, tmp_path, supported_project, target, fps):
+    from hashlib import sha256
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.domain.frame_rate import frame_timestamp
+    from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+    from krok_helper.subtitle_render.engine.renderer import _write_frames_native
+
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_TARGET', target)
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_FALLBACK', 'none')
+    monkeypatch.setenv('KROK_SUBTITLE_NATIVE_EXPORT_CHUNK_BYTES', str(320 * 180 * 4 * 17))
+    track, style = supported_project
+    job = RenderJob(track, style, tmp_path / 'unused', tmp_path / 'unused.mp4', width=320, height=180,
+                    fps=fps, duration_ms=1500, gpu_export_enabled=target == 'gpu')
+    count = round(fps * 1.5)
+    committed = []
+    pipe = SimpleNamespace(stdin=SimpleNamespace(write=lambda frame: committed.append(sha256(frame).digest())))
+    _write_frames_native(pipe, job, count, binary, None, None)
+    assert len(committed) == count
+
+    indices = list(range(0, count, 5))
+    times = [frame_timestamp(index, fps) for index in indices]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=320, height=180, fps=fps, duration_ms=1500)
+        reference, _ = collect(process, times)
+    assert len(set(committed)) > 3
+    assert [committed[index] for index in indices] == [sha256(frame).digest() for frame in reference]
+
+
 def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monkeypatch, tmp_path, supported_project):
     from krok_helper.errors import ProcessingError
     from krok_helper.subtitle_render.engine import renderer

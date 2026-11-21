@@ -759,6 +759,7 @@ def iter_native_rgba_frames_at_times(
     should_cancel: Callable[[], bool] | None = None,
     process_factory: Callable[..., NativeRendererProcess] | None = None,
     extra_tracks: list[TimingTrack] | None = None,
+    verify_frame_identity: bool = False,
 ) -> Iterator[tuple[int, bytes]]:
     """Yield ``(t_ms, rgba_bytes)`` for explicit timestamps from the sidecar."""
     timestamps_all = [int(t_ms) for t_ms in timestamps_ms]
@@ -814,6 +815,12 @@ def iter_native_rgba_frames_at_times(
                         with SharedFrameRingReader.from_event(event) as reader:
                             slot = reader.read_frame(event)
                         frame_index = int(event.get("frame_index", slot.frame_index))
+                        if verify_frame_identity and (
+                            frame_index < next_emit or frame_index >= count or frame_index in pending
+                            or slot.t_ms != timestamps[frame_index]
+                            or slot.width != width or slot.height != height
+                        ):
+                            raise NativeRendererError("Skia 导出共享帧的序号、时间或尺寸与请求不一致")
                         pending[frame_index] = shared_slot_rgba_bytes(slot)
                         while next_emit in pending:
                             yield timestamps[next_emit], pending.pop(next_emit)

@@ -138,6 +138,7 @@ class _FakeSlot:
     stride: int
     payload: bytes
     frame_index: int = 0
+    t_ms: int = 0
 
 
 def test_shared_slot_rgba_bytes_packs_strided_rows() -> None:
@@ -180,6 +181,7 @@ class _FakeRingReader:
             stride=4,
             payload=bytes([frame_index, frame_index, frame_index, 255]),
             frame_index=frame_index,
+            t_ms=event["t_ms"],
         )
 
 
@@ -300,6 +302,25 @@ def test_iter_native_rgba_frames_sends_cancel_when_cancelled_mid_range(monkeypat
         )
 
     assert _FakeNativeRendererProcess.instances[-1].cancels == [1]
+
+
+@pytest.mark.parametrize('invalid', ['timestamp', 'duplicate', 'index'])
+def test_skia_export_rejects_inconsistent_frame_identity(monkeypatch, invalid):
+    class Process(_FakeNativeRendererProcess):
+        def start_render_range(self, *args, **kwargs):
+            result = super().start_render_range(*args, **kwargs)
+            if invalid == 'timestamp':
+                self.events[0]['t_ms'] += 1
+            elif invalid == 'duplicate':
+                self.events.insert(1, dict(self.events[0]))
+            else:
+                self.events[0]['frame_index'] = 2
+            return result
+
+    monkeypatch.setattr(ne, 'SharedFrameRingReader', _FakeRingReader)
+    with pytest.raises(ne.NativeRendererError, match='序号、时间或尺寸'):
+        list(ne.iter_native_rgba_frames_at_times(_track(), Style(), [0, 17], width=1, height=1, fps=60,
+                                                process_factory=Process, verify_frame_identity=True))
 
 
 def test_iter_native_rgba_frames_at_times_uses_explicit_timestamps(monkeypatch) -> None:

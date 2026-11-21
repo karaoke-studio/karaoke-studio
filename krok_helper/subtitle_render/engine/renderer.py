@@ -49,6 +49,7 @@ from krok_helper.subtitle_render.engine.export.native_export import (
     gpu_restart_budget,
     iter_gpu_rgba_frames,
     iter_native_rgba_frames,
+    iter_native_rgba_frames_at_times,
 )
 from krok_helper.subtitle_render.engine.export.progress_watchdog import (
     active_export_monitor,
@@ -1301,26 +1302,23 @@ def _write_frames_native(
     written = 0
     from functools import partial
     from krok_helper.subtitle_render.native.backend import skia_requested
-    factory = None
+    options = dict(width=job.width, height=job.height, fps=job.fps,
+                   duration_ms=_paint_duration_ms(job), roll_shift_ms=_job_roll_shift_ms(job),
+                   renderer_path=renderer_path, should_cancel=should_cancel)
     if skia_requested():
         from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
         enabled = job.gpu_export_enabled
         if enabled is None:
             enabled = os.environ.get("KROK_SUBTITLE_GPU_EXPORT", "1").lower() not in {"0", "false", "off", "no"}
         factory = partial(SkiaRendererProcess, selection=SkiaSelection.from_environment(gpu_enabled=bool(enabled)), on_backend_info=logger)
-    for frame in iter_native_rgba_frames(
-        job.track,
-        job.style,
-        width=job.width,
-        height=job.height,
-        fps=job.fps,
-        total_frames=total_frames,
-        duration_ms=_paint_duration_ms(job),
-        roll_shift_ms=_job_roll_shift_ms(job),
-        renderer_path=renderer_path,
-        should_cancel=should_cancel,
-        **({"process_factory": factory, "extra_tracks": list(job.extra_tracks)} if factory else {}),
-    ):
+        timestamps = [frame_timestamp(index, job.fps) for index in range(total_frames)]
+        frames_at_times = iter_native_rgba_frames_at_times(job.track, job.style, timestamps, process_factory=factory,
+                                                          extra_tracks=list(job.extra_tracks), verify_frame_identity=True,
+                                                          **options)
+        frames = (frame for _, frame in frames_at_times)
+    else:
+        frames = iter_native_rgba_frames(job.track, job.style, total_frames=total_frames, **options)
+    for frame in frames:
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
         if monitor is not None:
