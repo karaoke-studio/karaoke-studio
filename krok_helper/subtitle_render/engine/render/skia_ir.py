@@ -208,7 +208,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
-    vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = False
+    vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
     shapes = set()
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -221,7 +221,9 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
         if look.vertical:
             motion = not ordinary and _ordinary_line_animation(line) and not source.wipe_reverse
             singing = index in vertical_singing_tracks
-            if (look.scanline_shape != 'band' or look.scanline_mode != 'color' or not (ordinary or motion)
+            palette = (look.scanline_mode in {'brighten', 'follow_before', 'follow_after'}
+                       and ordinary and not source.wipe_reverse and not singing)
+            if (look.scanline_shape != 'band' or (look.scanline_mode != 'color' and not palette) or not (ordinary or motion)
                     or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                     or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
                 raise ValueError('Skia 竖排扫字线当前仅支持普通走字或正向 Utopia 的实色高亮带')
@@ -231,6 +233,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
             reverse_vertical_band |= source.wipe_reverse
             moving_vertical_band |= motion
             vertical_singing_band |= singing
+            vertical_palette_band |= palette
             continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         image_during_transition = particle_entry and look.scanline_shape == 'image'
@@ -280,6 +283,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
         features.append('p07_vertical_scanline_line_animation')
     if vertical_singing_band:
         features.append('p07_vertical_scanline_singing')
+    if vertical_palette_band:
+        features.append('p07_vertical_scanline_palette')
     if shapes:
         features.append('p07_scanline_shape')
     if 'image' in shapes:
@@ -1007,7 +1012,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p08_vertical_viewport')
             features = set(ir['required_features'])
             if 'p07_vertical_scanline_band' in features and not features.intersection({
-                    'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation', 'p07_vertical_scanline_singing'}):
+                    'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation',
+                    'p07_vertical_scanline_singing', 'p07_vertical_scanline_palette'}):
                 ir['required_features'].append('p08_vertical_scanline_viewport')
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])

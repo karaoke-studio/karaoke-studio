@@ -872,6 +872,54 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('mode', ['brighten', 'follow_before', 'follow_after'])
+def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project)
+    style = replace(style, karaoke_colors=colors('#700000', '#007000'),
+                    ruby_karaoke_colors=colors('#000070', '#700070'),
+                    scanline_enabled=True, scanline_shape='band', scanline_mode=mode,
+                    scanline_brightness_pct=100, scanline_width_px=42, scanline_glow_px=3)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_vertical_scanline_palette'
+    assert {feature, 'p07_vertical_scanline_band', 'p07_ruby_scanline'} <= set(ir['required_features'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    line, = ir['skia_layout']['lines']
+    reading, = line['ruby_groups'][0]['units']
+    split = round((reading['wipe_left'] + line['cells'][0]['wipe_right']) * 1.5 / 2)
+    start, end = reading['interval_ms']
+    times = [start - 1, (start + end) // 2, end + 1]
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert not np.any(frames[0][..., :3].max(axis=-1) > 175)
+        body = frames[1][:, :split]
+        ruby = frames[1][:, split:]
+        for before, after in [
+            ((body[..., 0] > 190) & (body[..., 3] > 130),
+             (body[..., 1] > 190) & (body[..., 3] > 130)),
+            ((ruby[..., 0] < 30) & (ruby[..., 2] > 190) & (ruby[..., 3] > 130),
+             (ruby[..., 0] > 190) & (ruby[..., 2] > 190) & (ruby[..., 3] > 130)),
+        ]:
+            assert (np.count_nonzero(before) > 5) == (mode != 'follow_after')
+            assert (np.count_nonzero(after) > 5) == (mode != 'follow_before')
+            if mode == 'brighten':
+                assert np.median(np.nonzero(after)[0]) < np.median(np.nonzero(before)[0])
+        assert not np.any(frames[2][:, split:, :3].max(axis=-1) > 175)
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('entry,exit_,decoration', [('fade', 'fade', 'none'), ('rise', 'slide_out', 'glow')])
 def test_vertical_scanline_moves_and_fades_with_the_line(binary, project, entry, exit_, decoration):
     from test_subtitle_skia_outline_ruby import premultiplied
