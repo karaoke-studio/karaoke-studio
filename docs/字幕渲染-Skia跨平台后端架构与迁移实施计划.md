@@ -3460,6 +3460,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 入场共用已验收的注音翻转轴心和宿主时钟，原样工程可配置。301ms 原样帧的 alpha 总量为 **Direct2D GPU 221、Vulkan 221、Raster 228**，两种 Skia 目标相差 **3.07%**，高于 **3%**。退场原样仍通过原预算。
 - 对照逐像素定位到仅描边可见时的七个像素。显式 8 位解析使 Vulkan 和 Raster 都得到 **228**，与 D2D 超差。常规 8 位合成把 Raster 推到 **284**。预生成同一描边轮廓、量化输入透明度得到原差异。保留已通过预算的退场能力，入场实验与诊断在 `build/p07-ruby-entry-spin-retest.patch` 和 `build/p07-ruby-entry-spin-*-win-tests.log`。
 
+### 14.277 P05/P06 Mac 合成粗体及纵向光晕（2026-11-21）
+
+- 提交 `1c6fe5fc` 的 **5/5** 个 CI 作业通过，覆盖实色与纵向渐变角色光晕、整行淡化和 `v8` 合成粗体。Intel 与 Apple Silicon 各 **2045** 项产品用例通过、**1350** 项跳过，两份干净包各 **229** 项通过。下载并核对的 **98** 份规范样例跨架构 SHA-256 全部一致。
+- 两份包均报告 `functional_passed=true`，虚拟设备的 `hardware_gate_passed=false`。§14.272 之后的回读、横向光晕及基础样式扩展使用下一批源码验证。 [Mac CI 44887688712](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44887688712)
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
