@@ -56,11 +56,26 @@ def textured_roles(track, style, tmp_path, direction):
     return track, replace(style, custom_style_schemes=roles)
 
 
+def independent_ruby_paints(style):
+    palette = colors('#A932FD', '#7895F0')
+    roles = {name: replace(scheme, ruby_colors_follow_main=False, ruby_karaoke_colors=palette)
+             for name, scheme in style.custom_style_schemes.items()}
+    return replace(style, ruby_colors_follow_main=False, ruby_karaoke_colors=palette, custom_style_schemes=roles)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_body_role_paints_follow_the_glyphs_and_seek(binary, project, tmp_path, target):
+@pytest.mark.parametrize('ruby', [False, True], ids=['body', 'upper'])
+def test_body_role_paints_follow_the_glyphs_and_seek(binary, project, tmp_path, target, ruby):
     track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    if ruby:
+        chars = track.lines[0].chars
+        track = replace(track, rubies=[RubyAnnotation(kanji='A字', reading='AA',
+            pos_start_ms=chars[0].start_ms, pos_end_ms=chars[2].start_ms)])
+        style = independent_ruby_paints(style)
     ir = ir_for(binary, (track, style))
     assert 'p06_role_body_paints' in ir['required_features']
+    if ruby:
+        assert 'p05_upper_ruby' in ir['required_features'] and ir['skia_layout']['lines'][0]['ruby_groups']
     plain = copy.deepcopy(ir)
     plain['required_features'].remove('p06_role_body_paints')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -77,8 +92,11 @@ def test_body_role_paints_follow_the_glyphs_and_seek(binary, project, tmp_path, 
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('direction', ['gradient_horizontal', 'gradient_vertical'])
-def test_body_role_paints_match_actual_d2d_gpu(binary, application, tmp_path, direction):
+@pytest.mark.parametrize('direction,ruby', [
+    ('gradient_horizontal', 'none'), ('gradient_vertical', 'none'),
+    ('gradient_horizontal', 'upper'), ('gradient_vertical', 'both'),
+])
+def test_body_role_paints_match_actual_d2d_gpu(binary, application, tmp_path, direction, ruby):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
@@ -86,7 +104,10 @@ def test_body_role_paints_match_actual_d2d_gpu(binary, application, tmp_path, di
     style = replace(base.style, stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0,
                     decoration_kind='none', karaoke_anim='none')
     track, style = textured_roles(base.track, style, tmp_path, direction)
-    case = replace(base, case_id=f'role_body_paints_{direction}', track=track, style=style)
+    if ruby != 'none':
+        track = replace(track, rubies=base.track.rubies)
+        style = replace(independent_ruby_paints(style), lower_ruby_enabled=ruby == 'both')
+    case = replace(base, case_id=f'role_body_paints_{direction}_{ruby}', track=track, style=style)
     assert_ruby_transition_gpu_parity(binary, case, (299, 300, 1500, 1750, 2600, 4400, 5499, 5500))
 
 

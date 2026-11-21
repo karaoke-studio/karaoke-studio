@@ -591,7 +591,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
-            || (roleBodyPaints && (features.contains("p05_resolved_ruby") || !features.contains("p05_inline_roles")))
+            || (roleBodyPaints && !features.contains("p05_inline_roles"))
             || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
             throw BackendError("Skia 正文角色画笔当前支持正向横排和普通走字");
     }
