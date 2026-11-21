@@ -254,7 +254,7 @@ bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
         && (kind == "petal" || kind == "feather" || kind == "heart" || kind == "sparkle");
     return allowFade && (kind == "petal" || kind == "feather"
         || kind == "snow" || kind == "snow_solid" || kind == "note"
-        || kind == "heart" || kind == "sparkle");
+        || kind == "heart" || kind == "ripple" || kind == "sparkle");
 }
 
 bool isSkiaTransitionLayer(const QString& transition, const QString& kind, bool entry) {

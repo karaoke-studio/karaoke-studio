@@ -9,7 +9,7 @@ PARTICLE_TRANSITIONS = {
     'assemble_in': 'assemble',
     'dissolve_out': 'dissolve',
 }
-RUBY_PARTICLE_EXITS = {'petal', 'feather', 'snow', 'snow_solid', 'note', 'heart', 'sparkle'}
+RUBY_PARTICLE_EXITS = {'petal', 'feather', 'snow', 'snow_solid', 'note', 'heart', 'ripple', 'sparkle'}
 RUBY_PARTICLE_ENTRIES = {'petal', 'feather', 'heart', 'sparkle'}
 RUBY_PAIRED_PARTICLES = {'petal', 'feather', 'heart'}
 # Companion layers the existing planner emits around each energy transition:

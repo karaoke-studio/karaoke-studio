@@ -68,7 +68,7 @@ std::optional<RingStroke> concentricRing(const SkPath& path) {
     return RingStroke{(radii[0] + radii[1]) * .5f, radii[0] - radii[1]};
 }
 
-void drawParticleRing(SkCanvas& canvas, SkPoint center, RingStroke ring, float scale, SkColor4f color) {
+void drawParticleRing(SkCanvas& canvas, SkPoint center, RingStroke ring, float scale, SkColor4f color, bool quantize) {
     // Integrate each edge across the pixel's square footprint using its
     // local tangent. Subtract the coverages so the two thin edges stay
     // coupled as the authored ring expands through subpixel radii.
@@ -76,7 +76,8 @@ void drawParticleRing(SkCanvas& canvas, SkPoint center, RingStroke ring, float s
         auto result = SkRuntimeEffect::MakeForShader(SkString(R"(
             uniform float2 center;
             uniform float2 radii;
-            uniform half4 tint;
+            uniform float4 tint;
+            uniform int quantize;
             uniform float3 outerPlanes[32];
             uniform float3 innerPlanes[32];
             uniform int outerCount;
@@ -114,7 +115,9 @@ void drawParticleRing(SkCanvas& canvas, SkPoint center, RingStroke ring, float s
                 }
                 float outer = coverage(outside.z, max(max(outside.x, outside.y), 0.00001), min(outside.x, outside.y));
                 float inner = coverage(inside.z, max(max(inside.x, inside.y), 0.00001), min(inside.x, inside.y));
-                return tint * half(max(outer - inner, 0.0));
+                float amount = max(outer - inner, 0.0);
+                if (quantize != 0) return half4(floor(tint * amount * 255.0 + 0.5) / 255.0);
+                return half4(tint) * half(amount);
             }
         )"));
         if (!result.effect) throw std::runtime_error(result.errorText.c_str());
@@ -125,13 +128,17 @@ void drawParticleRing(SkCanvas& canvas, SkPoint center, RingStroke ring, float s
     SkRuntimeShaderBuilder builder(effect);
     builder.uniform("center") = SkV2{center.x(), center.y()};
     builder.uniform("radii") = SkV2{outer, inner};
+    builder.uniform("quantize") = int(quantize);
     const auto outerEdges = ringEdges(outer), innerEdges = ringEdges(inner);
     builder.uniform("outerCount") = outerEdges.count;
     builder.uniform("innerCount") = innerEdges.count;
     if (!builder.uniform("outerPlanes").set(outerEdges.planes.data(), int(outerEdges.planes.size()))
         || !builder.uniform("innerPlanes").set(innerEdges.planes.data(), int(innerEdges.planes.size())))
         throw std::runtime_error("Skia particle ring shader plane uniforms unavailable");
-    builder.uniform("tint") = SkV4{color.fR * color.fA, color.fG * color.fA, color.fB * color.fA, color.fA};
+    // Match the fixed-point brush opacity before resolving each ring to bytes.
+    constexpr float opacitySteps = 4096.f;
+    const float alpha = quantize ? std::floor(color.fA * opacitySteps) / opacitySteps : color.fA;
+    builder.uniform("tint") = SkV4{color.fR * alpha, color.fG * alpha, color.fB * alpha, alpha};
     auto shader = builder.makeShader();
     if (!shader) throw std::runtime_error("Skia particle ring shader unavailable");
     SkPaint paint;

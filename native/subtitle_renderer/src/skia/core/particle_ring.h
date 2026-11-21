@@ -13,5 +13,5 @@ struct RingStroke {
 };
 
 std::optional<RingStroke> concentricRing(const SkPath& path);
-void drawParticleRing(SkCanvas&, SkPoint center, RingStroke, float scale, SkColor4f color);
+void drawParticleRing(SkCanvas&, SkPoint center, RingStroke, float scale, SkColor4f color, bool quantize);
 }
