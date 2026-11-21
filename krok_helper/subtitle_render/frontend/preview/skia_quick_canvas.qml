@@ -13,9 +13,14 @@ Rectangle {
     property url backgroundImage
     property bool containImage: false
     signal scenePrepared(var revision, bool accepted, string error)
+    signal frameSubmitted(var revision, var generation, int timeMs)
 
     function configureSubtitle(data, revision) {
         return subtitle.configureScene(data, revision)
+    }
+
+    function clearSubtitle(revision) {
+        return subtitle.clearScene(revision)
     }
 
     function requestSubtitleFrame(revision, generation, timeMs) {
@@ -58,6 +63,9 @@ Rectangle {
             objectName: "subtitleRenderer"
             onScenePrepared: function(revision, accepted, error) {
                 root.scenePrepared(revision, accepted, error)
+            }
+            onFrameSubmitted: function(revision, generation, timeMs) {
+                root.frameSubmitted(revision, generation, timeMs)
             }
         }
     }

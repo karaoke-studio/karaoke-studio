@@ -958,6 +958,8 @@ class TransportBar(QWidget):
 
     timeChanged = Signal(int)
     """滑块拖动 / 程序设值 / 播放推进时 emit 当前时间（毫秒）。"""
+    seekRequested = Signal(int)
+    """只有显式 seek 才会开启新的媒体时间代次。"""
 
     playbackStateChanged = Signal(bool)
     """播放 / 暂停状态变化时 emit，供视频预览层同步静音视频播放器。"""
@@ -1368,6 +1370,8 @@ class TransportBar(QWidget):
 
     def _on_slider_changed(self, value: int) -> None:
         self._update_timecode(value)
+        if not self._suppress_seek:
+            self.seekRequested.emit(value)
         self.timeChanged.emit(value)
         if self._suppress_seek:
             return

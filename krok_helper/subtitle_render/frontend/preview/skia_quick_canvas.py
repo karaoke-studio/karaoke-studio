@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.domain.background import BackgroundSource, back
 
 class SkiaQuickCanvas(QQuickWidget):
     scene_prepared = pyqtSignal(object, bool, str)
+    frame_submitted = pyqtSignal(object, object, int)
 
     def __init__(self, qml_directory: Path, parent=None):
         super().__init__(parent)
@@ -26,6 +27,7 @@ class SkiaQuickCanvas(QQuickWidget):
             errors = '\n'.join(error.toString() for error in self.errors())
             raise RuntimeError(f'无法加载 Skia 直画预览\n{errors}')
         self._root.scenePrepared.connect(self.scene_prepared.emit)
+        self._root.frameSubmitted.connect(self.frame_submitted.emit)
         self.renderer = self._root.findChild(QQuickItem, 'subtitleRenderer')
         self.video_output = self._root.findChild(QQuickItem, 'videoOutput')
         self._background = BackgroundSource()
@@ -54,8 +56,13 @@ class SkiaQuickCanvas(QQuickWidget):
             self._root.setProperty('backgroundImage', url)
 
     def configure_scene(self, ir: dict, revision: int) -> bool:
-        data = QByteArray(json.dumps(ir, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-        return bool(self._root.configureSubtitle(data, revision))
+        return self.configure_scene_bytes(json.dumps(ir, ensure_ascii=False, allow_nan=False).encode('utf-8'), revision)
+
+    def configure_scene_bytes(self, data: bytes, revision: int) -> bool:
+        return bool(self._root.configureSubtitle(QByteArray(data), revision))
+
+    def clear_scene(self, revision: int) -> bool:
+        return bool(self._root.clearSubtitle(revision))
 
     def request_frame(self, revision: int, generation: int, time_ms: int) -> bool:
         accepted = self._root.requestSubtitleFrame(revision, generation, time_ms)

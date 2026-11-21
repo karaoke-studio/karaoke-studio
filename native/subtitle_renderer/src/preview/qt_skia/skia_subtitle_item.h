@@ -4,6 +4,7 @@
 #include <QtQuick/QQuickRhiItem>
 #include <QtQml/qqmlregistration.h>
 #include <optional>
+#include <tuple>
 
 namespace krok::subtitle::preview {
 struct PreviewFrame {
@@ -11,6 +12,8 @@ struct PreviewFrame {
     quint64 revision = 0;
     quint64 generation = 0;
     int timeMs = 0;
+
+    bool operator==(const PreviewFrame&) const = default;
 };
 
 // Host-side subtitle preview surface. It renders on Qt's scene graph render thread into the
@@ -34,16 +37,19 @@ public:
     bool motionProbeEnabled() const { return motionProbeEnabled_; }
     void setMotionProbeEnabled(bool enabled);
     Q_INVOKABLE bool configureScene(const QByteArray& ir, quint64 revision);
+    Q_INVOKABLE bool clearScene(quint64 revision);
     Q_INVOKABLE bool requestFrame(quint64 revision, quint64 generation, int timeMs);
     // Read only during synchronize() while Qt blocks the GUI thread.
     bool usesMotionProbe() const { return motionProbeEnabled_ && requestedRevision_ == 0; }
     PreviewFrame frameRequest() const { return frame_; }
     // Render thread, while the GUI thread is blocked in synchronize().
     void publishGraphicsBackend(const QString& backend, bool accepted);
+    void publishFrameSubmission(quint64 revision, quint64 generation, int timeMs);
 signals:
     void graphicsBackendChanged();
     void motionProbeEnabledChanged();
     void scenePrepared(quint64 revision, bool accepted, const QString& error);
+    void frameSubmitted(quint64 revision, quint64 generation, int timeMs);
 protected:
     QQuickRhiItemRenderer* createRenderer() override;
 private:
@@ -57,6 +63,7 @@ private:
     quint64 sceneRevision_ = 0;
     std::shared_ptr<const ::subtitle::skia::PreparedScene> scene_;
     PreviewFrame frame_;
+    std::tuple<quint64, quint64, int> lastReceipt_{};
     QString backend_;
     bool accepted_ = false;
     bool motionProbeEnabled_ = false;

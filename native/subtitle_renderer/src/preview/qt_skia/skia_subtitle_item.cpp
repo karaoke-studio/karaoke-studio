@@ -8,6 +8,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
+#include <QtCore/QPointer>
 #include <QtCore/QThread>
 #include <QtConcurrent/QtConcurrentRun>
 #include <rhi/qrhi.h>
@@ -122,10 +123,11 @@ public:
 protected:
     void initialize(QRhiCommandBuffer*) override {
         requireOwner();
-        // Runs again when the item's texture is recreated (resize, new window): re-report then.
-        backend_ = QString::fromLatin1(rhi()->backendName());
-        accepted_ = rhi()->backend() == kRequiredBackend;
-        reported_ = false;
+        const auto backend = QString::fromLatin1(rhi()->backendName());
+        const bool accepted = rhi()->backend() == kRequiredBackend;
+        if (backend != backend_ || accepted != accepted_) reported_ = false;
+        backend_ = backend;
+        accepted_ = accepted;
         trace("initialized");
         qCDebug(lcPreview) << "texture-size" << colorTexture()->pixelSize();
         if (!accepted_) {
@@ -147,6 +149,7 @@ protected:
     void synchronize(QQuickRhiItem* item) override {
         requireOwner();
         const auto preview = static_cast<SkiaSubtitleItem*>(item);
+        item_ = preview;
         motionProbe_ = preview->usesMotionProbe();
         frame_ = preview->frameRequest();
         // synchronize() precedes initialize() within a frame, so a fresh result is published
@@ -158,10 +161,29 @@ protected:
     }
     void render(QRhiCommandBuffer* cb) override {
         requireOwner();
+        const auto id = colorTexture()->globalResourceId();
+        const auto native = colorTexture()->nativeTexture().object;
+        const auto size = colorTexture()->pixelSize();
+        // The item texture persists between requests. A follow-up synchronization
+        // just to deliver the receipt needs no second draw or submit.
+        if (!motionProbe_ && frame_.scene && frame_ == lastSubmitted_ && id == submittedTextureId_
+            && native == submittedTextureObject_ && size == submittedTextureSize_) return;
         if (!drawWithSkia()) {
+            lastSubmitted_ = {};
             // Transparent texture; nothing else is drawn on an unaccepted or failed backend.
             cb->beginPass(renderTarget(), Qt::transparent, {1.0f, 0});
             cb->endPass();
+        } else if (!motionProbe_) {
+            lastSubmitted_ = frame_;
+            submittedTextureId_ = id;
+            submittedTextureObject_ = native;
+            submittedTextureSize_ = size;
+            // The application outlives the scene graph. Resolve the item's
+            // guarded pointer only on its owning GUI thread.
+            QMetaObject::invokeMethod(QCoreApplication::instance(),
+                [item = item_, revision = frame_.revision, generation = frame_.generation, time = frame_.timeMs] {
+                    if (item) item->publishFrameSubmission(revision, generation, time);
+                }, Qt::QueuedConnection);
         }
         if (motionProbe_ || !reported_) update();
     }
@@ -205,7 +227,12 @@ private:
     bool accepted_ = false;
     bool reported_ = false;
     bool motionProbe_ = false;
+    QPointer<SkiaSubtitleItem> item_;
     PreviewFrame frame_;
+    PreviewFrame lastSubmitted_;
+    quint64 submittedTextureId_ = 0;
+    quint64 submittedTextureObject_ = 0;
+    QSize submittedTextureSize_;
     QElapsedTimer clock_;
     QRhi* deviceRhi_ = nullptr;
     PlatformBridge bridge_;
@@ -230,6 +257,17 @@ bool SkiaSubtitleItem::configureScene(const QByteArray& ir, quint64 revision) {
     requestedRevision_ = revision;
     pendingConfig_ = PendingConfig{ir, revision};
     if (!preparingRevision_) startPreparation();
+    update();
+    return true;
+}
+
+bool SkiaSubtitleItem::clearScene(quint64 revision) {
+    if (revision <= requestedRevision_) return false;
+    requestedRevision_ = revision;
+    pendingConfig_.reset();
+    scene_.reset();
+    sceneRevision_ = 0;
+    frame_ = {};
     update();
     return true;
 }
@@ -271,6 +309,15 @@ void SkiaSubtitleItem::publishGraphicsBackend(const QString& backend, bool accep
     accepted_ = accepted;
     // Never emit on the render thread: QML bindings and Python slots belong to the GUI thread.
     QMetaObject::invokeMethod(this, &SkiaSubtitleItem::graphicsBackendChanged, Qt::QueuedConnection);
+}
+
+void SkiaSubtitleItem::publishFrameSubmission(quint64 revision, quint64 generation, int timeMs) {
+    const auto receipt = std::tuple{revision, generation, timeMs};
+    if (frame_.revision == revision && frame_.generation == generation && frame_.timeMs == timeMs
+        && lastReceipt_ != receipt) {
+        lastReceipt_ = receipt;
+        emit frameSubmitted(revision, generation, timeMs);
+    }
 }
 
 QQuickRhiItemRenderer* SkiaSubtitleItem::createRenderer() {

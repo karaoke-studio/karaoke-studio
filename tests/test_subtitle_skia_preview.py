@@ -215,18 +215,25 @@ Rectangle {
     property int lastRevision: 0
     property bool accepted: false
     property string failure: ''
+    property string receipts: ''
     function start() {
         return renderer.configureScene(sceneSource.bad, 1) && renderer.configureScene(sceneSource.good, 2)
     }
     function seek(revision, generation, timeMs) { return renderer.requestFrame(revision, generation, timeMs) }
     function seekPair() { return renderer.requestFrame(2, 2, 1250) && renderer.requestFrame(2, 2, 1350) }
     function rejectScene() { return renderer.configureScene(sceneSource.bad, 3) }
+    function clearScene() {
+        return renderer.configureScene(sceneSource.good, 4) && renderer.clearScene(5)
+    }
     SkiaSubtitleItem {
         id: renderer; anchors.fill: parent
         onScenePrepared: function(revision, ok, error) {
             parent.lastRevision = revision
             parent.accepted = ok
             parent.failure = error
+        }
+        onFrameSubmitted: function(revision, generation, timeMs) {
+            parent.receipts += revision + '/' + generation + '/' + timeMs + ';'
         }
     }
 }'''
@@ -286,12 +293,20 @@ def verify_rollback():
     QTimer.singleShot(250, lambda: capture(capture_revisit))
 
 def capture_revisit():
+    assert root.property('receipts') == '2/1/100;2/2/1350;2/3/100;', root.property('receipts')
+    assert root.clearScene()
+    assert not root.seek(2, 4, 100) and not root.seek(4, 4, 100)
+    QTimer.singleShot(250, lambda: capture(verify_clear))
+
+def verify_clear():
+    assert root.property('lastRevision') == 3
     if validate_only:
         print('validated scene', flush=True)
         app.quit()
         return
     assert frames[0] == frames[2]
     assert frames[0] != frames[1]
+    assert not any(frames[3][0::4]) and not any(frames[3][1::4])
     red = sum(r > 180 and g < 80 for r, g in zip(frames[0][0::4], frames[0][1::4]))
     green = sum(r < 80 and g > 180 for r, g in zip(frames[1][0::4], frames[1][1::4]))
     print('scene', red, green, flush=True)
@@ -495,8 +510,10 @@ from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
 from krok_helper.subtitle_render.frontend.preview.playback import PlaybackController
+from krok_helper.subtitle_render.frontend.preview.preview_view import TransportBar
 from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
 from krok_helper.subtitle_render.frontend.preview.skia_quick_canvas import SkiaQuickCanvas
+from krok_helper.subtitle_render.frontend.preview.skia_quick_clock import SkiaQuickClock
 from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
 select_quick_graphics_api()
 from PyQt6.QtCore import QPoint, QRect, QTimer
@@ -557,17 +574,31 @@ blocker.setStyleSheet("background: #ff0000;")
 band = QRect(0, int(H * 0.45), W, 12)
 blocker.setGeometry(band); blocker.raise_()
 player = None
+clock = SkiaQuickClock(canvas, fps=30)
+transport = TransportBar(host)
+transport.hide()
+transport.set_duration(4000)
+transport.set_preview_fps(30)
+transport_times = []
+transport.timeChanged.connect(transport_times.append)
+transport.timeChanged.connect(clock.set_time)
+transport.seekRequested.connect(clock.seek)
+transport.playbackStateChanged.connect(clock.set_playing)
+receipts = []
+canvas.frame_submitted.connect(lambda revision, generation, t: receipts.append((revision, generation, t)))
 if case == 'video':
     player = PlaybackController(host)
     player.set_video_output(canvas.video_output)
     player.set_media(work / 'v.mp4')
-    player.positionChanged.connect(lambda t: canvas.request_frame(1, 1, t))
+    transport.attach_playback_controller(player)
 
 def prepared(revision, accepted, error):
     assert revision == 1 and accepted, error
-    assert canvas.request_frame(1, 1, 0 if player else 1300)
     if player:
-        player.play()
+        transport.play()
+    else:
+        transport.set_time(100)
+        transport.set_time(1300)
     QTimer.singleShot(1300, report)
 
 def report():
@@ -584,6 +615,22 @@ def report():
     print("mouse_reaches_canvas", hit is canvas)
     if player:
         print("video_playing", player.is_playing() and player.position() > 0)
+        assert 3 < len(receipts) <= 44, receipts
+        emitted = iter([0, *transport_times])
+        for revision, generation, t in receipts:
+            assert revision == generation == 1 and t in emitted, (receipts, transport_times)
+        transport.pause()
+        transport.set_time(500)
+        QTimer.singleShot(200, verify_paused_seek)
+    else:
+        assert receipts == [(1, 3, 1300)], receipts
+        app.quit()
+
+def verify_paused_seek():
+    assert not player.is_playing()
+    assert receipts[-1] == (1, 2, 500), receipts
+    assert sum(generation == 2 for _, generation, _ in receipts) == 1, receipts
+    if player:
         player.shutdown()
     app.quit()
 
