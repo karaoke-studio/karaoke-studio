@@ -253,6 +253,52 @@ def test_title_paints_match_actual_d2d_gpu(binary, tmp_path, mode):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+def painted_role_title(tmp_path):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style = role_title(outlined=True)
+    title = style.title_overlays[0]
+    texture = write_png(tmp_path / 'title-role-texture.png', pattern('transparent'))
+    gradient = PaintFill(mode='gradient_horizontal', start_color='#F83408', end_color='#08A3F8')
+    image = PaintFill(mode='image', image_path=str(texture), color='#483CE1', image_scale_pct=135)
+    accent = style.custom_style_schemes['accent']
+    paint = accent.karaoke_colors.before
+    colors = KaraokeColors(before=replace(paint, text=gradient), after=replace(paint, text=gradient))
+    image_colors = KaraokeColors(before=replace(paint, text=image), after=replace(paint, text=image))
+    schemes = {'accent': replace(accent, karaoke_colors=colors),
+               'image': replace(accent, font_size_px=96, latin_font_size_px=96, karaoke_colors=image_colors)}
+    return track, replace(style, title_overlays=[replace(title, char_role_labels=[
+        [None, 'accent', 'image', 'accent'], ['image']
+    ])], custom_style_schemes=schemes)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_title_role_paints_use_independent_layers(binary, tmp_path, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = painted_role_title(tmp_path)
+    ir = ir_for(binary, (track, style))
+    assert {'p06_role_body_paints', 'p08_title_role_outlines'} <= set(ir['skia_titles'][0]['source']['required_features'])
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [400, 500, 1800, 500])
+    assert 0 < frames[0][..., 3].sum() < frames[1][..., 3].sum()
+    assert np.array_equal(frames[1], frames[2]) and np.array_equal(frames[1], frames[3])
+    colors = frames[1][frames[1][..., 3] == 255, :3]
+    assert np.unique(colors, axis=0).shape[0] > 60
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_role_paints_match_actual_d2d_gpu(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = painted_role_title(tmp_path)
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_role_paints'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def vector_guide_title():
     track, style = sample()
     track = replace(track, meta=replace(track.meta, offset_ms=5000))

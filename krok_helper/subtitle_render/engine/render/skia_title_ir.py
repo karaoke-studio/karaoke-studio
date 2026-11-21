@@ -59,7 +59,7 @@ def title_style(title):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
     textured = any(paint[layer]['mode'] != 'solid' for paint in paints for layer in ('fill', 'stroke', 'stroke2'))
-    if textured and (roles or guides or title['decoration_kind'] != 'none'):
+    if textured and (guides or title['decoration_kind'] != 'none'):
         return None
     if guides and (roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
         return None
