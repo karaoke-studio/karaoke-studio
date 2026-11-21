@@ -58,7 +58,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         || (s.allowBiting && !canonical)
         || (outlineLayers == 0 && (s.strokeWidth != 0 || s.latinStrokeWidth != 0))
         || (outlineLayers > 0 && (s.strokeWidth < 0 || !std::isfinite(s.strokeWidth)
-            || s.strokeWidth != s.latinStrokeWidth
+            || s.latinStrokeWidth < 0 || !std::isfinite(s.latinStrokeWidth)
+            || (s.strokeWidth != s.latinStrokeWidth && !caps.latinPrimaryOutline)
             || !supportedOutline(s.beforeStrokePaint) || !supportedOutline(s.afterStrokePaint)))
         || (outlineLayers < 2 && (s.stroke2Width != 0 || s.latinStroke2Width != 0))
         || (outlineLayers == 2 && (s.stroke2Width < 0 || !std::isfinite(s.stroke2Width)
@@ -98,7 +99,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
     for (const auto& style : scene.charStyles)
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
             .bodyGradients = caps.roleBodyPaints, .imageFills = caps.roleBodyPaints,
-            .staticGlow = caps.roleStaticGlow});
+            .staticGlow = caps.roleStaticGlow, .latinPrimaryOutline = caps.latinPrimaryOutline});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;

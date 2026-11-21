@@ -10,6 +10,7 @@
 #include "scene_input.h"
 #include "vertical_text.h"
 #include "../render_backend.h"
+#include "../text_semantics.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../scene/skia_ir_contract.h"
 #include "../../scene/skia_text_projection.h"
@@ -68,6 +69,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
+    const bool latinPrimaryOutline = features.contains("p06_latin_primary_outline");
     const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
     const bool outlineGradients = features.contains("p06_outline_gradient");
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
@@ -82,7 +84,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
-        .roleStaticGlow = roleStaticGlow});
+        .roleStaticGlow = roleStaticGlow, .latinPrimaryOutline = latinPrimaryOutline});
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -352,9 +354,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || interval[1].toDouble() < interval[0].toDouble())
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
+            const float strokeWidth = latinPrimaryOutline && isLatinText(line.chars[j].text)
+                ? paint.latinStrokeWidth : paint.strokeWidth;
             const auto beforeColor = argb(paint.beforeFillPaint.color);
             const auto afterColor = argb(paint.afterFillPaint.color);
-            const double wipePad = std::floor(std::round(paint.strokeWidth / glyphs.dpr) / 2);
+            const double wipePad = std::floor(std::round(strokeWidth / glyphs.dpr) / 2);
             const auto& vector = line.chars[j].vectorGlyph;
             const auto glyphId = sourceChars[j].toObject().value("vector_glyph_id");
             if ((glyphId.isString() && !vector) || (vector && line.chars[j].text != L"\ufffc"))
@@ -387,15 +391,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     || paintNeedsBodyProtection(paint.afterStrokePaint);
                 const auto beforeOutline = argb(paint.beforeStrokePaint.color);
                 const auto afterOutline = argb(paint.afterStrokePaint.color);
-                if (paint.strokeWidth > 0)
+                if (strokeWidth > 0)
                     glyph.outline = ::subtitle::skia::SolidOutline{
-                        ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth),
-                        beforeOutline, afterOutline, bodyAlpha, paint.strokeWidth};
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth),
+                        beforeOutline, afterOutline, bodyAlpha, strokeWidth};
                 if (paint.stroke2Width > 0)
                     glyph.outerOutline = ::subtitle::skia::SolidOutline{
-                        ::subtitle::skia::prepareOutlinePath(glyph.path, paint.strokeWidth + paint.stroke2Width),
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth + paint.stroke2Width),
                         argb(paint.beforeStroke2Paint.color), argb(paint.afterStroke2Paint.color),
-                        bodyAlpha || strokeAlpha, paint.strokeWidth + paint.stroke2Width};
+                        bodyAlpha || strokeAlpha, strokeWidth + paint.stroke2Width};
             }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {

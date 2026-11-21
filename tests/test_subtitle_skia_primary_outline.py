@@ -10,6 +10,7 @@ import pytest
 from test_subtitle_skia_rtl_flow import application, binary, project, rtl_source, collect, configure, ir_for, selection
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
+from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -101,6 +102,49 @@ def test_unsupported_outline_changes_keep_configured_scene(binary, project, muta
             configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert np.array_equal(before[0], after[0])
+
+
+def latin_outline_project(project, use_role):
+    track, style = outlined(project, 10, translucent=True)
+    line = track.lines[0]
+    chars = [replace(char, text=text, role_label='contrast' if use_role and i < 2 else None)
+             for i, (char, text) in enumerate(zip(line.chars, ('A', '字', 'W', '한'), strict=True))]
+    if use_role:
+        role = SubtitleStyleScheme(stroke_width_px=12, latin_stroke_width_px=4, stroke2_enabled=False,
+                                   karaoke_colors=style.karaoke_colors)
+        style = replace(style, custom_style_schemes={'contrast': role})
+    else:
+        style = replace(style, latin_stroke_width_px=4)
+    return replace(track, lines=[replace(line, chars=chars)]), style
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('use_role', [False, True], ids=['main', 'role'])
+def test_latin_primary_outline_uses_authored_cell_slot(binary, project, target, use_role):
+    ir = ir_for(binary, latin_outline_project(project, use_role))
+    assert 'p06_latin_primary_outline' in ir['required_features']
+    pads = []
+    for cell in ir['skia_layout']['lines'][0]['cells']:
+        left = cell['metrics']['ink'][0]
+        pads.append(cell['origin_x'] + left - cell['wipe_left'])
+    assert pads == pytest.approx([2, 6, 5, 5] if use_role else [2, 5, 2, 5])
+    undeclared = copy.deepcopy(ir)
+    undeclared['required_features'].remove('p06_latin_primary_outline')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        before, _ = collect(process, [550, 750])
+        with pytest.raises(NativeRendererError):
+            configure(process, undeclared)
+        after, _ = collect(process, [750, 550], generation=2)
+    assert not np.array_equal(before[0], before[1])
+    assert np.array_equal(before[0], after[1]) and np.array_equal(before[1], after[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('use_role,dpr', [(False, 1), (True, 1.5)])
+def test_latin_primary_outline_matches_actual_gpu(binary, project, use_role, dpr):
+    track, style = latin_outline_project(project, use_role)
+    assert_outline_matches_actual_gpu(binary, track, style, dpr)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

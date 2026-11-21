@@ -18,6 +18,7 @@ struct SkiaPaintCapabilities {
     bool roleOutlines = false;
     bool roleBodyPaints = false;
     bool roleStaticGlow = false;
+    bool latinPrimaryOutline = false;
 };
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
 SkMatrix skiaViewport(const RenderScene&);
