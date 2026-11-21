@@ -268,7 +268,10 @@ git submodule status
    该文档是待实施计划，不代表已切换生产后端；当前 GPU 默认与 G6 状态仍以下方关键约束为准。
    Skia 迁移最终目标（2026-11-14 用户明确）：Windows/Linux Vulkan、macOS Metal，
    CPU fallback 也使用同核心的 Skia Raster；不以 QPainter 做迁移画面对照，
-   只做 D2D GPU–Skia GPU 与 Skia CPU–Skia GPU 对照。验收后退役旧字幕绘制路径。
+   只做 D2D GPU–Skia GPU 与 Skia CPU–Skia GPU 对照。旧路径退役须等待用户明确授权。
+
+   当前源码已接通 P09 正式浮窗直画与 P10 五种导出格式。功能组合以实施计划 §8 的清单和
+   §14 的最新验证为准。下面 P04–P05 段落中的子集限制记录各批次引入时的边界。
 
    P01 的独立构建入口已实现：`scripts/build_skia_renderer.py`，锁文件为
    `native/subtitle_renderer/skia.lock.json`。它构建 C++ Skia 基础层和 GPU/Raster
@@ -509,8 +512,12 @@ git submodule status
    Widgets/Quick 窗口创建前调用；Linux 同时请求 swap interval 0，避免已复现的
    Wayland FIFO 呈现等待。隐藏保留 Qt device，完整设备恢复重建整个宿主；不要
    将原窗口强制 QRhi purge 当作已验收恢复模式。生命周期、故障影响与硬件门槛
-   见实施计划 §14.8；P04 产品 G5 闭环见 §14.9。P03 Quick 直画模块仍是边界验证，
-   P09 正式零回读预览和 P11 压力恢复尚未完成。
+   见实施计划 §14.8；P04 产品 G5 闭环见 §14.9。P09 在显式选用 Skia 时以
+   `KROK_SUBTITLE_SKIA_DIRECT_PREVIEW=1` 启用正式浮窗直画。浮窗、离屏 GPU 和编码前
+   抽样对照见 §14.237；Mac 托管复验见 §14.238 与 §14.244。Linux 真硬件及 Mac 真机仍需
+   阶段验收。P10 按精确帧时间交付，设 `fallback=raster` 时，结构化 GPU 设备错误可清理
+   半成品并从第 0 帧整轮重导。Windows Skia 导出范围复用见 §14.246。复杂工程兼容面及
+   P11 长播结论以实施计划为准。
 
 文档 1 的「当前进度」是 2026-07-13 的快照（渲染后端口径已于 2026-11-10 复核更新）；其余条目与现状冲突时，以下面的「关键约束」和代码为准。
 
