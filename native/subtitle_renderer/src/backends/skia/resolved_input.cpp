@@ -212,11 +212,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         const bool rtlRuby = style.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
         const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
-        if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse || (line.karaokeAnimation != "none" && !rtlRubySinging)
+        const bool rtlRubyNoWipe = rtlRuby && prepared.noWipe && features.contains("p07_rtl_ruby_no_wipe");
+        if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse
+            || (line.karaokeAnimation != "none" && !rtlRubySinging && !rtlRubyNoWipe)
             || line.entryAnimation != "none" || line.exitAnimation != "none" || line.zoomPulseEnabled
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || !projected.charStyles.empty()))
-            throw BackendError("Skia 右至左上注音当前需要有描边的普通走字或 Utopia 唱字，支持实色光晕");
+            throw BackendError("Skia 右至左上注音当前需要有描边的普通走字、整字变色或 Utopia 唱字，支持实色光晕");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft

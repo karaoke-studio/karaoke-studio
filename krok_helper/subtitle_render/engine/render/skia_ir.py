@@ -570,12 +570,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 look = item.layout_style
                 source = ir['track']['lines'][item.track_index]
                 if (look.stroke_width_px <= 0 or item.line.wipe_reverse or _uses_decoration(look, 'shadow')
-                        or source.get('karaoke_anim') not in {'none', 'utopia'} or source.get('zoom_pulse')
+                        or source.get('karaoke_anim') not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
                         or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                         or _inline_role_labels(item)
                         or any('shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)):
-                    raise ValueError('Skia 右至左上注音当前需要有描边的普通走字或 Utopia 唱字，支持实色光晕')
+                    raise ValueError('Skia 右至左上注音当前需要有描边的普通走字、整字变色或 Utopia 唱字，支持实色光晕')
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         sources, indices = lower_sources(prepared[0])
         zoom_lines = {
@@ -698,6 +698,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['zero_ruby_no_wipe_schema'] = 1
         ir["required_features"].append("p07_no_wipe")
         ir["skia_layout"]["no_wipe_schema"] = 1
+        if 'p05_horizontal_rtl_ruby' in ir['required_features']:
+            ir['required_features'].append('p07_rtl_ruby_no_wipe')
         lower_decoration = any(source.get('karaoke_anim') == 'no_wipe' and any(
             'lower_glow' in group or 'lower_shadow' in group for group in final.get('ruby_groups', ()))
             for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True))

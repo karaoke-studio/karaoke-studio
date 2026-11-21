@@ -202,7 +202,7 @@ def test_unvalidated_rtl_combinations_stay_explicitly_gated(binary,project,kind)
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
-@pytest.mark.parametrize('effect', ['none', 'utopia'])
+@pytest.mark.parametrize('effect', ['none', 'utopia', 'no_wipe'])
 def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, semantics, effect):
     track, style = reading
     body = colors('#FFFFFFFF', '#FFFFFFFF')
@@ -212,7 +212,8 @@ def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, sem
                     karaoke_anim=effect, layout_semantics=semantics)
     ir = ir_for(binary, (track, style))
     ltr = ir_for(binary, (track, replace(style, right_to_left=False)))
-    feature = 'p07_rtl_ruby_singing_scale' if effect == 'utopia' else 'p05_horizontal_rtl_ruby'
+    feature = {'none': 'p05_horizontal_rtl_ruby', 'utopia': 'p07_rtl_ruby_singing_scale',
+               'no_wipe': 'p07_rtl_ruby_no_wipe'}[effect]
     assert feature in ir['required_features']
     units = ir['skia_layout']['lines'][0]['ruby_groups'][0]['units']
     plain = ltr['skia_layout']['lines'][0]['ruby_groups'][0]['units']
@@ -220,6 +221,8 @@ def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, sem
     assert [cell['interval_ms'] for cell in units] == [cell['interval_ms'] for cell in plain]
     start, end = units[0]['interval_ms']
     times = [start - 1, (start + end) // 2, units[-1]['interval_ms'][1]]
+    if effect == 'no_wipe':
+        times[:2] = [end - 1, end]
     bad = copy.deepcopy(ir)
     bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -231,13 +234,15 @@ def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, sem
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
     green = (frames[1][..., 1] > frames[1][..., 0]) & (frames[1][..., 3] > 15)
     red = (frames[1][..., 0] > frames[1][..., 1]) & (frames[1][..., 3] > 15)
-    assert np.nonzero(green)[1].mean() > np.nonzero(red)[1].mean()
+    assert green.any() and red.any() and np.nonzero(green)[1].mean() > np.nonzero(red)[1].mean()
+    if effect == 'no_wipe':
+        assert not np.any((frames[0][..., 1] > frames[0][..., 0]) & (frames[0][..., 3] > 15))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('glow', [False, True])
-@pytest.mark.parametrize('effect', ['none', 'utopia'])
+@pytest.mark.parametrize('effect', ['none', 'utopia', 'no_wipe'])
 def test_rtl_upper_reading_matches_actual_gpu(binary, application, tmp_path, semantics, glow, effect):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
@@ -248,6 +253,8 @@ def test_rtl_upper_reading_matches_actual_gpu(binary, application, tmp_path, sem
         style = replace(style, decoration_kind='none', decoration_kind_before='none',
                         ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     times = (300, 600, 1500, 2600, 3400, 3450, 3500, 3650, 3900, 4120, 4400, 4499, 4500, 4501, 5000)
+    if effect == 'no_wipe':
+        times = tuple(sorted({*times, 3674, 3675, 3676, 3949, 3950, 3951}))
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 
