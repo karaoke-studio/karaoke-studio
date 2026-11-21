@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace subtitle::skia {
@@ -41,7 +42,7 @@ struct ParticleVisibility {
 };
 
 inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs, bool front,
-                              bool exitNote) {
+                              std::string_view sampledKind) {
     SkPaint paint;
     paint.setAntiAlias(true);
     for (const auto& item : bursts) {
@@ -50,6 +51,7 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
         const float colorAlpha = paint.getAlphaf();
         const bool flameBody = item.burst.kind == "flame";
         const bool flameCore = item.burst.kind == "flame_alt";
+        const bool sampled = item.burst.kind == sampledKind;
         for (const auto& particle : krok::subtitle::native::effects::burstParticlesAt(
                  item.burst, tMs, item.originX, item.originY, item.boxW, item.boxH)) {
             if (particle.alpha <= 0.f || particle.sizePx <= 0.f) continue;
@@ -76,7 +78,7 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             paint.setAlphaf(alpha);
             // Give Skia the final physical outline, as for the subtitle glyphs.
             const auto outline = particle_detail::spriteOutline(item.sprite, transform);
-            if (exitNote && item.burst.kind == "note")
+            if (sampled)
                 drawSamplePatternPath(canvas, outline, paint);
             else
                 canvas.drawPath(outline, paint);
