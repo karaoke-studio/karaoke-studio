@@ -57,7 +57,8 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     for (const auto& feature : source.value("required_features").toArray())
         if (!allowed.contains(feature)
             && !(title && (feature == QJsonValue("p05_vector_guides") || feature == QJsonValue("p08_bitmap_guides")
-                           || feature == QJsonValue("p08_animated_title_guides"))))
+                           || feature == QJsonValue("p08_animated_title_guides")
+                           || feature == QJsonValue("p08_title_role_outlines"))))
             throw BackendError("Skia 多轨暂不支持此绘制能力 " + feature.toString().toStdString());
     const auto layout = source.value("skia_layout").toObject().value("lines").toArray();
     if ((size.lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");

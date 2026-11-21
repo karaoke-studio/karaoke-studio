@@ -63,7 +63,7 @@ def title_style(title):
         return None
     if guides and (roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
         return None
-    if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
+    if roles and any(paint['decoration_kind'] != 'none'
                      or paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
                      for paint in (title, *roles.values())):
@@ -77,6 +77,9 @@ def title_style(title):
     for label, appearance in roles.items():
         color = _title_color(appearance)
         schemes[label] = SubtitleStyleScheme(**{key: appearance[key] for key in font_fields},
+                                            stroke_width_px=appearance['stroke_width_px'],
+                                            stroke2_width_px=appearance['stroke2_width_px'],
+                                            stroke2_enabled=appearance['stroke2_width_px'] > 0,
                                             karaoke_colors=KaraokeColors(before=color, after=color))
     return Style(
         layout_semantics='n3_1074',

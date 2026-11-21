@@ -159,23 +159,27 @@ def test_multiline_title_matches_actual_d2d_gpu(binary, anchor):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
-def role_title():
+def role_title(outlined=False):
     track, style = sample()
     track = replace(track, meta=replace(track.meta, offset_ms=5000))
     title = replace(solid_title(style), text_template='Skia\nGPU', anchor='center',
                     char_role_labels=[[None, 'accent', None, 'accent'], ['accent']])
-    accent = KaraokeColorState(text=PaintFill(color='#F78E32'))
+    accent = KaraokeColorState(text=PaintFill(color='#F78E32'), stroke=PaintFill(color='#AD146C'),
+                               stroke2=PaintFill(color='#43B223'))
     scheme = SubtitleStyleScheme(font_size_px=102, latin_font_size_px=104, font_weight=700,
                                  latin_font_weight=400, decoration_kind='none',
+                                 stroke_width_px=5 if outlined else 0, stroke2_enabled=outlined,
+                                 stroke2_width_px=4 if outlined else 0,
                                  karaoke_colors=KaraokeColors(before=accent, after=accent))
     return track, replace(style, title_overlays=[title], custom_style_schemes={'accent': scheme})
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_title_roles_preserve_fonts_and_static_palette(binary, target):
+@pytest.mark.parametrize('outlined', [False, True], ids=['plain', 'outlined'])
+def test_title_roles_preserve_fonts_and_static_palette(binary, target, outlined):
     from test_subtitle_skia_resolved import ir_for
 
-    track, style = role_title()
+    track, style = role_title(outlined)
     ir = ir_for(binary, (track, style))
     layout = ir['skia_titles'][0]['source']['skia_layout']
     runs = layout['runs']
@@ -188,16 +192,19 @@ def test_title_roles_preserve_fonts_and_static_palette(binary, target):
     pixels = frames[0][frames[0][..., 3] == 255, :3]
     assert np.any(np.all(pixels == [247, 142, 50], axis=-1))
     assert np.any(np.all(pixels == [97, 190, 248], axis=-1))
+    assert np.any(np.all(pixels == [173, 20, 108], axis=-1)) == outlined
+    assert np.any(np.all(pixels == [67, 178, 35], axis=-1)) == outlined
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_title_roles_match_actual_d2d_gpu(binary):
+@pytest.mark.parametrize('outlined', [False, True], ids=['plain', 'outlined'])
+def test_title_roles_match_actual_d2d_gpu(binary, outlined):
     from types import SimpleNamespace
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
-    track, style = role_title()
+    track, style = role_title(outlined)
     assert_ruby_transition_gpu_parity(
-        binary, SimpleNamespace(track=track, style=style, case_id='title_roles'),
+        binary, SimpleNamespace(track=track, style=style, case_id=f'title_roles_{outlined}'),
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 

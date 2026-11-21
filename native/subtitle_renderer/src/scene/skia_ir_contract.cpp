@@ -80,6 +80,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_line_band_animated_decoration",
         "p08_multiple_sources",
         "p08_solid_title",
+        "p08_title_role_outlines",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
         "p06_multi_lane_outline",

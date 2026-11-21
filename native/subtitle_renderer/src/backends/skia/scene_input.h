@@ -15,6 +15,7 @@ struct SkiaPaintCapabilities {
     bool vectorShapeSignal = false;
     bool volumeSignal = false;
     bool staticLineBand = false;
+    bool titleRoleOutlines = false;
 };
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
 SkMatrix skiaViewport(const RenderScene&);

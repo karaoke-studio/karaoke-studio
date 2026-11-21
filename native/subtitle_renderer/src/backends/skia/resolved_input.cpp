@@ -76,7 +76,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .decoratedShapeSignal = features.contains("p08_decorated_shape_signal"),
         .vectorShapeSignal = features.contains("p08_vector_shape_signal"),
         .volumeSignal = features.contains("p08_volume_signal"),
-        .staticLineBand = features.contains("p08_static_line_band")});
+        .staticLineBand = features.contains("p08_static_line_band"),
+        .titleRoleOutlines = staticTitle && features.contains("p08_title_role_outlines")});
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;

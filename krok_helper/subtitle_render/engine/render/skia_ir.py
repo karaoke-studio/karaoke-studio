@@ -15,6 +15,7 @@ from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
     validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs, vertical_solid_schema)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_vertical_ruby_ir import vertical_ruby_layout
@@ -464,10 +465,18 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'] += ['p06_ruby_solid_outline', 'p06_vertical_ruby_outline']
         ir['required_features'].extend(f'p06_ruby_{kind}' for kind in ('shadow', 'glow')
                                        if vertical_ruby.get(f'ruby_{kind}_schema'))
-    secondary_outline = any(item.layout_style.stroke2_enabled and item.layout_style.stroke2_width_px > 0
-                            for item in plan.lines)
-    if secondary_outline or any(item.layout_style.stroke_width_px > 0 for item in plan.lines):
+    outline_styles = [item.layout_style for item in plan.lines]
+    title_role_styles = []
+    if adjust_position is not None:
+        title_role_styles = [style_for_role_in_layout(item.layout_style, label)
+                             for item in plan.lines
+                             for label in {cell.role_label for cell in item.render_line.chars if cell.role_label}]
+        outline_styles.extend(title_role_styles)
+    secondary_outline = any(look.stroke2_enabled and look.stroke2_width_px > 0 for look in outline_styles)
+    if secondary_outline or any(look.stroke_width_px > 0 for look in outline_styles):
         ir['required_features'].append('p06_primary_solid_outline')
+        if title_role_styles:
+            ir['required_features'].append('p08_title_role_outlines')
     if secondary_outline:
         ir['required_features'].append('p06_secondary_solid_outline')
     if any(char.vector_glyph is not None and not guide_symbol_is_bitmap(char.vector_glyph)
