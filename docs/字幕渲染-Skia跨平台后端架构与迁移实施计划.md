@@ -3711,6 +3711,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_vertical_singing_scale` 在最终竖排布局中写入正文单元中心与各读音单元的轴心。缩放沿用普通 Utopia 的计时和 115% 峰值。走字仍按正文列的固定单元框及读音组原有的独立时钟沿 Y 轴进行。描边和光晕消费同一组缩放后的字形轮廓。
 - 验证以竖排产品几何和时钟为准，覆盖缩放峰值、完成前后、上下颜色顺序、乱序回放及旧能力拒绝后的场景回滚。原始 `vertical` 工程的四张 1080p 帧通过硬件 Vulkan 与 Skia Raster 的原装饰文本预算。§14.280 的两组画面对照统计仍按包含 D2D 对照的场景计算。多列、反向竖排、阴影、整字放大、Utopia 入退场与扫字线组合单独验收。
+- `30e42ae5` 的 Windows 相关回归 **274 通过**。Windows 独立 Raster 的四帧与 Vulkan sidecar 的 Raster 模式逐字节一致。WSL X11、Wayland 各 **24 通过、9 项 Windows 专用跳过**。Windows Vulkan、独立 Raster 与 WSL Vulkan 各通过 **3 项 CTest**，日志前缀 `build/p07-vertical-singing-*`。
 
 ### 14.312 整行淡入下的扫字线光晕回归（2026-11-22）
 
