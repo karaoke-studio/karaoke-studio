@@ -38,7 +38,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool reverseDecoration = line.rubyGroups.empty() && (!line.glow.empty() || line.shadow.visible());
     const bool rtlRubyWithoutScale = !line.rubyGroups.empty() && !line.singingScale.active;
     const bool ltrDecorationWithoutScale = !line.singingScale.active
-        && (line.shadow.visible() || line.hasRubyShadow || !line.rubyGlows[1].empty());
+        && (line.shadow.visible() || line.hasRubyShadow || !line.rubyGlows[1].empty() || line.scanline.enabled);
     const bool fixedOpacity = !line.vertical && (line.wipeRightToLeft
         ? (reverseDecoration || rtlRubyWithoutScale) : ltrDecorationWithoutScale);
     // Match the reference's fixed-point layer opacity before 8-bit blending.

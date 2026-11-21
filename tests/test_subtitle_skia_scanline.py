@@ -70,15 +70,20 @@ def scanline_source(project, kind='plain'):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_multitrack_scanline_tracks_each_source_clock(binary, project, target):
+@pytest.mark.parametrize('animated', [False, True])
+def test_multitrack_scanline_tracks_each_source_clock(binary, project, target, animated):
     track, style = scanline_source(project)
     line = replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=2700)
     track = replace(track, lines=[line])
     side = replace(track, lines=[replace(line, layout_index=1)], meta=replace(track.meta, offset_ms=500))
     style = replace(style, line_y_position='bottom',
                     layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=65)])
+    if animated:
+        style = replace(style, entry_anim='slide_in', exit_anim='fade', entry_lead_ms=200, exit_fade_ms=200)
     ir = ir_for(binary, (track, style), extra_tracks=[side])
     assert all('p07_scanline_band' in source['required_features'] for source in (ir, *ir['skia_extra_sources']))
+    assert all(('p07_scanline_unscaled_line_animation' in source['required_features']) == animated
+               for source in (ir, *ir['skia_extra_sources']))
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [350, 750, 850, 350, 850])
@@ -377,6 +382,12 @@ SCANLINE_MOTIONS = [
     ('band', 'slide_in', 'slide_out'), ('band', 'rise', 'rise'), ('band', 'fade', 'fade'),
     ('flame', 'slide_in', 'slide_out'), ('bubble', 'rise', 'rise'), ('animated', 'fade', 'fade'),
 ]
+SCANLINE_MOTION_CASES = [
+    (shape, entry, leave, 'utopia', 'color') for shape, entry, leave in SCANLINE_MOTIONS
+] + [
+    (shape, entry, leave, 'none', mode) for shape, entry, leave in SCANLINE_MOTIONS if shape == 'band'
+    for mode in ('color', 'brighten', 'follow_before', 'follow_after')
+]
 SHAPED_SCANLINE_SINGING = [('flame', 'note'), ('bubble', 'flame'), ('animated', 'lightning')]
 
 
@@ -387,11 +398,13 @@ def ruby_band_source(reading, softness, utopia=False):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('shape,entry,leave', SCANLINE_MOTIONS)
-def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, target, shape, entry, leave):
-    track, style = ruby_band_source(reading, 10, True)
+@pytest.mark.parametrize('shape,entry,leave,karaoke,mode', SCANLINE_MOTION_CASES)
+def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, target, shape, entry, leave,
+                                                            karaoke, mode):
+    track, style = ruby_band_source(reading, 10, karaoke == 'utopia')
     track = replace(track, lines=[replace(track.lines[0], display_end_override_ms=2200)])
-    style = replace(style, entry_anim=entry, exit_anim=leave, entry_lead_ms=600, exit_fade_ms=600)
+    style = replace(style, entry_anim=entry, exit_anim=leave, entry_lead_ms=600, exit_fade_ms=600,
+                    scanline_mode=mode)
     if shape == 'animated':
         style = replace(style, scanline_shape='image', scanline_image_band_enabled=False,
                         scanline_image_path=str(Path(__file__).with_name('data') / 'guide_anim_3frames.gif'))
@@ -399,8 +412,8 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
         style = replace(style, scanline_shape=shape)
     ir = upper_ir(binary, (track, style), 1)
     bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
-    assert 'p07_scanline_line_animation' in ir['required_features']
-    feature = 'p07_scanline_line_animation' if shape == 'band' else 'p07_scanline_shape_line_animation'
+    feature = ('p07_scanline_unscaled_line_animation' if karaoke == 'none' else
+               'p07_scanline_line_animation' if shape == 'band' else 'p07_scanline_shape_line_animation')
     assert feature in ir['required_features']
     assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
     times = [0, 450, 550, 1100, 1880, 2050, 2200]
@@ -420,17 +433,26 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('shape,entry,leave', SCANLINE_MOTIONS)
-def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, application, tmp_path, shape, entry, leave):
+@pytest.mark.parametrize('shape,entry,leave,karaoke,mode,dpr', [(*case, 1) for case in SCANLINE_MOTION_CASES] + [
+    ('band', 'fade', 'fade', 'none', 'color', 1.5),
+    ('band', 'rise', 'rise', 'none', 'brighten', 1.5),
+    ('band', 'slide_in', 'slide_out', 'none', 'follow_after', 1.5),
+])
+def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, application, tmp_path, shape, entry, leave,
+                                                               karaoke, mode, dpr):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     base = next(c for c in build_cases(tmp_path) if c.case_id == f'scanline_{shape}')
     line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
-    case = replace(base, case_id=f'scanline_{shape}_line_{entry}', track=replace(base.track, lines=[line]),
-                   style=replace(base.style, entry_anim=entry, exit_anim=leave))
-    assert_ruby_transition_gpu_parity(binary, case, (950, 1120, 1260, 1380, 1550, 2600,
-                                                    4110, 4280, 4450, 4530, 4610, 4650))
+    style = replace(base.style, entry_anim=entry, exit_anim=leave, scanline_mode=mode,
+                    karaoke_anim='utopia_scanline' if karaoke == 'utopia' else 'scanline')
+    case = replace(base, case_id=f'scanline_{shape}_{mode}_{karaoke}_{entry}',
+                   track=replace(base.track, lines=[line]), style=style)
+    times = (950, 1120, 1260, 1380, 1550, 2600, 4110, 4280, 4450, 4530, 4610, 4650)
+    if karaoke == 'none':
+        times = tuple(sorted((*times, 951, 957, 967, 986, 4614, 4633, 4643, 4649)))
+    assert_ruby_transition_gpu_parity(binary, case, times, dpr=dpr)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

@@ -184,6 +184,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
     """Validate the horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
+    unscaled_line_motion = False
     shapes = set()
     moving_shapes = shaped_singing = lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -200,7 +201,9 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
                        and (not bursts or shape_with_singing))
         motion = (not ordinary and _ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and look.scanline_mode != 'role'
-                  and line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
+                  and (line.get('karaoke_anim') == 'utopia'
+                       or (line.get('karaoke_anim') == 'none' and look.scanline_shape == 'band'))
+                  and not source.wipe_reverse
                   and not (line.get('zoom_pulse') or line.get('stroke_flash') or line.get('fx_bursts')))
         shape = solid_shape and (ordinary or motion)
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
@@ -221,7 +224,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
-        line_motion = line_motion or motion
+        line_motion |= motion and utopia
+        unscaled_line_motion |= motion and not utopia
         lower_readings = lower_readings or lower_band
         if shape:
             shapes.add(look.scanline_shape)
@@ -236,6 +240,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         features.append('p07_composed_scanline')
     if line_motion:
         features.append('p07_scanline_line_animation')
+    if unscaled_line_motion:
+        features.append('p07_scanline_unscaled_line_animation')
     if particle_band_tracks:
         features.append('p07_ruby_petal_entry_scanline')
     if moving_shapes:

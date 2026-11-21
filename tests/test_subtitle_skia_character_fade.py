@@ -405,6 +405,7 @@ def test_ruby_particle_entry_rejects_unverified_glow(binary, reading, layer):
 
 
 def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None, dpr=1):
+    from krok_helper.subtitle_render.engine.export.native_export import native_export_chunk_frames
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -412,12 +413,17 @@ def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None,
         _, raw = _render_g1_frames(process, case.style, times, force_warp=False,
                                    track=case.track, width=1920, height=1080, dpr=dpr, realization_enabled=False,
                                    extra_tracks=extra_tracks)
-    reference = [np.frombuffer(p, np.uint8).reshape(round(1080 * dpr), round(1920 * dpr), 4) for p in raw]
+    width, height = round(1920 * dpr), round(1080 * dpr)
+    reference = [np.frombuffer(p, np.uint8).reshape(height, width, 4) for p in raw]
+    chunk = native_export_chunk_frames(width=width, height=height, total_frames=len(times))
     rendered = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             process.configure(case.track, case.style, width=1920, height=1080, fps=60, extra_tracks=extra_tracks, dpr=dpr)
-            frames, _ = collect(process, times)
+            frames = []
+            for generation, start in enumerate(range(0, len(times), chunk), 1):
+                batch, _ = collect(process, times[start:start + chunk], generation=generation)
+                frames.extend(batch)
             rendered.append(frames)
     assert_glow_parity(times, reference, *rendered, case.case_id, check_p00_edges=True)
 

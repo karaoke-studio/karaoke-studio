@@ -763,6 +763,9 @@ effect_styles = {
                           shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3),
     'particle-pair': dict(entry_anim='petal', exit_anim='heart', entry_lead_ms=500, exit_fade_ms=600,
                           karaoke_anim='utopia', ruby_decoration_kind='none', stroke_width_px=4),
+    'band-motion': dict(entry_anim='slide_in', exit_anim='rise', entry_lead_ms=600, exit_fade_ms=600,
+                        karaoke_anim='scanline', scanline_enabled=True, scanline_mode='color',
+                        scanline_width_px=36, scanline_glow_px=6, scanline_color='#FFE000'),
 }
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 if effect:
@@ -801,6 +804,7 @@ if '--compare-export' in sys.argv:
     indices = {
         'shadow-motion': {24: 400, 48: 800, 90: 1500},
         'particle-pair': {18: 300, 57: 950, 108: 1800},
+        'band-motion': {24: 400, 48: 800, 90: 1500, 93: 1550},
     }.get(effect, {12: 200, 33: 550, 81: 1350})
     captures = {}
     for index, time_ms in indices.items():
@@ -831,14 +835,31 @@ if '--compare-export' in sys.argv:
     pipe = SimpleNamespace(stdin=SimpleNamespace(write=write_frame))
     _write_frames_native(pipe, job, 120, binary, None, None)
     assert frame_index == 120 and pipe_frames.keys() == indices.keys()
-    with SkiaRendererProcess(binary, selection=SkiaSelection.from_environment()) as process:
+    from contextlib import ExitStack
+
+    selection = SkiaSelection.from_environment()
+    with ExitStack() as stack:
+        process = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
         process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000)
+        preview_reference = process
+        if effect == 'band-motion':
+            # The scanline feather spans device pixels. Compare the preview
+            # at its actual rendering scale and keep the export reference at 1x.
+            preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
+            preview_reference.configure(track, style, width=640, height=360, fps=60,
+                                        duration_ms=2000, dpr=quick._target[2])
         for index, time_ms in indices.items():
             path = work / f'offscreen-{index}.png'
             process.render_frame_png(time_ms, path)
             offscreen = QImage(str(path)).convertToFormat(QImage.Format.Format_RGBA8888)
             assert pixels(offscreen).tobytes() == pipe_frames[index], index
+            if preview_reference is not process:
+                scaled_path = work / f'offscreen-preview-scale-{index}.png'
+                preview_reference.render_frame_png(time_ms, scaled_path)
+                offscreen = QImage(str(scaled_path))
             premultiplied = offscreen.convertToFormat(QImage.Format.Format_RGBA8888_Premultiplied)
+            if preview_reference is not process:
+                premultiplied = premultiplied.scaled(640, 360, transformMode=Qt.TransformationMode.SmoothTransformation)
             expected, preview = pixels(premultiplied), pixels(captures[index])
             left, right = expected[..., 3] >= 128, preview[..., 3] >= 128
             area = expected[..., 3] > 0
@@ -917,8 +938,8 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
     assert 'floating preview verified' in run_floating_preview(qml_dir)
 
 
-@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair'],
-                         ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair'])
+@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair', 'band-motion'],
+                         ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair', 'band-motion'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     result = run_floating_preview(qml_dir, compare_path=tmp_path, effects=effects)
     assert 'Quick, offscreen GPU and export pipe compared' in result

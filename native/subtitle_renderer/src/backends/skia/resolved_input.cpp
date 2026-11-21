@@ -616,7 +616,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool lineGlow = (lineAnimation || lowerUnscaledMotion || fadeComposition || noiseComposition || spinComposition
+        const bool unscaledScanlineMotion = line.scanlineEnabled && line.karaokeAnimation == "none" && ordinaryLineAnimation
+            && features.contains("p07_scanline_unscaled_line_animation");
+        const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion
+            || fadeComposition || noiseComposition || spinComposition
             || geometryComposition || rubyUtopiaExit)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled

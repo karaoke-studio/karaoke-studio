@@ -174,6 +174,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && line.karaokeAnimation == "utopia"
         && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
     const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
+    const bool unscaledScanlineGlow = line.scanlineEnabled && line.karaokeAnimation == "none"
+        && features.contains("p07_scanline_unscaled_line_animation");
     const bool noiseGlow = features.contains("p07_noise_composition")
         && (line.entryAnimation == "noise" || line.exitAnimation == "noise");
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
@@ -184,7 +186,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
-            || decorationMotion.upper || decorationMotion.lower || roleLineFade || gradientLineFade)
+            || decorationMotion.upper || decorationMotion.lower || unscaledScanlineGlow || roleLineFade || gradientLineFade)
         && (scene.charStyles.empty() || roleGlow);
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
