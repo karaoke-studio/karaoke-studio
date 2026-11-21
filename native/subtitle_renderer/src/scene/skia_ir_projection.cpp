@@ -84,10 +84,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const bool outlineRuby = features.contains("p06_outline_ruby");
     const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
     const bool reverseVerticalOutline = cfg.vertical && features.contains("p06_vertical_reverse_outline");
+    const bool reverseHorizontalOutline = !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
+        && features.contains("p06_reverse_decoration");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
             || (cfg.rightToLeft && !rtlRuby) || (cfg.dualLineLayout && !multiLaneOutline)
-            || (features.contains("p05_reverse_wipe") && !reverseVerticalOutline)
+            || (features.contains("p05_reverse_wipe") && !(reverseVerticalOutline || reverseHorizontalOutline))
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应布局能力");
     const auto& band = cfg.lineBand;

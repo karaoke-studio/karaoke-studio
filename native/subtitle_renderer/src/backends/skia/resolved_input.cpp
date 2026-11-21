@@ -107,7 +107,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const auto lines = layout.value("lines").toArray();
     const auto resources = lines.isEmpty() && layout.value("fonts").toObject().isEmpty()
         ? scene::FontResourceTable{} : scene::loadSkiaFontResources(layout.value("fonts").toObject());
-    const auto originalLines = ir.value("track").toObject().value("lines").toArray();
+    const auto originalTrack = ir.value("track").toObject();
+    const auto originalLines = originalTrack.value("lines").toArray();
+    const bool anyReadings = !originalTrack.value("rubies").toArray().isEmpty();
     if (lines.size() != int(projected.lines.size()) || lines.size() > 4096)
         throw BackendError("Skia 最终布局行数不一致或超限");
     const auto runs = layout.value("runs").toArray();
@@ -628,10 +630,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
+        const bool reverseHorizontalDecoration = features.contains("p06_reverse_decoration")
+            && !style.vertical && !style.rightToLeft && !anyReadings
+            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
+        if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline) && !reverseHorizontalDecoration)
+            throw BackendError("Skia 横排反向走字的描边缺少对应能力");
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || (hasShadow && !rtlShadow)))
-                || (line.wipeReverse && !reverseVerticalDecoration)
+                || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
                 || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow))
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))

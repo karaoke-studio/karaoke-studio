@@ -93,6 +93,67 @@ def test_final_clock_projection_moves_curves_without_moving_source_cells():
     with pytest.raises(ValueError, match='重叠终点'): project_reverse_wipe(unadjusted)
 
 
+REVERSE_DECORATIONS = (
+    ('glow', 'glow'), ('shadow', 'shadow'), ('shadow', 'glow'),
+    ('glow', 'shadow'), ('shadow', 'none'), ('none', 'shadow'),
+)
+
+
+def decorated_reverse(project, before, after):
+    from test_subtitle_skia_static_glow import glow_source
+
+    track, style = glow_source(project, 'split')
+    track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    style = replace(style, decoration_kind_before=before, decoration_kind=after, reverse_karaoke_anim='none',
+                    entry_anim='none', exit_anim='none')
+    return track, style
+
+
+@pytest.mark.parametrize('before,after', REVERSE_DECORATIONS)
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_reverse_decoration_replays_with_translucent_outlines(binary, project, before, after, target):
+    track, style = decorated_reverse(project, before, after)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p06_reverse_decoration'
+    assert feature in ir['required_features']
+    assert ir['track']['lines'][0]['wipe_reverse']
+    missing = copy.deepcopy(ir)
+    missing['required_features'].remove(feature)
+    times = [199, 399, 750, 1200, 1801]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, missing)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames)
+    assert not np.array_equal(frames[0], frames[-1])
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('before,after', REVERSE_DECORATIONS)
+def test_reverse_decoration_matches_actual_d2d_and_gpu_raster(binary, project, before, after):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = decorated_reverse(project, before, after)
+    dpr = 1.5
+    times = [199, 200, 300, 399, 599, 600, 750, 899, 900, 1200, 1799, 1800, 2200]
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        rendered.append(frames)
+    assert_glow_parity(times, reference, *rendered, (before, after), check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_no_wipe_roles_keep_glyph_font_and_paint_ownership(binary, roles, target):
     track, style = roles

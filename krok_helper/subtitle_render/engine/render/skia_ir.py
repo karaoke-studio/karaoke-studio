@@ -548,6 +548,17 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     decorations = [kind for kind in ('shadow', 'glow') if any(
         _uses_decoration(item.layout_style, kind) for item in plan.lines)]
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
+    if decorations and not (style.vertical or style.right_to_left or track.rubies):
+        decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse
+                             and any(_uses_decoration(item.layout_style, kind) for kind in decorations)]
+        for item in decorated_reverse:
+            source = ir['track']['lines'][item.track_index]
+            if (source.get('karaoke_anim') != 'none' or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
+                    or _inline_role_labels(item)):
+                raise ValueError('Skia 横排反向走字的实色装饰仅支持普通走字正文')
+        if decorated_reverse:
+            ir['required_features'].append('p06_reverse_decoration')
     if any(_uses_role_glow(item) for item in plan.lines):
         ir['required_features'].append('p06_role_static_glow')
     ruby_decorations = vertical_ruby is not None and any(
