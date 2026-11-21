@@ -322,13 +322,16 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
             && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
-        // Horizontal band with a separately negotiated upper-annotation pass.
+        const bool verticalBand = features.contains("p07_vertical_scanline_band") && staticScanline
+            && resolved.scanlineShape == "band" && resolved.scanlineMode == "color"
+            && source.karaokeAnimation == "none" && !source.wipeReverse && !source.zoomPulseEnabled
+            && !source.strokeFlashEnabled && source.fxBursts.empty();
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
                 || (resolved.scanlineMode != "color" && scanlineVersion < 3)
                 || (resolved.scanlineShape != "band" && !scanlineShape)
                 || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
-                || cfg.vertical || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
+                || (cfg.vertical && !verticalBand) || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
                 || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
                     && (!composedScanline || source.wipeReverse || resolved.scanlineMode == "role"))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
@@ -337,7 +340,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (rubyScanline && (source.wipeReverse || (resolved.scanlineMode == "role" && !roleLayers)
                     || !(staticScanline || movingScanline || particleScanline)
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
-            throw BackendError("Skia 扫字线当前仅支持横排实色高亮带");
+            throw BackendError("Skia 扫字线当前的布局或高亮组合不受支持");
         applyResolvedStyle(style, resolved, cfg.dpr);
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid")
             throw BackendError("Skia 扫字线的角色取色暂仅支持实色");

@@ -168,7 +168,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical',
+@pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical_shape',
                                   'ruby_role_utopia', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
@@ -179,7 +179,9 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
     elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
     elif case == 'rtl': track, style = rtl_source(project); style = band(style)
-    elif case == 'vertical': track, style = vertical_ruby_source(project); track = replace(track, rubies=[]); style = band(style)
+    elif case == 'vertical_shape':
+        track, style = vertical_ruby_source(project)
+        style = replace(band(style), scanline_shape='flame')
     elif case == 'ruby_role_utopia':
         track, style = vertical_ruby_source(project)
         style = replace(band(replace(style, vertical=False)), scanline_mode='role', karaoke_anim='utopia')

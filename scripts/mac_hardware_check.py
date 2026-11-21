@@ -43,6 +43,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_ruby_columns_scale_only_the_current_reading",
     "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_ruby_decoration_moves_with_the_column",
     "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_tracks_keep_independent_timing_and_source_order",
+    "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_scanline_follows_body_and_reading_fronts",
     "tests/test_subtitle_skia_vector_guides.py::test_vector_guide_gpu_raster_and_out_of_order_seek",
     "tests/test_subtitle_skia_secondary_outline.py::test_outer_ring_preserves_inner_alpha",
     "tests/test_subtitle_skia_line_fade.py::test_fade_g5_preview",

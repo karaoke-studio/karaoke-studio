@@ -208,6 +208,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
+    vertical_band = False
     shapes = set()
     moving_shapes = shaped_singing = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -217,6 +218,13 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         ordinary = {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
         particle_entry = index in particle_band_tracks
         bursts = line.get('fx_bursts', ())
+        if look.vertical:
+            if (look.scanline_shape != 'band' or look.scanline_mode != 'color' or not ordinary
+                    or line.get('karaoke_anim') != 'none' or source.wipe_reverse or look.lower_ruby_enabled
+                    or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
+                raise ValueError('Skia 竖排扫字线当前仅支持正向普通走字的实色高亮带')
+            vertical_band = True
+            continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
@@ -234,7 +242,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         lower_band = (look.lower_ruby_enabled and (ordinary or motion) and look.scanline_shape == 'band'
                       and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash or bursts))
         role_composition = look.scanline_mode == 'role' and (bool(track.rubies) or _uses_decoration(look, 'glow'))
-        if ((look.scanline_shape != 'band' and not shape) or look.vertical or look.right_to_left
+        if ((look.scanline_shape != 'band' and not shape) or look.right_to_left
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
                 or (look.lower_ruby_enabled and not lower_band)
@@ -255,6 +263,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
             moving_shapes = moving_shapes or motion
             shaped_singing = shaped_singing or shape_with_singing
     features = []
+    if vertical_band:
+        features.append('p07_vertical_scanline_band')
     if shapes:
         features.append('p07_scanline_shape')
     if 'image' in shapes:
@@ -589,6 +599,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_character_entry_fade_composition')
     if any(line.get('scanline') for line in ir['track']['lines']):
         ir['required_features'] += _validate_scanline_band(track, style, ir['track']['lines'], particle_band_tracks)
+        if vertical_ruby is not None:
+            ir['required_features'].append('p07_ruby_scanline')
     decorations = [kind for kind in ('shadow', 'glow') if any(
         _uses_decoration(item.layout_style, kind) for item in plan.lines)]
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)

@@ -83,9 +83,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                              || !std::isfinite(band.restingPad) || band.restingPad < .5f || band.restingPad > 8192
                              || !std::isfinite(band.softness) || band.softness < 0 || band.softness > band.halfWidth
                              || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
-                             || source.vertical || band.rightToLeft != source.wipeRightToLeft
+                             || band.vertical != source.vertical || band.rightToLeft != source.wipeRightToLeft
+                             || (band.vertical && (band.rightToLeft || band.shape || band.image
+                                 || band.paint.mode != ScanlineColorMode::Color || source.singingScale.active
+                                 || source.utopiaTransition.active()))
                              || source.noWipe || (!band.rubyHighlight && !source.rubyGroups.empty())))
-            throw std::runtime_error("Skia 扫字线仅支持横排实色高亮带");
+            throw std::runtime_error("Skia 扫字线的方向、画笔或布局组合无效");
         if (source.particles.size() > 4096) throw std::runtime_error("Skia 字幕粒子数量超限");
         for (const auto& item : source.particles)
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
@@ -221,7 +224,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
-            line.inkStart = ink.isEmpty() ? 0.f : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
+            if (!ink.isEmpty())
+                line.inkStart = line.scanline.vertical ? ink.fTop : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
             if (!ink.isEmpty()) line.inkCenter = ink.centerX();
             if (line.shadow.visible()) line.decorationInk = ink;

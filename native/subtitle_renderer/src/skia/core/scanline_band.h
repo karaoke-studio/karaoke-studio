@@ -29,6 +29,7 @@ struct ScanlineBand {
     float softness = 0;            // Physical pixels, limited to the band half-width.
     bool rightToLeft = false;
     bool rubyHighlight = false;
+    bool vertical = false;
     ScanlineShape shape;
     std::shared_ptr<const ScanlineImage> image;
 
@@ -46,7 +47,7 @@ struct ScanlineBand {
     std::optional<float> frontAt(const std::vector<Cell>& cells, int t, float inkStart) const {
         if (!enabled || !paint.visible() || cells.empty() || lineWipeComplete(cells, t))
             return std::nullopt;
-        const float edge = lineWipeFront(cells, t, inkStart, restingPad, rightToLeft);
+        const float edge = lineWipeFront(cells, t, inkStart, restingPad, rightToLeft, vertical);
         if (rightToLeft ? edge >= inkStart : edge <= inkStart) return std::nullopt;
         return edge;
     }
@@ -65,7 +66,7 @@ struct ScanlineBand {
                     const float hi = front + (after ? std::min(left + step, 0.f) : left + step);
                     if (lo >= hi || opacity <= 0) continue;
                     SkAutoCanvasRestore keep(&canvas, true);
-                    clipScanlineSlice(canvas, lo, hi);
+                    clipScanlineSlice(canvas, lo, hi, vertical);
                     paintSlice(layer, after, opacity * opacity * (3.f - 2.f * opacity));
                 }
             }
@@ -92,16 +93,20 @@ struct ScanlineBand {
     void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkStart, float inkTop, PaintCell&& paintCell) const {
         const auto front = frontAt(cells, t, inkStart);
         if (!front || !repaintsGlyphs()) return;
-        const SkRect band = SkRect::MakeLTRB(*front - halfWidth, -1e6f, *front + halfWidth, 1e6f);
+        const float bandStart = *front - halfWidth, bandEnd = *front + halfWidth;
+        const SkRect band = vertical ? SkRect::MakeLTRB(-1e6f, bandStart, 1e6f, bandEnd)
+                                    : SkRect::MakeLTRB(bandStart, -1e6f, bandEnd, 1e6f);
         SkAutoCanvasRestore restore(&canvas, false);
-        SkRect layer = band.makeOutset(1.f, 0.f);
+        SkRect layer = vertical ? band.makeOutset(0.f, 1.f) : band.makeOutset(1.f, 0.f);
         if (softness > 0) {
             if (!layer.intersect(canvas.getLocalClipBounds())) return;
             canvas.saveLayer(layer, nullptr);
         }
         for (std::size_t i = 0; i < cells.size(); ++i) {
             const auto& c = cells[i];
-            if (!sweeping(c, t) || !(band.fLeft < c.right + solidPad && c.left - solidPad < band.fRight)) continue;
+            const float cellStart = vertical ? c.top : c.left;
+            const float cellEnd = vertical ? c.bottom : c.right;
+            if (!sweeping(c, t) || !(bandStart < cellEnd + solidPad && cellStart - solidPad < bandEnd)) continue;
             canvas.save();
             canvas.clipRect(band, SkClipOp::kIntersect, true);
             if (paint.splitAtFront()) {
@@ -113,7 +118,9 @@ struct ScanlineBand {
                     const bool positiveSide = sung == rightToLeft;
                     const float lo = positiveSide ? edge : -1e6f;
                     const float hi = positiveSide ? 1e6f : edge;
-                    canvas.clipRect(SkRect::MakeLTRB(lo, band.fTop, hi, band.fBottom), SkClipOp::kIntersect, true);
+                    const auto phase = vertical ? SkRect::MakeLTRB(band.fLeft, lo, band.fRight, hi)
+                                                : SkRect::MakeLTRB(lo, band.fTop, hi, band.fBottom);
+                    canvas.clipRect(phase, SkClipOp::kIntersect, true);
                     paintCell(i, sung);
                 }
             } else {
@@ -121,8 +128,11 @@ struct ScanlineBand {
             }
             canvas.restore();
         }
-        if (softness > 0)
-            applyScanlineFeather(canvas, layer, *front, halfWidth, softness, band.fLeft - solidPad, inkTop - solidPad);
+        if (softness > 0) {
+            const float maskLeft = (vertical ? layer.fLeft : band.fLeft) - solidPad;
+            const float maskTop = (vertical ? band.fTop : inkTop) - solidPad;
+            applyScanlineFeather(canvas, layer, *front, halfWidth, softness, maskLeft, maskTop, vertical);
+        }
     }
 };
 }

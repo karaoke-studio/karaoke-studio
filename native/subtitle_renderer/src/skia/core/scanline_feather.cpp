@@ -7,14 +7,16 @@
 #include <stdexcept>
 
 namespace subtitle::skia {
-void clipScanlineSlice(SkCanvas& canvas, float left, float right) {
+void clipScanlineSlice(SkCanvas& canvas, float low, float high, bool vertical) {
     // The path is already in physical line coordinates. Use explicit pixel
     // coverage so Ganesh and Raster agree at the shared edge of adjacent slices.
     static const auto effect = [] {
         auto result = SkRuntimeEffect::MakeForShader(SkString(R"(
             uniform float2 edges;
+            uniform float2 axis;
             half4 main(float2 p) {
-                float covered = min(p.x + 0.5, edges.y) - max(p.x - 0.5, edges.x);
+                float along = dot(p, axis);
+                float covered = min(along + 0.5, edges.y) - max(along - 0.5, edges.x);
                 return half4(clamp(covered, 0.0, 1.0));
             }
         )"));
@@ -22,15 +24,18 @@ void clipScanlineSlice(SkCanvas& canvas, float left, float right) {
         return result.effect;
     }();
     SkRuntimeShaderBuilder builder(effect);
-    builder.uniform("edges") = SkV2{left, right};
+    builder.uniform("edges") = SkV2{low, high};
+    builder.uniform("axis") = vertical ? SkV2{0, 1} : SkV2{1, 0};
     auto shader = builder.makeShader();
     if (!shader) throw std::runtime_error("Skia scanline slice shader unavailable");
-    canvas.clipRect(SkRect::MakeLTRB(left - 1.f, -1e6f, right + 1.f, 1e6f), SkClipOp::kIntersect, false);
+    const auto bounds = vertical ? SkRect::MakeLTRB(-1e6f, low - 1.f, 1e6f, high + 1.f)
+                                 : SkRect::MakeLTRB(low - 1.f, -1e6f, high + 1.f, 1e6f);
+    canvas.clipRect(bounds, SkClipOp::kIntersect, false);
     canvas.clipShader(std::move(shader));
 }
 
 void applyScanlineFeather(SkCanvas& canvas, const SkRect& layer, float front, float halfWidth,
-                         float softness, float maskLeft, float maskTop) {
+                         float softness, float maskLeft, float maskTop, bool vertical) {
     // Reproduce the byte mask's texel centers and screen-aligned Bayer order.
     // DstIn applies the mask once to the composed band, including overlaps.
     static const auto effect = [] {
@@ -39,10 +44,11 @@ void applyScanlineFeather(SkCanvas& canvas, const SkRect& layer, float front, fl
             uniform float halfWidth;
             uniform float softness;
             uniform float2 origin;
+            uniform float2 axis;
 
             half4 main(float2 p) {
                 float2 pixel = floor(p - origin);
-                float distance = abs(origin.x + pixel.x + 0.5 - front);
+                float distance = abs(dot(origin + pixel, axis) + 0.5 - front);
                 float strength = smoothstep(0.0, softness, halfWidth - distance);
                 float2 bits = mod(pixel, 16.0);
                 float bayer = 0.0;
@@ -65,6 +71,7 @@ void applyScanlineFeather(SkCanvas& canvas, const SkRect& layer, float front, fl
     builder.uniform("halfWidth") = halfWidth;
     builder.uniform("softness") = softness;
     builder.uniform("origin") = SkV2{maskLeft, maskTop};
+    builder.uniform("axis") = vertical ? SkV2{0, 1} : SkV2{1, 0};
     auto shader = builder.makeShader();
     if (!shader) throw std::runtime_error("Skia scanline feather shader unavailable");
     SkPaint paint;

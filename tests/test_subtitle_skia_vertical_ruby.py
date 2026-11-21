@@ -764,6 +764,64 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('dpr,softness,has_ruby', [(1, 0, True), (1.5, 8, True), (1.5, 8, False)])
+def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr, softness, has_ruby):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, base = vertical_ruby_source(project)
+    if not has_ruby:
+        track = replace(track, rubies=[])
+    base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'))
+    style = replace(base, karaoke_anim='scanline', scanline_enabled=True, scanline_mode='color',
+                    scanline_shape='band', scanline_color='#00FFFF', scanline_width_px=18,
+                    scanline_glow_px=softness)
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    plain = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p07_vertical_scanline_band'
+    assert {feature, 'p07_scanline_band'} <= set(ir['required_features'])
+    assert ('p07_ruby_scanline' in ir['required_features']) == has_ruby
+    line, = ir['skia_layout']['lines']
+    assert line == plain['skia_layout']['lines'][0]
+    start, end = ir['track']['lines'][0]['resolved_intervals'][0]
+    columns_to_check = [slice(None)]
+    if has_ruby:
+        unit, = line['ruby_groups'][0]['units']
+        assert unit['interval_ms'] == [start, end]
+        split = round((unit['wipe_left'] + line['cells'][0]['wipe_right']) / 2 * dpr)
+        columns_to_check = [slice(None, split), slice(split, None)]
+    first, second = start + (end - start) // 3, end - (end - start) // 3
+    times = [start - 1, first, second, end + 25, 1801]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, [second, first], generation=2)
+            configure(process, plain)
+            reference, _ = collect(process, times, generation=3)
+        assert np.array_equal(frames[1], replay[1]) and np.array_equal(frames[2], replay[0])
+        assert np.array_equal(frames[0], reference[0]) and np.array_equal(frames[-1], reference[-1])
+        if has_ruby:
+            assert np.array_equal(frames[3][:, split:], reference[3][:, split:])
+        targets.append(np.stack(frames))
+        for columns in columns_to_check:
+            rows = []
+            for frame in frames[1:3]:
+                red, green, blue, alpha = np.moveaxis(frame[:, columns], -1, 0)
+                y, _ = np.nonzero((red < 40) & (green > 180) & (blue > 180) & (alpha > 64))
+                assert y.size
+                rows.append(np.median(y))
+            assert rows[1] > rows[0] + 2
+
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),

@@ -154,6 +154,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_character_fade",
         "p07_character_entry_fade_composition",
         "p07_scanline_band",
+        "p07_vertical_scanline_band",
         "p07_scanline_line_animation",
         "p07_scanline_unscaled_line_animation",
         "p07_scanline_shape",
@@ -635,6 +636,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_scanline_band")
         && (scanlineVersion < 1 || scanlineVersion > kScanlineBandSchema || std::floor(scanlineVersion) != scanlineVersion))
         throw BackendError("Skia 扫字线布局版本无效");
+    if (features.contains("p07_vertical_scanline_band")
+        && (!features.contains("p05_vertical_solid") || !features.contains("p07_scanline_band")))
+        throw BackendError("Skia 竖排扫字线缺少对应布局能力");
     if (features.contains("p07_composed_scanline")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 扫字线组合缺少横排高亮带能力声明");

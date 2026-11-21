@@ -5,6 +5,6 @@ class SkCanvas;
 
 namespace subtitle::skia {
 void applyScanlineFeather(SkCanvas&, const SkRect& layer, float front, float halfWidth,
-                         float softness, float maskLeft, float maskTop);
-void clipScanlineSlice(SkCanvas&, float left, float right);
+                         float softness, float maskLeft, float maskTop, bool vertical = false);
+void clipScanlineSlice(SkCanvas&, float low, float high, bool vertical = false);
 }

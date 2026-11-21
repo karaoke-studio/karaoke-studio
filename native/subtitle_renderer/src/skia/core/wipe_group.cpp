@@ -274,8 +274,10 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
         }
         return;
     }
-    const float front = frontAt(timeMs, bounds_.left());
-    if (front + band.halfWidth <= bounds_.left() - pad || front - band.halfWidth >= bounds_.right() + pad) return;
+    const float inkStart = vertical_ ? bounds_.top() : bounds_.left();
+    const float inkEnd = vertical_ ? bounds_.bottom() : bounds_.right();
+    const float front = frontAt(timeMs, inkStart);
+    if (front + band.halfWidth <= inkStart - pad || front - band.halfWidth >= inkEnd + pad) return;
     for (const auto& cell : cells_) {
         if (cell.path.isEmpty() || !ScanlineBand::sweeping(cell, timeMs)) continue;
         band.drawSlices(canvas, front, [&](int layer, bool after, float opacity) {
