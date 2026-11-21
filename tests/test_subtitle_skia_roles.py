@@ -217,15 +217,17 @@ def test_role_static_glow_matches_actual_d2d_gpu(binary, application, tmp_path, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_ruby_role_glow_preserves_other_groups_and_seek(binary, project, tmp_path, target):
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_ruby_role_glow_preserves_other_groups_and_seek(binary, project, tmp_path, target, karaoke):
     track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
-    style = role_static_glow_style(style)
+    style = replace(role_static_glow_style(style), karaoke_anim=karaoke)
     track = replace(track, rubies=[RubyAnnotation(kanji='A', reading='AA', pos_start_ms=200, pos_end_ms=400),
                                   RubyAnnotation(kanji='字', reading='AA', pos_start_ms=400, pos_end_ms=600)])
     ir = ir_for(binary, (track, style))
     assert {'p06_ruby_role_glow', 'p06_role_static_glow', 'p06_ruby_role_paints'} <= set(ir['required_features'])
+    assert ('p07_role_singing_glow' in ir['required_features']) == (karaoke == 'utopia')
     undeclared = copy.deepcopy(ir)
-    undeclared['required_features'].remove('p06_ruby_role_glow')
+    undeclared['required_features'].remove('p07_role_singing_glow' if karaoke == 'utopia' else 'p06_ruby_role_glow')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
         frames, _ = collect(process, [150, 300, 500, 150])
@@ -254,6 +256,17 @@ def test_ruby_role_glow_with_static_title_and_extra_track(binary, application, t
 
     original = next(case for case in build_cases(tmp_path) if case.case_id == 'g3_heavy_roles_fills_title_multisource')
     case = replace(original, case_id='static_heavy_role_glow', style=replace(original.style, karaoke_anim='none'))
+    assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms, extra_tracks=case.extra_tracks)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case_id', ['tactic_like_three_glow_blue_white', 'g3_heavy_roles_fills_title_multisource'])
+def test_role_singing_glow_original_p00_matches_gpu(binary, application, tmp_path, case_id):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
+    assert case.style.karaoke_anim == 'utopia'
     assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms, extra_tracks=case.extra_tracks)
 
 

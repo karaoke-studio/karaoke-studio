@@ -152,7 +152,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             auto layers = PreparedGlow::prepare(group.glow, false);
             for (auto index : group.cells) {
                 if (index >= line.cells.size()) throw std::runtime_error("Skia 角色光晕单元索引无效");
-                for (auto& layer : layers) layer.appendCell(line.cells[index].path);
+                const auto& cell = line.cells[index];
+                const auto peak = line.singingScale.peakMatrix(cell.pivot);
+                for (auto& layer : layers) layer.appendCell(cell.path, peak);
             }
             line.roleGlows.push_back({std::move(layers), group.cells});
         }

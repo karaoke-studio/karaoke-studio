@@ -112,6 +112,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_lower_ruby_no_wipe_decoration",
         "p07_singing_scale",
         "p07_role_singing_scale",
+        "p07_role_singing_glow",
         "p07_singing_glow",
         "p07_ruby_singing_scale",
         "p07_ruby_zoom_pulse",
@@ -410,9 +411,13 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_singing_scale") && layout.value("singing_scale_schema").toDouble(-1) != 1)
         throw BackendError("Skia 唱字放大布局版本无效");
     const bool roleSinging = features.contains("p07_role_singing_scale");
-    if (roleSinging && (!features.contains("p07_singing_scale") || !features.contains("p05_inline_roles")
-        || features.contains("p06_role_static_glow") || features.contains("p06_ruby_role_glow")))
-        throw BackendError("Skia 角色唱字放大当前仅支持基础逐字画笔及描边");
+    if (roleSinging && (!features.contains("p07_singing_scale") || !features.contains("p05_inline_roles")))
+        throw BackendError("Skia 角色唱字放大缺少对应能力声明");
+    const bool roleSingingGlow = features.contains("p07_role_singing_glow");
+    const bool hasRoleGlow = features.contains("p06_role_static_glow") || features.contains("p06_ruby_role_glow");
+    if (roleSingingGlow != (roleSinging && hasRoleGlow)
+        || (roleSingingGlow && !features.contains("p07_singing_glow")))
+        throw BackendError("Skia 角色唱字光晕缺少对应能力声明");
     if (features.contains("p07_ruby_singing_scale")
         && (!features.contains("p05_resolved_ruby") || !features.contains("p07_singing_scale")))
         throw BackendError("Skia Utopia 注音缺少注音或唱字能力声明");
@@ -549,7 +554,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 下方注音装饰动画缺少 Utopia 行动画或装饰能力声明");
     if (features.contains("p07_singing_glow")
         && (!features.contains("p07_singing_scale")
-            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
+            || !(hasRoleGlow || features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
         throw BackendError("Skia 唱字光晕缺少唱字放大或光晕能力声明");
     if (features.contains("p07_zoom_pulse_decoration")
         && (!features.contains("p07_singing_scale")
@@ -606,7 +611,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines",
             "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines",
             "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
-            "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale"
+            "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale",
+            "p07_singing_glow", "p07_role_singing_glow"
         };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))

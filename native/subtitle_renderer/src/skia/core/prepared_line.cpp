@@ -137,7 +137,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
             && (cell.outline || cell.outerOutline || cell.bodyPaintIndex >= 0 || transform.glowAlpha > 0
-                || !line.glow.empty() || line.hasStrokeFlash))
+                || !line.glow.empty() || !line.roleGlows.empty() || line.hasStrokeFlash))
             animatedInk = cell.path.makeTransform(transform.matrix);
         states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
                           transform, std::move(animatedInk)});
@@ -358,16 +358,19 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const bool after = layer.visible(true);
             if (!after && !layer.visible(false)) continue;
             const auto visible = [after](const State& state) {
-                return state.phase != (after ? Phase::Before : Phase::After);
+                return state.transform.opacity > 0 && state.phase != (after ? Phase::Before : Phase::After);
             };
             if (std::ranges::none_of(group.cells, [&](std::size_t index) { return visible(states[index]); })) continue;
             const auto source = layer.createSource(canvas);
             if (!source.surface) continue;
             for (std::size_t local = 0; local < group.cells.size(); ++local) {
-                const auto& state = states[group.cells[local]];
+                const auto index = group.cells[local];
+                const auto& state = states[index];
                 if (!visible(state)) continue;
-                const auto edge = state.phase == Phase::Wiping ? std::optional(state.edge) : std::nullopt;
-                layer.drawCell(*source.surface->getCanvas(), local, after, edge);
+                const auto edge = state.phase == Phase::Wiping
+                    ? std::optional(utopia ? transformedEdge(index) : state.edge) : std::nullopt;
+                const auto* ink = state.animatedInk ? &*state.animatedInk : nullptr;
+                layer.drawCell(*source.surface->getCanvas(), local, after, edge, ink, state.transform.opacity);
             }
             layer.composite(canvas, source);
         }

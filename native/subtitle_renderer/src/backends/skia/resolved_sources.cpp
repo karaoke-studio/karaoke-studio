@@ -42,7 +42,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p06_ruby_main_paint", "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_fill_image",
         "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow", "p07_singing_glow",
         "p06_static_shadow", "p06_ruby_shadow",
-        "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale",
+        "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale", "p07_role_singing_glow",
         "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p08_viewport",
         "p07_scanline_band", "p07_ruby_scanline", "p07_lower_ruby_scanline",
         "p07_scanline_image", "p07_scanline_shape", "p07_scanline_line_animation",
