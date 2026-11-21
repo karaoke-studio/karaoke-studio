@@ -64,7 +64,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         // Keep the same bounded destination-format layer at every opacity
         // for vertical decoration. Raster edge coverage depends on the target
         // origin when translucent outlines are composited over the shadow.
-        if (!line.roleBodyPaints.empty()) {
+        if (!line.roleBodyPaints.empty() || !line.roleGlows.empty()) {
             // The GPU reference composites the role paint stack into bytes,
             // then applies the 8-bit group opacity to its premultiplied pixels.
             SkPaint fade;

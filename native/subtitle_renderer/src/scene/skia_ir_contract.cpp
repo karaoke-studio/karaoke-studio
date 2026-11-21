@@ -606,9 +606,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_role_solid_outlines", "p06_latin_primary_outline", "p06_role_body_paints",
             "p05_resolved_ruby", "p05_upper_ruby", "p05_ruby_units", "p05_ruby_markers",
             "p06_outline_ruby", "p06_ruby_solid_outline", "p06_ruby_role_paints",
-            "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow"
+            "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
+            "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
         };
         if (!features.contains("p06_primary_solid_outline")
+            || (features.contains("p07_line_fade") && !features.contains("p07_role_line_fade"))
             || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
             throw BackendError("Skia 英数独立首层描边需要正向横排、普通走字和受支持的画笔组合");
     }
@@ -621,10 +623,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         || roleStaticGlow || rubyRoleGlow;
     const bool roleLineFade = features.contains("p07_role_line_fade");
     if (roleLineFade != (roleLayers && features.contains("p07_line_fade"))
-        || (roleLineFade && (roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow")
-            || features.contains("p06_ruby_glow") || features.contains("p05_lower_ruby")
-            || features.contains("p07_singing_scale"))))
-        throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字及无光晕的正文和上注音");
+        || (roleLineFade && (features.contains("p05_lower_ruby") || features.contains("p07_singing_scale"))))
+        throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字和受支持的上注音画笔");
     if (roleLayers) {
         static const QJsonArray allowed{
             "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",

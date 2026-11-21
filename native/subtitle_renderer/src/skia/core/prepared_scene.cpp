@@ -198,8 +198,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 line.paintBounds.join(groupBounds);
             }
         }
-        if (line.characterFade.active() || line.isolateVerticalDecoration) {
+        if (line.characterFade.active() || line.isolateVerticalDecoration
+            || (line.animation.active() && (!line.roleGlows.empty() || !line.roleBodyPaints.empty()))) {
             for (const auto& layer : line.glow) line.paintBounds.join(layer.sourceBounds());
+            for (const auto& group : line.roleGlows)
+                for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());
             for (const auto& lane : line.rubyGlows)
                 for (const auto& group : lane)
                     for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());

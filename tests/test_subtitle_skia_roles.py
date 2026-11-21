@@ -255,6 +255,14 @@ def independent_latin_outline(style):
     return replace(style, stroke_width_px=6, latin_stroke_width_px=3, custom_style_schemes=roles)
 
 
+def latin_role_text(track):
+    line, = track.lines
+    chars = list(line.chars)
+    chars[2] = replace(chars[2], text='A')
+    chars[3] = replace(chars[3], text='B')
+    return replace(track, lines=[replace(line, chars=chars)])
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_latin_outline_combines_with_role_paints_and_upper_glow(binary, project, tmp_path, target):
     track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
@@ -290,27 +298,27 @@ def test_latin_outline_with_role_paints_and_upper_glow_matches_actual_gpu(binary
 
     case = ruby_role_paints_case(tmp_path, direction, True)
     style = independent_latin_outline(role_static_glow_style(case.style, base=base_glow))
-    line, = case.track.lines
-    chars = list(line.chars)
-    chars[2] = replace(chars[2], text='A')
-    chars[3] = replace(chars[3], text='B')
-    track = replace(case.track, lines=[replace(line, chars=chars)])
+    track = latin_role_text(case.track)
     case = replace(case, case_id='latin_outline_role_paints_ruby_glow', track=track, style=style)
     assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 2800, 3500, 3900, 4499))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, tmp_path, target):
+@pytest.mark.parametrize('glow', [False, True], ids=['plain', 'glow'])
+def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, tmp_path, target, glow):
     from test_subtitle_skia_line_fade import premultiplied
     from test_subtitle_skia_ruby_groups import configure
 
     track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
     track = replace(track, rubies=[RubyAnnotation(kanji='A字', reading='AA', pos_start_ms=200, pos_end_ms=600)])
+    if glow:
+        style = role_static_glow_style(style)
     fade = replace(style, entry_anim='fade', entry_lead_ms=200, exit_anim='fade', exit_fade_ms=400)
     ir = ir_for(binary, (track, fade), dpr=1.5)
     opaque = ir_for(binary, (track, style), dpr=1.5)
     features = set(ir['required_features'])
     assert {'p06_role_body_paints', 'p06_ruby_role_paints', 'p07_role_line_fade'} <= features
+    assert ('p06_ruby_role_glow' in features) == glow
     line, = ir['track']['lines']
     entry, exit_ = line['entry_duration_ms'], line['exit_duration_ms']
     assert entry > 0 and exit_ > 0
@@ -336,13 +344,22 @@ def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, 
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('direction', ['gradient_horizontal', 'gradient_vertical'])
-def test_role_line_fade_with_body_and_ruby_paints_matches_actual_gpu(binary, tmp_path, direction):
+@pytest.mark.parametrize('direction,glow,latin', [
+    ('gradient_horizontal', False, False), ('gradient_vertical', False, False),
+    ('gradient_horizontal', True, False), ('gradient_vertical', True, False),
+    ('gradient_horizontal', True, True),
+])
+def test_role_line_fade_with_body_and_ruby_paints_matches_actual_gpu(binary, tmp_path, direction, glow, latin):
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     case = ruby_role_paints_case(tmp_path, direction, True)
     style = replace(case.style, entry_anim='fade', entry_lead_ms=600, exit_anim='fade', exit_fade_ms=600)
-    case = replace(case, case_id=f'role_paint_line_fade_{direction}', style=style)
+    if glow:
+        style = role_static_glow_style(style, base=latin)
+    if latin:
+        style = independent_latin_outline(style)
+        case = replace(case, track=latin_role_text(case.track))
+    case = replace(case, case_id=f'role_paint_line_fade_{direction}_{glow}_{latin}', style=style)
     assert_ruby_transition_gpu_parity(binary, case, (300, 420, 650, 900, 1950, 3900, 5100, 5450, 5500))
 
 
