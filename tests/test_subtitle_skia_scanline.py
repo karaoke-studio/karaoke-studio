@@ -400,10 +400,16 @@ def ruby_band_source(reading, softness, utopia=False):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('shape,entry,leave,karaoke,mode', SCANLINE_MOTION_CASES)
+@pytest.mark.parametrize('shape,entry,leave,karaoke,mode', [*SCANLINE_MOTION_CASES,
+                         ('glow_band', 'fade', 'fade', 'none', 'color')])
 def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, target, shape, entry, leave,
                                                             karaoke, mode):
-    track, style = ruby_band_source(reading, 10, karaoke == 'utopia')
+    with_glow = shape == 'glow_band'
+    if with_glow:
+        track, style = glow_band_source(reading, 'inherited')
+        shape = 'band'
+    else:
+        track, style = ruby_band_source(reading, 10, karaoke == 'utopia')
     track = replace(track, lines=[replace(track.lines[0], display_end_override_ms=2200)])
     style = replace(style, entry_anim=entry, exit_anim=leave, entry_lead_ms=600, exit_fade_ms=600,
                     scanline_mode=mode)
@@ -413,11 +419,13 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
     else:
         style = replace(style, scanline_shape=shape)
     ir = upper_ir(binary, (track, style), 1)
-    bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
+    alternate = (replace(style, scanline_color='#FF205BFF') if with_glow
+                 else replace(style, scanline_enabled=False))
+    alternate_ir = upper_ir(binary, (track, alternate), 1)
     motion_feature = ('p07_scanline_unscaled_line_animation' if karaoke == 'none' else 'p07_scanline_line_animation')
     feature = motion_feature if shape == 'band' else 'p07_scanline_shape_line_animation'
     assert {motion_feature, feature} <= set(ir['required_features'])
-    assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
+    assert ir['skia_layout']['lines'] == alternate_ir['skia_layout']['lines']
     times = [0, 450, 550, 1100, 1880, 2050, 2200]
     bad = copy.deepcopy(ir)
     bad['required_features'].remove(feature)
@@ -427,7 +435,7 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
         with pytest.raises(NativeRendererError):
             configure(process, bad)
         replay, _ = collect(process, [1880], generation=2)
-        configure(process, bare)
+        configure(process, alternate_ir)
         plain, _ = collect(process, times, generation=3)
     assert np.array_equal(frames[2], frames[-1]) and np.array_equal(frames[4], replay[0])
     assert not frames[0].any() and not frames[-2].any()
@@ -1114,7 +1122,7 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
 @pytest.mark.parametrize('change', [
     {'decoration_kind': 'shadow', 'decoration_kind_before': 'shadow'},
     {'scanline_mode': 'role', 'scanline_role_name': '__global__', 'scanline_effect': 'star'},
-    {'entry_anim': 'fade', 'entry_lead_ms': 400},
+    {'entry_anim': 'fade', 'entry_lead_ms': 400, 'scanline_mode': 'role', 'scanline_role_name': '__global__'},
     {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
 ])
 def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
