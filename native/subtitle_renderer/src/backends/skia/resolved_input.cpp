@@ -266,8 +266,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             });
         const bool lowerUtopiaMotion = singingScale && ordinaryLineAnimation
             && features.contains("p07_lower_ruby_decoration_line_animation");
+        const bool noteExit = line.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool petalScanline = line.scanlineEnabled && features.contains("p07_ruby_petal_entry_scanline")
-            && line.entryAnimation == "petal" && line.exitAnimation == "none" && singingScale
+            && line.entryAnimation == "petal" && (line.exitAnimation == "none" || noteExit) && singingScale
             && style.scanlineShape == "band" && style.scanlineMode == "color";
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
@@ -307,7 +308,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool pairedParticles = (features.contains("p07_ruby_energy_pair")
                 || features.contains("p07_ruby_particle_assembly_pair")
                 || features.contains("p07_ruby_particle_entry_exit")
-                || features.contains("p07_ruby_mixed_particle_entry_exit"))
+                || features.contains("p07_ruby_mixed_particle_entry_exit") || (noteExit && petalScanline))
             && line.entryDurationMs > 0 && line.exitDurationMs > 0;
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")

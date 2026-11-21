@@ -20,7 +20,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
-    const bool petalWithFlame = rubyParticles && entry == "petal" && exit.isEmpty()
+    const bool noteExit = exit == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
+    const bool petalWithFlame = rubyParticles && entry == "petal" && (exit.isEmpty() || noteExit)
         && features.contains("p07_ruby_petal_entry_flame_singing");
     const bool petalWithBand = petalWithFlame && source.scanlineEnabled && style.scanlineShape == "band"
         && style.scanlineMode == "color" && features.contains("p07_ruby_petal_entry_scanline");
@@ -42,6 +43,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
+        || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline)))
         || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))

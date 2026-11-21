@@ -57,14 +57,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool rubyGeometryPhase = line.rubyGeometryComposition
         && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
     const bool particleEntryGlow = line.byteParticleEntryGlow && line.characterGeometry.inEntryWindow(tMs, line.startMs);
+    const bool exitNote = line.characterGeometry.exit == "note";
     const bool particleExitFade = rubyGeometryPhase && !line.particles.empty() && line.glow.empty() && !line.hasRubyGlow()
         && !line.shadow.visible() && !line.hasRubyShadow
         && line.characterGeometry.exitMs > 0 && tMs >= line.characterGeometry.exitStart(line.endMs);
     if (!textVisible) {
         if (particleExitFade)
             canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
-        drawSingParticles(canvas, line.particles, tMs, false);
-        drawSingParticles(canvas, line.particles, tMs, true);
+        drawSingParticles(canvas, line.particles, tMs, false, exitNote);
+        drawSingParticles(canvas, line.particles, tMs, true, exitNote);
         return;
     }
     // Fade the composed line, preserving overlaps and translucent strokes.
@@ -356,7 +357,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCell(index, layer, roles.empty() || paint < 0 ? shaders : roles[paint]);
         });
     };
-    if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false);
+    if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false, exitNote);
     if (geometry)
         for (std::size_t i = 0; i < line.cells.size(); ++i) {
             const auto& state = states[i];
@@ -573,7 +574,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         SkAutoCanvasRestore keep(&canvas, false);
         if (particleExitFade && opacityTransition)
             canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
-        drawSingParticles(canvas, line.particles, tMs, true);
+        drawSingParticles(canvas, line.particles, tMs, true, exitNote);
     }
     if (line.scanline.rubyHighlight && line.scanline.repaintsGlyphs()
         && line.scanline.frontAt(line.cells, tMs, line.inkStart))

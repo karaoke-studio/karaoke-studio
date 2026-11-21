@@ -2,6 +2,7 @@
 
 #include "particle_outline.h"
 #include "particle_ring.h"
+#include "solid_outline.h"
 #include "../../effects/particles.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkMatrix.h"
@@ -39,7 +40,8 @@ struct ParticleVisibility {
     }
 };
 
-inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs, bool front) {
+inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs, bool front,
+                              bool exitNote) {
     SkPaint paint;
     paint.setAntiAlias(true);
     for (const auto& item : bursts) {
@@ -73,7 +75,11 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             }
             paint.setAlphaf(alpha);
             // Give Skia the final physical outline, as for the subtitle glyphs.
-            canvas.drawPath(particle_detail::spriteOutline(item.sprite, transform), paint);
+            const auto outline = particle_detail::spriteOutline(item.sprite, transform);
+            if (exitNote && item.burst.kind == "note")
+                drawSamplePatternPath(canvas, outline, paint);
+            else
+                canvas.drawPath(outline, paint);
         }
     }
 }

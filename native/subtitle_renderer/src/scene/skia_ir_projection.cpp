@@ -309,8 +309,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
+        const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool particleScanline = features.contains("p07_ruby_petal_entry_scanline") && utopiaSinging
-            && source.entryAnimation == "petal" && source.exitAnimation == "none"
+            && source.entryAnimation == "petal" && (source.exitAnimation == "none" || noteExit)
             && resolved.scanlineShape == "band" && resolved.scanlineMode == "color"
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.fxBursts.empty();
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5

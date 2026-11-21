@@ -349,32 +349,45 @@ def test_ruby_particle_entry_body_glow_replays(binary, reading, target, effect):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('scanline', [False, True])
-def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline):
+@pytest.mark.parametrize('scanline,exit_', [(False, 'none'), (True, 'none'), (True, 'note')])
+def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline, exit_):
     track, style = reading
-    style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim='none',
+    style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim=exit_, exit_fade_ms=600,
                     sing_fx='flame', anim_fx_speed_pct=50, fx_particle_speed_pct=200,
                     karaoke_anim='utopia_scanline' if scanline else 'utopia', scanline_enabled=scanline,
                     scanline_effect='star' if scanline else 'none',
                     decoration_kind='none', decoration_kind_before='none',
                     ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    if exit_ == 'note':
+        from test_subtitle_skia_roles import colors
+
+        style = replace(style, karaoke_colors=colors('#FFFFFF', '#2F8BFF'))
     ir = upper_ir(binary, (track, style), 1)
-    petals = upper_ir(binary, (track, replace(style, karaoke_anim='utopia', sing_fx='none',
+    petals = upper_ir(binary, (track, replace(style, karaoke_anim='utopia', sing_fx='none', exit_anim='none',
                                             scanline_enabled=False, scanline_effect='none')), 1)
-    flames = upper_ir(binary, (track, replace(style, entry_anim='none')), 1)
+    flames = upper_ir(binary, (track, replace(style, entry_anim='none', exit_anim='none')), 1)
     source, = ir['track']['lines']
     bursts = source['fx_bursts']
     petal_bursts = [burst for burst in bursts if burst['kind'] == 'petal']
-    singing_bursts = [burst for burst in bursts if burst['kind'] != 'petal']
+    singing_bursts = [burst for burst in bursts if burst['kind'] not in {'petal', 'note'}]
     assert any(burst['kind'] == 'scanline' for burst in singing_bursts) == scanline
     assert petal_bursts and singing_bursts
-    for mixed, separate in [(petal_bursts, petals), (singing_bursts, flames)]:
+    phases = [(petal_bursts, petals), (singing_bursts, flames)]
+    if exit_ == 'note':
+        notes = upper_ir(binary, (track, replace(style, entry_anim='none', karaoke_anim='utopia', sing_fx='none',
+                                               scanline_enabled=False, scanline_effect='none')), 1)
+        note_bursts = [burst for burst in bursts if burst['kind'] == 'note']
+        assert note_bursts
+        phases.append((note_bursts, notes))
+    for mixed, separate in phases:
         standalone = separate['track']['lines'][0]['fx_bursts']
         for after, before in zip(mixed, standalone, strict=True):
             assert {key: value for key, value in after.items() if key != 'color_id'} == {
                 key: value for key, value in before.items() if key != 'color_id'}
             assert ir['fx_color_table'][after['color_id']] == separate['fx_color_table'][before['color_id']]
     feature = 'p07_ruby_petal_entry_scanline' if scanline else 'p07_ruby_petal_entry_flame_singing'
+    if exit_ == 'note':
+        feature = 'p07_ruby_petal_scanline_note_exit'
     assert feature in ir['required_features']
     missing = copy.deepcopy(ir)
     missing['required_features'].remove(feature)
@@ -382,6 +395,8 @@ def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, read
     flame = next(burst for burst in bad_sweep['track']['lines'][0]['fx_bursts'] if burst['kind'] == 'flame')
     flame['sweep'] = 1
     times = [source['display_start_ms'] + 180, flame['start_ms'] + 100]
+    if exit_ == 'note':
+        times.append(source['display_end_ms'] - 200)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -389,7 +404,7 @@ def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, read
             with pytest.raises(NativeRendererError):
                 configure(process, invalid)
         replay, _ = collect(process, times[::-1], generation=2)
-    assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
+    assert all(frame.any() for frame in frames) and not np.array_equal(frames[0], frames[1])
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
 
 
@@ -546,6 +561,19 @@ def test_ruby_petal_entry_and_singing_scanline_match_actual_gpu(binary, applicat
         track = replace(case.track, lines=[replace(line, chars=chars + line.chars[len(starts):])])
         case = replace(case, track=track)
         times = (301, 450, 525, 600, 650, 750, 850, 899, 900, 901, 1100, 2300, 4400, 5499, 5500)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('speed', [50, 200])
+def test_ruby_petal_scanline_with_note_exit_matches_actual_gpu(binary, application, tmp_path, speed):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == f'particles_speed_{speed}')
+    style = replace(case.style, decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    times = (100, 299, 301, 600, 1000, 1300, 1500, 2600, 4500, 4899, 4900, 4901,
+             5100, 5300, 5498, 5499, 5500, 5510, 5900)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 

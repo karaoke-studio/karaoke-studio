@@ -30,7 +30,7 @@ from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS,
     RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_PAIRED_PARTICLES,
-    petal_entry_with_flame, petal_entry_with_scanline, write_particle_anchors)
+    petal_entry_with_flame, petal_entry_with_scanline, petal_scanline_with_note_exit, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -463,6 +463,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     particle_entry_glow = False
     repeated_particle_pair = False
     mixed_particle_pair = False
+    petal_note_pair = False
     petal_flame = False
     particle_band_tracks = set()
     if geometry.ruby is not None:
@@ -493,7 +494,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     if effect in {'assemble_in', 'dissolve_out'}:
                         assembly_lines.add(index)
                     paired = both_phases and entry in RUBY_PAIRED_PARTICLES and leave in RUBY_PAIRED_PARTICLES
-                    if paired or (leave == 'none' and effect in RUBY_PARTICLE_ENTRIES):
+                    note_exit = petal_scanline_with_note_exit(source, look)
+                    if paired or note_exit or (leave == 'none' and effect in RUBY_PARTICLE_ENTRIES):
                         readings = geometry.ruby.lines[index].rubies
                         ruby_decorations = {kind for reading in readings
                                             for kind in ruby_decoration_kinds(reading.target.style)}
@@ -505,6 +507,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= paired and entry == leave
                         mixed_particle_pair |= paired and entry != leave
+                        petal_note_pair |= note_exit
                         petal_flame |= with_flame
                         if with_band:
                             particle_band_tracks.add(item.track_index)
@@ -831,6 +834,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_entry_exit')
         if mixed_particle_pair:
             ir['required_features'].append('p07_ruby_mixed_particle_entry_exit')
+        if petal_note_pair:
+            ir['required_features'].append('p07_ruby_petal_scanline_note_exit')
         if petal_flame:
             ir['required_features'].append('p07_ruby_petal_entry_flame_singing')
     if style.right_to_left:

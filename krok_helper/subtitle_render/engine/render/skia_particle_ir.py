@@ -33,13 +33,23 @@ def _transition_layers(kind, entry):
     return _TRANSITION_LAYERS.get((kind, entry), {kind})
 
 
+def _utopia_color_band(line, style):
+    return (line.get('scanline') and line.get('karaoke_anim') == 'utopia'
+            and style.scanline_shape == 'band' and style.scanline_mode == 'color')
+
+
+def petal_scanline_with_note_exit(line, style):
+    return (line.get('entry_anim') == 'petal' and line.get('exit_anim') == 'note' and style.sing_fx == 'flame'
+            and line['entry_duration_ms'] > 0 and line['exit_duration_ms'] > 0 and _utopia_color_band(line, style))
+
+
 def petal_entry_with_flame(line, style):
-    return line.get('entry_anim') == 'petal' and line.get('exit_anim') == 'none' and style.sing_fx == 'flame'
+    return (line.get('entry_anim') == 'petal' and style.sing_fx == 'flame'
+            and (line.get('exit_anim') == 'none' or petal_scanline_with_note_exit(line, style)))
 
 
 def petal_entry_with_scanline(line, style):
-    return (petal_entry_with_flame(line, style) and line.get('scanline') and line.get('karaoke_anim') == 'utopia'
-            and style.scanline_shape == 'band' and style.scanline_mode == 'color')
+    return petal_entry_with_flame(line, style) and _utopia_color_band(line, style)
 
 
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
