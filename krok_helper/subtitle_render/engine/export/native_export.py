@@ -760,6 +760,7 @@ def iter_native_rgba_frames_at_times(
     process_factory: Callable[..., NativeRendererProcess] | None = None,
     extra_tracks: list[TimingTrack] | None = None,
     verify_frame_identity: bool = False,
+    reuse_range_mapping: bool = False,
 ) -> Iterator[tuple[int, bytes]]:
     """Yield ``(t_ms, rgba_bytes)`` for explicit timestamps from the sidecar."""
     timestamps_all = [int(t_ms) for t_ms in timestamps_ms]
@@ -800,6 +801,7 @@ def iter_native_rgba_frames_at_times(
             pending: dict[int, bytes] = {}
             next_emit = 0
             range_done = False
+            range_reader = None
             try:
                 while not range_done:
                     if should_cancel is not None and should_cancel():
@@ -812,8 +814,16 @@ def iter_native_rgba_frames_at_times(
                         continue
                     kind = event.get("event")
                     if kind == "frame_ready":
-                        with SharedFrameRingReader.from_event(event) as reader:
-                            slot = reader.read_frame(event)
+                        if reuse_range_mapping:
+                            # Skia retains every slot until range_done. Reuse
+                            # its mapping across the range and detach before
+                            # closing the sidecar on an interrupted export.
+                            if range_reader is None:
+                                range_reader = SharedFrameRingReader.from_event(event)
+                            slot = range_reader.read_frame(event)
+                        else:
+                            with SharedFrameRingReader.from_event(event) as reader:
+                                slot = reader.read_frame(event)
                         frame_index = int(event.get("frame_index", slot.frame_index))
                         if verify_frame_identity and (
                             frame_index < next_emit or frame_index >= count or frame_index in pending
@@ -834,6 +844,8 @@ def iter_native_rgba_frames_at_times(
                         f"native export range ended before all frames were emitted: {next_emit}/{count}"
                     )
             finally:
+                if range_reader is not None:
+                    range_reader.close()
                 generation += 1
             start_frame += count
 

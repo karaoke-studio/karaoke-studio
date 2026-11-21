@@ -1320,7 +1320,8 @@ def _write_frames_native(
     options = dict(width=job.width, height=job.height, fps=job.fps,
                    duration_ms=_paint_duration_ms(job), roll_shift_ms=_job_roll_shift_ms(job),
                    renderer_path=renderer_path, should_cancel=should_cancel)
-    if skia_requested():
+    skia_active = skia_requested()
+    if skia_active:
         from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
         enabled = job.gpu_export_enabled
         if enabled is None:
@@ -1329,25 +1330,30 @@ def _write_frames_native(
         timestamps = [frame_timestamp(index, job.fps) for index in range(total_frames)]
         frames_at_times = iter_native_rgba_frames_at_times(job.track, job.style, timestamps, process_factory=factory,
                                                           extra_tracks=list(job.extra_tracks), verify_frame_identity=True,
+                                                          reuse_range_mapping=True,
                                                           **options)
         frames = (frame for _, frame in frames_at_times)
     else:
         frames = iter_native_rgba_frames(job.track, job.style, total_frames=total_frames, **options)
-    for frame in frames:
-        if should_cancel is not None and should_cancel():
-            raise ExportCancelled("已停止导出。")
-        if monitor is not None:
-            monitor.begin_write(written)
-        try:
-            process.stdin.write(frame)
-        finally:
+    try:
+        for frame in frames:
+            if should_cancel is not None and should_cancel():
+                raise ExportCancelled("已停止导出。")
             if monitor is not None:
-                monitor.end_write(written)
-        written += 1
-        if monitor is not None:
-            monitor.frame_written(written, total_frames)
-        if on_progress is not None:
-            on_progress(written, total_frames)
+                monitor.begin_write(written)
+            try:
+                process.stdin.write(frame)
+            finally:
+                if monitor is not None:
+                    monitor.end_write(written)
+            written += 1
+            if monitor is not None:
+                monitor.frame_written(written, total_frames)
+            if on_progress is not None:
+                on_progress(written, total_frames)
+    finally:
+        if skia_active:
+            frames_at_times.close()
 
 
 def _write_frames_gpu(

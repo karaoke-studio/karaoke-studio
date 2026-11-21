@@ -323,6 +323,36 @@ def test_skia_export_rejects_inconsistent_frame_identity(monkeypatch, invalid):
                                                 process_factory=Process, verify_frame_identity=True))
 
 
+@pytest.mark.parametrize('interrupt', [False, True])
+def test_skia_export_reuses_mapping_and_detaches_before_shutdown(monkeypatch, interrupt):
+    lifecycle = []
+
+    class Process(_FakeNativeRendererProcess):
+        def __exit__(self, *_exc):
+            lifecycle.append('shutdown')
+
+    class Reader(_FakeRingReader):
+        def __init__(self, event):
+            super().__init__(event)
+            lifecycle.append('open')
+
+        def close(self):
+            lifecycle.append('close')
+
+    monkeypatch.setattr(ne, 'SharedFrameRingReader', Reader)
+    frames = ne.iter_native_rgba_frames_at_times(_track(), Style(), [0, 17, 33, 50, 67], width=1,
+                                              height=1, fps=60, chunk_frames=3, process_factory=Process,
+                                              verify_frame_identity=True, reuse_range_mapping=True)
+    if interrupt:
+        assert next(frames)[0] == 0
+        assert lifecycle == ['open']
+        frames.close()
+        assert lifecycle == ['open', 'close', 'shutdown']
+    else:
+        assert [time_ms for time_ms, _ in frames] == [0, 17, 33, 50, 67]
+        assert lifecycle == ['open', 'close', 'open', 'close', 'shutdown']
+
+
 def test_iter_native_rgba_frames_at_times_uses_explicit_timestamps(monkeypatch) -> None:
     _FakeNativeRendererProcess.instances.clear()
     monkeypatch.setattr(ne, "NativeRendererProcess", _FakeNativeRendererProcess)
