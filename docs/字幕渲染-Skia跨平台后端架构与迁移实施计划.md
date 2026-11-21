@@ -3849,6 +3849,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 水波纹退场复用已有环形轮廓，叠加前将笔刷透明度截为 12 位定点，再量化每个环的覆盖。原样 `exit_ripple` 在 5499ms 的 D2D、Vulkan、Raster alpha 总量为 **13781、13810、13812**，原 Vulkan/Raster 分别为 **13748、15072**。既有 **3%** 总量预算继续适用。
 - **11 张 1080p 帧**通过两组画面对照。Windows **15 通过**，含唱字水波纹、音符和雪花退场回归。独立 Raster **3 通过**，WSL X11 与 Wayland 各 **9 通过、6 项 Windows 专用跳过**。日志前缀 `build/p07-ripple-exit-*`。
+- `30fec617` 原样回归为 **116/129 个场景、527 张 1080p 帧**通过两组画面对照。证据 `build/p00-skia-coverage/original-warm-pixels-30fec617.json`。本批双架构验证已启动。 [Mac CI 44958731781](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44958731781)
 
 ## 15. 前期探针清理范围
 
