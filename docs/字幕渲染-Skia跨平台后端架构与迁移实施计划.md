@@ -602,6 +602,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P07.1 基础显隐、fade、slide、rise、char_fade、char_drip、spin_flip；全局/逐行覆盖、时长零值和阶段重叠规则。
   - [x] 无阴影、无光晕的横排上注音 Utopia 退场，见 §14.300。
   - [x] Utopia 退场时上注音可独立使用实色光晕，正文限无装饰，见 §14.301。
+  - [x] 正向横排上注音的 Utopia 退场中，正文和上注音可分别或同时使用实色光晕，见 §14.304。
   - [x] 右至左横排 Utopia 唱字、上注音和实色光晕随整行淡化、横移和升降，见 §14.299。
   - [x] 正向横排普通走字的整行淡化，组合角色渐变、图片画笔、双描边和上注音，见 §14.266。
   - [x] 同一整行淡化组合叠加正文、上注音实色光晕和独立英数描边，见 §14.267。
@@ -3620,6 +3621,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows Vulkan 与 Raster 各在 DPR 1、1.5 验证半透明正文的整帧像素及独立光晕的 alpha 遮罩，最终 **8 项通过**。旧正文裁切和旧光晕裁切分别复现 **4 项失败**。另外 **122 项**关联用例通过，覆盖注音、光晕与出入场，包括实际 D2D GPU 对照。
 - 先复测正文和注音裁切，再复测叠加光晕裁切的最终版本，两轮均为 **108/129** 个原样场景、**478 帧**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原画面预算。最终日志为 `build/p07-skia-seam-final-p00.log`，证据为 `build/p00-skia-coverage/original-pixels-wipe-and-glow-seam.json`。
 - 独立 Windows Raster **13 项通过**，WSL X11、Wayland 各 **26 项通过**。Windows Vulkan、独立 Raster 与 WSL Vulkan 构建各通过 **3 项 CTest**。WSL 使用软件 Vulkan。
+
+### 14.304 P07.1 Utopia 退场的正文与上注音光晕（2026-11-21）
+
+- 正文光晕以静态字形墨迹、排版单元水平范围及描边余量确定固定滤镜区域，退场时复用正文位姿和透明度。光晕输出矩形向外对齐到像素边界，保留裁切边缘的有效采样。GPU 和 Raster 共用同一路径。
+- `exit_utopia` 原样及无装饰、仅正文光晕、仅上注音光晕三组变体各 **19 帧**通过实际 D2D GPU 对 Vulkan、Vulkan 对 Raster 的画面预算。原样 5100ms 的 D2D/Vulkan 遮罩 IoU 由 **0.96976** 升至 **0.97303**，外框差 **1px**。Windows **34 项**通过，包含缺少能力拒绝、注音归属、回跳和走字细缝回归。
+- P00 的配置和像素全量复测覆盖 **109/129** 个原样场景、**484 帧**，这 109 个场景全部通过两组对照。原样报告为 `build/p00-skia-coverage/configure-utopia-exit-body-glow.json` 和 `build/p00-skia-coverage/original-pixels-utopia-exit-body-glow.json`。
+- 独立 Windows Raster **15 通过**，WSL X11、Wayland 各 **30 通过、4 项 D2D 专用跳过**。Windows Vulkan、独立 Raster 与 WSL Vulkan 构建各通过 **3 项 CTest**。
 
 ## 15. 前期探针清理范围
 

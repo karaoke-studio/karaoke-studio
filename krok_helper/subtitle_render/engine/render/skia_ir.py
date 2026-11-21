@@ -589,6 +589,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
     utopia_exit_lines = set()
     utopia_exit_ruby_glow = False
+    utopia_exit_body_glow = False
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         if not lower_enabled:
@@ -599,11 +600,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
                         and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
                         and not (look.right_to_left or item.line.wipe_reverse or _inline_role_labels(item))
-                        and not any(_uses_decoration(look, kind) for kind in ('glow', 'shadow'))
+                        and not _uses_decoration(look, 'shadow')
                         and all(kind != 'shadow' for group in reading.rubies
                                 for kind in ruby_decoration_kinds(group.target.style))
                         and all(cell.vector_glyph is None for cell in item.render_line.chars)):
                     utopia_exit_lines.add(index)
+                    utopia_exit_body_glow |= _uses_decoration(look, 'glow')
                     utopia_exit_ruby_glow |= any('glow' in ruby_decoration_kinds(group.target.style)
                                                 for group in reading.rubies)
         rtl_shadow = False
@@ -652,6 +654,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_utopia_exit')
         if utopia_exit_ruby_glow:
             ir['required_features'].append('p07_ruby_utopia_exit_glow')
+        if utopia_exit_body_glow:
+            ir['required_features'].append('p07_ruby_utopia_exit_body_glow')
         if style.right_to_left:
             ir['required_features'].append('p05_horizontal_rtl_ruby')
             if rtl_shadow:

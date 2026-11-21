@@ -79,6 +79,7 @@ private:
         std::vector<BodyPaint> roleBodyPaints;
         StaticShadow shadow;
         std::vector<PreparedGlow> glow;
+        SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();
         struct RoleGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> cells; };
         std::vector<RoleGlow> roleGlows;
         struct RubyGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> readings; };

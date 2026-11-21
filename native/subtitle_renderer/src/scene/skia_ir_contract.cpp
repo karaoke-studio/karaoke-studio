@@ -136,6 +136,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_utopia_transition",
         "p07_ruby_utopia_exit",
         "p07_ruby_utopia_exit_glow",
+        "p07_ruby_utopia_exit_body_glow",
         "p07_character_fade",
         "p07_character_entry_fade_composition",
         "p07_scanline_band",
@@ -497,6 +498,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_ruby_utopia_exit_glow")
         && (!features.contains("p07_ruby_utopia_exit") || !features.contains("p06_ruby_glow")))
         throw BackendError("Skia 上注音 Utopia 退场光晕缺少对应能力");
+    if (features.contains("p07_ruby_utopia_exit_body_glow")
+        && (!features.contains("p07_ruby_utopia_exit") || !features.contains("p06_static_glow")))
+        throw BackendError("Skia Utopia 退场的正文光晕缺少对应能力");
     if (features.contains("p07_character_fade")
         && layout.value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");

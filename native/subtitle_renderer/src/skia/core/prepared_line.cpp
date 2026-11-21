@@ -346,7 +346,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Accumulate faint fill, outline and halo contributions before rounding
     // the final pixel to the destination's 8-bit channels.
     const bool hasGlow = !line.glow.empty() || line.hasRubyGlow();
-    const bool utopiaExitGlow = line.utopiaTransition.leave && line.hasRubyGlow();
+    const bool utopiaExitGlow = line.utopiaTransition.leave
+        && (line.hasRubyGlow() || !line.bodyGlowTransitionBounds.isEmpty());
     const bool highPrecisionFade = (line.characterFade.active() || rubyGeometryPhase || utopiaExitGlow)
         && (hasGlow || !line.rubyGroups.empty())
         && std::ranges::any_of(states, [](const State& state) {
@@ -414,7 +415,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return state.transform.opacity > 0
                     && ((before && state.phase != Phase::After) || (after && state.phase != Phase::Before));
             })) continue;
-        const auto source = layer.createSource(canvas);
+        const auto source = layer.createSource(canvas, line.bodyGlowTransitionBounds);
         if (!source.surface) continue;
         auto& glowCanvas = *source.surface->getCanvas();
         inPhaseOrder([&](std::size_t index, Phase phase) {

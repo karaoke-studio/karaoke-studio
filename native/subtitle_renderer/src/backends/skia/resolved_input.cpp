@@ -230,9 +230,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const auto kind = style.rubyDecorationKindForState(after);
             return kind == "none" || (kind == "glow" && features.contains("p07_ruby_utopia_exit_glow"));
         };
+        const auto bodyDecor = [&](bool after) {
+            const auto kind = style.decorationKindForState(after);
+            return kind == "none" || (kind == "glow" && features.contains("p07_ruby_utopia_exit_body_glow"));
+        };
         const bool rubyUtopiaExit = transformedRuby && utopiaExit && singingScale && line.entryAnimation == "none"
             && line.bursts.empty() && features.contains("p07_ruby_utopia_exit")
-            && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
+            && bodyDecor(false) && bodyDecor(true)
             && readingDecor(false) && readingDecor(true);
         const bool spinComposition = transformedRuby && features.contains("p07_ruby_character_exit_spin")
             && line.bursts.empty() && line.entryAnimation == "none" && line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
@@ -552,6 +556,22 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
+        if (rubyUtopiaExit && (prepared.glow.before.radius > 0 || prepared.glow.after.radius > 0)) {
+            // The animated halo uses a fixed line rectangle, including the
+            // pen extent and the vertical paint pad used by the fill range.
+            auto ink = SkRect::MakeEmpty();
+            for (const auto& glyph : prepared.cells)
+                if (!glyph.path.isEmpty()) ink.join(glyph.path.computeTightBounds());
+            if (!ink.isEmpty()) {
+                const float pad = ::subtitle::skia::outlineVisualPad(
+                    style.strokeWidth, style.stroke2Width, projected.layoutReferenceScale);
+                auto fill = ink.makeOutset(0.f, pad);
+                fill.fLeft = std::min(fill.left(), prepared.rubySingingOrigin);
+                for (const auto& glyph : prepared.cells)
+                    fill.fRight = std::max(fill.right(), glyph.pivot.layoutRight);
+                prepared.bodyGlowTransitionBounds = fill;
+            }
+        }
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
         const bool lineGradientGlow = gradientGlow
             && ((prepared.glow.before.radius > 0 && style.beforeDecorPaint.mode != "solid")
@@ -567,7 +587,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool lineGlow = (lineAnimation || fadeComposition || noiseComposition || spinComposition || geometryComposition)
+        const bool lineGlow = (lineAnimation || fadeComposition || noiseComposition || spinComposition
+            || geometryComposition || rubyUtopiaExit)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_composed_stroke_flash");

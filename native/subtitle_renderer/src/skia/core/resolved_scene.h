@@ -79,6 +79,7 @@ struct ResolvedLine {
     std::vector<BodyPaint> roleBodyPaints;
     StaticShadow shadow;
     StaticGlow glow;
+    SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();
     struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; GlowGradients gradients; };
     std::vector<RoleGlow> roleGlows;
     NoiseTransition noise;

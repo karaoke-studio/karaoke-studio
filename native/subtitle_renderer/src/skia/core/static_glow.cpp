@@ -72,7 +72,8 @@ PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas, const SkRect& 
     if (!transitionBounds.isEmpty()) {
         const float expansion = 3.f * radius_ + 16.f;
         const float padding = expansion + strokeWidth_;
-        outputClip = transitionBounds.makeOutset(padding, padding);
+        // Preserve the halo samples in pixels intersected by the crop edge.
+        outputClip = SkRect::Make(transitionBounds.makeOutset(padding, padding).roundOut());
         source = outputClip->makeOutset(expansion, expansion);
     }
     if (source.isEmpty() || !source.intersect(sampled)) return {};
