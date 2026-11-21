@@ -129,6 +129,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_line_motion",
         "p07_ruby_line_animation",
         "p07_lower_ruby_decoration_line_animation",
+        "p07_lower_ruby_unscaled_line_animation",
         "p07_lower_ruby_no_wipe_decoration",
         "p07_singing_scale",
         "p07_role_singing_scale",
@@ -654,6 +655,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_utopia_line_animation") || !features.contains("p07_ruby_line_animation")
             || !(features.contains("p06_lower_ruby_glow") || features.contains("p06_lower_ruby_shadow"))))
         throw BackendError("Skia 下方注音装饰动画缺少 Utopia 行动画或装饰能力声明");
+    if (features.contains("p07_lower_ruby_unscaled_line_animation")
+        && (!features.contains("p07_ruby_line_animation")
+            || !(features.contains("p06_lower_ruby_glow") || features.contains("p06_lower_ruby_shadow"))))
+        throw BackendError("Skia 下方注音整行出入场缺少行动画或装饰能力声明");
     if (features.contains("p07_singing_glow")
         && (!features.contains("p07_singing_scale")
             || !(hasRoleGlow || features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))

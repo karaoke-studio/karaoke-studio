@@ -37,9 +37,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                        : LineAnimation::State{1.f, 0.f, 0.f};
     const bool reverseDecoration = line.rubyGroups.empty() && (!line.glow.empty() || line.shadow.visible());
     const bool rtlRubyWithoutScale = !line.rubyGroups.empty() && !line.singingScale.active;
-    const bool ltrShadowWithoutScale = !line.singingScale.active && (line.shadow.visible() || line.hasRubyShadow);
+    const bool ltrDecorationWithoutScale = !line.singingScale.active
+        && (line.shadow.visible() || line.hasRubyShadow || !line.rubyGlows[1].empty());
     const bool fixedOpacity = !line.vertical && (line.wipeRightToLeft
-        ? (reverseDecoration || rtlRubyWithoutScale) : ltrShadowWithoutScale);
+        ? (reverseDecoration || rtlRubyWithoutScale) : ltrDecorationWithoutScale);
     // Match the reference's fixed-point layer opacity before 8-bit blending.
     constexpr float opacitySteps = 4096.f;
     const float lineOpacity = fixedOpacity ? std::floor(animation.opacity * opacitySteps) / opacitySteps

@@ -4,6 +4,7 @@
 
 namespace krok::subtitle::native {
 enum class RubyTransition { None, Fade, Spin, Translation, Affine, UtopiaExit };
+struct RubyDecorationMotion { bool upper, lower; };
 enum class GlowPaintSupport;
 class SkiaImageFillCache;
 struct RolePaintBounds;
@@ -11,5 +12,5 @@ struct RolePaintBounds;
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const QJsonObject& line, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
     const RenderScene& scene, int lineIndex, int timingOffset, RubyTransition, SkiaImageFillCache&,
-    GlowPaintSupport, const RolePaintBounds*, bool lineDecorationMotion, std::size_t& totalCells, std::size_t& totalGroups);
+    GlowPaintSupport, const RolePaintBounds*, RubyDecorationMotion, std::size_t& totalCells, std::size_t& totalGroups);
 }

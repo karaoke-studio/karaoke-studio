@@ -231,15 +231,23 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
-        const bool horizontalShadowMotion = features.contains("p07_horizontal_shadow_line_animation")
-            && !style.vertical && !style.rightToLeft && !line.wipeReverse
+        const bool unscaledLineMotion = !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
             && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
-            && !vectorGuides && !hasInlineRoles && !features.contains("p05_lower_ruby")
+            && !vectorGuides && !hasInlineRoles;
+        const bool horizontalShadowMotion = unscaledLineMotion
+            && features.contains("p07_horizontal_shadow_line_animation") && !features.contains("p05_lower_ruby")
             && (style.decorationKindForState(false) == "shadow" || style.decorationKindForState(true) == "shadow"
                 || (annotated && (style.rubyDecorationKindForState(false) == "shadow"
                                   || style.rubyDecorationKindForState(true) == "shadow")));
+        const bool lowerUnscaledMotion = unscaledLineMotion && features.contains("p07_lower_ruby_unscaled_line_animation")
+            && std::ranges::any_of(source.value("ruby_groups").toArray(), [](const auto& value) {
+                const auto group = value.toObject();
+                return group.value("lower").toBool() && (group.contains("lower_glow") || group.contains("lower_shadow"));
+            });
+        const bool lowerUtopiaMotion = singingScale && ordinaryLineAnimation
+            && features.contains("p07_lower_ruby_decoration_line_animation");
         const bool petalScanline = line.scanlineEnabled && features.contains("p07_ruby_petal_entry_scanline")
             && line.entryAnimation == "petal" && line.exitAnimation == "none" && singingScale
             && style.scanlineShape == "band" && style.scanlineMode == "color";
@@ -520,7 +528,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
-            rtlRubyUnscaledMotion || horizontalShadowMotion, totalCells, totalGroups);
+            {rtlRubyUnscaledMotion || horizontalShadowMotion, lowerUnscaledMotion || lowerUtopiaMotion},
+            totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
@@ -606,7 +615,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool lineGlow = (lineAnimation || fadeComposition || noiseComposition || spinComposition
+        const bool lineGlow = (lineAnimation || lowerUnscaledMotion || fadeComposition || noiseComposition || spinComposition
             || geometryComposition || rubyUtopiaExit)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled

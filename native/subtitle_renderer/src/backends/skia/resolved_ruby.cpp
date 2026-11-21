@@ -135,7 +135,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
         const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
         GlowPaintSupport glowPaints,
-        const RolePaintBounds* roleBounds, bool lineDecorationMotion, std::size_t& totalCells, std::size_t& totalGroups) {
+        const RolePaintBounds* roleBounds, RubyDecorationMotion decorationMotion, std::size_t& totalCells,
+        std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
         || ir.value("skia_layout").toObject().value("ruby_schema").toDouble(-1) != 1
@@ -165,9 +166,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe");
     const bool allowShadow = features.contains("p06_ruby_shadow")
         && (!rtl || rtlShadow) && (!vertical || allowVerticalDecoration)
-        && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || lineDecorationMotion)
+        && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || decorationMotion.upper)
         && !line.zoomPulseEnabled
-        && (staticLine || verticalFade || lineDecorationMotion);
+        && (staticLine || verticalFade || decorationMotion.upper);
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
@@ -183,20 +184,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
-            || lineDecorationMotion || roleLineFade || gradientLineFade)
+            || decorationMotion.upper || decorationMotion.lower || roleLineFade || gradientLineFade)
         && (scene.charStyles.empty() || roleGlow);
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
-        && staticLine && features.contains("p07_lower_ruby_no_wipe_decoration"));
-    const bool lowerLineAnimation = features.contains("p07_lower_ruby_decoration_line_animation")
-        && line.karaokeAnimation == "utopia"
-        && (line.entryAnimation == "none" || line.entryAnimation == "fade"
-            || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
-        && (line.exitAnimation == "none" || line.exitAnimation == "fade"
-            || line.exitAnimation == "slide_out" || line.exitAnimation == "rise");
+        && (staticLine || decorationMotion.lower) && features.contains("p07_lower_ruby_no_wipe_decoration"));
     const bool lowerScanline = line.scanlineEnabled && staticLine && line.karaokeAnimation != "no_wipe"
         && features.contains("p07_lower_ruby_scanline");
-    const bool allowLowerDecoration = !vertical && (staticLine || lowerLineAnimation)
+    const bool allowLowerDecoration = !vertical && (staticLine || decorationMotion.lower)
         && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
         && (!line.scanlineEnabled || lowerScanline) && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);

@@ -215,15 +215,17 @@ def test_lower_shadow_and_glow_match_actual_gpu(binary, application, tmp_path, p
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('shadow', [False, True])
-def test_lower_decoration_keeps_its_clocks_under_line_animation(binary, glowing_lower, target, shadow):
+@pytest.mark.parametrize('effect', ['utopia', 'none', 'no_wipe'])
+def test_lower_decoration_keeps_its_clocks_under_line_animation(binary, glowing_lower, target, shadow, effect):
     track, style, resolve = glowing_lower
     track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=50, display_end_override_ms=2400)])
     style = lower_shadow_style(style, 'after') if shadow else style
-    style = replace(style, karaoke_anim='utopia')
+    style = replace(style, karaoke_anim=effect)
     animated = replace(style, entry_anim='slide_in', exit_anim='slide_out', entry_lead_ms=600, exit_fade_ms=600)
     ir = ir_for(binary, (track, animated, resolve))
     still = ir_for(binary, (track, style, resolve))
-    feature = 'p07_lower_ruby_decoration_line_animation'
+    feature = ('p07_lower_ruby_decoration_line_animation' if effect == 'utopia'
+               else 'p07_lower_ruby_unscaled_line_animation')
     assert feature in ir['required_features'] and feature not in still['required_features']
     assert ir['skia_layout']['lines'] == still['skia_layout']['lines']
     bad = copy.deepcopy(ir)
@@ -250,19 +252,22 @@ def test_lower_decoration_keeps_its_clocks_under_line_animation(binary, glowing_
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['utopia', 'none', 'no_wipe'])
 @pytest.mark.parametrize('entry,leave,shadow', [('slide_in', 'slide_out', None), ('rise', 'rise', 'before'),
                                                ('fade', 'fade', 'after')])
-def test_lower_decoration_line_animation_matches_actual_gpu(binary, application, tmp_path, entry, leave, shadow):
+def test_lower_decoration_line_animation_matches_actual_gpu(binary, application, tmp_path, entry, leave, shadow, effect):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
     line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
     style = lower_shadow_style(base.style, shadow) if shadow else base.style
-    case = replace(base, case_id=f'lower_decoration_{entry}', track=replace(base.track, lines=[line]),
-                   style=replace(style, entry_anim=entry, exit_anim=leave))
-    assert_ruby_transition_gpu_parity(binary, case, (950, 1120, 1260, 1380, 1550, 2600,
-                                                    4110, 4280, 4450, 4530, 4610, 4650))
+    case = replace(base, case_id=f'lower_decoration_{effect}_{entry}', track=replace(base.track, lines=[line]),
+                   style=replace(style, karaoke_anim=effect, entry_anim=entry, exit_anim=leave))
+    times = (950, 1120, 1260, 1380, 1550, 2600, 4110, 4280, 4450, 4530, 4610, 4650)
+    if effect != 'utopia':
+        times = tuple(sorted((*times, 951, 957, 967, 986, 4614, 4633, 4643, 4649)))
+    assert_ruby_transition_gpu_parity(binary, case, times)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

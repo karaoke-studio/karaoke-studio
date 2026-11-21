@@ -841,11 +841,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             animates_line = True
     if geometry.ruby is not None and animates_line:
         ir['required_features'].append('p07_ruby_line_animation')
-        if any(source.get('karaoke_anim') == 'utopia' and _ordinary_line_animation(source)
-               and {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-               and any('lower_glow' in group or 'lower_shadow' in group for group in final['ruby_groups'])
-               for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True)):
+        lower_motion_modes = {
+            source.get('karaoke_anim')
+            for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True)
+            if _ordinary_line_animation(source) and {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+            and any('lower_glow' in group or 'lower_shadow' in group for group in final['ruby_groups'])
+        }
+        if 'utopia' in lower_motion_modes:
             ir['required_features'].append('p07_lower_ruby_decoration_line_animation')
+        if lower_motion_modes & {'none', 'no_wipe'}:
+            ir['required_features'].append('p07_lower_ruby_unscaled_line_animation')
     if animates_line and not (style.vertical or style.right_to_left or style.lower_ruby_enabled):
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
