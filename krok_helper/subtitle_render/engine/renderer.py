@@ -1330,7 +1330,7 @@ def _write_frames_native(
         timestamps = [frame_timestamp(index, job.fps) for index in range(total_frames)]
         frames_at_times = iter_native_rgba_frames_at_times(job.track, job.style, timestamps, process_factory=factory,
                                                           extra_tracks=list(job.extra_tracks), verify_frame_identity=True,
-                                                          reuse_range_mapping=True,
+                                                          reuse_range_mapping=True, borrow_rgba=True,
                                                           **options)
         frames = (frame for _, frame in frames_at_times)
     else:

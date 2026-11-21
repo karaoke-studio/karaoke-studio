@@ -761,8 +761,11 @@ def iter_native_rgba_frames_at_times(
     extra_tracks: list[TimingTrack] | None = None,
     verify_frame_identity: bool = False,
     reuse_range_mapping: bool = False,
-) -> Iterator[tuple[int, bytes]]:
-    """Yield ``(t_ms, rgba_bytes)`` for explicit timestamps from the sidecar."""
+    borrow_rgba: bool = False,
+) -> Iterator[tuple[int, bytes | memoryview]]:
+    """Yield RGBA frames for explicit timestamps. A borrowed frame expires on resume."""
+    if borrow_rgba and (not reuse_range_mapping or not verify_frame_identity):
+        raise ValueError("borrowed export frames require validated, retained range slots")
     timestamps_all = [int(t_ms) for t_ms in timestamps_ms]
     frame_total = len(timestamps_all)
     if frame_total <= 0:
@@ -818,12 +821,24 @@ def iter_native_rgba_frames_at_times(
                         continue
                     kind = event.get("event")
                     if kind == "frame_ready":
-                        if reuse_range_mapping:
+                        if reuse_range_mapping and range_reader is None:
                             # Skia retains every slot until range_done. Reuse
                             # its mapping across the range and detach before
                             # closing the sidecar on an interrupted export.
-                            if range_reader is None:
-                                range_reader = SharedFrameRingReader.from_event(event)
+                            range_reader = SharedFrameRingReader.from_event(event)
+                        if borrow_rgba:
+                            # The owner emits in order, with one slot per
+                            # frame. Consume the view before resuming.
+                            if (event.get("frame_index") != next_emit or next_emit >= count
+                                    or event.get("t_ms") != timestamps[next_emit]
+                                    or event.get("width") != width or event.get("height") != height):
+                                raise NativeRendererError("Skia 导出共享帧的序号、时间或尺寸与请求不一致")
+                            assert range_reader is not None
+                            with range_reader.borrow_packed_rgba_view(event) as frame:
+                                yield timestamps[next_emit], frame
+                            next_emit += 1
+                            continue
+                        if range_reader is not None:
                             slot = range_reader.read_frame(event)
                         else:
                             with SharedFrameRingReader.from_event(event) as reader:

@@ -860,9 +860,19 @@ def test_skia_export_pipe_uses_exact_frame_times(binary, monkeypatch, tmp_path, 
                     fps=fps, duration_ms=1500, gpu_export_enabled=target == 'gpu')
     count = round(fps * 1.5)
     committed = []
-    pipe = SimpleNamespace(stdin=SimpleNamespace(write=lambda frame: committed.append(sha256(frame).digest())))
+    borrowed = []
+
+    def write_frame(frame):
+        assert isinstance(frame, memoryview)
+        if not committed:
+            borrowed.append(frame)
+        committed.append(sha256(frame).digest())
+
+    pipe = SimpleNamespace(stdin=SimpleNamespace(write=write_frame))
     _write_frames_native(pipe, job, count, binary, None, None)
     assert len(committed) == count
+    with pytest.raises(ValueError, match='released memoryview'):
+        bytes(borrowed[0])
 
     indices = list(range(0, count, 5))
     times = [frame_timestamp(index, fps) for index in indices]
