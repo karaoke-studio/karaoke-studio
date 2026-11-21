@@ -956,6 +956,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if (style.viewport_scale_pct != 100 or style.viewport_rotation_deg
             or style.viewport_offset_x or style.viewport_offset_y):
         ir['required_features'].append('p08_viewport')
+        if style.vertical:
+            ir['required_features'].append('p08_vertical_viewport')
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])
     declare_bitmap_guides(plan.lines, ir, static_title=adjust_position is not None)

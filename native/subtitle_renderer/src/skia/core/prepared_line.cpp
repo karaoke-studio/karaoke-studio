@@ -128,7 +128,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto band = [&](float from, float to) {
         return line.vertical ? SkRect::MakeLTRB(-1e6f, from, 1e6f, to) : SkRect::MakeLTRB(from, -1e6f, to, 1e6f);
     };
-    const float wipeViewportHeight = viewport_.rectStaysRect() ? 0.f : float(height_);
+    // Vertical columns retain the local half-plane when the viewport rotates.
+    const float wipeViewportHeight = line.vertical || viewport_.rectStaysRect() ? 0.f : float(height_);
     enum class Phase { Before, After, Wiping };
     struct State {
         float progress, edge;

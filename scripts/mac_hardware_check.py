@@ -36,6 +36,7 @@ RENDER_FEATURE_CASES = (
     "tests/test_subtitle_skia_vertical.py::test_vertical_ruby_gpu_raster_and_out_of_order_seek",
     "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_ruby_units_split_one_span_and_keep_the_pause",
     "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_singing_scale_keeps_column_and_reading_wipe",
+    "tests/test_subtitle_skia_vertical_ruby.py::test_vertical_viewport_rotates_body_and_reading_wipes",
     "tests/test_subtitle_skia_vector_guides.py::test_vector_guide_gpu_raster_and_out_of_order_seek",
     "tests/test_subtitle_skia_secondary_outline.py::test_outer_ring_preserves_inner_alpha",
     "tests/test_subtitle_skia_line_fade.py::test_fade_g5_preview",

@@ -350,6 +350,62 @@ def test_vertical_singing_scale_original_corpus_gpu_raster(binary, application, 
     assert_glow_parity(case.timestamps_ms, frames[0], *frames, case.case_id, check_p00_edges=True)
 
 
+@pytest.mark.parametrize('angle,dpr,glowing', [(28, 1, False), (-28, 1.5, False), (90, 1.5, False),
+                                             (28, 1.5, True)])
+def test_vertical_viewport_rotates_body_and_reading_wipes(binary, project, angle, dpr, glowing):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(0, 1), position='center')
+    style = replace(style, karaoke_colors=colors('#FF0000', '#0000FF'),
+                    ruby_karaoke_colors=colors('#00FF00', '#FF00FF'))
+    if glowing:
+        style = replace(style, karaoke_anim='utopia', decoration_kind='glow', glow_before_radius_px=6,
+                        glow_after_radius_px=7, ruby_decoration_kind='glow', ruby_glow_after_radius_px=5)
+    baseline = ir_for(binary, (track, style), dpr=dpr)
+    ir = ir_for(binary, (track, replace(style, viewport_rotation_deg=angle, viewport_scale_pct=80,
+                                      viewport_offset_x=-135, viewport_align='center_right')), dpr=dpr)
+    assert ir['skia_layout']['lines'] == baseline['skia_layout']['lines']
+    assert ir['track']['lines'] == baseline['track']['lines']
+    feature = 'p08_vertical_viewport'
+    assert {'p08_viewport', feature} <= set(ir['required_features'])
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    unit, = group['units']
+    start, end = unit['interval_ms']
+    times = [start, (start + end) // 2, end]
+    captures = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, [*times, times[1]])
+            assert np.array_equal(frames[1], frames[-1])
+            bad = copy.deepcopy(ir)
+            bad['required_features'].remove(feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, [times[1]], generation=2)
+            assert np.array_equal(frames[1], replay[0])
+        captures.append(np.stack(frames[:-1]))
+        r, g, b, alpha = np.moveaxis(frames[1], -1, 0)
+        well_covered = alpha > 128
+        theta = np.radians(angle)
+
+        def local_rows(mask):
+            y, x = np.nonzero(mask & well_covered)
+            assert len(x)
+            return y * np.cos(theta) - x * np.sin(theta)
+
+        body_before = local_rows((r > 220) & (g < 16) & (b < 16))
+        body_after = local_rows((b > 220) & (g < 16) & (r < 16))
+        ruby_before = local_rows((g > 220) & (r < 16) & (b < 16))
+        ruby_after = local_rows((r > 220) & (b > 220) & (g < 16))
+        assert np.max(body_after) < np.min(body_before) + 1
+        assert np.max(ruby_after) < np.min(ruby_before) + 1
+
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),

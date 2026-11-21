@@ -187,6 +187,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_petal_entry_flame_singing",
         "p07_ruby_petal_entry_scanline",
         "p08_viewport",
+        "p08_vertical_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",
         "p08_decorated_shape_signal",
@@ -296,6 +297,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_noise_composition")
         && (!features.contains("p07_noise_transition") || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 噪声出入场组合缺少对应布局能力");
+    if (features.contains("p08_vertical_viewport")
+        && (!features.contains("p08_viewport") || !features.contains("p05_vertical_solid")
+            || !style.value("vertical").toBool()))
+        throw BackendError("Skia 竖排视口变换缺少竖排布局或视口能力声明");
     if (features.contains("p08_viewport")) {
         integer(style, "viewport_scale_pct", 1, 400);
         integer(style, "viewport_rotation_deg", -180, 180);

@@ -763,6 +763,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 自定义动态行背景带的阴影、发光与大半径精确模糊，见 §14.198。
 - [ ] P08.4 主副轨各自布局、分页、时间偏移、角色样式、多源顺序与 viewport 变换。
   - [x] 单轨正向横排正文与注音的视口偏移、缩放和旋转，见 §14.125。
+  - [x] 单轨正向竖排正文与注音的共同视口变换，走字沿旋转后的列轴推进，见 §14.313。
   - [x] 横排实色多轨的独立分页、时间偏移、角色着色、按源合成和共享视口，见 §14.197。
   - [x] 横排多轨的上注音、下方罗马音、实色描边及 Utopia 缩放，见 §14.199。
   - [x] 横排多轨共享行背景带素材，含独立窗口、重叠消隐和动态装饰，见 §14.200。
@@ -3525,7 +3526,9 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 2026-11-22 的 `p07_ruby_particle_entry_glow` 支持爱心、花瓣单独入场与正文实色光晕和上注音同场，覆盖上注音跟随正文光晕的原样。逐字显形时在目标格式合成，正文光晕每次模糊后在公共 SkSL 滤镜中量化到 8 位再叠加。滤镜在场景准备时建立，Vulkan、Metal 和 Raster 复用绘制逻辑。
 - 原样 `entry_heart` 和 `entry_petal` 在 1080p 和 DPR 1.5 各测 **36 帧**，共 **72 帧**通过原两组画面对照，覆盖 299–302ms、预发射、完整入场及稳定帧。Windows 专项 **20 项通过**，独立 Windows Raster **6 项通过**，WSL X11、Wayland 各 **12 通过、8 项 D2D 专用跳过**，三份构建各通过 **3 项 CTest**。星光、羽毛带光晕的临界帧仍待验收。日志前缀为 `build/p07-particle-entry-body-glow-*`。
 - `5f94c560` 的 P00 重新配置 **111/129** 个原样场景成功。用同一批 D2D、Vulkan、Raster 进程重配，全部 **496 帧**通过两组画面对照。逐帧证据 `build/p00-skia-coverage/original-warm-pixels-5f94c560.json`。
+- `b117c9d1` 将竖排按产品几何和时钟单独验收后，再次复验同一批原样工程，**111 个场景、496 帧**仍通过两组对照。逐帧证据 `build/p00-skia-coverage/original-warm-pixels-b117c9d1.json`。
 - 仍保留有光晕的原样配置门槛。301ms 切到目标格式后，四种原样的 D2D/Vulkan 通过，该帧 Vulkan/Raster 的遮罩 IoU 为 **0.9439–0.9633**。音符、涟漪和两类雪花的无装饰变体也仍有未达预算的帧。保留现有绘制精度，逐帧日志为 `build/p07-annotated-particle-entry-*-win.log`，配置扫描原样集合仍为 **107/129**。
+- 音符、涟漪、星光的试验用固定 16 个子像素位置采样粒子路径。三种带光晕原样在 DPR 1.5 各 **14 帧**符合原预算。DPR 1 的 301ms Vulkan/Raster 已通过，D2D/Vulkan 的遮罩 IoU 分别为 **0.9690、0.9681、0.9689**，低于 **0.97**。无光晕变体的 302ms 正文边缘仍有差异。试验已撤回，证据为 `build/p07-entry-particle-pattern-*.log` 与 `build/p07-note-ripple-sparkle-16-sample-unverified.patch`。 [Microsoft 的多重采样位置说明](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_standard_multisample_quality_levels)
 
 ### 14.281 P00 主线原样配置与画面复验（2026-11-21）
 
@@ -3719,6 +3722,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - [Mac CI 44937151256](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44937151256) 的两种架构在同一个过期的拒绝断言失败，每架构 **2260 通过、1 失败、1546 跳过**。该断言仍要求拒绝已有的整行淡入加扫字线和光晕组合。
 - `f2fb0b2d` 以正向测试核对继承光晕的扫字线在淡入淡出中改变画面、保留原布局及乱序回放。未覆盖的角色扫字线组合继续拒绝。Windows 光晕扫字线相关 **19 项通过**。[修正后的双架构 CI 44940928106](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44940928106) 用于复验。
+
+### 14.313 P08.4 竖排视口缩放、旋转与偏移（2026-11-22）
+
+- `p08_vertical_viewport` 在排版和时钟完成后应用同一视口矩阵。竖排正文和右侧注音各自的走字裁剪保留在局部 Y 轴，随画面共同旋转。Windows 和 WSL 的同一组用例验证正负旋转、90°、DPR 1/1.5、Utopia 与光晕、乱序和旧能力拒绝后的回滚。
+- Windows 相关 **45 项通过**，WSL X11 与 Wayland 各 **35 项通过、10 项 Windows 专用跳过**。独立 Windows Raster 的 **4 帧**与 Vulkan sidecar 的 Raster 模式逐字节一致。三份 native 构建各 **3 项 CTest** 通过。物理 Metal 复测包加入同一组测试。日志前缀 `build/p08-vertical-viewport-*`。
 
 ## 15. 前期探针清理范围
 

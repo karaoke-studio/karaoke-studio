@@ -127,8 +127,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         throw BackendError("Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
-    if (viewport && (!features.contains("p08_viewport") || cfg.vertical || cfg.rightToLeft))
-        throw BackendError("Skia 字幕视口变换缺少横排布局能力声明");
+    if (viewport && (!features.contains("p08_viewport") || cfg.rightToLeft
+        || (cfg.vertical && !features.contains("p08_vertical_viewport"))))
+        throw BackendError("Skia 字幕视口变换缺少对应布局能力声明");
     RenderScene out;
     if (staticBand) {
         out.lineBand.enabled = true;
