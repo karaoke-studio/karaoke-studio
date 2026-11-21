@@ -741,8 +741,9 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
     stroke_width_px=0, stroke2_enabled=False, dual_line_layout=False, karaoke_anim='none', entry_anim='none',
     exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
 panel.set_style(style)
-panel.set_track(TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
-    end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)]))
+track = TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
+    end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)])
+panel.set_track(track)
 window.show()
 if '--require-hardware' in sys.argv:
     wait_for(lambda: errors or panel.skia_quick_target_established)
@@ -761,6 +762,69 @@ if '--require-hardware' in sys.argv:
     sys.exit(0)
 wait_for(lambda: panel.skia_quick_target_established and frames)
 assert panel.current_subtitle_frame() is None
+if '--compare-export' in sys.argv:
+    from pathlib import Path
+    from types import SimpleNamespace
+    import numpy as np
+    from PyQt6.QtCore import QSize, Qt
+    from krok_helper.subtitle_render.engine.export.render_job import OUTPUT_FORMAT_PNG_TRANSPARENT, RenderJob
+    from krok_helper.subtitle_render.engine.renderer import _write_frames_native
+    from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
+
+    work = Path(sys.argv[-1])
+    quick = panel.canvas._quick_preview
+    binary = quick._binary
+    indices = {12: 200, 33: 550, 81: 1350}
+    captures = {}
+    for index, time_ms in indices.items():
+        transport.set_time(time_ms)
+        wait_for(lambda: frames[-1] == time_ms)
+        grab = quick._canvas.renderer.grabToImage(QSize(640, 360))
+        assert grab is not None
+        wait_for(lambda: not grab.image().isNull())
+        image = grab.image().convertToFormat(QImage.Format.Format_RGBA8888_Premultiplied)
+        captures[index] = image.scaled(640, 360, transformMode=Qt.TransformationMode.SmoothTransformation)
+
+    def pixels(image):
+        assert (image.width(), image.height()) == (640, 360)
+        return np.frombuffer(image.constBits().asstring(image.sizeInBytes()), np.uint8).reshape(360, 640, 4)
+
+    pipe_frames = {}
+    frame_index = 0
+    def write_frame(data):
+        global frame_index
+        if frame_index in indices:
+            pipe_frames[frame_index] = bytes(data)
+        frame_index += 1
+
+    job = RenderJob(track, style, work / 'unused', work / '字幕', width=640, height=360,
+                    fps=60, duration_ms=2000, include_audio=False, gpu_export_enabled=True,
+                    output_format=OUTPUT_FORMAT_PNG_TRANSPARENT)
+    pipe = SimpleNamespace(stdin=SimpleNamespace(write=write_frame))
+    _write_frames_native(pipe, job, 120, binary, None, None)
+    assert frame_index == 120 and pipe_frames.keys() == indices.keys()
+    with SkiaRendererProcess(binary, selection=SkiaSelection.from_environment()) as process:
+        process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000)
+        for index, time_ms in indices.items():
+            path = work / f'offscreen-{index}.png'
+            process.render_frame_png(time_ms, path)
+            offscreen = QImage(str(path)).convertToFormat(QImage.Format.Format_RGBA8888)
+            assert pixels(offscreen).tobytes() == pipe_frames[index], index
+            premultiplied = offscreen.convertToFormat(QImage.Format.Format_RGBA8888_Premultiplied)
+            expected, preview = pixels(premultiplied), pixels(captures[index])
+            left, right = expected[..., 3] >= 128, preview[..., 3] >= 128
+            area = expected[..., 3] > 0
+            union = left | right
+            assert union.sum() > 200
+            overlap = np.sum(left & right) / union.sum()
+            delta = np.abs(expected.astype(np.int16) - preview.astype(np.int16))
+            mean = delta[area | (preview[..., 3] > 0)].mean()
+            assert overlap >= 0.97 and mean <= 5, (index, overlap, mean)
+    window.close()
+    owner.close()
+    player.shutdown()
+    print('Quick, offscreen GPU and export pipe compared', flush=True)
+    sys.exit(0)
 transport.set_time(1350)
 wait_for(lambda: frames[-1] == 1350)
 image = panel.canvas.grab().toImage().convertToFormat(QImage.Format.Format_RGBA8888)
@@ -797,7 +861,7 @@ print('floating preview verified', flush=True)
 """
 
 
-def run_floating_preview(qml_dir, *, require_hardware=False):
+def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None):
     binary = qml_dir.parent / ('krok_skia_subtitle_renderer.exe' if sys.platform == 'win32' else 'krok_skia_subtitle_renderer')
     env = desktop_environment() | {
         'KROK_SUBTITLE_RENDER_BACKEND': 'skia', 'KROK_SUBTITLE_SKIA_TARGET': 'gpu',
@@ -807,6 +871,8 @@ def run_floating_preview(qml_dir, *, require_hardware=False):
         'KROK_SUBTITLE_SKIA_RENDERER': str(binary), 'QT_FORCE_STDERR_LOGGING': '1',
     }
     args = ['--require-hardware'] if require_hardware else []
+    if compare_path is not None:
+        args += ['--compare-export', str(compare_path)]
     result = subprocess.run([sys.executable, '-c', FLOATING_WINDOW, *args], env=env, capture_output=True,
                             text=True, encoding='utf-8', errors='replace', timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -815,6 +881,10 @@ def run_floating_preview(qml_dir, *, require_hardware=False):
 
 def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
     assert 'floating preview verified' in run_floating_preview(qml_dir)
+
+
+def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path):
+    assert 'Quick, offscreen GPU and export pipe compared' in run_floating_preview(qml_dir, compare_path=tmp_path)
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='Software Vulkan fallback on Linux')
