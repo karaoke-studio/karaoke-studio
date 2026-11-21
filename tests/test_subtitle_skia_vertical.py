@@ -235,28 +235,35 @@ def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, proj
 
 
 @pytest.mark.parametrize('kind', ['glow', 'shadow', 'shadow_to_glow'])
-def test_vertical_columns_switch_decoration_at_their_own_unit_ends(binary, project, kind):
+@pytest.mark.parametrize('directions', ['forward', 'reverse', 'mixed'])
+def test_vertical_columns_switch_decoration_at_their_own_unit_ends(binary, project, kind, directions):
     from test_subtitle_skia_outline_ruby import premultiplied
 
-    track, style, _ = decorated_columns(project, kind)
-    ir = ir_for(binary, (track, replace(style, karaoke_anim='no_wipe')))
+    track, style, _ = decorated_columns(project, kind, reverse=directions != 'forward',
+                                        mixed_directions=directions == 'mixed')
+    style = replace(style, karaoke_anim='no_wipe', reverse_karaoke_anim='no_wipe')
+    ir = ir_for(binary, (track, style))
     feature = 'p07_vertical_columns_decoration_no_wipe'
     assert feature in ir['required_features']
+    reverse = 'p07_vertical_reverse_decoration_no_wipe'
+    assert (reverse in ir['required_features']) == (directions != 'forward')
     ends = [line['resolved_intervals'][0][1] for line in ir['track']['lines']]
     times = [time for end in ends for time in (end - 2, end - 1, end)]
     columns = [line['cells'][0]['origin_x'] for line in ir['skia_layout']['lines']]
     # Measure core pixels. The two columns' outer halos can meet in the gap.
     windows = [slice(round(origin + style.font_size_px / 4), round(origin + style.font_size_px * 3 / 4))
                for origin in columns]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
+    required = [feature] if directions == 'forward' else [feature, reverse]
     captures = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
+            for missing in required:
+                bad = copy.deepcopy(ir)
+                bad['required_features'].remove(missing)
+                with pytest.raises(NativeRendererError):
+                    configure(process, bad)
             replay, _ = collect(process, times[::-1], generation=2)
         assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
         for index, window in enumerate(windows):
@@ -265,11 +272,29 @@ def test_vertical_columns_switch_decoration_at_their_own_unit_ends(binary, proje
             blue_before, blue_after = [(frame[..., 2].astype(np.int64) * frame[..., 3]).sum()
                                        for frame in (before, after)]
             assert blue_after > blue_before
+            rows = (after[..., 2].astype(float) * after[..., 3]).sum(axis=1)
+            cells = ir['skia_layout']['lines'][index]['cells']
+            middle = (cells[0]['wipe_top'] + cells[-1]['wipe_bottom']) / 2
+            assert (np.average(np.arange(rows.size), weights=rows) > middle) == track.lines[index].wipe_reverse
             other = windows[1 - index]
             assert np.array_equal(frames[3 * index + 1][:, other], frames[3 * index + 2][:, other])
         captures.append(np.stack(frames))
     diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@GPU
+def test_reverse_vertical_no_wipe_keeps_shadow_overhang_before_first_unit(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'vertical')
+    track = replace(case.track, rubies=[], lines=[replace(case.track.lines[0], wipe_reverse=True)])
+    style = replace(case.style, karaoke_anim='no_wipe', reverse_karaoke_anim='no_wipe',
+                    decoration_before_sync=False, decoration_kind_before='shadow', decoration_kind='glow',
+                    shadow_before_offset_x=9, shadow_before_offset_y=6)
+    times = (300, 600, 1199, 1200, 1500, 1800, 3900, 4499, 4500)
+    assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 
 
 def test_vertical_column_decoration_rejects_ruby_layout(binary, project):

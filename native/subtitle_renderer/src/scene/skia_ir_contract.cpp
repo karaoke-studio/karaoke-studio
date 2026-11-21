@@ -55,6 +55,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_shadow_no_wipe",
         "p07_vertical_mixed_decoration_no_wipe",
         "p07_vertical_columns_decoration_no_wipe",
+        "p07_vertical_reverse_decoration_no_wipe",
         "p07_vertical_decoration_fade",
         "p06_vertical_reverse_outline",
         "p06_vertical_columns_outline",
@@ -339,16 +340,19 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool wholeShadow = features.contains("p07_vertical_shadow_no_wipe");
     const bool wholeMixed = features.contains("p07_vertical_mixed_decoration_no_wipe");
     const bool wholeColumns = features.contains("p07_vertical_columns_decoration_no_wipe");
-    if (wholeGlow || wholeShadow || wholeMixed || wholeColumns) {
+    const bool wholeReverse = features.contains("p07_vertical_reverse_decoration_no_wipe");
+    if (wholeGlow || wholeShadow || wholeMixed || wholeColumns || wholeReverse) {
         const bool hasGlow = verticalGlow || (verticalRubyDecoration && features.contains("p06_ruby_glow"));
         const bool hasShadow = verticalShadow || (verticalRubyDecoration && features.contains("p06_ruby_shadow"));
         if (!features.contains("p05_vertical_solid") || !features.contains("p07_no_wipe")
             || !style.value("vertical").toBool() || (hasGlow && !features.contains("p07_no_wipe_decoration"))
-            || features.contains("p07_line_fade") || reverseVertical
+            || features.contains("p07_line_fade") || wholeReverse != reverseVertical
             || wholeGlow != (hasGlow && !hasShadow) || wholeShadow != (hasShadow && !hasGlow)
             || wholeMixed != (hasGlow && hasShadow)
             || wholeColumns != features.contains("p05_vertical_columns")
-            || (wholeColumns && (!features.contains("p06_vertical_columns_decoration") || !(hasGlow || hasShadow))))
+            || (wholeColumns && !features.contains("p06_vertical_columns_decoration"))
+            || (wholeReverse && (verticalRubyDecoration || features.contains("p05_vertical_ruby")))
+            || !(hasGlow || hasShadow))
             throw BackendError("Skia 竖排装饰整字变色缺少对应布局或装饰能力");
     }
     if ((verticalGlow || verticalShadow)
