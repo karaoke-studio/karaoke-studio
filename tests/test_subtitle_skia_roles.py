@@ -249,6 +249,56 @@ def test_ruby_role_glow_matches_actual_d2d_gpu(binary, application, tmp_path, di
     assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 3500, 3900, 4499))
 
 
+def independent_latin_outline(style):
+    roles = dict(style.custom_style_schemes)
+    roles['a'] = replace(roles['a'], latin_stroke_width_px=9)
+    return replace(style, stroke_width_px=6, latin_stroke_width_px=3, custom_style_schemes=roles)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_latin_outline_combines_with_role_paints_and_upper_glow(binary, project, tmp_path, target):
+    track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    style = independent_latin_outline(role_static_glow_style(style))
+    style = replace(style, font_reference_height=360)
+    line, = track.lines
+    chars = list(line.chars)
+    chars[2] = replace(chars[2], text='A')
+    track = replace(track, lines=[replace(line, chars=chars)],
+                    rubies=[RubyAnnotation(kanji='A字', reading='AA', pos_start_ms=200, pos_end_ms=600)])
+    ir = ir_for(binary, (track, style), dpr=1)
+    assert {'p06_latin_primary_outline', 'p06_role_body_paints', 'p06_ruby_role_glow'} <= set(ir['required_features'])
+    cells = ir['skia_layout']['lines'][0]['cells']
+    pads = [cells[i]['origin_x'] + cells[i]['metrics']['ink'][0] - cells[i]['wipe_left'] for i in (0, 2)]
+    assert pads == pytest.approx([4, 1])
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [300, 750])
+        replay, _ = collect(process, [750, 300], generation=2)
+    assert frames[0].any() and frames[1].any() and not np.array_equal(*frames)
+    np.testing.assert_array_equal(frames[0], replay[1])
+    np.testing.assert_array_equal(frames[1], replay[0])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction,base_glow', [
+    ('gradient_horizontal', False),
+    ('gradient_horizontal', True),
+    ('gradient_vertical', False),
+])
+def test_latin_outline_with_role_paints_and_upper_glow_matches_actual_gpu(binary, tmp_path, direction, base_glow):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = ruby_role_paints_case(tmp_path, direction, True)
+    style = independent_latin_outline(role_static_glow_style(case.style, base=base_glow))
+    line, = case.track.lines
+    chars = list(line.chars)
+    chars[2] = replace(chars[2], text='A')
+    chars[3] = replace(chars[3], text='B')
+    track = replace(case.track, lines=[replace(line, chars=chars)])
+    case = replace(case, case_id='latin_outline_role_paints_ruby_glow', track=track, style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 2800, 3500, 3900, 4499))
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 def test_ruby_role_glow_with_static_title_and_extra_track(binary, application, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases

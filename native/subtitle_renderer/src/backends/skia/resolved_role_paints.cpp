@@ -1,13 +1,39 @@
 #include "resolved_role_paints.h"
 #include "image_fill_cache.h"
 #include "scene_input.h"
+#include "../../model/render_scene.h"
 #include "../../model/text_line.h"
 #include "../../model/text_style.h"
 #include "../render_backend.h"
+#include "../text_semantics.h"
 #include "core/resolved_scene.h"
 #include <algorithm>
 
 namespace krok::subtitle::native {
+void splitLatinOutlineStyles(RenderScene& scene) {
+    // Match the GPU style projection: distinct script stroke widths also
+    // partition role gradient domains and phase masks for glow.
+    std::vector<int> roleVariants(scene.charStyles.size(), -1);
+    for (std::size_t lineIndex = 0; lineIndex < scene.lines.size(); ++lineIndex) {
+        int lineVariant = -1;
+        const auto& lineStyle = scene.lineStyles[lineIndex];
+        for (auto& cell : scene.lines[lineIndex].chars) {
+            if (cell.vectorGlyph || cell.bitmapGuide || !isLatinText(cell.text)) continue;
+            const int role = cell.styleIndex;
+            const auto& style = role < 0 ? lineStyle : scene.charStyles[role];
+            if (style.latinStrokeWidth == style.strokeWidth) continue;
+            auto& variant = role < 0 ? lineVariant : roleVariants[role];
+            if (variant < 0) {
+                auto latin = style;
+                latin.strokeWidth = latin.latinStrokeWidth;
+                variant = int(scene.charStyles.size());
+                scene.charStyles.push_back(std::move(latin));
+            }
+            cell.styleIndex = variant;
+        }
+    }
+}
+
 const SkRect& RolePaintBounds::forRole(int role) const {
     const auto it = roles.find(role);
     return it == roles.end() ? line : it->second.ink;

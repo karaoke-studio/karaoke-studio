@@ -85,6 +85,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
         .roleStaticGlow = roleStaticGlow, .latinPrimaryOutline = latinPrimaryOutline});
+    const bool staticGlow = features.contains("p06_static_glow");
+    if (latinPrimaryOutline && (roleBodyPaints || roleStaticGlow || staticGlow))
+        splitLatinOutlineStyles(projected);
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -512,7 +515,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
-        if (roleStaticGlow && hasInlineRoles) {
+        if ((roleStaticGlow || (latinPrimaryOutline && staticGlow)) && hasInlineRoles) {
             resolveRoleGlows(prepared, line, style, projected.charStyles);
             prepared.glow = {};
         }

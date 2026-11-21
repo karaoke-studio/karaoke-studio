@@ -602,11 +602,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
             "p05_overlap_wipe", "p05_font_fallback", "p05_mixed_fonts", "p05_standalone_marks",
             "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_multi_lane_outline",
-            "p06_role_solid_outlines", "p06_latin_primary_outline"
+            "p06_role_solid_outlines", "p06_latin_primary_outline", "p06_role_body_paints",
+            "p05_resolved_ruby", "p05_upper_ruby", "p05_ruby_units", "p05_ruby_markers",
+            "p06_outline_ruby", "p06_ruby_solid_outline", "p06_ruby_role_paints",
+            "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow"
         };
         if (!features.contains("p06_primary_solid_outline")
             || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
-            throw BackendError("Skia 英数独立首层描边当前仅支持横排实色走字");
+            throw BackendError("Skia 英数独立首层描边需要正向横排、普通走字和受支持的画笔组合");
     }
     if (features.contains("p06_secondary_solid_outline")
         && (layout.value("secondary_solid_outline_schema").toDouble(-1) != 1

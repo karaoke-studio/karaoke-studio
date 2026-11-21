@@ -7,6 +7,7 @@
 namespace subtitle::skia { struct ResolvedLine; }
 namespace krok::subtitle::native {
 class SkiaImageFillCache;
+struct RenderScene;
 struct TextLine;
 struct TextStyle;
 
@@ -24,4 +25,5 @@ struct RolePaintBounds {
 RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
                                     std::span<const TextStyle>, SkiaImageFillCache&, float layoutScale);
 void resolveRoleGlows(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&, std::span<const TextStyle>);
+void splitLatinOutlineStyles(RenderScene&);
 }
