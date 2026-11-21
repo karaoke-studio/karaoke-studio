@@ -895,18 +895,22 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
 
 
 @pytest.mark.parametrize('mode', ['brighten', 'follow_before', 'follow_after'])
-def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode):
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode, karaoke):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
     track, style = vertical_ruby_source(project)
     style = replace(style, karaoke_colors=colors('#700000', '#007000'),
                     ruby_karaoke_colors=colors('#000070', '#700070'),
-                    scanline_enabled=True, scanline_shape='band', scanline_mode=mode,
+                    karaoke_anim=karaoke, scanline_enabled=True, scanline_shape='band', scanline_mode=mode,
                     scanline_brightness_pct=100, scanline_width_px=42, scanline_glow_px=3)
     ir = ir_for(binary, (track, style), dpr=1.5)
     feature = 'p07_vertical_scanline_palette'
     assert {feature, 'p07_vertical_scanline_band', 'p07_ruby_scanline'} <= set(ir['required_features'])
+    if karaoke == 'utopia':
+        feature = 'p07_vertical_singing_scanline_palette'
+        assert {feature, 'p07_vertical_singing_scale'} <= set(ir['required_features'])
     invalid = copy.deepcopy(ir)
     invalid['required_features'].remove(feature)
     line, = ir['skia_layout']['lines']

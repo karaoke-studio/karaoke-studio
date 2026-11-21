@@ -87,7 +87,6 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                              || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
                              || band.vertical != source.vertical || band.rightToLeft != source.wipeRightToLeft
                              || (band.vertical && ((band.rightToLeft && !source.rubyGroups.empty()) || band.shape || band.image
-                                 || (band.paint.mode != ScanlineColorMode::Color && source.singingScale.active)
                                  || source.singingScale.zoomPulse
                                  || source.utopiaTransition.active()))
                              || source.noWipe || (!band.rubyHighlight && !source.rubyGroups.empty())))
