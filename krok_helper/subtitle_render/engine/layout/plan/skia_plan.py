@@ -48,8 +48,10 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, **plan_kwargs):
             return resolve_page_offset_windows(width, height, source, appearance,
                 PageOffsetResolvers(display, geometry.page_lines), metrics_identity=geometry.identity)
 
+        # These closures are unique to one preparation and own its complete
+        # measurement snapshot. A process-wide identity cache cannot hit them.
         ports = LayoutPlanResolvers(display, offsets, measured.snapshot.resolve_intervals, geometry.identity,
-                                    respect_page_plan=True)
+                                    respect_page_plan=True, retain_plan=False)
         plan = build_track_layout_plan(track, style, ports, **plan_kwargs)
         geometry.set_lanes(plan.lines)
         return PreparedSkiaLayout(plan, measured, geometry)

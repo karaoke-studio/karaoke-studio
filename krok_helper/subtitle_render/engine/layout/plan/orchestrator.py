@@ -79,6 +79,7 @@ class LayoutPlanResolvers:
     char_intervals: "CharIntervalsResolver"
     metrics_identity: Hashable | None = None
     respect_page_plan: bool = False
+    retain_plan: bool = True
 
 
 class CharIntervalsResolver(Protocol):
@@ -173,24 +174,26 @@ def resolve_track_layout_plan(
     歌词布局样式签名) 命中复用——签名不匹配自动回退重建，因此局部复用
     永远是签名校验过的，调用方的 scope 只是性能提示而非正确性依据。
     """
-    cache_key = (
-        resolvers.metrics_identity if resolvers.metrics_identity is not None else _ResolverIdentity(resolvers.char_intervals),
-        _ResolverIdentity(resolvers.display_lines), _ResolverIdentity(resolvers.page_offset_windows),
-        logical_w,
-        logical_h,
-        id(track),
-        # 窗口语义归一化签名（P5）：逐行动画「类型互换（时长不变）」不再
-        # 打布局计划缓存——计划几何不变，逐行样式由 _rebind_plan_line_styles
-        # 从当前轨道重解析。none↔非none 与时长变化仍全量重排。
-        track_signature_for_windows(track),
-        lyric_layout_style_signature(style),
-        # 前黑展示层偏移参与缓存键：入场/信号窗口的钳制下界随偏移变化
-        # （layout_context 线程局部），同签名不同偏移必须各自成计划。
-        current_roll_shift_ms(),
-    )
-    if resolvers.respect_page_plan:
-        cache_key += (("authored_page_membership", True),)
-    if use_cache and layout_cache_enabled():
+    cache_key = None
+    if resolvers.retain_plan and layout_cache_enabled():
+        cache_key = (
+            resolvers.metrics_identity if resolvers.metrics_identity is not None else _ResolverIdentity(resolvers.char_intervals),
+            _ResolverIdentity(resolvers.display_lines), _ResolverIdentity(resolvers.page_offset_windows),
+            logical_w,
+            logical_h,
+            id(track),
+            # 窗口语义归一化签名（P5）：逐行动画「类型互换（时长不变）」不再
+            # 打布局计划缓存——计划几何不变，逐行样式由 _rebind_plan_line_styles
+            # 从当前轨道重解析。none↔非none 与时长变化仍全量重排。
+            track_signature_for_windows(track),
+            lyric_layout_style_signature(style),
+            # 前黑展示层偏移参与缓存键：入场/信号窗口的钳制下界随偏移变化
+            # （layout_context 线程局部），同签名不同偏移必须各自成计划。
+            current_roll_shift_ms(),
+        )
+        if resolvers.respect_page_plan:
+            cache_key += (("authored_page_membership", True),)
+    if use_cache and cache_key is not None:
         cached = cached_track_layout_plan(cache_key)
         if cached is not None:
             rebound = _rebind_plan_line_styles(cached, track, style)
@@ -271,7 +274,7 @@ def resolve_track_layout_plan(
             resolved_intervals=resolved_intervals,
             respect_page_plan=resolvers.respect_page_plan,
         )
-    if layout_cache_enabled():
+    if cache_key is not None:
         # Retain the mutable owners because the key contains track identity.
         store_track_layout_plan(cache_key, track, style, plan)
     return plan

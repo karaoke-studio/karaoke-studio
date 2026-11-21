@@ -46,6 +46,18 @@ def ir_for(binary, project, **kwargs):
     return ir
 
 
+def test_skia_scene_preparation_does_not_retain_transient_layout_plan(binary, project, monkeypatch):
+    from krok_helper.subtitle_render.engine.layout.plan import orchestrator
+
+    def unexpected_cache_access(*_args):
+        pytest.fail('Skia scene-local resolvers entered the process-wide plan cache')
+
+    monkeypatch.setattr(orchestrator, 'cached_track_layout_plan', unexpected_cache_access)
+    monkeypatch.setattr(orchestrator, 'store_track_layout_plan', unexpected_cache_access)
+    first = ir_for(binary, project)
+    assert ir_for(binary, project)['skia_layout'] == first['skia_layout']
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_canonical_ir_draws_shaped_cells_and_keeps_seek_stable(binary, project, target, monkeypatch, tmp_path):
     from krok_helper.subtitle_render.engine.render import render_ir
