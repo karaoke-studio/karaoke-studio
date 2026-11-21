@@ -93,7 +93,6 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
             || cell.wipePoints.back().position < 0 || cell.wipePoints.back().position > 1))
             throw std::runtime_error("Skia 注音组重叠终点无效");
         previousEnd = cell.endMs;
-        antialiasClip_ = antialiasClip_ || cell.adjustedWipeEnd;
         bounds_.join(cell.path.getBounds());
     }
 }
@@ -146,7 +145,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
                                         : singingFront(cell, timeMs, originX, ink, rightToLeft_);
                 const auto clip = after != rightToLeft_ ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
                                                        : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
-                clipViewportWipe(canvas, clip, viewportHeight, true);
+                clipViewportWipe(canvas, clip, viewportHeight);
             }
             paintRubyCell(canvas, paint, cell, after, opacity * exitOpacity, shader);
         }
@@ -324,7 +323,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
         const float high = clipLow ? edge : 1e6f;
         clipViewportWipe(canvas, vertical_ ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
                                            : SkRect::MakeLTRB(low, -1e6f, high, 1e6f),
-                         viewportHeight, antialiasClip_);
+                         viewportHeight);
     };
     if (before) {
         draw(false);

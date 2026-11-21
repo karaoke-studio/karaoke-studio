@@ -109,7 +109,8 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
         const float low = clipLow ? -1e6f : *edge, high = clipLow ? *edge : 1e6f;
         const auto clip = vertical ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
                                    : SkRect::MakeLTRB(low, -1e6f, high, 1e6f);
-        canvas.clipRect(clip, SkClipOp::kIntersect, true);
+        // Split the blur source at pixel boundaries to keep the shared edge covered.
+        canvas.clipRect(clip);
     }
     auto paint = posed ? strokePaint() : SkPaint{};
     paint.setAntiAlias(true);

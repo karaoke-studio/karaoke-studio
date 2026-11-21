@@ -37,7 +37,6 @@ private:
     std::optional<std::size_t> fadeOwner_;
     std::optional<std::size_t> utopiaExitOwner_;
     SkRect bounds_;
-    bool antialiasClip_ = false;
     bool noWipe_ = false;
     bool vertical_ = false;
     bool rightToLeft_ = false;

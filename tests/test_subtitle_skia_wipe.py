@@ -11,6 +11,7 @@ import pytest
 from test_subtitle_skia_resolved import application, binary, project, ir_for
 from test_subtitle_skia_protocol import collect, selection
 from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.engine.ruby.skia_timing import (
     main_wipe_points, prepare_ruby_wipe_timing, wipe_points_to_ir,
@@ -18,6 +19,45 @@ from krok_helper.subtitle_render.engine.ruby.skia_timing import (
 from krok_helper.subtitle_render.engine.ruby.timing import ruby_main_wipe_intervals
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, NativeRendererError
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+@pytest.mark.parametrize('glow', [False, True], ids=['body', 'glow'])
+def test_same_paint_has_no_alpha_seam_at_fractional_wipe_front(binary, project, target, dpr, glow):
+    from test_subtitle_skia_roles import colors
+
+    track, style = project
+    chars = [TimingChar('字', 200)] if glow else [TimingChar('字', 200), TimingChar('字', 900)]
+    line = replace(track.lines[0], chars=chars, end_ms=1600,
+                   display_start_override_ms=0, display_end_override_ms=2000)
+    track = replace(track, lines=[line])
+    style = replace(style, karaoke_anim='none', letter_spacing_px=-16,
+                    karaoke_colors=colors('#80D8A040', '#80D8A040'))
+    if glow:
+        palette = colors('#00000000', '#00000000')
+        paint = PaintFill(color='#80D8A040')
+        palette = replace(palette, before=replace(palette.before, shadow=paint),
+                          after=replace(palette.after, shadow=paint))
+        style = replace(style, karaoke_colors=palette, decoration_before_sync=False,
+                        decoration_kind='glow', decoration_kind_before='glow',
+                        glow_before_radius_px=5, glow_after_radius_px=5,
+                        glow_before_concentration_level=0, glow_concentration_level=0)
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    first = ir['skia_layout']['lines'][0]['cells'][0]
+    if not glow:
+        assert 0 < first['wipe_end_position'] < 1
+    times = [150, 445, 497, 525, 569, 701, 800, 1601]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process._send({'cmd': 'configure', 'ir': ir})
+        process._expect_ok(process._read_until_event('configured'))
+        frames, _ = collect(process, times)
+    assert frames[0].any()
+    # The glow test isolates the alpha mask before checking the wipe split.
+    channel = slice(3, 4) if glow else slice(None)
+    for time, frame in zip(times[1:], frames[1:], strict=True):
+        changed = np.count_nonzero(frame[..., channel] != frames[0][..., channel])
+        assert changed == 0, (time, changed)
 
 
 def prepared(rubies):

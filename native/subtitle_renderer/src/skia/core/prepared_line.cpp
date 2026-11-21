@@ -292,7 +292,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             clipViewportWipe(canvas, line.wipeRightToLeft
                 ? band(-1e6f, before ? 1e6f : clipEdge)
                 : band(before ? -1e6f : clipEdge, 1e6f),
-                wipeViewportHeight, cell.adjustedWipeEnd || animatedClip);
+                wipeViewportHeight);
             draw(false);
             canvas.restore();
         }
@@ -301,7 +301,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             clipViewportWipe(canvas, line.wipeRightToLeft
                 ? band(after ? -1e6f : clipEdge, 1e6f)
                 : band(-1e6f, after ? 1e6f : clipEdge),
-                wipeViewportHeight, cell.adjustedWipeEnd || animatedClip);
+                wipeViewportHeight);
             draw(true);
             canvas.restore();
         }

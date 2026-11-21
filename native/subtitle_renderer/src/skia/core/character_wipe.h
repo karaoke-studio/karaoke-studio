@@ -5,9 +5,11 @@
 #include <cmath>
 
 namespace subtitle::skia {
-inline void clipViewportWipe(SkCanvas& canvas, SkRect clip, float viewportHeight, bool antialias) {
+inline void clipViewportWipe(SkCanvas& canvas, SkRect clip, float viewportHeight) {
+    // Partition the split at device pixels. Antialiased half-planes blend
+    // the boundary pixel twice and can lose opacity even with identical paint.
     if (viewportHeight == 0.f) {
-        canvas.clipRect(clip, SkClipOp::kIntersect, antialias);
+        canvas.clipRect(clip);
         return;
     }
     // Direct2D clips each wipe side to the device-aligned bounds of its
@@ -16,7 +18,7 @@ inline void clipViewportWipe(SkCanvas& canvas, SkRect clip, float viewportHeight
     clip.fBottom = 2.f * viewportHeight;
     const SkMatrix transform = canvas.getTotalMatrix();
     canvas.resetMatrix();
-    canvas.clipRect(transform.mapRect(clip), SkClipOp::kIntersect, antialias);
+    canvas.clipRect(transform.mapRect(clip));
     canvas.setMatrix(transform);
 }
 
