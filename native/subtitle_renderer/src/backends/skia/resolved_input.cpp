@@ -243,11 +243,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.entryAnimation == "none" && line.exitAnimation == "glow_out" && line.exitDurationMs > 0));
         const bool affineComposition = transformedRuby && line.bursts.empty()
             && ((line.exitDurationMs > 0 && (affineExit || waveScatter)) || stretchEntry || glowTransition);
-        const bool pairedEnergy = features.contains("p07_ruby_energy_pair")
+        const bool pairedParticles = (features.contains("p07_ruby_energy_pair")
+                || features.contains("p07_ruby_particle_assembly_pair"))
             && line.entryDurationMs > 0 && line.exitDurationMs > 0;
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
-                || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedEnergy)
+                || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedParticles)
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
         if (particleComposition && features.contains("p07_ruby_particle_entry")
             && (style.decorationKindForState(false) != "none" || style.decorationKindForState(true) != "none"

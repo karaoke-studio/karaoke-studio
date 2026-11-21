@@ -391,6 +391,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     glow_lines = set()
     paired_geometry_lines = set()
     assembly_lines = set()
+    assembly_pair = False
     particle_fade_lines = set()
     particle_affine_lines = set()
     energy_pair_lines = set()
@@ -406,8 +407,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if source.get('fx_bursts'):
                 if len(plan.lines) == 1 and item.layout_style.sing_fx == 'none':
                     entry, leave = source.get('entry_anim'), source.get('exit_anim')
+                    both_phases = source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0
+                    if both_phases and (entry, leave) == ('assemble_in', 'dissolve_out'):
+                        assembly_lines.add(index)
+                        assembly_pair = True
                     if (entry in ENERGY_TRANSITIONS and leave in ENERGY_TRANSITIONS
-                            and source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0):
+                            and both_phases):
                         energy_pair_lines.add(index)
                         same_energy_pair |= entry == leave
                         if 'flame' in (entry, leave):
@@ -665,6 +670,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_character_wave_scatter')
         if assembly_lines:
             ir['required_features'].append('p07_ruby_particle_assembly')
+        if assembly_pair:
+            ir['required_features'].append('p07_ruby_particle_assembly_pair')
         if particle_fade_lines:
             ir['required_features'].append('p07_ruby_particle_fade')
         if energy_pair_lines:

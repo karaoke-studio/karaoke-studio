@@ -291,6 +291,33 @@ def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect
     assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[0], replay[1])
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_assembly_pair_owns_both_phases_and_replays(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, entry_anim='assemble_in', exit_anim='dissolve_out', entry_lead_ms=600,
+                    exit_fade_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_particle_assembly_pair'
+    assert feature in ir['required_features']
+    source, = ir['track']['lines']
+    assert {burst['kind'] for burst in source['fx_bursts']} == {'assemble', 'dissolve'}
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert group['fade_owner'] == 0
+    times = [source['display_start_ms'] + 170, source['display_end_ms'] - 350]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
 @pytest.mark.parametrize('layer', ['decoration_kind', 'ruby_decoration_kind'])
 def test_ruby_particle_entry_rejects_unverified_glow(binary, reading, layer):
     track, style = reading
@@ -327,6 +354,17 @@ def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entr
     case = replace(source, case_id=f'{entry}_in_{exit_}_out', style=style)
     times = (100, 299, 301, 450, 735, 840, 1000, 1500, 4500, 4900, 5100, 5370, 5499, 5900)
     assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['none', 'utopia'])
+def test_ruby_assembly_pair_matches_actual_gpu(binary, application, tmp_path, effect):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'entry_assemble_in')
+    style = replace(case.style, exit_anim='dissolve_out', karaoke_anim=effect)
+    times = (100, 299, 301, 450, 650, 899, 900, 901, 1500, 4500, 4900, 5100, 5499, 5500, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

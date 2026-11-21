@@ -162,6 +162,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_character_glow_transition",
         "p07_ruby_character_wave_scatter",
         "p07_ruby_particle_assembly",
+        "p07_ruby_particle_assembly_pair",
         "p07_ruby_particle_fade",
         "p07_ruby_energy_pair",
         "p07_ruby_same_energy_pair",
@@ -199,6 +200,8 @@ bool isSkiaEnergyTransition(const QString& animation) {
 
 bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
                                       const QJsonArray& features) {
+    if (entry == "assemble" && exit == "dissolve")
+        return features.contains("p07_ruby_particle_assembly_pair");
     if (entry.isEmpty() == exit.isEmpty())
         return features.contains("p07_ruby_energy_pair")
             && (entry != exit || features.contains("p07_ruby_same_energy_pair"))
@@ -234,6 +237,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             throw BackendError("Skia IR: unknown required feature");
     if (features.contains("p07_ruby_same_energy_pair") && !features.contains("p07_ruby_energy_pair"))
         throw BackendError("Skia 同类粒子出入场缺少组合能力");
+    if (features.contains("p07_ruby_particle_assembly_pair") && !features.contains("p07_ruby_particle_assembly"))
+        throw BackendError("Skia 拼接入场与消散退场缺少粒子能力");
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
     if (ir.contains("skia_extra_sources") || features.contains("p08_multiple_sources")
