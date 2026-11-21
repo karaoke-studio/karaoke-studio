@@ -1170,9 +1170,10 @@ class PreviewGraphicsView(QGraphicsView):
         )
 
     def _refresh_async_target(self) -> None:
-        self._roll_preview.source.set_render_scale(self._scene_device_pixel_ratio())
+        raster_scale = self._scene_device_pixel_ratio()
+        self._roll_preview.source.set_render_scale(raster_scale)
         if self.uses_skia_quick_preview:
-            dpr = min(self._display_device_scale(), 8, 8192 / max(self._output_w, self._output_h))
+            dpr = min(raster_scale, 8, 8192 / max(self._output_w, self._output_h))
             self._quick_preview.set_target(self._output_w, self._output_h, max(0.1, dpr))
             return
         if self._async_renderer is None:

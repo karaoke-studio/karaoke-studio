@@ -64,6 +64,7 @@ class SkiaQuickPreview(QObject):
         if target != self._target:
             self._target = target
             self._canvas.set_output_size(width, height)
+            self._canvas.set_subtitle_texture_size(round(width * dpr), round(height * dpr))
             self._reconfigure()
 
     def set_source(self, track, style, extra_tracks, duration) -> None:

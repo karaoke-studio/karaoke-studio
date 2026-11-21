@@ -858,6 +858,14 @@ assert not errors, errors
 assert panel.set_gpu_preview_enabled(False) and not panel.uses_skia_quick_preview
 assert panel.canvas._async_renderer.selection.target == 'raster'
 assert panel.set_gpu_preview_enabled(True) and panel.uses_skia_quick_preview
+renderer = panel.canvas._quick_preview._canvas.renderer
+panel.set_preview_quality('low')
+wait_for(lambda: 0 < renderer.property('effectiveColorBufferSize').width() <= 160)
+size = renderer.property('effectiveColorBufferSize')
+assert 0 < size.height() <= 90
+assert panel.uses_skia_quick_preview
+panel.set_preview_quality('high')
+wait_for(lambda: renderer.property('effectiveColorBufferSize').width() > size.width())
 roll = RollTimelinePlan(pre=RollSegmentConfig(), post=RollSegmentConfig(), pre_ms=600)
 panel.set_roll_plan(roll)
 assert not panel.uses_skia_quick_preview and panel.canvas._async_renderer.selection.target == 'gpu'

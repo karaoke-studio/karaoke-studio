@@ -39,6 +39,11 @@ class SkiaQuickCanvas(QQuickWidget):
         self._root.setProperty('outputWidth', max(1, width))
         self._root.setProperty('outputHeight', max(1, height))
 
+    def set_subtitle_texture_size(self, width: int, height: int) -> None:
+        # QQuickRhiItem expects physical pixels for a fixed color buffer.
+        self.renderer.setProperty('fixedColorBufferWidth', max(1, width))
+        self.renderer.setProperty('fixedColorBufferHeight', max(1, height))
+
     def set_background_source(self, source: BackgroundSource) -> None:
         self._background = source
         self._root.setProperty('backgroundKind', source.kind)
