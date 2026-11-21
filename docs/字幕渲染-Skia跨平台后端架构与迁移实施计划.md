@@ -3509,6 +3509,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 关联 **29 通过**，独立 Windows Raster **4 通过**，WSL X11、Wayland 各 **11 通过、8 项 D2D 专用跳过**。三份构建各通过 **3 项 CTest**。日志为 `build/p07-rtl-utopia-*.log`。
 - `68f82c8b` 的 P00 主线复验有 **108/129** 个原样通过配置，新增 `rtl`。全部 **108** 个场景、**478 帧**通过实际 D2D GPU 对 Skia Vulkan 与 Skia Vulkan 对 Raster 的原画面预算。复用 §14.281 的采样与对照口径，记录为 `build/p00-skia-coverage/configure-68f82c8b.json` 和 `build/p00-skia-coverage/original-pixels-68f82c8b.json`。同提交的 [Mac CI 44896948974](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44896948974) 已启动。
 
+### 14.285 P07.4 花瓣入场与音符退场的尾部复验（2026-11-21）
+
+- 用 P00 粒子变速样式去掉光晕、扫字线和唱字粒子，保留上注音与 Utopia，试验同一行花瓣入场、音符退场。50、100、200 档各采 **20 帧**。5480ms 的 Vulkan/Raster alpha 总量差在 50 档为 **4.90%**、100 档为 **6.78%**，超过原预算。
+- 仅保留音符退场时，同一批失败时间及测量值逐项重合。差异定位到音符退场尾部，组合保留原能力门槛。诊断为 `build/p00-skia-coverage/petal-note.json`、`build/p00-skia-coverage/note-only.json`，试验补丁为 `build/p07-ruby-petal-note-unverified.patch`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
