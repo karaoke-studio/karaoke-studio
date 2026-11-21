@@ -149,6 +149,13 @@ def style_for_role(style: Style, role_label: str | None) -> Style:
     return replace(style, **changes)
 
 
+def uses_authored_decoration(style: Style, kind: str) -> bool:
+    """Report the configured karaoke decoration before width and paint projection."""
+    return style.decoration_kind == kind or (
+        not style.decoration_before_sync and style.decoration_kind_before == kind
+    )
+
+
 def style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
     """Apply role visuals while retaining the active layout's spacing fields."""
     role_style = style_for_role(style, role_label)
