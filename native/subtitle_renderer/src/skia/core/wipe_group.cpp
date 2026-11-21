@@ -53,11 +53,11 @@ std::optional<ResolvedCell> posedUnit(const ResolvedCell& cell, const CharacterT
     return visual;
 }
 
-float singingFront(const ResolvedCell& cell, int timeMs, float originX, const SkRect& ink) {
+float singingFront(const ResolvedCell& cell, int timeMs, float originX, const SkRect& ink, bool rtl = false) {
     const float progress = cell.wipePoints.empty()
         ? float(timeMs - cell.startMs) / (cell.endMs - cell.startMs)
         : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, timeMs);
-    return transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad);
+    return transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad, rtl);
 }
 
 }
@@ -123,9 +123,9 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
             if (after ? before : complete) continue;
             SkAutoCanvasRestore restore(&canvas, !before && !complete);
             if (!before && !complete) {
-                const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
-                const auto clip = after ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
-                                        : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
+                const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds(), rightToLeft_);
+                const auto clip = after != rightToLeft_ ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
+                                                       : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
                 clipViewportWipe(canvas, clip, viewportHeight, true);
             }
             paintRubyCell(canvas, paint, cell, after, opacity, shader);
@@ -146,8 +146,8 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
             std::optional<SkPath> posed;
             if (transform.transformed) posed = cell.path.makeTransform(transform.matrix);
             const auto edge = before || complete ? std::nullopt : std::optional(singingFront(
-                cell, timeMs, originX, (posed ? *posed : cell.path).computeTightBounds()));
-            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr, opacity);
+                cell, timeMs, originX, (posed ? *posed : cell.path).computeTightBounds(), rightToLeft_));
+            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr, opacity, false, rightToLeft_);
         }
         return;
     }

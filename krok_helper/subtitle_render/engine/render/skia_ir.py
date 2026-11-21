@@ -145,7 +145,8 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
         inline_roles = any(c.role_label is not None for c in item.render_line.chars)
         role_scale = inline_roles and scales and animations == {'none'} and not source.get('zoom_pulse')
         role_scale = role_scale and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
-        if (style.vertical or style.right_to_left or item.line.wipe_reverse
+        rtl_singing = scales and annotated and 'p07_rtl_ruby_singing_scale' in ir['required_features']
+        if (style.vertical or (style.right_to_left and not rtl_singing) or item.line.wipe_reverse
                 or (annotated and ((source.get('zoom_pulse') and not ruby_zoom)
                                    or (animations != {'none'} and not (line_animation or with_character_transition or with_noise))))
                 or (not (line_animation or with_character_transition or with_noise) and not animations <= {'none', 'utopia'})
@@ -569,12 +570,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 look = item.layout_style
                 source = ir['track']['lines'][item.track_index]
                 if (look.stroke_width_px <= 0 or item.line.wipe_reverse or _uses_decoration(look, 'shadow')
-                        or source.get('karaoke_anim') != 'none' or source.get('zoom_pulse')
+                        or source.get('karaoke_anim') not in {'none', 'utopia'} or source.get('zoom_pulse')
                         or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                         or _inline_role_labels(item)
                         or any('shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)):
-                    raise ValueError('Skia 右至左上注音当前需要有描边的普通走字，支持实色光晕')
+                    raise ValueError('Skia 右至左上注音当前需要有描边的普通走字或 Utopia 唱字，支持实色光晕')
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         sources, indices = lower_sources(prepared[0])
         zoom_lines = {
@@ -600,6 +601,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if style.right_to_left:
             ir['required_features'].append('p05_horizontal_rtl_ruby')
+            if singing_lines:
+                ir['required_features'].append('p07_rtl_ruby_singing_scale')
         if zoom_lines:
             ir['required_features'].append('p07_ruby_zoom_pulse')
         if 'p07_scanline_band' in ir['required_features']:

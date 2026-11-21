@@ -190,7 +190,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const float origin = utopia && !line.rubyGroups.empty()
             ? line.rubySingingOrigin : line.cells.front().pivot.layoutLeft;
         return transformedWipeEdge(origin, transform.matrix.mapPoint({cell.pivot.inkLeft, 0}).x(),
-            transform.matrix.mapPoint({cell.pivot.inkRight, 0}).x(), ratio, cell.pivot.wipePad);
+            transform.matrix.mapPoint({cell.pivot.inkRight, 0}).x(), ratio, cell.pivot.wipePad, line.wipeRightToLeft);
     };
     // bitmap_guide_schema=1: the existing GPU draws a bitmap guide (glow, then
     // image) in the body pass. A wiping guide clips each side around its own

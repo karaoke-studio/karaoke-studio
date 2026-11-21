@@ -19,6 +19,7 @@ from skia_text_fixture import make_kana_font
 from PyQt6.QtGui import QFontDatabase
 from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, NativeRendererError
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -201,12 +202,17 @@ def test_unvalidated_rtl_combinations_stay_explicitly_gated(binary,project,kind)
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
-def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, semantics):
+@pytest.mark.parametrize('effect', ['none', 'utopia'])
+def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, semantics, effect):
     track, style = reading
-    style = replace(style, right_to_left=True, stroke_width_px=4, karaoke_anim='none', layout_semantics=semantics)
+    body = colors('#FFFFFFFF', '#FFFFFFFF')
+    stroke = PaintFill(color='#FF000000')
+    palette = replace(body, before=replace(body.before, stroke=stroke), after=replace(body.after, stroke=stroke))
+    style = replace(style, right_to_left=True, stroke_width_px=4, stroke2_enabled=False, karaoke_colors=palette,
+                    karaoke_anim=effect, layout_semantics=semantics)
     ir = ir_for(binary, (track, style))
     ltr = ir_for(binary, (track, replace(style, right_to_left=False)))
-    feature = 'p05_horizontal_rtl_ruby'
+    feature = 'p07_rtl_ruby_singing_scale' if effect == 'utopia' else 'p05_horizontal_rtl_ruby'
     assert feature in ir['required_features']
     units = ir['skia_layout']['lines'][0]['ruby_groups'][0]['units']
     plain = ltr['skia_layout']['lines'][0]['ruby_groups'][0]['units']
@@ -231,12 +237,13 @@ def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, sem
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('glow', [False, True])
-def test_rtl_upper_reading_matches_actual_gpu(binary, application, tmp_path, semantics, glow):
+@pytest.mark.parametrize('effect', ['none', 'utopia'])
+def test_rtl_upper_reading_matches_actual_gpu(binary, application, tmp_path, semantics, glow, effect):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
-    style = replace(case.style, layout_semantics=semantics, karaoke_anim='none')
+    style = replace(case.style, layout_semantics=semantics, karaoke_anim=effect)
     if not glow:
         style = replace(style, decoration_kind='none', decoration_kind_before='none',
                         ruby_decoration_kind='none', ruby_decoration_kind_before='none')

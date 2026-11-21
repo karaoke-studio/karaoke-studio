@@ -211,11 +211,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         const bool rtlRuby = style.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
-        if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse || line.karaokeAnimation != "none"
+        const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
+        if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse || (line.karaokeAnimation != "none" && !rtlRubySinging)
             || line.entryAnimation != "none" || line.exitAnimation != "none" || line.zoomPulseEnabled
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || !projected.charStyles.empty()))
-            throw BackendError("Skia 右至左上注音当前需要有描边的普通走字，支持实色光晕");
+            throw BackendError("Skia 右至左上注音当前需要有描边的普通走字或 Utopia 唱字，支持实色光晕");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
@@ -268,7 +269,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-        if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
+        if (utopia && (style.vertical || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
