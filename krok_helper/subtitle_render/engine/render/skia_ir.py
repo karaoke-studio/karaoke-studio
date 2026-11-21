@@ -405,7 +405,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             section_edge_context(source, source_style)
             for line in source.lines:
                 _validate_style(style_for_line(source_style, line))
-            result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font, **plan_kwargs)
+            result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font,
+                                         dpr=kwargs.get('dpr', 1), **plan_kwargs)
         prepared.append(result)
         return result.plan
 
@@ -413,10 +414,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                          serialize_source_baselines=False, **kwargs)
     vertical_singing = _vertical_singing_lines(ir, prepared[0].plan) if style.vertical else set()
     vertical_ruby = None
-    if style.vertical and track.rubies:
+    if prepared[0].vertical_readings is not None:
         vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
-                                            dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure,
-                                            singing_tracks=vertical_singing)
+                                            dpr=kwargs.get('dpr', 1), singing_tracks=vertical_singing)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     spin_lines = set()
@@ -549,6 +549,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if vertical_ruby is not None:
         ir['skia_layout'].update(vertical_ruby)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_ruby']
+        if style.dual_line_layout:
+            ir['required_features'].append('p05_vertical_columns_ruby')
         if any(len(line['ruby_groups']) > 1 for line in lines):
             ir['required_features'].append('p05_vertical_ruby_groups')
         if vertical_ruby.get('vertical_ruby_shift_schema'):

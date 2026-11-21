@@ -463,6 +463,70 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('semantics,dpr,outline', [('legacy', 1, False), ('n3_1074', 1.5, True)])
+def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, project, semantics, dpr, outline):
+    from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, style = vertical_ruby_source(project, span=(0, 1), position='top')
+    reading, = track.rubies
+    lines = []
+    rubies = []
+    for index, start in enumerate((200, 380, 2400, 2580)):
+        page_start = 2200 if index >= 2 else 0
+        lines.append(TimingLine(chars=[TimingChar('字', start), TimingChar('字', start + 200)],
+                                end_ms=start + 600, track_line_index=index, display_start_override_ms=page_start,
+                                display_end_override_ms=page_start + 1600))
+        if index != 2:
+            rubies.append(replace(reading, target_line_index=index, pos_start_ms=start, pos_end_ms=start + 200))
+    track = replace(track, lines=lines, rubies=rubies)
+    style = replace(style, dual_line_layout=True, layout_semantics=semantics, line_gap_px=32,
+                    line_alignments=['left', 'right'], line_offsets_x=[0, 0], auto_fill_section_time=False,
+                    sync_entry=False, stroke_width_px=4 if outline else 0, stroke2_enabled=outline,
+                    stroke2_width_px=2 if outline else 0)
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    bare = ir_for(binary, (replace(track, rubies=[]), style), dpr=dpr)
+    feature = 'p05_vertical_columns_ruby'
+    assert {'p05_vertical_columns', 'p05_vertical_ruby', feature} <= set(ir['required_features'])
+    final = ir['skia_layout']['lines']
+    assert [line['vertical_lane'] for line in final] == [0, 1, 0, 1]
+    columns = [line['cells'][0]['origin_x'] for line in final]
+    assert columns[:2] == pytest.approx(columns[2:])
+    blank_column = bare['skia_layout']['lines'][0]['cells'][0]['origin_x']
+    allowance = blank_column - columns[0]
+    assert allowance > style.ruby_gap_px
+    assert columns[0] - columns[1] == pytest.approx(style.font_size_px + style.line_gap_px + allowance)
+    assert final[2]['ruby_groups'] == []
+    assert [line['resolved_intervals'] for line in ir['track']['lines']] == [
+        line['resolved_intervals'] for line in bare['track']['lines']]
+    for index, line in enumerate(final):
+        if index == 2:
+            continue
+        group, = line['ruby_groups']
+        unit, = group['units']
+        start = lines[index].chars[0].start_ms
+        assert unit['interval_ms'] == [start, start + 200]
+        assert unit['wipe_left'] > line['cells'][0]['wipe_right']
+        if index in (1, 3):
+            assert unit['wipe_right'] < final[index - 1]['cells'][0]['wipe_left']
+    times = [300, 490, 1750, 2490, 2690]
+    targets = []
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, [times[1], times[-1]], generation=2)
+        assert frames[0].any() and frames[-1].any() and not frames[2].any()
+        assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[-1], replay[1])
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),

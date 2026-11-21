@@ -3,11 +3,9 @@ import hashlib
 import math
 
 from ..layout.line.skia_vertical import (
-    upright_vertical_text, vertical_cells, vertical_glyph_rotates, vertical_glyph_shift, vertical_line_box,
+    vertical_cells, vertical_glyph_rotates, vertical_glyph_shift, vertical_line_box,
 )
-from ..ruby.skia_geometry import upper_ruby_targets
-from ..ruby.skia_metrics import measure_timed_readings
-from ..ruby.skia_timing import prepare_ruby_target_timing, wipe_points_to_ir
+from ..ruby.skia_timing import wipe_points_to_ir
 from .skia_ruby_paint_ir import ruby_decoration_kinds, solid_ruby_outlines
 
 
@@ -43,37 +41,12 @@ def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_of
     return units
 
 
-def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure, singing_tracks):
+def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
     geometry, measured = prepared.geometry, prepared.measured
-    track = geometry.track
-    annotation_indices = {id(ruby): i for i, ruby in enumerate(track.rubies)}
-    entries, readings = [], []
-    version = 1
-    shifted = rotated = outlined = False
+    readings = prepared.vertical_readings
+    ruby = readings.measured
+    outlined = False
     decorations = set()
-    for index, (line, style) in enumerate(zip(track.lines, geometry.styles, strict=True)):
-        intervals = measured.snapshot.resolve_intervals(line, geometry.style)
-        targets = sorted(upper_ruby_targets(track, index, line, style, intervals, annotation_indices),
-                         key=lambda target: min(target.indices))
-        timing = prepare_ruby_target_timing(line, targets, style.ruby_main_progress_mode)
-        groups, previous_end = [], 0
-        for target, clock in zip(targets, timing.readings, strict=True):
-            if min(target.indices) < previous_end:
-                raise ValueError('Skia 竖排同列注音的正文范围不能重叠')
-            previous_end = max(target.indices) + 1
-            if (not clock.units or clock.units != clock.glyph_units
-                    or any(not (upright_vertical_text(unit) or vertical_glyph_shift(unit) or vertical_glyph_rotates(unit))
-                           for unit in clock.units)):
-                raise ValueError('Skia 竖排注音包含未验证的读音字符')
-            shifted = shifted or any(vertical_glyph_shift(unit) for unit in clock.units)
-            rotated = rotated or any(vertical_glyph_rotates(unit) for unit in clock.units)
-            if len(clock.units) > 1:
-                version = 2
-            groups.append((target, clock, len(readings)))
-            readings.append((target.effective, target.style))
-        entries.append((timing.main, groups))
-
-    ruby = measure_timed_readings(readings, resolve_font=resolve_font, measure=measure)
     fonts = dict(measured.fonts)
     for key, font in ruby.fonts.items():
         if key in fonts and fonts[key] != font:
@@ -84,13 +57,11 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure,
     for item in prepared.plan.lines:
         main = measured.lines[item.track_index]
         local = geometry.locals[item.track_index]
-        main_clocks, groups = entries[item.track_index]
+        main_clocks, groups = readings.entries[item.track_index]
         style = item.layout_style
         singing_scale = item.track_index in singing_tracks
-        # The allowance is rounded on the device grid, before the ruby gap.
-        line_height = max((float(ruby.readings[i].baseline_metrics['ascent'])
-                           + float(ruby.readings[i].baseline_metrics['descent']) for _, _, i in groups), default=0.0)
-        allowance = max(math.floor(line_height * dpr + 0.5) / dpr + style.ruby_gap_px, 0.0) if groups else 0.0
+        allowance = (geometry.vertical_reading_allowance if style.dual_line_layout
+                     else readings.allowances[item.track_index])
         cells = vertical_cells(local, main, item, width=width, height=height, ruby_allowance=allowance,
                                singing_scale=singing_scale)
         for cell, curve in zip(cells, main_clocks, strict=True):
@@ -120,14 +91,17 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, resolve_font, measure,
             if len(groups) > 1:
                 group['span_end_cell'] = end
             ruby_groups.append(group)
-        lines.append({'cells': cells, 'text_flow': 'vertical', 'ruby_groups': ruby_groups})
+        final = {'cells': cells, 'text_flow': 'vertical', 'ruby_groups': ruby_groups}
+        if style.dual_line_layout:
+            final['vertical_lane'] = item.lane
+        lines.append(final)
 
     result = {'lines': lines, 'fonts': fonts, 'runs': [*measured.runs, *ruby.runs],
               'metrics_identity': hashlib.sha256(f'{measured.identity}:{ruby.identity}'.encode()).hexdigest(),
-              'ruby_schema': 1, 'vertical_ruby_schema': version}
-    if shifted:
+              'ruby_schema': 1, 'vertical_ruby_schema': readings.version}
+    if readings.shifted:
         result['vertical_ruby_shift_schema'] = 1
-    if rotated:
+    if readings.rotated:
         result['vertical_ruby_rotation_schema'] = 1
     if outlined:
         result['ruby_solid_outline_schema'] = 1
