@@ -198,6 +198,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_petal_entry_flame_singing",
         "p07_ruby_petal_entry_scanline",
         "p07_ruby_petal_scanline_note_exit",
+        "p07_ruby_petal_scanline_image",
         "p08_viewport",
         "p08_vertical_viewport",
         "p08_vertical_scanline_viewport",
@@ -307,6 +308,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 花瓣入场的扫字线缺少粒子或上注音扫字线能力");
     if (features.contains("p07_ruby_petal_scanline_note_exit") && !features.contains("p07_ruby_petal_entry_scanline"))
         throw BackendError("Skia 音符退场缺少对应花瓣入场扫字线能力");
+    if (features.contains("p07_ruby_petal_scanline_image")
+        && (!features.contains("p07_ruby_petal_scanline_note_exit") || !features.contains("p07_scanline_image")
+            || !features.contains("p07_shaped_scanline_singing_particles")))
+        throw BackendError("Skia 粒子出入场缺少对应图片扫字线能力");
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
     if (ir.contains("skia_extra_sources") || features.contains("p08_multiple_sources")

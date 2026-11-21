@@ -21,12 +21,15 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
     const bool noteExit = exit == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
+    const bool petalWithImage = noteExit && entry == "petal" && style.scanlineShape == "image"
+        && features.contains("p07_ruby_petal_scanline_image");
     const bool petalWithFlame = rubyParticles && entry == "petal" && (exit.isEmpty() || noteExit)
         && features.contains("p07_ruby_petal_entry_flame_singing");
-    const bool petalWithBand = petalWithFlame && source.scanlineEnabled && style.scanlineShape == "band"
+    const bool petalWithBand = petalWithFlame && source.scanlineEnabled
+        && (style.scanlineShape == "band" || petalWithImage)
         && style.scanlineMode == "color" && features.contains("p07_ruby_petal_entry_scanline");
     const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
-        && !animated && source.scanlineEnabled && rubyParticles && style.scanlineMode == "color"
+        && (!animated || petalWithImage) && source.scanlineEnabled && rubyParticles && style.scanlineMode == "color"
         && (style.scanlineShape == "flame" || style.scanlineShape == "bubble" || style.scanlineShape == "image");
     const bool bandSinging = features.contains("p07_ruby_band_singing_particles")
         && (!animated || petalWithBand) && source.scanlineEnabled && rubyParticles && style.scanlineShape == "band"

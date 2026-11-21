@@ -33,14 +33,14 @@ def _transition_layers(kind, entry):
     return _TRANSITION_LAYERS.get((kind, entry), {kind})
 
 
-def _utopia_color_band(line, style):
-    return (line.get('scanline') and line.get('karaoke_anim') == 'utopia'
-            and style.scanline_shape == 'band' and style.scanline_mode == 'color')
+def _utopia_color_scanline(line, style):
+    return bool(line.get('scanline')) and line.get('karaoke_anim') == 'utopia' and style.scanline_mode == 'color'
 
 
 def petal_scanline_with_note_exit(line, style):
     return (line.get('entry_anim') == 'petal' and line.get('exit_anim') == 'note' and style.sing_fx == 'flame'
-            and line['entry_duration_ms'] > 0 and line['exit_duration_ms'] > 0 and _utopia_color_band(line, style))
+            and line['entry_duration_ms'] > 0 and line['exit_duration_ms'] > 0
+            and style.scanline_shape in {'band', 'image'} and _utopia_color_scanline(line, style))
 
 
 def petal_entry_with_flame(line, style):
@@ -49,7 +49,8 @@ def petal_entry_with_flame(line, style):
 
 
 def petal_entry_with_scanline(line, style):
-    return petal_entry_with_flame(line, style) and _utopia_color_band(line, style)
+    return petal_scanline_with_note_exit(line, style) or (
+        petal_entry_with_flame(line, style) and style.scanline_shape == 'band' and _utopia_color_scanline(line, style))
 
 
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
@@ -71,7 +72,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
-        singing_under_shape = (annotated and band and not animated and look.scanline_shape != 'band'
+        singing_under_shape = (annotated and band and (not animated or petal_with_band) and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         singing_under_band = (annotated and band and (not animated or petal_with_band) and look.scanline_shape == 'band'
                               and look.scanline_mode != 'role' and not item.line.wipe_reverse

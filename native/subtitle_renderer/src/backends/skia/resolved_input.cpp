@@ -174,8 +174,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const auto px = [&](int i) { return float(rect[i].toDouble() * glyphs.dpr); };
             prepared.lineBand = SkRect::MakeLTRB(px(0), px(1), px(2), px(3));
             if (features.contains("p08_line_band_transition")) {
-                const auto duration = [](const std::string& kind, int value) {
-                    if (kind != "char_fade" && kind != "flame" && kind != "lightning") return 0;
+                const bool particlePair = features.contains("p07_ruby_petal_scanline_image");
+                const auto duration = [particlePair](const std::string& kind, int value) {
+                    if (kind != "char_fade" && kind != "flame" && kind != "lightning"
+                        && !(particlePair && (kind == "petal" || kind == "note"))) return 0;
                     return value > 0 ? value : 600;
                 };
                 prepared.lineBandTransition = {duration(line.entryAnimation, line.entryDurationMs),
@@ -267,9 +269,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool lowerUtopiaMotion = singingScale && ordinaryLineAnimation
             && features.contains("p07_lower_ruby_decoration_line_animation");
         const bool noteExit = line.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
+        const bool petalScanlineImage = noteExit && style.scanlineShape == "image"
+            && features.contains("p07_ruby_petal_scanline_image");
         const bool petalScanline = line.scanlineEnabled && features.contains("p07_ruby_petal_entry_scanline")
             && line.entryAnimation == "petal" && (line.exitAnimation == "none" || noteExit) && singingScale
-            && style.scanlineShape == "band" && style.scanlineMode == "color";
+            && (style.scanlineShape == "band" || petalScanlineImage) && style.scanlineMode == "color";
         const bool petalNotePair = noteExit && petalScanline;
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft

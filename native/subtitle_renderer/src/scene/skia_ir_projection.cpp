@@ -239,7 +239,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     };
     const auto bandAnimation = [&](const QString& animation, bool entry) {
         return plainLineAnimation(animation, entry) || (bandTransition
-            && (animation == "char_fade" || isSkiaEnergyTransition(animation)));
+            && (animation == "char_fade" || isSkiaEnergyTransition(animation)
+                || (features.contains("p07_ruby_petal_scanline_image") && animation == (entry ? "petal" : "note"))));
     };
     const auto supportedAnimation = [&](const QString& animation, bool entry) {
         return plainLineAnimation(animation, entry)
@@ -294,7 +295,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         // The band follows the posed unit during forward Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
-        const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles") && staticScanline
+        const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
+        const bool particleScanlineImage = noteExit && source.entryAnimation == "petal"
+            && resolved.scanlineShape == "image" && features.contains("p07_ruby_petal_scanline_image");
+        const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
+            && (staticScanline || particleScanlineImage)
             && std::ranges::none_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
@@ -309,16 +314,15 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
-        const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool particleScanline = features.contains("p07_ruby_petal_entry_scanline") && utopiaSinging
             && source.entryAnimation == "petal" && (source.exitAnimation == "none" || noteExit)
-            && resolved.scanlineShape == "band" && resolved.scanlineMode == "color"
+            && (resolved.scanlineShape == "band" || particleScanlineImage) && resolved.scanlineMode == "color"
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.fxBursts.empty();
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
             && !source.wipeReverse && (staticScanline || movingScanline || particleScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
-        const bool scanlineShape = solidShape && (staticScanline || movingScanline);
+        const bool scanlineShape = solidShape && (staticScanline || movingScanline || particleScanlineImage);
         const bool lowerScanline = features.contains("p07_lower_ruby_scanline")
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"

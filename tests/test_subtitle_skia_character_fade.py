@@ -349,15 +349,16 @@ def test_ruby_particle_entry_body_glow_replays(binary, reading, target, effect):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('scanline,exit_,glow', [
-    (False, 'none', False), (True, 'none', False), (True, 'note', False), (True, 'note', True),
+@pytest.mark.parametrize('scanline,exit_,glow,image', [
+    (False, 'none', False, False), (True, 'none', False, False),
+    (True, 'note', False, False), (True, 'note', True, False), (True, 'note', True, True),
 ])
-def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline, exit_, glow):
+def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline, exit_, glow, image):
     track, style = reading
     style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim=exit_, exit_fade_ms=600,
                     sing_fx='flame', anim_fx_speed_pct=50, fx_particle_speed_pct=200,
                     karaoke_anim='utopia_scanline' if scanline else 'utopia', scanline_enabled=scanline,
-                    scanline_effect='star' if scanline else 'none',
+                    scanline_effect='star' if scanline and not image else 'none',
                     decoration_kind='glow' if glow else 'none',
                     decoration_kind_before='glow' if glow else 'none',
                     ruby_decoration_kind='glow' if glow else 'none',
@@ -366,19 +367,26 @@ def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, read
         from test_subtitle_skia_roles import colors
 
         style = replace(style, karaoke_colors=colors('#FFFFFF', '#2F8BFF'))
+    if image:
+        from pathlib import Path
+
+        asset = Path(__file__).with_name('data') / 'guide_anim_3frames.gif'
+        style = replace(style, scanline_shape='image', scanline_image_path=str(asset),
+                        line_band_enabled=True, line_band_image='preset:staff_scroll')
     ir = upper_ir(binary, (track, style), 1)
-    petals = upper_ir(binary, (track, replace(style, karaoke_anim='utopia', sing_fx='none', exit_anim='none',
+    standalone = replace(style, line_band_enabled=False)
+    petals = upper_ir(binary, (track, replace(standalone, karaoke_anim='utopia', sing_fx='none', exit_anim='none',
                                             scanline_enabled=False, scanline_effect='none')), 1)
-    flames = upper_ir(binary, (track, replace(style, entry_anim='none', exit_anim='none')), 1)
+    flames = upper_ir(binary, (track, replace(standalone, entry_anim='none', exit_anim='none')), 1)
     source, = ir['track']['lines']
     bursts = source['fx_bursts']
     petal_bursts = [burst for burst in bursts if burst['kind'] == 'petal']
     singing_bursts = [burst for burst in bursts if burst['kind'] not in {'petal', 'note'}]
-    assert any(burst['kind'] == 'scanline' for burst in singing_bursts) == scanline
+    assert any(burst['kind'] == 'scanline' for burst in singing_bursts) == (scanline and not image)
     assert petal_bursts and singing_bursts
     phases = [(petal_bursts, petals), (singing_bursts, flames)]
     if exit_ == 'note':
-        notes = upper_ir(binary, (track, replace(style, entry_anim='none', karaoke_anim='utopia', sing_fx='none',
+        notes = upper_ir(binary, (track, replace(standalone, entry_anim='none', karaoke_anim='utopia', sing_fx='none',
                                                scanline_enabled=False, scanline_effect='none')), 1)
         note_bursts = [burst for burst in bursts if burst['kind'] == 'note']
         assert note_bursts
@@ -392,8 +400,11 @@ def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, read
     feature = 'p07_ruby_petal_entry_scanline' if scanline else 'p07_ruby_petal_entry_flame_singing'
     if exit_ == 'note':
         feature = 'p07_ruby_petal_scanline_note_exit'
+    if image:
+        feature = 'p07_ruby_petal_scanline_image'
     assert feature in ir['required_features']
     assert ('p07_ruby_particle_entry_glow' in ir['required_features']) == glow
+    assert ('p08_line_band_transition' in ir['required_features']) == image
     missing = copy.deepcopy(ir)
     missing['required_features'].remove(feature)
     bad_sweep = copy.deepcopy(ir)
@@ -580,6 +591,18 @@ def test_ruby_petal_scanline_with_note_exit_matches_actual_gpu(binary, applicati
                                             ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     times = (100, 299, 301, 600, 1000, 1300, 1500, 2600, 4500, 4899, 4900, 4901,
              5100, 5300, 5498, 5499, 5500, 5510, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('line_band', [False, True])
+def test_ruby_animated_scanline_image_with_particle_transitions_matches_actual_gpu(binary, application, tmp_path, line_band):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'combined_effects')
+    times = (100, 299, 301, 400, 650, 1200, 1330, 1500, 1750, 2600, 3700, 4899, 4900, 5100,
+             5300, 5499, 5500, 5900)
+    style = replace(case.style, line_band_enabled=line_band)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 

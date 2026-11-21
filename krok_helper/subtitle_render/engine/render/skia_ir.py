@@ -210,7 +210,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
     unscaled_line_motion = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = False
     shapes = set()
-    moving_shapes = shaped_singing = lower_readings = moving_lower_readings = False
+    moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -233,7 +233,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
             vertical_singing_band |= singing
             continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
-        shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
+        image_during_transition = particle_entry and look.scanline_shape == 'image'
+        shape_with_singing = (shape_style and (ordinary or image_during_transition) and bool(track.rubies) and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
         solid_shape = (shape_style and not (source.wipe_reverse or line.get('zoom_pulse') or line.get('stroke_flash'))
                        and (not bursts or shape_with_singing))
@@ -242,7 +243,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
                   and line.get('karaoke_anim') in {'none', 'utopia'}
                   and not source.wipe_reverse
                   and not (line.get('zoom_pulse') or line.get('stroke_flash') or line.get('fx_bursts')))
-        shape = solid_shape and (ordinary or motion)
+        shape = solid_shape and (ordinary or motion or image_during_transition)
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
                   and (ordinary or motion or particle_entry))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
@@ -267,6 +268,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
         moving_lower_readings |= lower_band and motion
         if shape:
             shapes.add(look.scanline_shape)
+            particle_scanline_image |= image_during_transition
             moving_shapes = moving_shapes or motion
             shaped_singing = shaped_singing or shape_with_singing
     features = []
@@ -282,6 +284,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
         features.append('p07_scanline_shape')
     if 'image' in shapes:
         features.append('p07_scanline_image')
+    if particle_scanline_image:
+        features.append('p07_ruby_petal_scanline_image')
     if composed:
         features.append('p07_composed_scanline')
     if line_motion:
