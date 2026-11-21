@@ -2654,6 +2654,464 @@ def test_gpu_g1_directwrite_wipe_progresses_monotonically(monkeypatch) -> None:
     assert len({_alpha_count(payload) for payload in frames}) == 1
 
 
+def _wipe_front_column_alpha(
+    payload: bytes, width: int, height: int
+) -> list[int]:
+    """Per-column peak alpha of a tightly packed RGBA8888 frame."""
+    assert len(payload) == width * height * 4, (len(payload), width, height)
+    return (
+        np.frombuffer(payload, np.uint8)
+        .reshape(height, width, 4)[:, :, 3]
+        .max(axis=0)
+        .tolist()
+    )
+
+
+def _solid_block_wipe_style(before: str, after: str) -> Style:
+    return _g1_style(
+        font_family="Segoe UI Symbol",
+        font_family_latin="Segoe UI Symbol",
+        font_size_px=120,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(color=before)),
+            after=KaraokeColorState(text=PaintFill(color=after)),
+        ),
+    )
+
+
+def _solid_block_wipe_track() -> TimingTrack:
+    # U+25A0 in Segoe UI Symbol is a ~0.70 em filled square with side
+    # bearings: its vertical sides and solid interior make any interior alpha
+    # deficit the wipe front, never glyph antialiasing.
+    return TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("\u25a0", 0)], end_ms=1_000)]
+    )
+
+
+def _interior_columns(columns: list[int], solid: int) -> list[int]:
+    """Columns whose two-pixel-away neighbours are both solid ink.
+
+    The solid block's own side bearings and antialiased edges are excluded;
+    the wipe front is the only interior column that can lose coverage.
+    """
+    return [
+        x
+        for x in range(2, len(columns) - 2)
+        if columns[x - 2] >= solid and columns[x + 2] >= solid
+    ]
+
+
+def _assert_two_state_partition(
+    payload: bytes,
+    width: int,
+    height: int,
+    before_rgb: tuple[int, int, int],
+    after_rgb: tuple[int, int, int],
+) -> None:
+    """Every opaque pixel is exactly one wipe state; the runs meet at the front.
+
+    This probes a *contrasting-colour* frame, so it also proves the sampled
+    timestamp puts the front inside the solid ink rather than outside it.
+    """
+
+    frame = np.frombuffer(payload, np.uint8).reshape(height, width, 4)
+    opaque_rows = (frame[:, :, 3] >= 250).sum(axis=1)
+    row = int(opaque_rows.argmax())
+    rgb = frame[row, :, :3].astype(np.int16)
+    opaque = frame[row, :, 3] >= 250
+    before = np.all(rgb == before_rgb, axis=1) & opaque
+    after = np.all(rgb == after_rgb, axis=1) & opaque
+    assert before.any() and after.any(), "both wipe states must be inside the ink"
+    assert np.all(before | after | ~opaque), [
+        (int(x), tuple(int(c) for c in rgb[x]))
+        for x in range(width)
+        if not (before[x] or after[x]) and opaque[x]
+    ]
+    before_x, after_x = np.flatnonzero(before), np.flatnonzero(after)
+    assert before_x.max() + 1 == after_x.min() or after_x.max() + 1 == before_x.min(), (
+        int(before_x.max()),
+        int(after_x.min()),
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("dpr", [1.0, 1.25, 1.5])
+def test_gpu_different_wipe_colours_split_at_one_column(
+    monkeypatch, dpr: float
+) -> None:
+    """The aliased front split must assign each pixel to exactly one colour.
+
+    This is the non-vacuity companion of the identical-colour test: it proves
+    the 253 ms front really sits inside the solid ink, and it rejects both an
+    antialiased clip (one blended column) and a 1 px overlap (both colours in
+    the same column).
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _solid_block_wipe_style("#FF0000", "#0000FF")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (253,),
+            force_warp=True,
+            track=_solid_block_wipe_track(),
+            dpr=dpr,
+        )
+    width, height = configured["width"], configured["height"]
+    _assert_two_state_partition(frames[0], width, height, (255, 0, 0), (0, 0, 255))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("dpr", [1.0, 1.5])
+@pytest.mark.parametrize("force_warp", [True, False])
+def test_gpu_identical_wipe_colours_do_not_seam_at_the_front(
+    monkeypatch, dpr: float, force_warp: bool
+) -> None:
+    """Same before/after colour must not draw a dark hairline at the wipe front.
+
+    2026-11 user report: a role whose wipe colours are identical shows a dark
+    line travelling with the front.  Both states were drawn through
+    complementary *antialiased* half-plane clips, so the pixel straddling the
+    front received ~50% coverage from each pass and composited to ~75% alpha;
+    on a dark video that missing 25% reads as a black line.  The front split
+    is now an aliased (physical-pixel) partition, the same rule as the CPU
+    Painter and the scanline band.  The contrasting-colour test above proves
+    the same timestamp puts the front inside the block.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _solid_block_wipe_style("#FFD166", "#FFD166")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (253,),
+            force_warp=force_warp,
+            track=_solid_block_wipe_track(),
+            dpr=dpr,
+        )
+    columns = _wipe_front_column_alpha(
+        frames[0], configured["width"], configured["height"]
+    )
+    interior = _interior_columns(columns, 250)
+    assert interior, "the solid block must have an interior"
+    assert min(columns[x] for x in interior) >= 250, (
+        dpr,
+        [(x, columns[x]) for x in interior if columns[x] < 250],
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_role_identical_wipe_colours_do_not_seam(monkeypatch) -> None:
+    """The reported scene: one role's before/after wipe colours are identical.
+
+    The line itself uses contrasting colours, so the role scheme is a real
+    override and the role-specific brush path is exercised; only the clip is
+    under test.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    role_colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FFD166")),
+        after=KaraokeColorState(text=PaintFill(color="#FFD166")),
+    )
+    style = _g1_style(
+        font_family="Segoe UI Symbol",
+        font_family_latin="Segoe UI Symbol",
+        font_size_px=120,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(color="#FF0000")),
+            after=KaraokeColorState(text=PaintFill(color="#0000FF")),
+        ),
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(karaoke_colors=role_colors)
+        },
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\u25a0", 0, role_label="lead")],
+                end_ms=1_000,
+            )
+        ]
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer, style, (253,), force_warp=True, track=track, dpr=1.5
+        )
+    columns = _wipe_front_column_alpha(
+        frames[0], configured["width"], configured["height"]
+    )
+    interior = _interior_columns(columns, 250)
+    assert interior, "the role glyph must have an interior"
+    assert min(columns[x] for x in interior) >= 250, [
+        (x, columns[x]) for x in interior if columns[x] < 250
+    ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_identical_wipe_colours_with_glow_are_progress_independent(
+    monkeypatch,
+) -> None:
+    """Same colours mean the whole body + glow frame must not depend on the front.
+
+    This is stronger than the alpha probe: it also covers the main glow source
+    split.  The former AA clips left a 25% dip in the opaque body and in the
+    blurred glow source at 253 ms, while the completed frame at 999 ms had
+    none; the two frames must now be byte-identical.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Segoe UI Symbol",
+        font_family_latin="Segoe UI Symbol",
+        font_size_px=120,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        glow_concentration_level=1,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(color="#FFD166")),
+            after=KaraokeColorState(text=PaintFill(color="#FFD166")),
+        ),
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (253, 999),
+            force_warp=True,
+            track=_solid_block_wipe_track(),
+            dpr=1.5,
+        )
+    wiping = np.frombuffer(frames[0], np.uint8)
+    complete = np.frombuffer(frames[1], np.uint8)
+    assert np.array_equal(wiping, complete), (
+        int(np.abs(wiping.astype(np.int16) - complete.astype(np.int16)).max()),
+        int((wiping != complete).sum()),
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("dpr", [1.0, 1.5])
+def test_gpu_translucent_wipe_colours_are_partitioned_not_double_composited(
+    monkeypatch, dpr: float
+) -> None:
+    """The aliased front split must paint each pixel exactly once.
+
+    A 1 px overlap would composite a translucent colour twice (α², a bright
+    hairline); a gap would lose coverage (dark hairline).  With an exact
+    partition every solid column keeps the fill's own alpha.  Allow one LSB
+    for premultiplied 8-bit rounding; the rejected outcomes are off by 7 or
+    more.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _solid_block_wipe_style("#80FFFFFF", "#80FFFFFF")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (253,),
+            force_warp=True,
+            track=_solid_block_wipe_track(),
+            dpr=dpr,
+        )
+    columns = _wipe_front_column_alpha(
+        frames[0], configured["width"], configured["height"]
+    )
+    interior = _interior_columns(columns, 120)
+    assert interior, "the solid block must have an interior"
+    bad = [(x, columns[x]) for x in interior if abs(columns[x] - 128) > 1]
+    assert not bad, (dpr, bad)
+
+
+def _solid_ruby_wipe_track() -> TimingTrack:
+    # The reading is the same solid square, so the ruby body split is visible
+    # as an alpha/colour change with no glyph-internal antialiasing.
+    return TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("漢", 0)], end_ms=2_000)],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢",
+                reading="\u25a0",
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+
+
+def _solid_ruby_wipe_style(before: str, after: str) -> Style:
+    # The main text is fully transparent; only the ruby layer is measured.
+    transparent = KaraokeColorState(text=PaintFill(color="#00FFFFFF"))
+    return _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_y_position="center",
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+        ruby_font_family="Segoe UI Symbol",
+        ruby_font_family_latin="Segoe UI Symbol",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=96,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none",
+        ruby_colors_follow_main=False,
+        ruby_karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(color=before)),
+            after=KaraokeColorState(text=PaintFill(color=after)),
+        ),
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_ruby_identical_wipe_colours_do_not_seam(monkeypatch) -> None:
+    """The ruby body split uses the same physical-pixel partition as the main text.
+
+    The main-body test cannot see the ruby clip sites; this reads a solid ruby
+    glyph and proves both the front is inside the ruby ink (contrast pass) and
+    the identical-colour pass keeps full alpha on every interior column.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    timestamps = (1_001, 1_007, 1_027)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            _solid_ruby_wipe_style("#FFD166", "#FFD166"),
+            timestamps,
+            force_warp=True,
+            track=_solid_ruby_wipe_track(),
+            dpr=1.5,
+        )
+        _contrast_configured, contrast = _render_g1_frames(
+            renderer,
+            _solid_ruby_wipe_style("#FF0000", "#0000FF"),
+            timestamps,
+            force_warp=True,
+            track=_solid_ruby_wipe_track(),
+            dpr=1.5,
+        )
+    width, height = configured["width"], configured["height"]
+    for t_ms, payload, contrast_payload in zip(
+        timestamps, frames, contrast, strict=True
+    ):
+        _assert_two_state_partition(
+            contrast_payload, width, height, (255, 0, 0), (0, 0, 255)
+        )
+        columns = _wipe_front_column_alpha(payload, width, height)
+        interior = _interior_columns(columns, 250)
+        assert interior, "the ruby glyph must have an interior"
+        assert min(columns[x] for x in interior) >= 250, (
+            t_ms,
+            [(x, columns[x]) for x in interior if columns[x] < 250],
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_wiping_bitmap_guide_partitions_before_and_after_images(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A wiping bitmap guide must not nest an antialiased line-level clip.
+
+    The per-character phase path already applies the aliased physical-pixel
+    partition; the inner before-image clip that the retired legacy stack
+    needed must be skipped while Wiping.  Otherwise the before image keeps a
+    half-covered front column (64 instead of 128 for a 50% image) and the
+    same dark hairline returns on inline avatar/emoji guides.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    paths = []
+    for name, color in (
+        ("before", QColor(255, 0, 0, 128)),
+        ("after", QColor(0, 0, 255, 128)),
+    ):
+        image = QImage(48, 48, QImage.Format.Format_RGBA8888)
+        image.fill(color)
+        path = tmp_path / f"{name}.png"
+        assert image.save(str(path))
+        paths.append(str(path))
+    symbol = GuideSymbol(
+        kind="bitmap",
+        bitmap_no_decor=True,
+        bitmap_before_path=paths[0],
+        bitmap_after_path=paths[1],
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\uFFFC", 0, vector_glyph=symbol)],
+                end_ms=2_000,
+            )
+        ]
+    )
+    transparent = KaraokeColorState(text=PaintFill(color="#00FFFFFF"))
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (1_001, 1_007, 1_027),
+            force_warp=True,
+            track=track,
+            dpr=1.5,
+        )
+    width, height = configured["width"], configured["height"]
+    # Three timestamps land the front on different sub-pixel phases, so the
+    # former half-covered column cannot slip through on an integer edge.
+    for t_ms, payload in zip((1_001, 1_007, 1_027), frames):
+        frame = np.frombuffer(payload, np.uint8).reshape(height, width, 4)
+        alpha = frame[:, :, 3]
+        peak = alpha.argmax(axis=0)
+        columns = alpha[peak, np.arange(width)].astype(int)
+        rgb = frame[peak, np.arange(width), :3].astype(np.int16)
+        interior = _interior_columns(columns.tolist(), 120)
+        assert interior, "the bitmap guide must have an interior"
+        bad_alpha = [
+            (x, int(columns[x]))
+            for x in interior
+            if abs(int(columns[x]) - 128) > 1
+        ]
+        assert not bad_alpha, (t_ms, bad_alpha)
+        solid = np.abs(columns - 128) <= 1
+        before = np.all(rgb == (255, 0, 0), axis=1) & solid
+        after = np.all(rgb == (0, 0, 255), axis=1) & solid
+        assert before.any() and after.any(), (t_ms, "both image states must be visible")
+        assert np.all(before | after | ~solid), [
+            (int(x), tuple(int(c) for c in rgb[x]))
+            for x in range(width)
+            if not (before[x] or after[x]) and solid[x]
+        ]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_main_glow_splits_before_after_radii(monkeypatch) -> None:
     """走字前/走字后发光半径不同时，主发光各用各的半径，不再统一取最大值。

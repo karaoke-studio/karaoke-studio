@@ -4621,7 +4621,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             context->SetTransform(previousTransform);
         };
-        auto drawBitmapGuidePart = [&](std::size_t charIndex, bool after) {
+        auto drawBitmapGuidePart = [&](std::size_t charIndex, bool after,
+                                       bool wipeClipped) {
             restoreRealizationBaseTransform();
             if (charIndex >= line->chars.size()) {
                 return;
@@ -4646,7 +4647,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             // not remain composited under a partly transparent after image).
             // The per-char phase path already clips both sides; this branch
             // matters for the legacy stack, whose before pass is unclipped.
-            if (!after && !ch.bitmapGuide->afterPath.empty()) {
+            // A Wiping-phase caller passes wipeClipped=true: the outer clip is
+            // already the aliased physical-pixel partition, and nesting this
+            // antialiased line-level clip would put the 25% seam back on the
+            // before image's front column.
+            if (!after && !wipeClipped && !ch.bitmapGuide->afterPath.empty()) {
                 if (mainWipeComplete) {
                     return;
                 }
@@ -4989,9 +4994,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         edge = animated.second;
                     }
                     const float pad = sourceWidth + 4.0f;
+                    // Same pixel-partition rule as the body: two antialiased
+                    // complementary clips lose up to 25% coverage where they
+                    // meet, which a blurred glow turns into a visible dark
+                    // band travelling with the front.
                     pushAxisAlignedClip(
                         directionalWipeClip(bounds, edge, pad, after),
-                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        D2D1_ANTIALIAS_MODE_ALIASED
                     );
                 };
                 const auto drawGlowPhase = [&](std::size_t index, N3WipePhase phase) {
@@ -5247,8 +5256,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         phaseBounds, edge, pad, after
                     );
                     if (phase == N3WipePhase::Wiping) {
+                        // Pixel-partition the front instead of letting two
+                        // complementary antialiased clips cover the seam at
+                        // ~75% (see pushMainWipeClip).
                         pushAxisAlignedClip(
-                            clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                            clip, D2D1_ANTIALIAS_MODE_ALIASED
                         );
                     }
                     brush->SetOpacity(
@@ -5631,7 +5643,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     if (needClip) {
                         pushAxisAlignedClip(
-                            clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                            clip, D2D1_ANTIALIAS_MODE_ALIASED
                         );
                     }
                     context->DrawGeometry(
@@ -5679,7 +5691,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         );
                     }
                     pushAxisAlignedClip(
-                        clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        clip, D2D1_ANTIALIAS_MODE_ALIASED
                     );
                 }
                 context->DrawGeometry(geometry, brush.Get(), sourceWidth);
@@ -6073,10 +6085,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 maskRect.left, maskRect.top, device_
             );
         };
-        const auto pushScanlineStateClip = [&](float edge, bool after) {
+        const auto pushScanlineStateClipMode = [&](
+            float edge, bool after, D2D1_ANTIALIAS_MODE antialiasMode
+        ) {
             pushAxisAlignedClip(
                 directionalWipeClip(line->bounds, edge, geometryPad, after),
-                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                antialiasMode
+            );
+        };
+        const auto pushScanlineStateClip = [&](float edge, bool after) {
+            pushScanlineStateClipMode(
+                edge, after, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
             );
         };
         ScanlineGlowLayer scanlineMainGlow;
@@ -8110,17 +8129,28 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float pad = std::max(
                 charStyle.strokeWidth + charStyle.stroke2Width, 2.0f
             ) + 4.0f;
+            // Complementary antialiased half-plane clips each keep only their
+            // own partial coverage, so the pixel straddling the front is drawn
+            // by both passes with ~50% alpha each and ends up at ~75% --
+            // identical before/after colours expose it as a dark hairline that
+            // travels with the wipe. Snap the split to physical pixels instead
+            // (the Painter and the scanline band do the same); the front is
+            // then partitioned exactly once for axis-aligned viewport
+            // transforms and translucent colours no longer composite twice.
+            // A rotated world viewport still clips to axis-aligned bounds
+            // (pre-existing PushAxisAlignedClip limitation, not this split).
             pushAxisAlignedClip(
                 directionalWipeClip(bounds, edge, pad, after),
-                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                D2D1_ANTIALIAS_MODE_ALIASED
             );
         };
         const auto drawMainLayerPart = [&](std::size_t charIndex,
-                                           bool after, int layer) {
+                                           bool after, int layer,
+                                           bool wipeClipped) {
             const Impl::CachedChar &ch = line->chars[charIndex];
             if (ch.bitmapGuide.has_value()) {
                 if (layer == 2) {
-                    drawBitmapGuidePart(charIndex, after);
+                    drawBitmapGuidePart(charIndex, after, wipeClipped);
                 }
                 return;
             }
@@ -8170,20 +8200,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const auto drawPhasePart = [&](std::size_t charIndex,
                                            N3WipePhase phase) {
                 if (layer == 2 && bitmapGuideNoWipe(line->chars[charIndex])) {
-                    drawMainLayerPart(charIndex, false, layer);
+                    drawMainLayerPart(charIndex, false, layer, false);
                     return;
                 }
                 if (phase != N3WipePhase::Wiping) {
                     drawMainLayerPart(
-                        charIndex, phase == N3WipePhase::After, layer
+                        charIndex, phase == N3WipePhase::After, layer, false
                     );
                     return;
                 }
                 pushMainWipeClip(charIndex, false);
-                drawMainLayerPart(charIndex, false, layer);
+                drawMainLayerPart(charIndex, false, layer, true);
                 context->PopAxisAlignedClip();
                 pushMainWipeClip(charIndex, true);
-                drawMainLayerPart(charIndex, true, layer);
+                drawMainLayerPart(charIndex, true, layer, true);
                 context->PopAxisAlignedClip();
             };
             for (std::size_t reverse = line->chars.size(); reverse > 0; --reverse) {
@@ -8277,7 +8307,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 pushAxisAlignedClip(
                                     sliceRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                                 );
-                                pushScanlineStateClip(band->second, after);
+                                // The scanline repaint is a two-state split on
+                                // top of the body; partition it at physical
+                                // pixels too, or a uniform highlight loses
+                                // 25% alpha on the front column (Utopia and
+                                // ruby slice paths).
+                                pushScanlineStateClipMode(
+                                    band->second, after,
+                                    D2D1_ANTIALIAS_MODE_ALIASED
+                                );
                                 drawMainGlyphLayer(
                                     charIndex, layer, brush.Get());
                                 context->PopAxisAlignedClip();
@@ -9478,7 +9516,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 directionalWipeClip(
                                     animatedBounds, animatedEdge, pad, true
                                 ),
-                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                                D2D1_ANTIALIAS_MODE_ALIASED
                             );
                             pushedUtopiaClip = true;
                         }
@@ -9500,7 +9538,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 directionalWipeClip(
                                     animatedBounds, animatedEdge, pad, false
                                 ),
-                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                                D2D1_ANTIALIAS_MODE_ALIASED
                             );
                             pushedUtopiaClip = true;
                         }
@@ -9594,7 +9632,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 fullWipeClipBottom
                             ));
                     pushAxisAlignedClip(
-                        rubyBeforeClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        rubyBeforeClip, D2D1_ANTIALIAS_MODE_ALIASED
                     );
                     drawRubyStack(rubyIndex, ruby, false);
                     context->PopAxisAlignedClip();
@@ -9605,7 +9643,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {
                 if (!useUtopiaTransition && !rubyComplete) {
                     pushAxisAlignedClip(
-                        rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        rubyAfterClip, D2D1_ANTIALIAS_MODE_ALIASED
                     );
                 }
                 drawRubyStack(rubyIndex, ruby, true);
@@ -9724,7 +9762,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 pushAxisAlignedClip(
                                     sliceRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                                 );
-                                pushScanlineStateClip(edge, after);
+                                // Same physical-pixel partition as the main
+                                // scanline slices: identical before/after
+                                // highlight colours must not lose the front
+                                // column to two complementary AA clips.
+                                pushScanlineStateClipMode(
+                                    edge, after,
+                                    D2D1_ANTIALIAS_MODE_ALIASED
+                                );
                                 drawRubyGlyphLayers(
                                     rubyIndex, unitIndex,
                                     layer == 2 ? brush.Get() : nullptr,
