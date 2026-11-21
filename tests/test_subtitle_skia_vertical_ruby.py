@@ -463,10 +463,8 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('semantics,dpr,outline', [('legacy', 1, False), ('n3_1074', 1.5, True)])
-def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, project, semantics, dpr, outline):
+def annotated_column_project(project, semantics, outline):
     from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine
-    from test_subtitle_skia_outline_ruby import premultiplied
 
     track, style = vertical_ruby_source(project, span=(0, 1), position='top')
     reading, = track.rubies
@@ -484,6 +482,14 @@ def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, 
                     line_alignments=['left', 'right'], line_offsets_x=[0, 0], auto_fill_section_time=False,
                     sync_entry=False, stroke_width_px=4 if outline else 0, stroke2_enabled=outline,
                     stroke2_width_px=2 if outline else 0)
+    return track, style
+
+
+@pytest.mark.parametrize('semantics,dpr,outline', [('legacy', 1, False), ('n3_1074', 1.5, True)])
+def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, project, semantics, dpr, outline):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, style = annotated_column_project(project, semantics, outline)
     ir = ir_for(binary, (track, style), dpr=dpr)
     bare = ir_for(binary, (replace(track, rubies=[]), style), dpr=dpr)
     feature = 'p05_vertical_columns_ruby'
@@ -504,7 +510,7 @@ def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, 
             continue
         group, = line['ruby_groups']
         unit, = group['units']
-        start = lines[index].chars[0].start_ms
+        start = track.lines[index].chars[0].start_ms
         assert unit['interval_ms'] == [start, start + 200]
         assert unit['wipe_left'] > line['cells'][0]['wipe_right']
         if index in (1, 3):
@@ -522,6 +528,54 @@ def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, 
             replay, _ = collect(process, [times[1], times[-1]], generation=2)
         assert frames[0].any() and frames[-1].any() and not frames[2].any()
         assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[-1], replay[1])
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.parametrize('body,ruby,karaoke,fade,reverse', [
+    ('none', 'glow', 'none', False, False), ('glow', 'glow', 'none', True, False),
+    ('glow', 'none', 'no_wipe', False, False), ('shadow', 'shadow', 'no_wipe', False, False),
+    ('glow', 'shadow', 'none', False, True),
+])
+def test_vertical_ruby_columns_composite_independent_decoration(binary, project, body, ruby, karaoke, fade, reverse):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    track, base = annotated_column_project(project, 'n3_1074', True)
+    if reverse:
+        track = replace(track, lines=[track.lines[0], replace(track.lines[1], wipe_reverse=True), *track.lines[2:]])
+    base = replace(base, karaoke_anim=karaoke)
+    if fade:
+        base = replace(base, entry_anim='fade', exit_anim='fade', entry_lead_ms=500, exit_fade_ms=500)
+    style = replace(base, decoration_kind=body, ruby_decoration_kind=ruby, ruby_decoration_kind_before=ruby,
+                    glow_before_radius_px=6, glow_after_radius_px=7, ruby_glow_before_radius_px=4,
+                    ruby_glow_after_radius_px=5, shadow_offset_x=-6, shadow_before_offset_x=-6,
+                    ruby_shadow_offset_x=8, ruby_shadow_before_offset_x=8)
+    dpr = 1.5
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    plain = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p06_vertical_columns_ruby_decoration'
+    assert {feature, 'p06_vertical_columns_decoration', 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
+    final = ir['skia_layout']['lines']
+    assert final == plain['skia_layout']['lines']
+    assert bool(final[1]['ruby_groups']) != reverse
+    split = round((final[0]['cells'][0]['origin_x'] + final[1]['cells'][0]['origin_x']) / 2 * dpr)
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    times = [110, 490, 600, 1380, 1750, 2690]
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, [times[1]], generation=2)
+            configure(process, plain)
+            baseline, _ = collect(process, times, generation=3)
+        assert np.array_equal(frames[1], replay[0]) and not frames[4].any()
+        for columns in (slice(None, split), slice(split, None)):
+            assert np.any(frames[1][:, columns, 3] > baseline[1][:, columns, 3])
         targets.append(np.stack(frames))
     diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003

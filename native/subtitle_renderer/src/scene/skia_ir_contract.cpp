@@ -63,6 +63,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_vertical_reverse_outline",
         "p06_vertical_columns_outline",
         "p06_vertical_columns_decoration",
+        "p06_vertical_columns_ruby_decoration",
         "p06_vertical_mixed_column_decoration",
         "p07_vertical_columns_decoration_fade",
         "p06_vertical_ruby_outline",
@@ -445,11 +446,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if ((reverseVerticalGlow || reverseVerticalShadow) && (!reverseVertical || (reverseVerticalGlow && !verticalGlow)
         || (reverseVerticalShadow && !verticalShadow)))
         throw BackendError("Skia 反向竖排静态装饰缺少对应布局能力");
-    if (features.contains("p06_vertical_columns_decoration")
-        && (!features.contains("p05_vertical_columns") || !(verticalGlow || verticalShadow)
-            || features.contains("p05_vertical_ruby") || (features.contains("p07_vertical_decoration_fade")
+    const bool columnsDecoration = features.contains("p06_vertical_columns_decoration");
+    if (columnsDecoration
+        && (!verticalColumns || !(verticalGlow || verticalShadow || verticalRubyDecoration)
+            || (features.contains("p07_vertical_decoration_fade")
                 && !features.contains("p07_vertical_columns_decoration_fade"))))
-        throw BackendError("Skia 多列竖排静态装饰缺少对应能力或包含注音");
+        throw BackendError("Skia 多列竖排静态装饰缺少对应能力");
+    if (features.contains("p06_vertical_columns_ruby_decoration") != (columnsDecoration && verticalRubyDecoration))
+        throw BackendError("Skia 多列竖排注音装饰缺少对应能力");
     if (features.contains("p07_vertical_columns_decoration_fade")
         && (!features.contains("p06_vertical_columns_decoration") || !features.contains("p07_vertical_decoration_fade")))
         throw BackendError("Skia 多列竖排装饰淡化缺少对应能力");

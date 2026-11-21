@@ -297,12 +297,12 @@ def test_reverse_vertical_no_wipe_keeps_shadow_overhang_before_first_unit(binary
     assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 
 
-def test_vertical_column_decoration_rejects_ruby_layout(binary, project):
+def test_vertical_column_decoration_rejects_ruby_with_scanline(binary, project):
     track, style, _ = decorated_columns(project, 'glow')
     track = replace(track, rubies=[RubyAnnotation('字', '字', pos_start_ms=200, pos_end_ms=360, target_line_index=0,
                                                   target_char_start=0, target_char_end=1)])
     with pytest.raises(ValueError):
-        ir_for(binary, (track, style))
+        ir_for(binary, (track, replace(style, karaoke_anim='scanline')))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
