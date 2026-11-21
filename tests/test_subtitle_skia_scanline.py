@@ -278,17 +278,21 @@ def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
     """Original 1px ink, sung-front and band-edge budgets against actual D2D GPU."""
     from test_subtitle_render_gpu_backend import _render_g1_frames
     track, style = scanline_source(project, kind)
+    # At DPR 1 a posed glyph can enter and leave the opaque-band mask
+    # between the clock-boundary samples. Keep those samples and inspect
+    # the interior of each wipe at uniform intervals as well.
+    times = sorted(set(TIMES) | set(range(250, 1800, 50))) if dpr == 1 and kind.startswith('utopia') else TIMES
     with NativeRendererProcess() as process:
-        _, raw = _render_g1_frames(process, style, tuple(TIMES), force_warp=False, track=track,
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
     refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
     with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
         configure(process, ir_for(binary, (track, style), dpr=dpr))
-        frames, _ = collect(process, TIMES)
+        frames, _ = collect(process, times)
     sung = lambda p: (p[..., 1].astype(float) * p[..., 3] / 255**2).sum()
     full_a, full_b = sung(refs[-1]), sung(frames[-1])
     banded = []
-    for t, a, b in zip(TIMES, refs, frames, strict=True):
+    for t, a, b in zip(times, refs, frames, strict=True):
         if a[..., 3].max() == 0 or b[..., 3].max() == 0:
             assert a[..., 3].max() == b[..., 3].max() == 0, (kind, t)
             continue
@@ -308,7 +312,7 @@ def test_band_matches_actual_d2d_gpu(binary, project, kind, dpr):
             assert abs(xa.min()-xb.min()) <= 1 and abs(xa.max()-xb.max()) <= 1, (kind, t, 'band', xa, xb)
             assert abs(band_mass(a) - band_mass(b)) / height <= 1, (kind, t, 'band mass')
     if kind == 'utopia_pause':
-        assert len(banded) >= 5 and not set(banded).intersection({401, 500, 599}), (kind, banded)
+        assert len(banded) >= 5 and not any(400 < t < 600 for t in banded), (kind, banded)
     else:
         assert len(banded) >= 8, (kind, banded)
 
