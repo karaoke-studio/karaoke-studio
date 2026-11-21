@@ -351,6 +351,9 @@ def test_skia_export_reuses_mapping_and_detaches_before_shutdown(monkeypatch, in
     else:
         assert [time_ms for time_ms, _ in frames] == [0, 17, 33, 50, 67]
         assert lifecycle == ['open', 'close', 'open', 'close', 'shutdown']
+        first, second = Process.instances[-1].ranges
+        assert first['shm_key'] == second['shm_key']
+        assert first['generation'] != second['generation']
 
 
 def test_iter_native_rgba_frames_at_times_uses_explicit_timestamps(monkeypatch) -> None:

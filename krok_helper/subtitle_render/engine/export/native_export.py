@@ -775,6 +775,10 @@ def iter_native_rgba_frames_at_times(
     )
     generation = 1
     factory = process_factory or NativeRendererProcess
+    # Windows Skia can keep the allocation when the next completed range has
+    # the same geometry. Unix still chooses a fresh owned POSIX key in the
+    # sidecar; the supplied string is only a hint there.
+    range_key = f"krok-export-{os.getpid()}-{uuid.uuid4().hex}" if reuse_range_mapping else None
     with factory(renderer_path, response_timeout_s=5.0, close_timeout_s=1.0) as renderer:
         configure_kwargs = {"width": width, "height": height, "fps": fps}
         if extra_tracks:
@@ -790,7 +794,7 @@ def iter_native_rgba_frames_at_times(
                 raise ExportCancelled("已停止导出。")
             count = min(chunk_size, frame_total - start_frame)
             timestamps = timestamps_all[start_frame : start_frame + count]
-            shm_key = f"krok-export-{os.getpid()}-{uuid.uuid4().hex}"
+            shm_key = range_key or f"krok-export-{os.getpid()}-{uuid.uuid4().hex}"
             renderer.start_render_range(
                 timestamps,
                 generation=generation,
