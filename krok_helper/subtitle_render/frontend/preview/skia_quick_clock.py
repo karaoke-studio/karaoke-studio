@@ -53,7 +53,14 @@ class SkiaQuickClock(QObject):
 
     def set_time(self, time_ms: int) -> None:
         self._time_ms = time_ms
-        self._schedule()
+        deadline = self._next_submit_ns
+        if self._playing and self._revision and deadline is not None and monotonic_ns() >= deadline:
+            # A transport tick already delivered the latest time on the GUI
+            # thread. Submit an overdue frame without another timer event.
+            self._timer.stop()
+            self._submit_latest()
+        else:
+            self._schedule()
 
     def refresh_background(self) -> None:
         self._canvas.set_background_time(self._time_ms)
