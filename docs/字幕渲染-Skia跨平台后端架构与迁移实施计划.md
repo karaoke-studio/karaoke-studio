@@ -3800,8 +3800,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 ### 14.325 P07.7 竖排 Utopia 唱字与扫字带（2026-11-22）
 
-- `p07_vertical_scanline_singing` 让 Utopia 缩放后的字形按各自固定字格的 Y 轴走字坐标着色。注音使用自己的座标、时钟与缩放枢轴。单列、双列、实色描边、正文和注音发光均纳入测试。
+- `p07_vertical_scanline_singing` 让 Utopia 缩放后的字形按各自固定字格的 Y 轴走字坐标着色。注音使用自己的坐标、时钟与缩放枢轴。单列、双列、实色描边、正文和注音发光均纳入测试。
 - Windows **22 个不同用例通过**，含 **6 项**横排实际 D2D GPU 对 Vulkan 复验。WSL X11 与 Wayland 各 **16 通过、6 项 Windows 专用跳过**。独立 Windows Raster 的 **5 帧**与 Vulkan sidecar 的 Raster 模式逐字节一致。日志前缀 `build/p07-vertical-scanline-utopia-*`。
+
+### 14.326 P09/P10 竖排 Utopia 扫字带的正式浮窗和导出对照（2026-11-22）
+
+- 用跨平台固定测试字体验证真实浮窗的 GPU 直画、离屏 GPU 和正式导出写帧路径。抽样覆盖开唱前、正文与注音高亮、后续字格走字和完成后。直画按实际设备比例对照，遮罩 IoU ≥ 0.97，像素平均绝对误差 ≤ 5，离屏 GPU 与导出采样逐字节一致。
+- Windows 真机 Vulkan、WSL X11 与 Wayland 各 **1 通过**。日志前缀 `build/p09-vertical-scanline-floating-*`。
 
 ## 15. 前期探针清理范围
 

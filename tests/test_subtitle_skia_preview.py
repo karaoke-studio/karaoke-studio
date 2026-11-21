@@ -766,11 +766,29 @@ effect_styles = {
     'band-motion': dict(entry_anim='slide_in', exit_anim='rise', entry_lead_ms=600, exit_fade_ms=600,
                         karaoke_anim='scanline', scanline_enabled=True, scanline_mode='color',
                         scanline_width_px=36, scanline_glow_px=6, scanline_color='#FFE000'),
+    'vertical-scanline': dict(vertical=True, karaoke_anim='utopia', scanline_enabled=True,
+                              scanline_shape='band', scanline_mode='color', scanline_color='#00FFFF',
+                              scanline_width_px=48, scanline_glow_px=5, decoration_kind='glow',
+                              glow_before_radius_px=6, glow_after_radius_px=7),
 }
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 if effect:
     style = replace(style, **effect_styles[effect])
-    track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
+    if effect == 'vertical-scanline':
+        from pathlib import Path
+        from PyQt6.QtGui import QFontDatabase
+
+        font_id = QFontDatabase.addApplicationFont(str(Path(sys.argv[-1]) / 'vertical.ttf'))
+        assert font_id >= 0
+        family, = QFontDatabase.applicationFontFamilies(font_id)
+        style = replace(style, font_family=family, ruby_font_family=family, font_size_px=100, ruby_font_size_px=45)
+        line, = track.lines
+        chars = [replace(char, text=text) for char, text in zip(line.chars, ('字', '한'), strict=True)]
+        reading = RubyAnnotation('字', '字', pos_start_ms=400, pos_end_ms=700,
+                                 target_line_index=0, target_char_start=0, target_char_end=1)
+        track = replace(track, lines=[replace(line, chars=chars)], rubies=[reading])
+    else:
+        track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
 panel.set_style(style)
 panel.set_track(track)
 window.show()
@@ -805,6 +823,7 @@ if '--compare-export' in sys.argv:
         'shadow-motion': {24: 400, 48: 800, 90: 1500},
         'particle-pair': {18: 300, 57: 950, 108: 1800},
         'band-motion': {24: 400, 48: 800, 90: 1500, 93: 1550},
+        'vertical-scanline': {23: 383, 33: 550, 48: 800, 81: 1350},
     }.get(effect, {12: 200, 33: 550, 81: 1350})
     captures = {}
     for index, time_ms in indices.items():
@@ -842,7 +861,7 @@ if '--compare-export' in sys.argv:
         process = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
         process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000)
         preview_reference = process
-        if effect == 'band-motion':
+        if effect in {'band-motion', 'vertical-scanline'}:
             # The scanline feather spans device pixels. Compare the preview
             # at its actual rendering scale and keep the export reference at 1x.
             preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
@@ -869,6 +888,10 @@ if '--compare-export' in sys.argv:
             delta = np.abs(expected.astype(np.int16) - preview.astype(np.int16))
             mean = delta[area | (preview[..., 3] > 0)].mean()
             assert overlap >= 0.97 and mean <= 5, (index, overlap, mean)
+            if effect == 'vertical-scanline' and index == 33:
+                for frame in (expected, preview):
+                    red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+                    assert np.any((red < 32) & (green > 128) & (blue > 128) & (alpha > 128))
     close_preview()
     print('Quick, offscreen GPU and export pipe compared', flush=True)
     sys.exit(0)
@@ -938,9 +961,15 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
     assert 'floating preview verified' in run_floating_preview(qml_dir)
 
 
-@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair', 'band-motion'],
-                         ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair', 'band-motion'])
+@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair',
+                                     'band-motion', 'vertical-scanline'],
+                         ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
+                              'band-motion', 'vertical-scanline'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
+    if effects == 'vertical-scanline':
+        from skia_text_fixture import make_font
+
+        make_font(tmp_path / 'vertical.ttf')
     result = run_floating_preview(qml_dir, compare_path=tmp_path, effects=effects)
     assert 'Quick, offscreen GPU and export pipe compared' in result
 
