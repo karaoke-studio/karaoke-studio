@@ -3490,7 +3490,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 ### 14.281 P00 主线原样配置与画面复验（2026-11-21）
 
 - `d147d4ae` 在 Windows 真 GPU 上重新扫描 **129** 个原样场景，**107** 个通过配置。逐个用各场景现有时间点、原样追加轨道和原样画笔比较 1080p 离屏字幕，合计 **474 帧**。**107 个场景全部通过**实际 D2D GPU 对 Skia Vulkan、Skia Vulkan 对 Raster 的既有画面预算。D2D 对照使用同机硬件并关闭 realization。
-- 其余 **22** 个原样仍由配置门槛拒绝，集中在竖排与 RTL 注音、彩色/位图字形、带注音的逐字变换与粒子出入场，以及多个特效同时启用的走字线。四个无装饰粒子变体的结果见 §14.280。原始逐项记录为 `build/p00-skia-coverage/configure-current.json` 和 `build/p00-skia-coverage/current-original-pixels.json`。
+- 其余 **22** 个原样仍由配置门槛拒绝，集中在竖排与 RTL 注音、彩色/位图字形、带注音的逐字变换与粒子出入场，以及多个特效同时启用的走字线。四个无装饰粒子变体的结果见 §14.280。原始逐项记录为 `build/p00-skia-coverage/configure-d147d4ae.json` 和 `build/p00-skia-coverage/original-pixels-d147d4ae.json`。
 
 ### 14.282 P05.7/P06.3 右至左排列的上注音与光晕（2026-11-21）
 
@@ -3507,6 +3507,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p07_rtl_ruby_singing_scale` 将 §14.282 的右至左上注音扩展到 Utopia 唱字。沿用既有逐字缩放和分段时钟，在缩放后的正文与读音墨迹上从右侧计算前沿。正文、注音、描边及光晕的唱前唱后裁剪共享方向。
 - legacy 与 N3 各测有、无光晕的双描边 Utopia，**60 帧**均通过实际 D2D GPU 对 Vulkan、Vulkan 对 Raster 的既有画面预算。包括 P00 `rtl` 原样及上注音唱前、唱中、唱完边界。协议测试覆盖缺少能力时拒绝并保留旧场景、重排请求后回跳逐字节一致。保留无描边样式、下方注音、阴影、整字缩放及出入场的组合门槛。
 - Windows 关联 **29 通过**，独立 Windows Raster **4 通过**，WSL X11、Wayland 各 **11 通过、8 项 D2D 专用跳过**。三份构建各通过 **3 项 CTest**。日志为 `build/p07-rtl-utopia-*.log`。
+- `68f82c8b` 的 P00 主线复验有 **108/129** 个原样通过配置，新增 `rtl`。全部 **108** 个场景、**478 帧**通过实际 D2D GPU 对 Skia Vulkan 与 Skia Vulkan 对 Raster 的原画面预算。复用 §14.281 的采样与对照口径，记录为 `build/p00-skia-coverage/configure-68f82c8b.json` 和 `build/p00-skia-coverage/original-pixels-68f82c8b.json`。同提交的 [Mac CI 44896948974](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44896948974) 已启动。
 
 ## 15. 前期探针清理范围
 
