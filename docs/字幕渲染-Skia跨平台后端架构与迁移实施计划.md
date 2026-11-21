@@ -3893,6 +3893,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 正向竖排 Utopia 的正文与注音支持提亮、跟随唱前和跟随唱后。缩放轮廓与各自固定字格的走字轴沿用 §14.325，提亮只在锋面两侧按各自配色重绘。
 - Windows、WSL X11 和 Wayland 各 **23 通过**，覆盖柔化、回跳、双列 Utopia 和反向普通走字的配色回归。Windows 独立 Raster 与 Linux Vulkan 各通过 **3 项 CTest**。日志前缀 `build/p07-vertical-singing-palette-*`。
+- 正式浮窗以固定字体复验实色高亮和提亮两种模式，共 **8 个采样时刻**。Windows Vulkan、WSL X11 和 Wayland 各 **2 通过**，浮窗满足既有画质预算，离屏和导出逐字节一致。日志前缀 `build/p09-vertical-palette-quick-*`。
 
 ## 15. 前期探针清理范围
 
