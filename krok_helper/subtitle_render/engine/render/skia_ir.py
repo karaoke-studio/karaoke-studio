@@ -26,7 +26,7 @@ from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_b
 from .skia_lower_ir import lower_sources
 from .skia_line_band_ir import write_line_band
 from .skia_line_animation_ir import declare_line_animations, ordinary_line_animation, write_line_animation_schemas
-from .skia_scanline_ir import scanline_features, write_scanline_schema
+from .skia_scanline_ir import declare_vertical_scanline_viewport, scanline_features, write_scanline_schema
 from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
@@ -872,11 +872,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].append('p08_viewport')
         if style.vertical:
             ir['required_features'].append('p08_vertical_viewport')
-            features = set(ir['required_features'])
-            if 'p07_vertical_scanline_band' in features and not features.intersection({
-                    'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation',
-                    'p07_vertical_scanline_singing', 'p07_vertical_scanline_palette'}):
-                ir['required_features'].append('p08_vertical_scanline_viewport')
+            declare_vertical_scanline_viewport(ir)
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])
     declare_bitmap_guides(plan.lines, ir, static_title=adjust_position is not None)
