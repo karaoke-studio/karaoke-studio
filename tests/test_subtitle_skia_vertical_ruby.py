@@ -701,6 +701,69 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('overlap', [False, True])
+def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap):
+    from krok_helper.subtitle_render.domain.models import LyricsLayout
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    main, style = vertical_ruby_source(project, span=(0, 1), position='bottom')
+    line, = main.lines
+    main = replace(main, lines=[replace(line, display_start_override_ms=0, display_end_override_ms=2200,
+                                        chars=line.chars if overlap else line.chars[:2])])
+    extra = replace(main, lines=[replace(main.lines[0], layout_index=0 if overlap else 1)],
+                    meta=replace(main.meta, offset_ms=900))
+    style = replace(style, layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=24)],
+                    viewport_offset_x=-38, viewport_scale_pct=86,
+                    karaoke_colors=colors('#70FF0000', '#AD00FF00'))
+    if not overlap:
+        style = replace(style, decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6,
+                        ruby_decoration_kind='glow', ruby_glow_after_radius_px=5)
+    else:
+        style = replace(style, ruby_karaoke_colors=colors('#70FF00FF', '#AD0000FF'))
+    ir = ir_for(binary, (main, style), dpr=1.5, extra_tracks=[extra])
+    single = [ir_for(binary, (source, style), dpr=1.5) for source in (main, extra)]
+    feature = 'p08_multiple_vertical_sources'
+    assert {feature, 'p08_multiple_sources'} <= set(ir['required_features'])
+    for actual, expected in zip((ir, *ir['skia_extra_sources']), single, strict=True):
+        assert actual['skia_layout']['lines'] == expected['skia_layout']['lines']
+        assert actual['track']['lines'] == expected['track']['lines']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    times = [320, 1420, 2450, 3250]
+    captures = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, [times[1]], generation=2)
+            separate = []
+            for generation, source in enumerate(single, 3):
+                configure(process, source)
+                pixels, _ = collect(process, times, generation=generation)
+                separate.append(pixels)
+        principal, secondary = separate
+        assert principal[0].any() and not secondary[0].any()
+        assert principal[1].any() and secondary[1].any()
+        assert not principal[2].any() and secondary[2].any()
+        assert np.array_equal(frames[0], principal[0]) and np.array_equal(frames[2], secondary[2])
+        assert not frames[-1].any() and np.array_equal(frames[1], replay[0])
+        bottom = premultiplied(principal[1])
+        top = premultiplied(secondary[1])
+        expected = top + bottom * (1 - top[..., 3:4] / 255)
+        intersection = (top[..., 3] > 16) & (bottom[..., 3] > 16)
+        assert intersection.any() == overlap
+        if overlap:
+            other_order = bottom + top * (1 - bottom[..., 3:4] / 255)
+            assert abs(other_order - expected).max() > 10
+        assert abs(premultiplied(frames[1]) - expected).max() <= 2
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),

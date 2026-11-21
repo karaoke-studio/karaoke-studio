@@ -377,6 +377,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
     if extras:
         ir['skia_extra_sources'] = extras
         ir['required_features'].append('p08_multiple_sources')
+        if any('p05_vertical_solid' in source['required_features'] for source in (ir, *extras)):
+            ir['required_features'].append('p08_multiple_vertical_sources')
     if title_sources:
         ir['skia_titles'] = title_sources
         ir['required_features'].append('p08_solid_title')

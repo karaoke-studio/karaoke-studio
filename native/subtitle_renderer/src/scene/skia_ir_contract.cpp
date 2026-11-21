@@ -95,6 +95,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_line_band_blur",
         "p08_line_band_animated_decoration",
         "p08_multiple_sources",
+        "p08_multiple_vertical_sources",
         "p08_solid_title",
         "p08_title_role_outlines",
         "p06_primary_solid_outline",
