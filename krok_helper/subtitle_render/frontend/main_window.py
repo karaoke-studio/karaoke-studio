@@ -4027,6 +4027,7 @@ class SubtitleRenderWindow(QWidget):
         )
 
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
+        self._transport_bar.seekRequested.connect(self._preview_panel.seek)
         # 前黑/后黑段音频作为跨段时钟锚定源（无段音频时回退墙钟/主媒体）。
         self._transport_bar.set_roll_audio_position_provider(
             lambda t_ms: self._preview_panel.roll_audio_display_position(t_ms)
@@ -9746,7 +9747,10 @@ class SubtitleRenderWindow(QWidget):
             # 上），直接读会永远拿 None → 模式永远误报 G5。
             native = bool(self._preview_panel.uses_native_preview)
             mode = "G6 DirectComposition 直画" if native else "G5 shared-memory/QImage"
-            if native:
+            if self._preview_panel.uses_skia_quick_preview:
+                mode = ('Skia GPU 直画（已建立）' if self._preview_panel.skia_quick_target_established
+                        else 'Skia GPU 直画（准备中）')
+            elif native:
                 established = bool(self._preview_panel.native_target_established)
                 # 开关在导出页，预览画布此刻多半隐藏：G6 已选定，子窗口要等
                 # 画布可见（showEvent）才建立——不是切换失败。

@@ -14,6 +14,7 @@ Rectangle {
     property bool containImage: false
     signal scenePrepared(var revision, bool accepted, string error)
     signal frameSubmitted(var revision, var generation, int timeMs)
+    signal graphicsReported(string backend, bool accepted, bool hardware)
 
     function configureSubtitle(data, revision) {
         return subtitle.configureScene(data, revision)
@@ -71,6 +72,7 @@ Rectangle {
             onFrameSubmitted: function(revision, generation, timeMs) {
                 root.frameSubmitted(revision, generation, timeMs)
             }
+            onGraphicsBackendChanged: root.graphicsReported(graphicsBackend, graphicsBackendAccepted, graphicsHardware)
         }
     }
 }

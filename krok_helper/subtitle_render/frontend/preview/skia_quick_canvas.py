@@ -14,7 +14,9 @@ from krok_helper.subtitle_render.domain.background import BackgroundSource, back
 
 class SkiaQuickCanvas(QQuickWidget):
     scene_prepared = pyqtSignal(object, bool, str)
+    scene_cleared = pyqtSignal()
     frame_submitted = pyqtSignal(object, object, int)
+    graphics_reported = pyqtSignal(str, bool, bool)
 
     def __init__(self, qml_directory: Path, parent=None):
         super().__init__(parent)
@@ -28,6 +30,7 @@ class SkiaQuickCanvas(QQuickWidget):
             raise RuntimeError(f'无法加载 Skia 直画预览\n{errors}')
         self._root.scenePrepared.connect(self.scene_prepared.emit)
         self._root.frameSubmitted.connect(self.frame_submitted.emit)
+        self._root.graphicsReported.connect(self.graphics_reported.emit)
         self.renderer = self._root.findChild(QQuickItem, 'subtitleRenderer')
         self.video_output = self._root.findChild(QQuickItem, 'videoOutput')
         self._background = BackgroundSource()
@@ -65,7 +68,10 @@ class SkiaQuickCanvas(QQuickWidget):
         return bool(self._root.reserveSubtitle(revision))
 
     def clear_scene(self, revision: int) -> bool:
-        return bool(self._root.clearSubtitle(revision))
+        cleared = bool(self._root.clearSubtitle(revision))
+        if cleared:
+            self.scene_cleared.emit()
+        return cleared
 
     def request_frame(self, revision: int, generation: int, time_ms: int) -> bool:
         accepted = self._root.requestSubtitleFrame(revision, generation, time_ms)

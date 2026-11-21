@@ -313,6 +313,9 @@ class PreviewGraphicsView(QGraphicsView):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("PreviewGraphicsView")
+        self._quick_preview = None
+        self._quick_preview_enabled = False
+        self._quick_preview_fps = 60
         self._font_preparation_timer = None
         self.destroyed.connect(lambda: self._stop_async_renderer())
         self.setMinimumHeight(240)
@@ -478,6 +481,8 @@ class PreviewGraphicsView(QGraphicsView):
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
+        if self.uses_skia_quick_preview:
+            self._quick_preview.resize()
         self._fit_scene_to_view()
         self._layout_render_badge()
         # fitInView immediately scales the scene, including the last completed
@@ -557,6 +562,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._resize_render_timer.stop()
 
     def closeEvent(self, event):  # noqa: N802
+        if self.uses_skia_quick_preview:
+            self._quick_preview.deactivate()
         self._stop_async_renderer()
         super().closeEvent(event)
 
@@ -601,6 +608,12 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_native_preview_mode(self, enabled: bool) -> bool:
         """G6↔G5 热切换（不重建渲染器/sidecar）。返回 False 走完整重建。"""
+        if self._quick_preview is not None:
+            self._quick_preview_enabled = enabled
+            self._update_quick_preview()
+            self._refresh_async_target()
+            self._refresh_async_state()
+            return True
         renderer = self._async_renderer
         if not isinstance(renderer, GpuAsyncSubtitleRenderer):
             return False
@@ -645,6 +658,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._connect_backend_mode_signal()
         self._connect_skia_error_signal()
         self._subtitle_item.set_async_mode(True)
+        self._update_quick_preview()
         if hasattr(self._async_renderer, "set_playing"):
             self._async_renderer.set_playing(self._video_playing)
         self._refresh_async_target()
@@ -726,6 +740,8 @@ class PreviewGraphicsView(QGraphicsView):
         以渲染器最近一次确认的实际出帧后端为准（GPU 渲染器可能因 sidecar
         故障或功能不支持逐帧回退 Painter）；尚无帧定论时按渲染器选择展示。
         """
+        if self.uses_skia_quick_preview:
+            return 'Skia GPU 直画' if self._quick_preview.established else 'Skia 直画准备中'
         renderer = self._async_renderer
         if renderer is None:
             return "CPU"
@@ -764,6 +780,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._subtitle_item.update()
         self._roll_preview.set_plan(plan)
         self._apply_roll_layer_alphas()
+        if self._update_quick_preview():
+            self._refresh_async_target()
         self._refresh_async_state()
 
     def set_roll_preview_volume(self, percent: int) -> None:
@@ -790,7 +808,7 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms
-        if self._background_source.kind == "image_sequence":
+        if self._background_source.kind == "image_sequence" and not self.uses_skia_quick_preview:
             self._refresh_background_image()
         if self._async_renderer is not None:
             self._note_render_requested()
@@ -803,8 +821,20 @@ class PreviewGraphicsView(QGraphicsView):
             self._apply_roll_layer_alphas()
 
     def _request_prepared_frame(self, t_ms: int) -> None:
+        if self.uses_skia_quick_preview:
+            self._quick_preview.clock.set_time(t_ms)
+            return
         if getattr(self, "_font_preparation_timer", None) is None and self._async_renderer is not None:
             self._async_renderer.request(t_ms)
+
+    def seek(self, t_ms: int) -> None:
+        if self.uses_skia_quick_preview:
+            self._quick_preview.clock.seek(t_ms)
+
+    def set_preview_fps(self, fps: float) -> None:
+        self._quick_preview_fps = fps
+        if self._quick_preview is not None:
+            self._quick_preview.clock.set_frame_rate(fps)
 
     def _cancel_font_preparation(self) -> None:
         timer = getattr(self, "_font_preparation_timer", None)
@@ -817,6 +847,11 @@ class PreviewGraphicsView(QGraphicsView):
 
     def _refresh_async_state(self) -> None:
         self._cancel_font_preparation()
+        if self.uses_skia_quick_preview:
+            self._quick_preview.set_source(self._track, self._style, self._subtitle_item._extra_tracks, self._duration_ms)
+            self._note_render_requested()
+            self._request_prepared_frame(self._t_ms)
+            return
         renderer = self._async_renderer
         if renderer is None:
             return
@@ -1003,7 +1038,7 @@ class PreviewGraphicsView(QGraphicsView):
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
-        if getattr(self, "_font_preparation_timer", None) is not None:
+        if getattr(self, "uses_skia_quick_preview", False) or getattr(self, "_font_preparation_timer", None) is not None:
             return
         if (getattr(self._async_renderer, "uses_native_preview", False)
                 and image.text("preview_backend") != "cpu"):
@@ -1126,6 +1161,10 @@ class PreviewGraphicsView(QGraphicsView):
 
     def _refresh_async_target(self) -> None:
         self._roll_preview.source.set_render_scale(self._scene_device_pixel_ratio())
+        if self.uses_skia_quick_preview:
+            dpr = min(self._display_device_scale(), 8, 8192 / max(self._output_w, self._output_h))
+            self._quick_preview.set_target(self._output_w, self._output_h, max(0.1, dpr))
+            return
         if self._async_renderer is None:
             return
         native_mode = getattr(self._async_renderer, "uses_native_preview", False)
@@ -1235,6 +1274,64 @@ class PreviewGraphicsView(QGraphicsView):
         controller.set_video_output(self._video_item)
         if hasattr(controller, "set_preview_quality"):
             controller.set_preview_quality(self._preview_quality)
+        from krok_helper.subtitle_render.native.backend_selection import skia_direct_preview_requested
+
+        if skia_direct_preview_requested() and self._quick_preview is None:
+            try:
+                from .skia_quick_preview import SkiaQuickPreview
+
+                self._quick_preview = SkiaQuickPreview(self.viewport())
+            except (ImportError, RuntimeError) as error:
+                self.gpuFallback.emit(str(error))
+                return
+            self._quick_preview_enabled = True
+            self._quick_preview.clock.set_frame_rate(self._quick_preview_fps)
+            self._quick_preview.frame_painted.connect(self._on_quick_frame)
+            self._quick_preview.failed.connect(self._on_quick_failure, Qt.ConnectionType.QueuedConnection)
+            self._quick_preview.established_changed.connect(self._on_quick_established)
+        if self._update_quick_preview():
+            self._refresh_async_target()
+            self._refresh_async_state()
+
+    def _update_quick_preview(self) -> bool:
+        quick = self._quick_preview
+        if quick is None:
+            return False
+        selection = getattr(self._async_renderer, 'selection', None)
+        active = bool(self._quick_preview_enabled and selection and selection.target == 'gpu'
+                      and (self._roll_plan is None or not self._roll_plan.active))
+        if active == quick.active:
+            return False
+        if active:
+            self._subtitle_item.clear_async_image()
+            quick.activate(self._external_player, self._background_source, require_hardware=selection.require_hardware)
+            quick.clock.set_playing(self._video_playing)
+        else:
+            quick.deactivate()
+            self._external_player.set_video_output(self._video_item)
+            self._refresh_background_image()
+        self.renderBackendChanged.emit(self.render_backend_label())
+        return True
+
+    def _on_quick_frame(self, _time_ms: int) -> None:
+        self._note_frame_delivered()
+        self.framePainted.emit()
+
+    def _on_quick_established(self) -> None:
+        self.renderBackendChanged.emit(self.render_backend_label())
+
+    @property
+    def uses_skia_quick_preview(self) -> bool:
+        return self._quick_preview is not None and self._quick_preview.active
+
+    @property
+    def skia_quick_target_established(self) -> bool:
+        return self.uses_skia_quick_preview and self._quick_preview.established
+
+    def _on_quick_failure(self, reason: str) -> None:
+        if self._quick_preview.active:
+            self.set_native_preview_mode(False)
+            self.gpuFallback.emit(reason)
 
     def set_video_source(self, path: Optional[Path]) -> None:
         if path != self._video_path:
@@ -1267,6 +1364,8 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_background_source(self, source: BackgroundSource) -> None:
         self._background_source = source
+        if self.uses_skia_quick_preview:
+            self._quick_preview.set_background(source)
         # 缓存按路径键控且有条数上限：换背景不清空（seed 过的首帧得以复用）；
         # 只作废上一来源的在途解码请求。
         self._background_image_generation += 1
@@ -1276,7 +1375,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._update_letterbox_rect()
         self._scene.setBackgroundBrush(QBrush(QColor(stage_bg())))
         self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
-        self._refresh_background_image()
+        if not self.uses_skia_quick_preview:
+            self._refresh_background_image()
         #setBackgroundBrush 不会自动调度重绘：切换背景后显式失效背景层。
         self._scene.invalidate(
             self._scene.sceneRect(),
@@ -1390,6 +1490,8 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_playing(self, playing: bool) -> None:
         self._video_playing = playing
+        if self.uses_skia_quick_preview:
+            self._quick_preview.clock.set_playing(playing)
         if self._roll_plan is not None and self._roll_plan.active:
             self._roll_preview.set_playing(playing)
         if self._async_renderer is not None and hasattr(self._async_renderer, "set_playing"):

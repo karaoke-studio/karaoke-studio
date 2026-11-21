@@ -21,6 +21,7 @@ class SkiaQuickClock(QObject):
         self._timer.timeout.connect(self._submit_latest)
         self.set_frame_rate(fps)
         canvas.scene_prepared.connect(self._scene_prepared)
+        canvas.scene_cleared.connect(self._scene_cleared)
 
     def set_frame_rate(self, fps: int | float) -> None:
         self._play_interval_ms = max(1, ceil(1000 / frame_rate(fps)))
@@ -29,6 +30,11 @@ class SkiaQuickClock(QObject):
         if accepted:
             self._revision = int(revision)
             self._submit_soon()
+
+    def _scene_cleared(self) -> None:
+        self._timer.stop()
+        self._revision = 0
+        self._last_request = None
 
     def set_playing(self, playing: bool) -> None:
         if self._playing != playing:

@@ -432,6 +432,7 @@ def test_preview_font_preparation_discards_superseded_state(qapp, qtbot, monkeyp
     monkeypatch.setattr(font_preparation, "iter_prepare_fonts", prepare)
     commits, requests = [], []
     class Host(QObject):
+        uses_skia_quick_preview = False
         _refresh_async_state = graphics.PreviewGraphicsView._refresh_async_state
         _cancel_font_preparation = graphics.PreviewGraphicsView._cancel_font_preparation
         _request_prepared_frame = graphics.PreviewGraphicsView._request_prepared_frame

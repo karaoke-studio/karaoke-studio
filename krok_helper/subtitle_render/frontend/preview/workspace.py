@@ -147,6 +147,7 @@ class PreviewWorkspaceView(QWidget):
         body.setSizes([520, 180])
         outer.addWidget(body, 1)
 
+        transport_bar.previewFrameRateChanged.connect(preview_panel.set_preview_fps)
         transport_bar.set_preview_fps(preview_fps)
         self.controls = PreviewWorkspaceControls(
             body_splitter=body,

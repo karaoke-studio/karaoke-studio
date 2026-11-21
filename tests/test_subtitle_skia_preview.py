@@ -679,3 +679,106 @@ def test_quick_canvas_composites_background_and_subtitles_under_widgets(qml_dir,
         assert lines["corner"] == "#204080", lines
     elif case != "contain":
         assert lines["corner"] != "#000000", lines        # background, not a black hole, shows
+
+
+FLOATING_WINDOW = r"""
+import sys
+from PyQt6.QtGui import QImage
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QWidget
+from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
+from krok_helper.subtitle_render.domain.roll import RollSegmentConfig, RollTimelinePlan
+from krok_helper.subtitle_render.frontend.preview.playback import PlaybackController
+from krok_helper.subtitle_render.frontend.preview.player_window import PreviewPlayerWindow
+from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
+
+select_quick_graphics_api()
+app = QApplication([])
+owner = QWidget()
+owner.resize(900, 600)
+owner.show()
+window = PreviewPlayerWindow(owner)
+window.resize(640, 450)
+panel, transport = window.preview_panel, window.transport_bar
+player = PlaybackController(window)
+assert panel.use_external_player(player)
+transport.attach_playback_controller(player)
+transport.timeChanged.connect(panel.set_time)
+transport.seekRequested.connect(panel.seek)
+transport.playbackStateChanged.connect(panel.set_playing)
+frames, errors = [], []
+panel.canvas.framePainted.connect(lambda: frames.append(transport.current_time_ms))
+panel.gpuFallback.connect(errors.append)
+
+def wait_for(predicate):
+    for _ in range(160):
+        if predicate():
+            break
+        QTest.qWait(100)
+    else:
+        raise AssertionError((frames, errors, panel.canvas.render_backend_label()))
+
+assert panel.uses_skia_quick_preview
+panel.set_output_size(640, 360)
+panel.set_background_source(BackgroundSource(kind='solid', color='#204080'))
+transport.set_duration(2000)
+style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial', font_size_px=160,
+    karaoke_colors=KaraokeColors(before=KaraokeColorState(text=PaintFill(color='#FF1010')),
+        after=KaraokeColorState(text=PaintFill(color='#10FF10'))), decoration_kind='none',
+    stroke_width_px=0, stroke2_enabled=False, dual_line_layout=False, karaoke_anim='none', entry_anim='none',
+    exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
+panel.set_style(style)
+panel.set_track(TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
+    end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)]))
+window.show()
+wait_for(lambda: panel.skia_quick_target_established and frames)
+assert panel.current_subtitle_frame() is None
+transport.set_time(1350)
+wait_for(lambda: frames[-1] == 1350)
+image = panel.canvas.grab().toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+pixels = image.constBits().asstring(image.sizeInBytes())
+assert sum(r < 60 and g > 210 for r, g in zip(pixels[0::4], pixels[1::4])) > 50
+for index, size in enumerate([(720, 520), (860, 580), (640, 450)]):
+    window.hide()
+    window.resize(*size)
+    frame_count = len(frames)
+    time_ms = 100 if index % 2 == 0 else 1350
+    transport.set_time(time_ms)
+    QTest.qWait(200)
+    window.show()
+    wait_for(lambda: len(frames) > frame_count and frames[-1] == time_ms)
+panel.set_track(None)
+QTest.qWait(250)
+cleared = panel.canvas.grab().toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+pixels = cleared.constBits().asstring(cleared.sizeInBytes())
+assert not any(r < 60 and g > 210 for r, g in zip(pixels[0::4], pixels[1::4]))
+assert not any(r > 210 and g < 60 for r, g in zip(pixels[0::4], pixels[1::4]))
+assert not errors, errors
+assert panel.set_gpu_preview_enabled(False) and not panel.uses_skia_quick_preview
+assert panel.canvas._async_renderer.selection.target == 'raster'
+assert panel.set_gpu_preview_enabled(True) and panel.uses_skia_quick_preview
+roll = RollTimelinePlan(pre=RollSegmentConfig(), post=RollSegmentConfig(), pre_ms=600)
+panel.set_roll_plan(roll)
+assert not panel.uses_skia_quick_preview and panel.canvas._async_renderer.selection.target == 'gpu'
+panel.set_roll_plan(None)
+assert panel.uses_skia_quick_preview
+window.close()
+owner.close()
+player.shutdown()
+print('floating preview verified', flush=True)
+"""
+
+
+def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
+    binary = qml_dir.parent / ('krok_skia_subtitle_renderer.exe' if sys.platform == 'win32' else 'krok_skia_subtitle_renderer')
+    env = desktop_environment() | {
+        'KROK_SUBTITLE_RENDER_BACKEND': 'skia', 'KROK_SUBTITLE_SKIA_TARGET': 'gpu',
+        'KROK_SUBTITLE_SKIA_DIRECT_PREVIEW': '1', 'KROK_SUBTITLE_GPU_PREVIEW': '1',
+        'KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE': '1' if sys.platform == 'win32' else '0',
+        'KROK_SUBTITLE_SKIA_RENDERER': str(binary), 'QT_FORCE_STDERR_LOGGING': '1',
+    }
+    result = subprocess.run([sys.executable, '-c', FLOATING_WINDOW], env=env, capture_output=True,
+                            text=True, encoding='utf-8', errors='replace', timeout=90)
+    assert result.returncode == 0 and 'floating preview verified' in result.stdout, result.stdout + result.stderr

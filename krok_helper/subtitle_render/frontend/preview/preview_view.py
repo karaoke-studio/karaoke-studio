@@ -760,6 +760,14 @@ class PreviewPanel(DropPanel):
     def set_time(self, t_ms: int) -> None:
         self._canvas.set_time(t_ms)
 
+    def seek(self, t_ms: int) -> None:
+        if (seek := getattr(self._canvas, 'seek', None)) is not None:
+            seek(t_ms)
+
+    def set_preview_fps(self, fps: float) -> None:
+        if (setter := getattr(self._canvas, 'set_preview_fps', None)) is not None:
+            setter(fps)
+
     def set_duration(self, duration_ms: int) -> None:
         setter = getattr(self._canvas, "set_duration", None)
         if setter is not None:
@@ -825,6 +833,14 @@ class PreviewPanel(DropPanel):
         return bool(
             renderer and getattr(renderer, "native_target_established", False)
         )
+
+    @property
+    def uses_skia_quick_preview(self) -> bool:
+        return bool(getattr(self._canvas, 'uses_skia_quick_preview', False))
+
+    @property
+    def skia_quick_target_established(self) -> bool:
+        return bool(getattr(self._canvas, 'skia_quick_target_established', False))
 
     def set_preview_quality(self, quality: object) -> None:
         setter = getattr(self._canvas, "set_preview_quality", None)
@@ -962,6 +978,7 @@ class TransportBar(QWidget):
     """只有显式 seek 才会开启新的媒体时间代次。"""
 
     playbackStateChanged = Signal(bool)
+    previewFrameRateChanged = Signal(float)
     """播放 / 暂停状态变化时 emit，供视频预览层同步静音视频播放器。"""
 
     previewQualityChanged = Signal(str)
@@ -1183,6 +1200,7 @@ class TransportBar(QWidget):
         interval = max(1, int(1000 / normalized))
         self._tick_timer.setInterval(interval)
         self._position_poll_timer.setInterval(interval)
+        self.previewFrameRateChanged.emit(normalized)
 
     def set_preview_quality(self, quality: object) -> None:
         """Select a preview-quality tier without emitting a user-change signal."""

@@ -29,11 +29,13 @@ class SkiaSubtitleItem : public QQuickRhiItem {
     QML_ELEMENT
     Q_PROPERTY(QString graphicsBackend READ graphicsBackend NOTIFY graphicsBackendChanged FINAL)
     Q_PROPERTY(bool graphicsBackendAccepted READ graphicsBackendAccepted NOTIFY graphicsBackendChanged FINAL)
+    Q_PROPERTY(bool graphicsHardware READ graphicsHardware NOTIFY graphicsBackendChanged FINAL)
     Q_PROPERTY(bool motionProbeEnabled READ motionProbeEnabled WRITE setMotionProbeEnabled NOTIFY motionProbeEnabledChanged FINAL)
 public:
     explicit SkiaSubtitleItem(QQuickItem* parent = nullptr);
     QString graphicsBackend() const { return backend_; }
     bool graphicsBackendAccepted() const { return accepted_; }
+    bool graphicsHardware() const { return hardware_; }
     bool motionProbeEnabled() const { return motionProbeEnabled_; }
     void setMotionProbeEnabled(bool enabled);
     Q_INVOKABLE bool configureScene(const QByteArray& ir, quint64 revision);
@@ -44,7 +46,7 @@ public:
     bool usesMotionProbe() const { return motionProbeEnabled_ && requestedRevision_ == 0; }
     PreviewFrame frameRequest() const { return frame_; }
     // Render thread, while the GUI thread is blocked in synchronize().
-    void publishGraphicsBackend(const QString& backend, bool accepted);
+    void publishGraphicsBackend(const QString& backend, bool accepted, bool hardware);
     void publishFrameSubmission(quint64 revision, quint64 generation, int timeMs);
 signals:
     void graphicsBackendChanged();
@@ -68,6 +70,7 @@ private:
     std::tuple<quint64, quint64, int> lastReceipt_{};
     QString backend_;
     bool accepted_ = false;
+    bool hardware_ = false;
     bool motionProbeEnabled_ = false;
 };
 }

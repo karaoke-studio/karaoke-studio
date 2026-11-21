@@ -124,21 +124,25 @@ protected:
     void initialize(QRhiCommandBuffer*) override {
         requireOwner();
         const auto backend = QString::fromLatin1(rhi()->backendName());
-        const bool accepted = rhi()->backend() == kRequiredBackend;
-        if (backend != backend_ || accepted != accepted_) reported_ = false;
+        const auto device = rhi()->driverInfo().deviceType;
+        const bool hardware = device == QRhiDriverInfo::DiscreteDevice || device == QRhiDriverInfo::IntegratedDevice
+            || device == QRhiDriverInfo::ExternalDevice;
+        if (backend != backend_ || hardware != hardware_) reported_ = false;
         backend_ = backend;
-        accepted_ = accepted;
+        hardware_ = hardware;
         trace("initialized");
         qCDebug(lcPreview) << "texture-size" << colorTexture()->pixelSize();
-        if (!accepted_) {
+        if (rhi()->backend() != kRequiredBackend) {
+            context_.reset();
             qCWarning(lcPreview) << "Rejecting scene graph backend" << backend_
                                  << "- Skia preview requires" << kRequiredName;
             return;
         }
         if (!clock_.isValid()) clock_.start();
-        if (!context_ || deviceRhi_ != rhi()) {
+        if (deviceRhi_ != rhi()) {
             context_.reset();
             deviceRhi_ = rhi();
+            reported_ = false;
             try {
                 context_ = bridge_.connect(*rhi());
             } catch (const std::exception& error) {
@@ -155,7 +159,7 @@ protected:
         // synchronize() precedes initialize() within a frame, so a fresh result is published
         // on the following frame, which render() requests below.
         if (!backend_.isEmpty() && !reported_) {
-            preview->publishGraphicsBackend(backend_, accepted_);
+            preview->publishGraphicsBackend(backend_, bool(context_), hardware_);
             reported_ = true;
         }
     }
@@ -198,7 +202,7 @@ private:
             << " gui=" << (owner_ == QCoreApplication::instance()->thread());
     }
     bool drawWithSkia() {
-        if (!accepted_ || !context_ || (!motionProbe_ && !frame_.scene)) return false;
+        if (!context_ || (!motionProbe_ && !frame_.scene)) return false;
         QRhiTexture& texture = *colorTexture();
         try {
             auto surface = bridge_.wrap(*context_, texture);
@@ -219,12 +223,13 @@ private:
         } catch (const std::exception& error) {
             qCWarning(lcPreview) << "Skia preview frame failed:" << error.what();
             context_.reset();
+            reported_ = false;
             return false;
         }
     }
     QString backend_;
     QThread* const owner_ = QThread::currentThread();
-    bool accepted_ = false;
+    bool hardware_ = false;
     bool reported_ = false;
     bool motionProbe_ = false;
     QPointer<SkiaSubtitleItem> item_;
@@ -313,10 +318,11 @@ bool SkiaSubtitleItem::requestFrame(quint64 revision, quint64 generation, int ti
     return true;
 }
 
-void SkiaSubtitleItem::publishGraphicsBackend(const QString& backend, bool accepted) {
-    if (backend == backend_ && accepted == accepted_) return;
+void SkiaSubtitleItem::publishGraphicsBackend(const QString& backend, bool accepted, bool hardware) {
+    if (backend == backend_ && accepted == accepted_ && hardware == hardware_) return;
     backend_ = backend;
     accepted_ = accepted;
+    hardware_ = hardware;
     // Never emit on the render thread: QML bindings and Python slots belong to the GUI thread.
     QMetaObject::invokeMethod(this, &SkiaSubtitleItem::graphicsBackendChanged, Qt::QueuedConnection);
 }

@@ -109,8 +109,13 @@ def run_gui(args: argparse.Namespace) -> int:
     # 那句话只会流向 OutputDebugString，没人接就等于没发生过。
     install_qt_message_capture()
     from krok_helper.logging_config import install_font_diagnostics
+    from krok_helper.subtitle_render.native.backend_selection import skia_direct_preview_requested
 
     install_font_diagnostics()
+    if skia_direct_preview_requested():
+        from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
+
+        select_quick_graphics_api()
     qt_app = QApplication.instance() or QApplication(sys.argv)
     install_font_diagnostics(qt_app)
     trace("gui.qapplication_ready")
