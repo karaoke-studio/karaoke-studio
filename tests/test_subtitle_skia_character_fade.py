@@ -219,8 +219,11 @@ def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
     assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[0], replay[1])
 
 
+_ENERGY_PAIRS = [('flame', 'lightning'), ('lightning', 'flame'), ('flame', 'flame'), ('lightning', 'lightning')]
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('entry,exit_', [('flame', 'lightning'), ('lightning', 'flame')])
+@pytest.mark.parametrize('entry,exit_', _ENERGY_PAIRS)
 def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target, entry, exit_):
     from test_subtitle_skia_static_glow import glowing_ruby
 
@@ -230,10 +233,16 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
     ir = upper_ir(binary, (track, style), 1)
     feature = 'p07_ruby_energy_pair'
     assert feature in ir['required_features']
+    same_feature = 'p07_ruby_same_energy_pair'
+    assert (same_feature in ir['required_features']) == (entry == exit_)
     source, = ir['track']['lines']
     assert (source['entry_anim'], source['exit_anim']) == (entry, exit_)
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
-    assert group['fade_owner'] == 0 and np.isfinite(group['affine_pivot_y'])
+    assert group['fade_owner'] == 0
+    if 'flame' in (entry, exit_):
+        assert np.isfinite(group['affine_pivot_y'])
+    else:
+        assert 'affine_pivot_y' not in group
     entering = source['display_start_ms'] + source['entry_duration_ms'] * 7 // 8
     leaving = source['display_end_ms'] - 120
     times = [entering, leaving, entering]
@@ -241,7 +250,7 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
         configure(process, ir)
         frames, _ = collect(process, times)
         invalid = copy.deepcopy(ir)
-        invalid['required_features'].remove(feature)
+        invalid['required_features'].remove(same_feature if entry == exit_ else feature)
         with pytest.raises(NativeRendererError):
             configure(process, invalid)
         replay, _ = collect(process, [leaving, entering], generation=2)
@@ -309,7 +318,7 @@ def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('entry,exit_', [('flame', 'lightning'), ('lightning', 'flame')])
+@pytest.mark.parametrize('entry,exit_', _ENERGY_PAIRS)
 def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entry, exit_):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 

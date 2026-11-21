@@ -394,6 +394,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     particle_fade_lines = set()
     particle_affine_lines = set()
     energy_pair_lines = set()
+    same_energy_pair = False
     particle_entry_lines = set()
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
@@ -405,10 +406,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if source.get('fx_bursts'):
                 if len(plan.lines) == 1 and item.layout_style.sing_fx == 'none':
                     entry, leave = source.get('entry_anim'), source.get('exit_anim')
-                    if ({entry, leave} == ENERGY_TRANSITIONS
+                    if (entry in ENERGY_TRANSITIONS and leave in ENERGY_TRANSITIONS
                             and source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0):
                         energy_pair_lines.add(index)
-                        particle_affine_lines.add(index)
+                        same_energy_pair |= entry == leave
+                        if 'flame' in (entry, leave):
+                            particle_affine_lines.add(index)
                     effect = (entry if leave == 'none' and source['entry_duration_ms'] > 0
                               else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
                     if effect in {'assemble_in', 'dissolve_out'}:
@@ -666,6 +669,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_fade')
         if energy_pair_lines:
             ir['required_features'].append('p07_ruby_energy_pair')
+        if same_energy_pair:
+            ir['required_features'].append('p07_ruby_same_energy_pair')
         if particle_entry_lines:
             ir['required_features'].append('p07_ruby_particle_entry')
     if style.right_to_left:
