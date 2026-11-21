@@ -20,17 +20,19 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
+    const bool petalWithFlame = rubyParticles && entry == "petal" && exit.isEmpty()
+        && features.contains("p07_ruby_petal_entry_flame_singing");
+    const bool petalWithBand = petalWithFlame && source.scanlineEnabled && style.scanlineShape == "band"
+        && style.scanlineMode == "color" && features.contains("p07_ruby_petal_entry_scanline");
     const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
         && !animated && source.scanlineEnabled && rubyParticles && style.scanlineMode == "color"
         && (style.scanlineShape == "flame" || style.scanlineShape == "bubble" || style.scanlineShape == "image");
     const bool bandSinging = features.contains("p07_ruby_band_singing_particles")
-        && !animated && source.scanlineEnabled && rubyParticles && style.scanlineShape == "band"
+        && (!animated || petalWithBand) && source.scanlineEnabled && rubyParticles && style.scanlineShape == "band"
         && style.scanlineMode != "role" && !source.wipeReverse;
     const bool scanlineWithSinging = shapedSinging || bandSinging;
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit, features);
-    const bool petalWithFlame = composedTransition && entry == "petal" && exit.isEmpty()
-        && features.contains("p07_ruby_petal_entry_flame_singing");
     const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
@@ -39,7 +41,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     if (cfg.vertical || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
-        || (animated && (cfg.lines.size() != 1 || source.scanlineEnabled))
+        || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline)))
         || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
@@ -65,6 +67,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
                 || (!exit.isEmpty() && fx.sweep == exitSweep && isSkiaTransitionLayer(exit, fx.kind, false))
                 || (petalWithFlame && flame && fx.sweep == singingFlameSweep)
+                || (petalWithBand && fx.kind == "scanline" && fx.sweep == 0)
             : !falling || fx.sweep == 0;
         const bool scanline = version >= 7 && fx.kind == "scanline";
         const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke"

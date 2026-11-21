@@ -321,27 +321,32 @@ def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target):
+@pytest.mark.parametrize('scanline', [False, True])
+def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline):
     track, style = reading
-    style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim='none', karaoke_anim='utopia',
+    style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim='none',
                     sing_fx='flame', anim_fx_speed_pct=50, fx_particle_speed_pct=200,
+                    karaoke_anim='utopia_scanline' if scanline else 'utopia', scanline_enabled=scanline,
+                    scanline_effect='star' if scanline else 'none',
                     decoration_kind='none', decoration_kind_before='none',
                     ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     ir = upper_ir(binary, (track, style), 1)
-    petals = upper_ir(binary, (track, replace(style, sing_fx='none')), 1)
+    petals = upper_ir(binary, (track, replace(style, karaoke_anim='utopia', sing_fx='none',
+                                            scanline_enabled=False, scanline_effect='none')), 1)
     flames = upper_ir(binary, (track, replace(style, entry_anim='none')), 1)
     source, = ir['track']['lines']
     bursts = source['fx_bursts']
     petal_bursts = [burst for burst in bursts if burst['kind'] == 'petal']
-    flame_bursts = [burst for burst in bursts if burst['kind'] != 'petal']
-    assert petal_bursts and flame_bursts
-    for mixed, separate in [(petal_bursts, petals), (flame_bursts, flames)]:
+    singing_bursts = [burst for burst in bursts if burst['kind'] != 'petal']
+    assert any(burst['kind'] == 'scanline' for burst in singing_bursts) == scanline
+    assert petal_bursts and singing_bursts
+    for mixed, separate in [(petal_bursts, petals), (singing_bursts, flames)]:
         standalone = separate['track']['lines'][0]['fx_bursts']
         for after, before in zip(mixed, standalone, strict=True):
             assert {key: value for key, value in after.items() if key != 'color_id'} == {
                 key: value for key, value in before.items() if key != 'color_id'}
             assert ir['fx_color_table'][after['color_id']] == separate['fx_color_table'][before['color_id']]
-    feature = 'p07_ruby_petal_entry_flame_singing'
+    feature = 'p07_ruby_petal_entry_scanline' if scanline else 'p07_ruby_petal_entry_flame_singing'
     assert feature in ir['required_features']
     missing = copy.deepcopy(ir)
     missing['required_features'].remove(feature)
@@ -483,6 +488,30 @@ def test_ruby_petal_entry_and_singing_flame_match_actual_gpu(binary, application
                     decoration_kind='none', decoration_kind_before='none',
                     ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     times = (100, 240, 299, 301, 450, 650, 900, 1000, 1200, 1300, 1500, 1750, 2600, 3700, 4500, 5500, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect,speed,overlap', [
+    *((effect, speed, False) for effect in ('none', 'star') for speed in (50, 100, 200)),
+    ('star', 100, True),
+])
+def test_ruby_petal_entry_and_singing_scanline_match_actual_gpu(binary, application, tmp_path, speed, effect, overlap):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'particles_speed_50')
+    style = replace(case.style, exit_anim='none', scanline_enabled=True, scanline_effect=effect,
+                    anim_fx_speed_pct=speed, fx_particle_speed_pct=speed,
+                    decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    times = (100, 240, 299, 301, 450, 650, 900, 1000, 1200, 1300, 1500, 1750, 2600, 3700, 4500, 5500, 5900)
+    if overlap:
+        line, = case.track.lines
+        starts = (400, 650, 900)
+        chars = [replace(char, start_ms=time) for char, time in zip(line.chars[:len(starts)], starts, strict=True)]
+        track = replace(case.track, lines=[replace(line, chars=chars + line.chars[len(starts):])])
+        case = replace(case, track=track)
+        times = (301, 450, 525, 600, 650, 750, 850, 899, 900, 901, 1100, 2300, 4400, 5499, 5500)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 

@@ -303,9 +303,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
+        const bool particleScanline = features.contains("p07_ruby_petal_entry_scanline") && utopiaSinging
+            && source.entryAnimation == "petal" && source.exitAnimation == "none"
+            && resolved.scanlineShape == "band" && resolved.scanlineMode == "color"
+            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.fxBursts.empty();
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
-            && !source.wipeReverse && (staticScanline || movingScanline);
+            && !source.wipeReverse && (staticScanline || movingScanline || particleScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = solidShape && (staticScanline || movingScanline);
         const bool lowerScanline = features.contains("p07_lower_ruby_scanline") && staticScanline
@@ -324,7 +328,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (features.contains("p05_lower_ruby") && !lowerScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
                 || (rubyScanline && (source.wipeReverse || (resolved.scanlineMode == "role" && !roleLayers)
-                    || !(staticScanline || movingScanline)
+                    || !(staticScanline || movingScanline || particleScanline)
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前仅支持横排实色高亮带");
         applyResolvedStyle(style, resolved, cfg.dpr);

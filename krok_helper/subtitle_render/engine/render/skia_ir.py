@@ -140,7 +140,8 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
         line_animation = scales and animations != {'none'} and _ordinary_line_animation(source)
         with_character_transition = index in transition_lines
         with_noise = _noise_animation(source) and 'p07_noise_composition' in ir['required_features']
-        scanline_motion = line_animation and 'p07_scanline_line_animation' in ir['required_features']
+        scanline_motion = (line_animation and 'p07_scanline_line_animation' in ir['required_features']
+                           or with_character_transition and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
         ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
         inline_roles = any(c.role_label is not None for c in item.render_line.chars)
         role_scale = inline_roles and scales and animations == {'none'} and not source.get('zoom_pulse')
@@ -178,17 +179,18 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
         ir['required_features'].append('p07_utopia_line_animation')
 
 
-def _validate_scanline_band(track, style, lines):
+def _validate_scanline_band(track, style, lines, particle_band_tracks):
     """Validate the horizontal solid-color band."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     shapes = set()
     moving_shapes = shaped_singing = lower_readings = False
-    for source, line in zip(track.lines, lines, strict=True):
+    for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
         look = style_for_line(style, source)
         ordinary = {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
+        particle_entry = index in particle_band_tracks
         bursts = line.get('fx_bursts', ())
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
@@ -201,7 +203,7 @@ def _validate_scanline_band(track, style, lines):
                   and not (line.get('zoom_pulse') or line.get('stroke_flash') or line.get('fx_bursts')))
         shape = solid_shape and (ordinary or motion)
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
-                  and (ordinary or motion))
+                  and (ordinary or motion or particle_entry))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
         lower_band = (look.lower_ruby_enabled and ordinary and look.scanline_shape == 'band'
                       and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash or bursts))
@@ -212,7 +214,7 @@ def _validate_scanline_band(track, style, lines):
                 or (look.lower_ruby_enabled and not lower_band)
                 or _uses_decoration(look, 'shadow')
                 or (role_composition and (not ordinary or utopia or source.wipe_reverse or line.get('fx_bursts')))
-                or (track.rubies and not (ordinary or motion))
+                or (track.rubies and not (ordinary or motion or particle_entry))
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(source).chars)):
             raise ValueError('Skia 扫字线当前仅支持横排实色高亮带')
@@ -233,6 +235,8 @@ def _validate_scanline_band(track, style, lines):
         features.append('p07_composed_scanline')
     if line_motion:
         features.append('p07_scanline_line_animation')
+    if particle_band_tracks:
+        features.append('p07_ruby_petal_entry_scanline')
     if moving_shapes:
         features.append('p07_scanline_shape_line_animation')
     if shaped_singing:
@@ -286,7 +290,7 @@ _GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'}
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
-def _character_transforms(track, ir, plan, measured, spin_lines, composed_geometry_lines) -> int:
+def _character_transforms(track, ir, plan, measured, spin_lines, composed_geometry_lines, particle_band_tracks) -> int:
     """Write canonical cell and glyph pivots and return the required version."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     version = 3
@@ -306,7 +310,7 @@ def _character_transforms(track, ir, plan, measured, spin_lines, composed_geomet
         if (look.vertical or look.right_to_left or line.wipe_reverse
                 or (index not in spin_lines and index not in composed_geometry_lines
                     and (source.get('karaoke_anim') != 'none' or track.rubies))
-                or source.get('scanline') or look.lower_ruby_enabled
+                or (source.get('scanline') and item.track_index not in particle_band_tracks) or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(line).chars)):
             raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排正文')
@@ -399,17 +403,21 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     particle_entry_lines = set()
     repeated_particle_pair = False
     petal_entry_with_flame = False
+    particle_band_tracks = set()
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
+            entry, leave = source.get('entry_anim'), source.get('exit_anim')
+            look = item.layout_style
+            with_flame = entry == 'petal' and leave == 'none' and look.sing_fx == 'flame'
+            with_band = (with_flame and source.get('scanline') and source.get('karaoke_anim') == 'utopia'
+                         and look.scanline_shape == 'band' and look.scanline_mode == 'color')
             if (source.get('karaoke_anim') not in {'none', 'utopia'} or source.get('zoom_pulse')
-                    or source.get('scanline') or source.get('stroke_flash')
-                    or _uses_decoration(item.layout_style, 'shadow')):
+                    or (source.get('scanline') and not with_band) or source.get('stroke_flash')
+                    or _uses_decoration(look, 'shadow')):
                 continue
             if source.get('fx_bursts'):
-                entry, leave = source.get('entry_anim'), source.get('exit_anim')
-                with_flame = (entry == 'petal' and leave == 'none' and item.layout_style.sing_fx == 'flame')
-                if len(plan.lines) == 1 and (item.layout_style.sing_fx == 'none' or with_flame):
+                if len(plan.lines) == 1 and (look.sing_fx == 'none' or with_flame):
                     both_phases = source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0
                     if both_phases and (entry, leave) == ('assemble_in', 'dissolve_out'):
                         assembly_lines.add(index)
@@ -434,6 +442,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= matching
                         petal_entry_with_flame |= with_flame
+                        if with_band:
+                            particle_band_tracks.add(item.track_index)
                     if effect in ENERGY_TRANSITIONS or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
                         particle_fade_lines.add(index)
                         if effect == 'flame':
@@ -534,7 +544,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if fade_lines:
             ir['required_features'].append('p07_character_entry_fade_composition')
     if any(line.get('scanline') for line in ir['track']['lines']):
-        ir['required_features'] += _validate_scanline_band(track, style, ir['track']['lines'])
+        ir['required_features'] += _validate_scanline_band(track, style, ir['track']['lines'], particle_band_tracks)
     decorations = [kind for kind in ('shadow', 'glow') if any(
         _uses_decoration(item.layout_style, kind) for item in plan.lines)]
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
@@ -738,7 +748,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['kana_mark_schema'] = 1
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
-            track, ir, plan, measured, spin_lines, composed_geometry_lines)
+            track, ir, plan, measured, spin_lines, composed_geometry_lines, particle_band_tracks)
         ir['required_features'].append('p07_character_transform')
     write_body_gradient_bounds(ir, plan)
     if 'p07_scanline_band' in ir['required_features']:

@@ -221,9 +221,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || !projected.charStyles.empty()))
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
+        const bool petalScanline = line.scanlineEnabled && features.contains("p07_ruby_petal_entry_scanline")
+            && line.entryAnimation == "petal" && line.exitAnimation == "none" && singingScale
+            && style.scanlineShape == "band" && style.scanlineMode == "color";
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
-            && !line.scanlineEnabled && !line.strokeFlashEnabled
+            && (!line.scanlineEnabled || petalScanline) && !line.strokeFlashEnabled
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const auto readingDecor = [&](bool after) {
@@ -541,7 +544,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     || (fade.exit && fade.exitKind != Kind::Fade && end > std::max(line.endMs, prepared.endMs - 600)))
                     throw BackendError("Skia 逐字滴落/翻转期间暂不支持走字");
             }
-            if (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe || line.scanlineEnabled)
+            if (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
+                || (line.scanlineEnabled && !petalScanline))
                 throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
         }
         const bool primaryOutline = style.strokeWidth > 0, secondaryOutline = style.stroke2Width > 0;

@@ -50,9 +50,11 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         annotated = bool(track.rubies)
         petal_with_flame = (annotated and entry == 'petal' and exit_ == 'none' and look.sing_fx == 'flame'
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
+        petal_with_band = (petal_with_flame and band and look.scanline_shape == 'band' and look.scanline_mode == 'color'
+                           and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
         singing_under_shape = (annotated and band and not animated and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
-        singing_under_band = (annotated and band and not animated and look.scanline_shape == 'band'
+        singing_under_band = (annotated and band and (not animated or petal_with_band) and look.scanline_shape == 'band'
                               and look.scanline_mode != 'role' and not item.line.wipe_reverse
                               and any(burst['kind'] != 'scanline' for burst in bursts))
         ruby_band_singing = ruby_band_singing or singing_under_band
@@ -63,7 +65,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (source.get('karaoke_anim') != 'none' and not scaled_singing)
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
-                or (animated and (len(plan.lines) != 1 or band or (look.sing_fx != 'none' and not petal_with_flame)))
+                or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
+                                  or (look.sing_fx != 'none' and not petal_with_flame)))
                 or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
                 or (not annotated and (look.stroke_width_px > 0
                     or (look.stroke2_enabled and look.stroke2_width_px > 0)))
@@ -83,7 +86,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 sweep = burst['sweep']
                 if not ((entry_kind and sweep == entry_sweep and kind in _transition_layers(entry_kind, True))
                         or (exit_kind and sweep == exit_sweep and kind in _transition_layers(exit_kind, False))
-                        or (petal_with_flame and sweep == _FLAME_SINGING_SWEEPS.get(kind))):
+                        or (petal_with_flame and sweep == _FLAME_SINGING_SWEEPS.get(kind))
+                        or (petal_with_band and kind == 'scanline' and sweep == 0)):
                     raise ValueError('Skia 粒子出入场暂不支持与唱字粒子同场')
             elif kind in {'fireball', 'flash', 'shockwave', 'ash'}:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
