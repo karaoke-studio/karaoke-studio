@@ -14,13 +14,19 @@ qt_add_qml_module(subtitle_skia_preview
     PLUGIN_TARGET subtitle_skia_preview
     OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml/Krok/SubtitleSkia"
     SOURCES
+        src/preview/qt_skia/preview_scene_input.cpp
         src/preview/qt_skia/skia_subtitle_item.h
         src/preview/qt_skia/skia_subtitle_item.cpp)
 # The generated type registration includes the item header by its bare file name.
 target_include_directories(subtitle_skia_preview PRIVATE src src/preview/qt_skia)
 # QRhi (<rhi/qrhi.h>) is Qt's semi-public GPU API; Qt ships it through GuiPrivate.
-target_link_libraries(subtitle_skia_preview PUBLIC Qt6::Quick Qt6::Gui PRIVATE Qt6::GuiPrivate subtitle_skia_gpu)
+target_link_libraries(subtitle_skia_preview PUBLIC Qt6::Quick Qt6::Gui
+                                           PRIVATE Qt6::Concurrent Qt6::GuiPrivate subtitle_skia_gpu subtitle_skia_ir)
 krok_strict_float(subtitle_skia_preview)
+if(WIN32)
+    configure_file("${KROK_SKIA_LIB_DIR}/icudtl.dat"
+                   "${CMAKE_BINARY_DIR}/qml/Krok/SubtitleSkia/icudtl.dat" COPYONLY)
+endif()
 
 if(KROK_BUILD_NATIVE_TESTS)
     # Test-only process-local screen scaling: exercises real Qt DPR change notifications and

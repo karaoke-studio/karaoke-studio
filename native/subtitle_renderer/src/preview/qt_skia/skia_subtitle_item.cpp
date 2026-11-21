@@ -1,5 +1,6 @@
 #include "skia_subtitle_item.h"
 #include "core/motion_probe.h"
+#include "core/prepared_scene.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkSurface.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
@@ -8,6 +9,7 @@
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QMetaObject>
 #include <QtCore/QThread>
+#include <QtConcurrent/QtConcurrentRun>
 #include <rhi/qrhi.h>
 #include <exception>
 #include <stdexcept>
@@ -144,10 +146,13 @@ protected:
     }
     void synchronize(QQuickRhiItem* item) override {
         requireOwner();
+        const auto preview = static_cast<SkiaSubtitleItem*>(item);
+        motionProbe_ = preview->usesMotionProbe();
+        frame_ = preview->frameRequest();
         // synchronize() precedes initialize() within a frame, so a fresh result is published
         // on the following frame, which render() requests below.
         if (!backend_.isEmpty() && !reported_) {
-            static_cast<SkiaSubtitleItem*>(item)->publishGraphicsBackend(backend_, accepted_);
+            preview->publishGraphicsBackend(backend_, accepted_);
             reported_ = true;
         }
     }
@@ -158,8 +163,7 @@ protected:
             cb->beginPass(renderTarget(), Qt::transparent, {1.0f, 0});
             cb->endPass();
         }
-        // Keep requesting frames: the probe moves with time (and pending reports need a frame).
-        update();
+        if (motionProbe_ || !reported_) update();
     }
 private:
     void requireOwner() const {
@@ -172,13 +176,21 @@ private:
             << " gui=" << (owner_ == QCoreApplication::instance()->thread());
     }
     bool drawWithSkia() {
-        if (!accepted_ || !context_) return false;
+        if (!accepted_ || !context_ || (!motionProbe_ && !frame_.scene)) return false;
         QRhiTexture& texture = *colorTexture();
         try {
             auto surface = bridge_.wrap(*context_, texture);
-            ::subtitle::skia::drawMotionProbe(*surface->getCanvas(), texture.pixelSize().width(),
-                                              texture.pixelSize().height(), clock_.elapsed() / 1000.0);
+            auto& canvas = *surface->getCanvas();
+            if (motionProbe_) {
+                ::subtitle::skia::drawMotionProbe(canvas, texture.pixelSize().width(),
+                    texture.pixelSize().height(), clock_.elapsed() / 1000.0);
+            } else {
+                canvas.scale(float(texture.pixelSize().width()) / frame_.scene->width(),
+                             float(texture.pixelSize().height()) / frame_.scene->height());
+                frame_.scene->draw(canvas, frame_.timeMs);
+            }
             bridge_.submit(*context_, *surface, texture);
+            if (!motionProbe_) qCDebug(lcPreview) << "scene-time" << frame_.timeMs;
             trace("rendered");
             return true;
         } catch (const std::exception& error) {
@@ -191,6 +203,8 @@ private:
     QThread* const owner_ = QThread::currentThread();
     bool accepted_ = false;
     bool reported_ = false;
+    bool motionProbe_ = false;
+    PreviewFrame frame_;
     QElapsedTimer clock_;
     QRhi* deviceRhi_ = nullptr;
     PlatformBridge bridge_;
@@ -200,6 +214,50 @@ private:
 
 SkiaSubtitleItem::SkiaSubtitleItem(QQuickItem* parent) : QQuickRhiItem(parent) {
     setAlphaBlending(true);
+    connect(&preparation_, &QFutureWatcher<PreviewSceneResult>::finished, this, &SkiaSubtitleItem::finishPreparation);
+}
+
+void SkiaSubtitleItem::setMotionProbeEnabled(bool enabled) {
+    if (enabled == motionProbeEnabled_) return;
+    motionProbeEnabled_ = enabled;
+    update();
+    emit motionProbeEnabledChanged();
+}
+
+bool SkiaSubtitleItem::configureScene(const QByteArray& ir, quint64 revision) {
+    if (revision <= requestedRevision_ || ir.isEmpty()) return false;
+    requestedRevision_ = revision;
+    pendingConfig_ = PendingConfig{ir, revision};
+    if (!preparingRevision_) startPreparation();
+    update();
+    return true;
+}
+
+void SkiaSubtitleItem::startPreparation() {
+    if (!pendingConfig_) return;
+    auto config = std::move(*pendingConfig_);
+    pendingConfig_.reset();
+    preparingRevision_ = config.revision;
+    preparation_.setFuture(QtConcurrent::run(preparePreviewScene, std::move(config.ir)));
+}
+
+void SkiaSubtitleItem::finishPreparation() {
+    const auto revision = preparingRevision_;
+    const auto result = preparation_.result();
+    preparingRevision_ = 0;
+    if (revision == requestedRevision_ && result.scene) {
+        scene_ = result.scene;
+        sceneRevision_ = revision;
+    }
+    startPreparation();
+    if (revision == requestedRevision_) emit scenePrepared(revision, bool(result.scene), result.error);
+}
+
+bool SkiaSubtitleItem::requestFrame(quint64 revision, int timeMs) {
+    if (!scene_ || revision != sceneRevision_) return false;
+    frame_ = {scene_, timeMs};
+    update();
+    return true;
 }
 
 void SkiaSubtitleItem::publishGraphicsBackend(const QString& backend, bool accepted) {

@@ -66,7 +66,7 @@ view = QQuickView()
 view.engine().addImportPath(sys.argv[1])
 view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
 view.setSource(QUrl("data:text/plain,import QtQuick%0Aimport Krok.SubtitleSkia%0A"
-                    "Rectangle { color: 'black'; SkiaSubtitleItem { objectName: 'item'; anchors.fill: parent } }"))
+                    "Rectangle { color: 'black'; SkiaSubtitleItem { objectName: 'item'; motionProbeEnabled: true; anchors.fill: parent } }"))
 container = QWidget.createWindowContainer(view, host)
 container.resize(240, 120)
 item = view.rootObject().findChild(QQuickItem, "item")
@@ -169,6 +169,172 @@ def qml_dir():
     return directory
 
 
+REAL_SCENE = r"""
+import json
+import sys
+from pathlib import Path
+from PyQt6.QtCore import QByteArray, QObject, QTimer, QUrl, pyqtProperty
+from PyQt6.QtGui import QGuiApplication, QImage
+from PyQt6.QtQuick import QQuickView
+from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
+from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
+from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
+from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+from krok_helper.subtitle_render.native.skia_fonts import resolve_skia_font
+from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
+
+select_quick_graphics_api()
+app = QGuiApplication(sys.argv)
+binary = Path(sys.argv[1]).parent / ('krok_skia_subtitle_renderer.exe' if sys.platform == 'win32' else 'krok_skia_subtitle_renderer')
+track = TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)], end_ms=1000,
+    display_start_override_ms=0, display_end_override_ms=2000)])
+style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial', font_size_px=170,
+    karaoke_colors=KaraokeColors(before=KaraokeColorState(text=PaintFill(color='#FF1414')),
+        after=KaraokeColorState(text=PaintFill(color='#14FF14'))), decoration_kind='none',
+    stroke_width_px=0, stroke2_enabled=False, dual_line_layout=False, karaoke_anim='none', entry_anim='none',
+    exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
+with SkiaTextMetricsProcess(binary) as metrics:
+    ir = build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve_skia_font,
+        width=640, height=360, fps=60)
+apply_resolved_font_faces(ir)
+
+class Source(QObject):
+    @pyqtProperty(QByteArray, constant=True)
+    def good(self):
+        return QByteArray(json.dumps(ir, ensure_ascii=False).encode())
+
+    @pyqtProperty(QByteArray, constant=True)
+    def bad(self):
+        return QByteArray(b'[]')
+
+source = Source()
+validate_only = 'validation' in sys.argv
+view = QQuickView()
+view.engine().addImportPath(sys.argv[1])
+view.rootContext().setContextProperty('sceneSource', source)
+qml = r'''
+import QtQuick
+import Krok.SubtitleSkia
+Rectangle {
+    width: 640; height: 360; color: 'black'
+    property int lastRevision: 0
+    property bool accepted: false
+    property string failure: ''
+    function start() {
+        return renderer.configureScene(sceneSource.bad, 1) && renderer.configureScene(sceneSource.good, 2)
+    }
+    function seek(revision, timeMs) { return renderer.requestFrame(revision, timeMs) }
+    function rejectScene() { return renderer.configureScene(sceneSource.bad, 3) }
+    SkiaSubtitleItem {
+        id: renderer; anchors.fill: parent
+        onScenePrepared: function(revision, ok, error) {
+            parent.lastRevision = revision
+            parent.accepted = ok
+            parent.failure = error
+        }
+    }
+}'''
+from PyQt6.QtQml import QQmlComponent
+component = QQmlComponent(view.engine())
+component.setData(qml.encode(), QUrl())
+root = component.create()
+assert root is not None, [e.toString() for e in component.errors()]
+view.setContent(QUrl(), component, root)
+view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+view.resize(640, 360)
+view.show()
+assert root.start()
+assert not root.seek(1, 100)
+
+def capture(done):
+    if validate_only:
+        done()
+        return
+    # Capture the item's offscreen texture. Window grabs touch the swapchain
+    # and introduce Qt's own presentation/readback barriers into this check.
+    grab = root.grabToImage()
+    assert grab is not None
+    grabs.append(grab)
+    def ready():
+        image = grab.image().convertToFormat(QImage.Format.Format_RGBA8888)
+        frames.append(image.constBits().asstring(image.sizeInBytes()))
+        done()
+    grab.ready.connect(ready)
+
+def first_frame():
+    if root.property('lastRevision') != 2:
+        return
+    timer.stop()
+    assert root.property('accepted'), root.property('failure')
+    assert root.seek(2, 100)
+    QTimer.singleShot(250, lambda: capture(capture_before))
+
+def capture_before():
+    assert root.seek(2, 1350)
+    QTimer.singleShot(250, lambda: capture(capture_after))
+
+def capture_after():
+    assert root.rejectScene()
+    timer.timeout.disconnect()
+    timer.timeout.connect(verify_rollback)
+    timer.start(20)
+
+def verify_rollback():
+    if root.property('lastRevision') != 3:
+        return
+    timer.stop()
+    assert not root.property('accepted') and root.property('failure')
+    assert not root.seek(3, 100)
+    assert root.seek(2, 100)
+    QTimer.singleShot(250, lambda: capture(capture_revisit))
+
+def capture_revisit():
+    if validate_only:
+        print('validated scene', flush=True)
+        app.quit()
+        return
+    assert frames[0] == frames[2]
+    assert frames[0] != frames[1]
+    red = sum(r > 180 and g < 80 for r, g in zip(frames[0][0::4], frames[0][1::4]))
+    green = sum(r < 80 and g > 180 for r, g in zip(frames[1][0::4], frames[1][1::4]))
+    print('scene', red, green, flush=True)
+    app.quit()
+
+frames = []
+grabs = []
+timer = QTimer()
+timer.timeout.connect(first_frame)
+timer.start(20)
+QTimer.singleShot(12000, app.quit)
+sys.exit(app.exec())
+"""
+
+
+def test_quick_native_scene_uses_explicit_clock_and_keeps_last_good_scene(qml_dir):
+    result = subprocess.run([sys.executable, '-c', REAL_SCENE, str(qml_dir)],
+                            env=desktop_environment(), capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr
+    match = re.search(r'^scene (\d+) (\d+)$', result.stdout, re.M)
+    assert match and min(map(int, match.groups())) > 40, result.stdout + result.stderr
+
+
+def test_quick_native_scene_handoff_under_vulkan_validation(qml_dir, tmp_path):
+    if sys.platform == 'darwin' or not os.environ.get('KROK_VULKAN_VALIDATION'):
+        pytest.skip('Needs an active Khronos Vulkan validation layer')
+    log = tmp_path / 'validation.log'
+    env = desktop_environment() | vulkan_validation_environment(log) | {
+        'QT_LOGGING_RULES': 'krok.subtitle.skia.preview.debug=true',
+        'QT_FORCE_STDERR_LOGGING': '1',
+    }
+    result = subprocess.run([sys.executable, '-c', REAL_SCENE, str(qml_dir), 'validation'],
+                            env=env, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0 and 'validated scene' in result.stdout, result.stdout + result.stderr
+    times = [int(t) for t in re.findall(r'\bscene-time (\d+)\b', result.stderr)]
+    assert 1350 in times and times[0] == 100 and times[-1] == 100, result.stderr
+    assert_vulkan_validation_clean(log)
+
+
 def test_pyqt_host_loads_native_quick_module(qml_dir):
     # Loading needs no GPU, so the offscreen platform keeps this test headless.
     env = os.environ | {"QT_QPA_PLATFORM": "offscreen"}
@@ -234,7 +400,7 @@ view = QQuickView()
 view.engine().addImportPath(sys.argv[1])
 view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
 view.setSource(QUrl("data:text/plain,import QtQuick%0Aimport Krok.SubtitleSkia%0A"
-                    "Rectangle { color: 'black'; SkiaSubtitleItem { anchors.fill: parent } }"))
+                    "Rectangle { color: 'black'; SkiaSubtitleItem { motionProbeEnabled: true; anchors.fill: parent } }"))
 container = QWidget.createWindowContainer(view, host)
 container.resize(320, 160)
 frames = [0]
@@ -374,7 +540,7 @@ Rectangle {{
         width: 1920; height: 1080; anchors.centerIn: parent
         scale: Math.max(parent.width / 1920, parent.height / 1080)
         {layer}
-        SkiaSubtitleItem {{ objectName: 'subtitle'; anchors.fill: parent }}
+        SkiaSubtitleItem {{ objectName: 'subtitle'; motionProbeEnabled: true; anchors.fill: parent }}
     }}
 }}
 ''', encoding="utf-8")

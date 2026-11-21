@@ -38,7 +38,7 @@ def main(argv=None):
     control.krokSetPreviewTestScreenScale.argtypes = [ctypes.c_double]
     control.krokSetPreviewTestScreenScale.restype = ctypes.c_bool
     qml = ("import QtQuick\nimport Krok.SubtitleSkia\n"
-           "Rectangle { color: 'black'; clip: true; SkiaSubtitleItem { "
+           "Rectangle { color: 'black'; clip: true; SkiaSubtitleItem { motionProbeEnabled: true; "
            "objectName: 'subtitle'; anchors.fill: parent } }")
     counters = {"initialized": 0, "invalidated": 0, "destroyed": 0}
     snapshots = []

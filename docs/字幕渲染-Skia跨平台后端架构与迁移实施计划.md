@@ -742,6 +742,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 ### P09：正式直接预览
 
 - [ ] P09.1 将 P03 的纹理交接接入完整公共核心；宿主入口与 sidecar 的 scene prepare / frame draw 不产生分叉。API/表面配置必须按 §14.8 在启动阶段、所有顶层窗口创建前完成，不能在页面构造后补设。
+  - [x] Qt Quick 原生组件接受真实 Skia IR，复用场景准备及绘制，按外部时钟直画到 Qt 纹理，见 §14.227。
 - [ ] P09.2 接入现有播放/暂停/seek、generation、最新请求优先、预读和精确上屏时间；不把 QML 动画时钟引入字幕效果。按播放时钟有界提交与节流，不依赖 swap interval 决定字幕时间或限制请求数。
 - [ ] P09.3 使用有界帧仓/纹理槽，正确管理 Qt 和 GPU 消费结束；不会显示错误 t 或过期 revision 的纹理。
 - [ ] P09.4 合成视频、图片、图片序列与纯色背景；视频 contain/黑边、图片 cover/contain 与现有预览/导出保持一致。
@@ -3111,6 +3112,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 上注音每个角色拥有独立的唱前、唱后光晕源，严格保留原有时钟、笔画范围和按角色分层的顺序。GPU 与 Raster 共用准备和绘制代码，读音的颜色、笔宽和画笔可独立配置。
 - 横向及纵向渐变两个场景共 **16 帧**，含渐变、图片、上注音、发光标题及副轨的静态复杂场景另有 **3 帧**，均通过实际 D2D GPU 对 Vulkan、Vulkan 对 Raster 的严格原预算。Windows **20 通过**，X11、Wayland 各 **12 通过、8 跳过**，独立 Windows/Linux Raster 各 **5 通过**，四份干净构建各通过 3 项 CTest。原始 `g3_heavy_roles_fills_title_multisource` 使用 Utopia，仍待验证；静态用例显式设置普通走字。日志为 `build/p06-ruby-role-glow*.log`。
+- Mac 托管 [运行 44856283469](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44856283469) 的双架构 Metal、Raster 和 Quick 窗口测试通过，产品各 **1998 通过、1 失败、1335 跳过**。旧用例仍要求拒绝角色图片填充，`74fe8c8c` 将其改为验证仍未支持的角色图片描边，本地已通过。
 
 ### 14.224 P07.3 Utopia 唱字的角色画笔（2026-11-21）
 
@@ -3121,6 +3123,18 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 角色光晕沿当前字形变换后的走字前沿分割。每个角色保留独立的文字和注音光晕、前后配色和多次模糊。GPU 和 Raster 使用同一份几何与绘制代码。
 - `tactic_like_three_glow_blue_white` 与 `g3_heavy_roles_fills_title_multisource` 沿用原始工程配置和全部 **6 个 P00 采样帧**，都满足实际 D2D GPU 对 Vulkan、Vulkan 对 Raster 原画面预算。后者包含真实副轨、发光标题、角色渐变及图片、上注音和 Utopia。Windows **21 通过**，X11、Wayland 各 **12 通过、9 跳过**，独立 Windows/Linux Raster 各 **6 通过**，四份构建各通过 3 项 CTest。日志为 `build/p07-role-singing-glow-*.log`。
+- 固定 `48ab824a` 的 Skia sidecar 复跑原样 P00，**107/129 场景、474 帧**同时通过实际 D2D GPU 对 Vulkan、Vulkan 对 Raster。首次执行中 5 个场景遇到进程启动或回读超时，按原配置、原画质预算单独复跑均通过。多轨场景传入原始副轨。证据为 `build/p00-skia-coverage/role-singing-glow-p00-verified-pixels.json`。
+
+### 14.226 P07.4 带上注音的花瓣、羽毛与雪花入场复验（2026-11-21）
+
+- `entry_petal`、`entry_feather`、`entry_snow_solid` 在 301ms 的全精度合成中 D2D/Vulkan 遮罩 IoU 分别为 **0.94189、0.93317、0.92696**。改用目标格式时这三帧的 D2D/Vulkan 对照通过，Vulkan/Raster 仍低于 **0.97**。花瓣样本的 Vulkan/Raster 有 **158 个像素**分别落在 alpha 16 和 17。关闭光晕后同帧的两组 IoU 分别为 **0.9905、0.9989**。
+- `entry_snow` 在 299ms 的 D2D/Vulkan IoU 为 **0.95536**。四种入场继续受原画质门槛约束，试验差异留在 `build/p07-ruby-falling-entry-diagnostic.patch`，日志为 `build/p07-ruby-falling-*.log`。
+
+### 14.227 P09.1 Qt Quick 直画真实字幕 IR（2026-11-21）
+
+- `subtitle_skia_ir` 为 sidecar 和 Qt Quick 提供唯一的最终 IR 解析与投影入口，两边均使用 `PreparedScene`。Qt 组件在工作线程准备不可变场景，至多保留一个正在准备和一个待准备版本。无效或过期配置保留上一有效场景。Qt 渲染线程按外部显式时间使用现有 Vulkan/Metal 纹理交接，帧绘制路径无需 CPU 回读。
+- Windows 和 WSL 的 X11、Wayland 均验证真实字幕首尾配色、倒序 seek 后画面一致、坏配置回滚和显式时间提交。Vulkan 同步检查在独立无截图运行中通过。截图测试使用 Qt item 抓取，窗口抓取会带入 Qt swapchain 的呈现同步告警。X11、Wayland 各 **26 通过、1 跳过**，Windows 完整组其余 **25 通过、1 跳过**，补跑真实场景及纹理交接 **3 通过**。四份干净构建各通过 3 项 CTest，日志为 `build/p09-real-quick-*.log`。
+- 这是原生组件和 GPU 表面通路的验证。正式浮窗入口、播放请求节流、视频与背景合成、持续播放及实机窗口生命周期继续按 P09 验收。
 
 ## 15. 前期探针清理范围
 
