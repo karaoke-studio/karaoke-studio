@@ -217,6 +217,47 @@ def test_role_static_glow_matches_actual_d2d_gpu(binary, application, tmp_path, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_role_glow_preserves_other_groups_and_seek(binary, project, tmp_path, target):
+    track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    style = role_static_glow_style(style)
+    track = replace(track, rubies=[RubyAnnotation(kanji='A', reading='AA', pos_start_ms=200, pos_end_ms=400),
+                                  RubyAnnotation(kanji='字', reading='AA', pos_start_ms=400, pos_end_ms=600)])
+    ir = ir_for(binary, (track, style))
+    assert {'p06_ruby_role_glow', 'p06_role_static_glow', 'p06_ruby_role_paints'} <= set(ir['required_features'])
+    undeclared = copy.deepcopy(ir)
+    undeclared['required_features'].remove('p06_ruby_role_glow')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [150, 300, 500, 150])
+        process._send({'cmd': 'configure', 'ir': undeclared})
+        with pytest.raises(NativeRendererError, match='光晕'):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [500], generation=2)
+    assert np.array_equal(frames[0], frames[-1]) and np.array_equal(replay[0], frames[2])
+    assert not np.array_equal(frames[1], frames[2])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction', ['gradient_horizontal', 'gradient_vertical'])
+def test_ruby_role_glow_matches_actual_d2d_gpu(binary, application, tmp_path, direction):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = ruby_role_paints_case(tmp_path, direction, True)
+    case = replace(case, style=role_static_glow_style(case.style))
+    assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 3500, 3900, 4499))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_ruby_role_glow_with_static_title_and_extra_track(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    original = next(case for case in build_cases(tmp_path) if case.case_id == 'g3_heavy_roles_fills_title_multisource')
+    case = replace(original, case_id='static_heavy_role_glow', style=replace(original.style, karaoke_anim='none'))
+    assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms, extra_tracks=case.extra_tracks)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('with_ruby', [False, True], ids=['body', 'ruby'])
 def test_body_role_outlines_follow_their_cell_clock(binary, project, target, with_ruby):
     track, style = project

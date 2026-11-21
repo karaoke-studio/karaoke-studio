@@ -52,6 +52,7 @@ struct ResolvedRubyGroup {
     bool lower = false;
     std::array<sk_sp<SkShader>, 2> fillGradients;
     std::array<ImageFill, 2> fillImages;
+    int glowStyle = -1;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

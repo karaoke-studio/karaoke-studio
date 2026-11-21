@@ -10,6 +10,7 @@
 #include "include/ports/SkFontMgr_empty.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <stdexcept>
 
 namespace subtitle::skia {
@@ -166,7 +167,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             }
         }
         if (line.isolateVerticalDecoration) includeShadowPaint(line.paintBounds, line.shadow);
-        std::size_t rubyGlowCells = 0, lowerGlowCells = 0;
+        struct RubyGlowEntry { std::size_t index, nextCell; };
+        std::map<std::pair<bool, int>, RubyGlowEntry> rubyGlowEntries;
         for (const auto& group : source.rubyGroups) {
             if (group.fadeOwner && *group.fadeOwner >= line.cells.size())
                 throw std::runtime_error("Skia 注音逐字淡化索引超限");
@@ -174,14 +176,15 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             if (++totalGroups > 4096 || totalCells > 65536) throw std::runtime_error("Skia 注音组或单元总数超限");
             std::optional<std::size_t> glowOffset;
             if (group.glow) {
-                // Group the phases within each reading lane. The lower
-                // reading's blur colors, radius and outline are independent.
-                auto& layers = group.lower ? line.lowerGlow : line.rubyGlow;
-                auto& cellCount = group.lower ? lowerGlowCells : rubyGlowCells;
-                if (layers.empty()) layers = PreparedGlow::prepare(*group.glow, false);
-                glowOffset = cellCount;
-                cellCount += group.cells.size();
-                for (auto& layer : layers)
+                auto& lane = line.rubyGlows[group.lower];
+                auto [entry, inserted] = rubyGlowEntries.try_emplace(std::pair{group.lower, group.glowStyle},
+                                                                    RubyGlowEntry{lane.size(), 0});
+                if (inserted) lane.push_back({PreparedGlow::prepare(*group.glow, false), {}});
+                auto& preparedGlow = lane[entry->second.index];
+                glowOffset = entry->second.nextCell;
+                entry->second.nextCell += group.cells.size();
+                preparedGlow.readings.push_back(line.rubyGroups.size());
+                for (auto& layer : preparedGlow.phases)
                     for (const auto& cell : group.cells)
                         layer.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
             }
@@ -195,8 +198,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         }
         if (line.characterFade.active() || line.isolateVerticalDecoration) {
             for (const auto& layer : line.glow) line.paintBounds.join(layer.sourceBounds());
-            for (const auto& layer : line.rubyGlow) line.paintBounds.join(layer.sourceBounds());
-            for (const auto& layer : line.lowerGlow) line.paintBounds.join(layer.sourceBounds());
+            for (const auto& lane : line.rubyGlows)
+                for (const auto& group : lane)
+                    for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
         if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {

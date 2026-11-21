@@ -81,9 +81,9 @@ private:
         std::vector<PreparedGlow> glow;
         struct RoleGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> cells; };
         std::vector<RoleGlow> roleGlows;
-        std::vector<PreparedGlow> rubyGlow;
-        std::vector<PreparedGlow> lowerGlow;
-        bool hasRubyGlow() const { return !rubyGlow.empty() || !lowerGlow.empty(); }
+        struct RubyGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> readings; };
+        std::array<std::vector<RubyGlow>, 2> rubyGlows; // upper, lower
+        bool hasRubyGlow() const { return !rubyGlows[0].empty() || !rubyGlows[1].empty(); }
         SkRect decorationInk = SkRect::MakeEmpty();
         NoiseTransition noise;
         CharacterFade characterFade;

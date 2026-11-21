@@ -89,10 +89,14 @@ def _uses_decoration(style, kind):
     )
 
 
+def _inline_role_labels(item):
+    return {cell.role_label for cell in item.render_line.chars
+            if cell.role_label in item.layout_style.custom_style_schemes}
+
+
 def _uses_role_glow(item):
     look = item.layout_style
-    labels = {cell.role_label for cell in item.render_line.chars
-              if cell.role_label in look.custom_style_schemes}
+    labels = _inline_role_labels(item)
     return bool(labels) and (_uses_decoration(look, 'glow') or any(
         _uses_decoration(style_for_role_in_layout(look, label), 'glow') for label in labels
     ))
@@ -599,6 +603,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p06_ruby_shadow')
         if 'ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_glow')
+            if any(_inline_role_labels(item) for item in plan.lines):
+                ir['required_features'].append('p06_ruby_role_glow')
         if 'lower_ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_glow')
         if 'lower_ruby_shadow_schema' in ir['skia_layout']:

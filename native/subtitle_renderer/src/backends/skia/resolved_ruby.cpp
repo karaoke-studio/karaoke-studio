@@ -161,10 +161,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool noiseGlow = features.contains("p07_noise_composition")
         && (line.entryAnimation == "noise" || line.exitAnimation == "noise");
     const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
+    const bool roleGlow = features.contains("p06_ruby_role_glow") && !vertical && staticLine
+        && line.karaokeAnimation == "none" && !line.wipeReverse && !line.zoomPulseEnabled
+        && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade)
-        && scene.charStyles.empty();
+        && (scene.charStyles.empty() || roleGlow);
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
         && staticLine && features.contains("p07_lower_ruby_no_wipe_decoration"));
@@ -440,7 +443,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             images[1] = imageCache.fill(paint.rubyAfterFillPaint, scene.layoutReferenceScale);
         }
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
-                          fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images)});
+                          fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
+                          roleGlow && !lower ? role : -1});
     }
     return groups;
 }

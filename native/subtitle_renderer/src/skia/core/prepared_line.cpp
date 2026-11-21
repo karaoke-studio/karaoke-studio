@@ -322,23 +322,28 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     }
     // Tracking and wave restore static glow as each unit settles. Spin keeps
     // a separate blurred source for moving glyphs.
-    const auto drawRubyGlow = [&](const PreparedGlow& layer, bool lower) {
+    const auto drawRubyGlow = [&](const PreparedGlow& layer, const std::vector<std::size_t>& readings) {
         const bool after = layer.visible(true);
         if (!after && !layer.visible(false)) return;
         const auto source = layer.createSource(canvas);
         if (source.surface) {
-            for (const auto& group : line.rubyGroups)
-                if (group.lower() == lower && rubyPose(group).isIdentity())
+            for (const auto index : readings) {
+                const auto& group = line.rubyGroups[index];
+                if (rubyPose(group).isIdentity())
                     group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
                                          rubyScale, line.rubySingingOrigin, rubyOpacity(group));
+            }
             layer.composite(canvas, source);
         }
-        for (const auto& group : line.rubyGroups)
-            if (const auto pose = rubyPose(group); group.lower() == lower && !rubyGeometryPhase && !pose.isIdentity())
+        for (const auto index : readings) {
+            const auto& group = line.rubyGroups[index];
+            if (const auto pose = rubyPose(group); !rubyGeometryPhase && !pose.isIdentity())
                 group.compositeSpinGlow(canvas, layer, tMs, after, rubyOpacity(group), pose);
+        }
     };
-    for (const auto& layer : line.rubyGlow) drawRubyGlow(layer, false);
-    for (const auto& layer : line.lowerGlow) drawRubyGlow(layer, true);
+    for (const auto& lane : line.rubyGlows)
+        for (const auto& group : lane)
+            for (const auto& layer : group.phases) drawRubyGlow(layer, group.readings);
     for (const auto& group : line.roleGlows) {
         for (const auto& layer : group.phases) {
             const bool after = layer.visible(true);

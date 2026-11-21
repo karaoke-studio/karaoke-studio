@@ -102,6 +102,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_static_glow",
         "p06_role_static_glow",
         "p06_ruby_glow",
+        "p06_ruby_role_glow",
         "p06_lower_ruby_glow",
         "p06_lower_ruby_shadow",
         "p07_line_fade",
@@ -527,6 +528,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_ruby_glow")
         && (!features.contains("p05_resolved_ruby") || layout.value("ruby_glow_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音光晕缺少版本化布局或注音能力声明");
+    const bool rubyRoleGlow = features.contains("p06_ruby_role_glow");
+    if (rubyRoleGlow && (!features.contains("p06_ruby_glow") || !features.contains("p05_inline_roles")
+                        || !features.contains("p05_upper_ruby")))
+        throw BackendError("Skia 上注音角色光晕缺少对应能力声明");
     if (features.contains("p06_lower_ruby_glow")
         && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_glow_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音光晕缺少版本化布局或注音能力声明");
@@ -585,7 +590,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 二重实色描边布局版本无效");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
-    if (features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints") || roleStaticGlow) {
+    if (features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints") || roleStaticGlow
+        || rubyRoleGlow) {
         static const QJsonArray allowed{
             "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
             "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
@@ -594,7 +600,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_ruby_markers", "p05_standalone_marks", "p06_outline_ruby", "p06_ruby_solid_outline",
             "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines",
             "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines",
-            "p06_static_glow", "p06_role_static_glow"
+            "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow"
         };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
