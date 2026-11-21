@@ -16,4 +16,5 @@ struct SolidOutline {
 
 SkPath prepareOutlinePath(const SkPath& body, float width);
 void drawFixedOutline(SkCanvas&, const SkPath&, const SkPaint&, float width);
+void drawSupersampledSolidPath(SkCanvas&, const SkPath&, const SkPaint& fill, const SkPaint& composite);
 }

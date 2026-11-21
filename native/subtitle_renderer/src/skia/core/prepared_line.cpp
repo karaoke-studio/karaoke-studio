@@ -14,7 +14,7 @@
 
 namespace subtitle::skia {
 namespace {
-sk_sp<SkColorFilter> byteOpacityFilter(float opacity) {
+sk_sp<SkColorFilter> byteOpacityFilter(float opacityByte) {
     static const auto compiled = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
         uniform float opacityByte;
         float4 main(float4 color) {
@@ -24,7 +24,7 @@ sk_sp<SkColorFilter> byteOpacityFilter(float opacity) {
     )"));
     if (!compiled.effect) throw std::runtime_error("Skia 整行淡化滤镜无法编译");
     SkRuntimeColorFilterBuilder builder(compiled.effect);
-    builder.uniform("opacityByte") = std::round(opacity * 255.f);
+    builder.uniform("opacityByte") = opacityByte;
     return builder.makeColorFilter();
 }
 }
@@ -51,7 +51,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         canvas.translate(animation.dx, animation.dy);
     const auto placement = line.translationAt(tMs);
     if (placement.x() != 0 || placement.y() != 0) canvas.translate(placement.x(), placement.y());
+    const bool rubyGeometryPhase = line.rubyGeometryComposition
+        && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
+    const bool particleExitFade = rubyGeometryPhase && !line.particles.empty() && line.glow.empty() && !line.hasRubyGlow()
+        && !line.shadow.visible() && !line.hasRubyShadow
+        && line.characterGeometry.exitMs > 0 && tMs >= line.characterGeometry.exitStart(line.endMs);
     if (!textVisible) {
+        if (particleExitFade)
+            canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
         drawSingParticles(canvas, line.particles, tMs, false);
         drawSingParticles(canvas, line.particles, tMs, true);
         return;
@@ -59,8 +66,6 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Fade the composed line, preserving overlaps and translucent strokes.
     // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
     const bool geometry = line.characterGeometry.active();
-    const bool rubyGeometryPhase = line.rubyGeometryComposition
-        && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
     // The opacity-only character transition owns the entry window.
     const bool utopia = !rubyGeometryPhase && (line.singingScale.active || line.utopiaTransition.active())
         && line.characterFade.side(tMs, line.startMs, line.endMs) == 0;
@@ -78,7 +83,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             // The GPU reference composites the paint stack into bytes,
             // then applies the 8-bit group opacity to its premultiplied pixels.
             SkPaint fade;
-            fade.setColorFilter(byteOpacityFilter(lineOpacity));
+            fade.setColorFilter(byteOpacityFilter(std::round(lineOpacity * 255.f)));
             canvas.saveLayer(bounds, &fade);
         } else if (!line.vertical && (!line.glow.empty() || line.hasRubyGlow())) {
             // Keep the halo coverage and the line opacity at float precision
@@ -286,6 +291,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             paint.setShader(shader);
             paint.setColor(shader ? SK_ColorWHITE : drawOutline ? (sung ? stroke->after : stroke->before)
                                                                : (sung ? cell.after : cell.before));
+            if (particleExitFade && opacity < 1.f && !transform.transformed && !shader) {
+                // Sample stroke coverage before applying the fixed-point fade.
+                // Round the painted pass before blending it into the target.
+                const float fixed = std::floor(opacity * opacitySteps) / opacitySteps;
+                SkPaint fade;
+                fade.setColorFilter(byteOpacityFilter(fixed * 255.f));
+                drawSupersampledSolidPath(canvas, path, paint, fade);
+                return;
+            }
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
             if (animatedInk) {
                 if (posedStroke) canvas.drawPath(*posedStroke, paint);
@@ -358,12 +372,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool hasGlow = !line.glow.empty() || line.hasRubyGlow();
     const bool utopiaExitGlow = line.utopiaTransition.leave
         && (line.hasRubyGlow() || !line.bodyGlowTransitionBounds.isEmpty());
-    const bool highPrecisionFade = (line.characterFade.active() || rubyGeometryPhase || utopiaExitGlow)
+    const bool opacityTransition = (line.characterFade.active() || rubyGeometryPhase || utopiaExitGlow)
         && (hasGlow || !line.rubyGroups.empty())
         && std::ranges::any_of(states, [](const State& state) {
             return state.transform.opacity > 0.f && state.transform.opacity < 1.f;
         });
-    if (highPrecisionFade) {
+    if (opacityTransition && !particleExitFade) {
         const auto* bounds = line.characterFade.transforms() || rubyGeometryPhase || utopiaExitGlow ? nullptr : &line.paintBounds;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
@@ -549,7 +563,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                    rubyPose(group), ownerPivot);
     }
     // The GPU's front particle layer covers the main text and readings.
-    if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, true);
+    if (!line.particles.empty()) {
+        SkAutoCanvasRestore keep(&canvas, false);
+        if (particleExitFade && opacityTransition)
+            canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
+        drawSingParticles(canvas, line.particles, tMs, true);
+    }
     if (line.scanline.rubyHighlight && line.scanline.repaintsGlyphs()
         && line.scanline.frontAt(line.cells, tMs, line.inkStart))
         for (const auto& group : line.rubyGroups)

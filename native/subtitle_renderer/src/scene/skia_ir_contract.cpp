@@ -178,6 +178,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_same_energy_pair",
         "p07_ruby_particle_entry",
         "p07_ruby_particle_entry_exit",
+        "p07_ruby_mixed_particle_entry_exit",
         "p07_ruby_petal_entry_flame_singing",
         "p07_ruby_petal_entry_scanline",
         "p08_viewport",
@@ -215,8 +216,9 @@ bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
                                       const QJsonArray& features) {
     if (entry == "assemble" && exit == "dissolve")
         return features.contains("p07_ruby_particle_assembly_pair");
-    if (entry == exit && (entry == "petal" || entry == "feather" || entry == "heart"))
-        return features.contains("p07_ruby_particle_entry_exit");
+    const auto canPair = [](const QString& kind) { return kind == "petal" || kind == "feather" || kind == "heart"; };
+    if (canPair(entry) && canPair(exit))
+        return features.contains(entry == exit ? "p07_ruby_particle_entry_exit" : "p07_ruby_mixed_particle_entry_exit");
     if (entry.isEmpty() == exit.isEmpty())
         return features.contains("p07_ruby_energy_pair")
             && (entry != exit || features.contains("p07_ruby_same_energy_pair"))
@@ -254,8 +256,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 同类粒子出入场缺少组合能力");
     if (features.contains("p07_ruby_particle_assembly_pair") && !features.contains("p07_ruby_particle_assembly"))
         throw BackendError("Skia 拼接入场与消散退场缺少粒子能力");
-    if (features.contains("p07_ruby_particle_entry_exit") && !features.contains("p07_ruby_particle_entry"))
-        throw BackendError("Skia 同类无装饰粒子出入场缺少粒子能力");
+    if ((features.contains("p07_ruby_particle_entry_exit") || features.contains("p07_ruby_mixed_particle_entry_exit"))
+        && !features.contains("p07_ruby_particle_entry"))
+        throw BackendError("Skia 无装饰粒子出入场缺少粒子能力");
     if (features.contains("p06_reverse_decoration") && (!features.contains("p05_reverse_wipe")
         || !(features.contains("p06_static_glow") || features.contains("p06_static_shadow"))))
         throw BackendError("Skia 横排反向走字的实色装饰缺少对应能力");

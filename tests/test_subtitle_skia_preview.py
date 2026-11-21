@@ -694,6 +694,7 @@ def test_quick_canvas_composites_background_and_subtitles_under_widgets(qml_dir,
 
 FLOATING_WINDOW = r"""
 import sys
+from dataclasses import replace
 from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtGui import QImage
 from PyQt6.QtTest import QTest
@@ -754,18 +755,18 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
     exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
 track = TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
     end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)])
-if '--particle-scanline' in sys.argv:
-    from dataclasses import replace
-
-    style = replace(style, entry_anim='petal', entry_lead_ms=600, karaoke_anim='utopia_scanline',
-                    sing_fx='flame', scanline_effect='star', ruby_decoration_kind='none')
-    track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
-if '--shadow-motion' in sys.argv:
-    from dataclasses import replace
-
-    style = replace(style, entry_anim='slide_in', exit_anim='rise', entry_lead_ms=600, exit_fade_ms=600,
-                    decoration_kind='shadow', ruby_decoration_kind='shadow', stroke_width_px=4,
-                    shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3)
+effect_styles = {
+    'particle-scanline': dict(entry_anim='petal', entry_lead_ms=600, karaoke_anim='utopia_scanline',
+                              sing_fx='flame', scanline_effect='star', ruby_decoration_kind='none'),
+    'shadow-motion': dict(entry_anim='slide_in', exit_anim='rise', entry_lead_ms=600, exit_fade_ms=600,
+                          decoration_kind='shadow', ruby_decoration_kind='shadow', stroke_width_px=4,
+                          shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3),
+    'particle-pair': dict(entry_anim='petal', exit_anim='heart', entry_lead_ms=500, exit_fade_ms=600,
+                          karaoke_anim='utopia', ruby_decoration_kind='none', stroke_width_px=4),
+}
+effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
+if effect:
+    style = replace(style, **effect_styles[effect])
     track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
 panel.set_style(style)
 panel.set_track(track)
@@ -797,7 +798,10 @@ if '--compare-export' in sys.argv:
     work = Path(sys.argv[-1])
     quick = panel.canvas._quick_preview
     binary = quick._binary
-    indices = {24: 400, 48: 800, 90: 1500} if '--shadow-motion' in sys.argv else {12: 200, 33: 550, 81: 1350}
+    indices = {
+        'shadow-motion': {24: 400, 48: 800, 90: 1500},
+        'particle-pair': {18: 300, 57: 950, 108: 1800},
+    }.get(effect, {12: 200, 33: 550, 81: 1350})
     captures = {}
     for index, time_ms in indices.items():
         transport.set_time(time_ms)
@@ -913,8 +917,8 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
     assert 'floating preview verified' in run_floating_preview(qml_dir)
 
 
-@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion'],
-                         ids=['plain', 'particle-scanline', 'shadow-motion'])
+@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair'],
+                         ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     result = run_floating_preview(qml_dir, compare_path=tmp_path, effects=effects)
     assert 'Quick, offscreen GPU and export pipe compared' in result
