@@ -33,13 +33,13 @@ def test_find_tool_accepts_windows_executable_name_in_posix_directory(monkeypatc
     assert find_tool("ffmpeg.exe", install_dir) == str(tool)
 
 
-def test_find_tool_accepts_windows_executable_name_on_posix_path(monkeypatch):
+@pytest.mark.parametrize("inherited_windows_path", [False, True])
+def test_find_tool_accepts_windows_executable_name_on_posix_path(monkeypatch, inherited_windows_path):
     monkeypatch.setattr(ffmpeg_mod.os, "name", "posix")
-    monkeypatch.setattr(
-        ffmpeg_mod.shutil,
-        "which",
-        lambda name: "/usr/local/bin/ffmpeg" if name == "ffmpeg" else None,
-    )
+    tools = {"ffmpeg": "/usr/local/bin/ffmpeg"}
+    if inherited_windows_path:
+        tools["ffmpeg.exe"] = "/mnt/c/tools/ffmpeg.exe"
+    monkeypatch.setattr(ffmpeg_mod.shutil, "which", tools.get)
 
     assert find_tool("ffmpeg.exe") == "/usr/local/bin/ffmpeg"
 

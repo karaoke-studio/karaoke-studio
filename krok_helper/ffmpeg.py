@@ -26,12 +26,12 @@ def _build_subprocess_kwargs() -> dict:
 
 
 def _tool_name_candidates(tool_name: str) -> tuple[str, ...]:
-    candidates = [tool_name]
     if os.name == "nt" and not Path(tool_name).suffix:
-        candidates.append(f"{tool_name}.exe")
-    elif os.name != "nt" and tool_name.lower().endswith(".exe"):
-        candidates.append(tool_name[:-4])
-    return tuple(candidates)
+        return tool_name, f"{tool_name}.exe"
+    if os.name != "nt" and tool_name.lower().endswith(".exe"):
+        # WSL can inherit a Windows ffmpeg.exe that cannot open Linux paths.
+        return tool_name[:-4], tool_name
+    return (tool_name,)
 
 
 def _find_tool_in_dir(directory: Path, tool_name: str) -> str | None:
