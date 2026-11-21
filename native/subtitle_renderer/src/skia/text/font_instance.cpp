@@ -16,6 +16,13 @@
 #include <stdexcept>
 
 namespace subtitle::skia::text {
+namespace {
+using FontOwner = std::shared_ptr<const FontResource>;
+
+void releaseFontOwner(void* owner) {
+    delete static_cast<FontOwner*>(owner);
+}
+}
 FontInstance::FontInstance(const FontSpec& spec) {
     if (!spec.resource || spec.resource->bytes.empty() || spec.resource->sha256.size() != 64
         || spec.resource->faceIndex < 0 || !std::isfinite(spec.size) || spec.size <= 0 || spec.size > 2048
@@ -23,7 +30,11 @@ FontInstance::FontInstance(const FontSpec& spec) {
         throw std::runtime_error("Skia 字体资源、字号或水平缩放无效");
     const auto& source = *spec.resource;
     auto manager = SkFontMgr_New_Custom_Empty();
-    auto face = manager->makeFromData(SkData::MakeWithCopy(source.bytes.data(), source.bytes.size()), source.faceIndex);
+    // The font data is immutable. Each engine retains its own reference even
+    // if a cached typeface or shaping object outlives this instance.
+    auto data = SkData::MakeWithProc(source.bytes.data(), source.bytes.size(),
+        [](const void*, void* owner) { releaseFontOwner(owner); }, new FontOwner(spec.resource));
+    auto face = manager->makeFromData(std::move(data), source.faceIndex);
     if (!face) throw std::runtime_error("Skia 无法读取指定字体 face");
     const int count = face->getVariationDesignParameters({});
     if (count < 0) throw std::runtime_error("Skia 无法读取字体轴信息");
@@ -78,7 +89,7 @@ FontInstance::FontInstance(const FontSpec& spec) {
     // quantizes even at em size and can truncate multi-glyph integer boxes.
     auto blob = std::shared_ptr<hb_blob_t>(hb_blob_create(
         reinterpret_cast<const char*>(source.bytes.data()), unsigned(source.bytes.size()),
-        HB_MEMORY_MODE_DUPLICATE, nullptr, nullptr), hb_blob_destroy);
+        HB_MEMORY_MODE_READONLY, new FontOwner(spec.resource), releaseFontOwner), hb_blob_destroy);
     auto hbFace = std::shared_ptr<hb_face_t>(hb_face_create(blob.get(), unsigned(source.faceIndex)), hb_face_destroy);
     const auto em = hb_face_get_upem(hbFace.get());
     if (!em || em > 65536) throw std::runtime_error("Skia HarfBuzz 字体 em 无效");
