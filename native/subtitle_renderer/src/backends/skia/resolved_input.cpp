@@ -630,9 +630,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
+        const bool reverseHorizontalNoWipe = line.wipeReverse && prepared.noWipe
+            && features.contains("p07_reverse_decoration_no_wipe");
         const bool reverseHorizontalDecoration = features.contains("p06_reverse_decoration")
             && !style.vertical && !style.rightToLeft && !anyReadings
-            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
+            && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
         if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline) && !reverseHorizontalDecoration)
             throw BackendError("Skia 横排反向走字的描边缺少对应能力");
@@ -640,7 +643,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || (hasShadow && !rtlShadow)))
                 || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
-                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow))
+                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
+                    || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
