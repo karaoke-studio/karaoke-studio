@@ -583,6 +583,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
             "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
             "p05_overlap_wipe", "p05_font_fallback", "p05_mixed_fonts",
+            "p05_resolved_ruby", "p05_upper_ruby", "p05_lower_ruby", "p05_ruby_units",
+            "p05_ruby_markers", "p05_standalone_marks", "p06_outline_ruby", "p06_ruby_solid_outline",
             "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines",
             "p06_multi_lane_outline"
         };

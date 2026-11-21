@@ -11,7 +11,7 @@ from PyQt6.QtGui import QColor
 from test_subtitle_skia_font_slots import application, binary, project, mixed
 from test_subtitle_skia_resolved import ir_for
 from test_subtitle_skia_protocol import collect, selection
-from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme, TimingChar, TimingLine
+from krok_helper.subtitle_render.domain.models import RubyAnnotation, SubtitleStyleScheme, TimingChar, TimingLine
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
 from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_karaoke_colors, style_for_role_in_layout
@@ -38,17 +38,23 @@ def role_outline_palette():
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_body_role_outlines_follow_their_cell_clock(binary, project, target):
+@pytest.mark.parametrize('with_ruby', [False, True], ids=['body', 'ruby'])
+def test_body_role_outlines_follow_their_cell_clock(binary, project, target, with_ruby):
     track, style = project
     line = track.lines[0]
     chars = [replace(char, role_label='edge' if i in {0, 2, 4} else None)
              for i, char in enumerate(line.chars)]
     line = replace(line, chars=chars, display_start_override_ms=0, display_end_override_ms=3000)
     track = replace(track, lines=[line])
+    if with_ruby:
+        track = replace(track, rubies=[RubyAnnotation(kanji='A字', reading='AA',
+            pos_start_ms=chars[0].start_ms, pos_end_ms=chars[2].start_ms)])
     style = replace(style, custom_style_schemes={'edge': SubtitleStyleScheme(
         stroke_width_px=5, stroke2_width_px=3, stroke2_enabled=True, karaoke_colors=role_outline_palette())})
     ir = ir_for(binary, (track, style))
     assert {'p06_role_solid_outlines', 'p06_secondary_solid_outline'} <= set(ir['required_features'])
+    if with_ruby:
+        assert 'p06_outline_ruby' in ir['required_features'] and ir['skia_layout']['lines'][0]['ruby_groups']
     plain = copy.deepcopy(ir)
     plain['required_features'].remove('p06_role_solid_outlines')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -66,21 +72,23 @@ def test_body_role_outlines_follow_their_cell_clock(binary, project, target):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_body_role_outlines_match_actual_d2d_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('ruby', ['none', 'upper', 'both'])
+def test_body_role_outlines_match_actual_d2d_gpu(binary, application, tmp_path, ruby):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     base = next(case for case in build_cases(tmp_path) if case.case_id == 'viewport')
     line = base.track.lines[0]
     chars = [replace(char, role_label='edge' if i % 2 == 0 else None) for i, char in enumerate(line.chars)]
-    track = replace(base.track, lines=[replace(line, chars=chars)], rubies=[])
+    track = replace(base.track, lines=[replace(line, chars=chars)], rubies=[] if ruby == 'none' else base.track.rubies)
     palette = role_outline_palette()
     role = SubtitleStyleScheme(font_size_px=97, stroke_width_px=5, stroke2_width_px=2,
                                stroke2_enabled=True, karaoke_colors=palette)
     style = replace(base.style, viewport_rotation_deg=0, viewport_scale_pct=100, viewport_offset_x=0,
                     stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0,
-                    decoration_kind='none', karaoke_anim='none', custom_style_schemes={'edge': role})
-    case = replace(base, case_id='body_role_outlines', track=track, style=style)
+                    decoration_kind='none', karaoke_anim='none', lower_ruby_enabled=ruby == 'both',
+                    custom_style_schemes={'edge': role})
+    case = replace(base, case_id=f'body_role_outlines_{ruby}', track=track, style=style)
     assert_ruby_transition_gpu_parity(binary, case, (299, 300, 1500, 1750, 2600, 4400, 5499, 5500))
 
 
