@@ -3,7 +3,9 @@
 #include <QtCore/QFile>
 #include <QtCore/QJsonArray>
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
 
 namespace krok::subtitle::native::scene {
@@ -18,6 +20,25 @@ double number(const QJsonObject& object, const char* name, double fallback, doub
 }
 using Resource = ::subtitle::skia::text::FontResource;
 using Instance = ::subtitle::skia::text::FontInstance;
+
+std::shared_ptr<const Resource> shareLiveResource(std::shared_ptr<Resource> candidate, const QByteArray& bytes) {
+    constexpr std::size_t maxLiveEntries = 64;
+    static std::mutex mutex;
+    static std::vector<std::weak_ptr<const Resource>> live;
+    std::lock_guard lock(mutex);
+    std::erase_if(live, [](const auto& entry) { return entry.expired(); });
+    for (const auto& entry : live) {
+        auto existing = entry.lock();
+        if (existing && existing->sha256 == candidate->sha256 && existing->faceIndex == candidate->faceIndex
+            && std::ranges::equal(existing->axes, candidate->axes, [](const auto& a, const auto& b) {
+                return a.tag == b.tag && std::bit_cast<std::uint32_t>(a.value) == std::bit_cast<std::uint32_t>(b.value);
+            })) return existing;
+    }
+    candidate->bytes.assign(bytes.begin(), bytes.end());
+    if (live.size() < maxLiveEntries) live.emplace_back(candidate);
+    return candidate;
+}
+
 std::shared_ptr<const Resource> loadFont(const QJsonObject& object) {
     QFile file(object.value("path").toString());
     if (!file.open(QIODevice::ReadOnly) || file.size() < 1 || file.size() > 64 * 1024 * 1024)
@@ -28,7 +49,7 @@ std::shared_ptr<const Resource> loadFont(const QJsonObject& object) {
     if (object.contains("sha256") && object.value("sha256").toString().toLatin1() != hash)
         throw std::runtime_error("Skia 字体内容与请求的 SHA-256 不符");
     auto result = std::make_shared<Resource>();
-    result->bytes.assign(bytes.begin(), bytes.end()); result->sha256 = hash.toStdString();
+    result->sha256 = hash.toStdString();
     const auto index = number(object, "face_index", 0, 0, 1024);
     if (std::floor(index) != index) throw std::runtime_error("Skia 字体 face index 必须为整数");
     result->faceIndex = int(index);
@@ -42,7 +63,9 @@ std::shared_ptr<const Resource> loadFont(const QJsonObject& object) {
         for (auto c : tag) value = (value << 8) | std::uint8_t(c);
         result->axes.push_back({value, float(number(axes, tag.constData(), 0, -1e6, 1e6))});
     }
-    return result;
+    // Always verify the current file first. Reuse only an immutable resource
+    // still owned by a live font engine or an in-flight scene preparation.
+    return shareLiveResource(std::move(result), bytes);
 }
 }
 QJsonObject skiaCellMetricsJson(const ::subtitle::skia::text::ShapedCell& cell) {
