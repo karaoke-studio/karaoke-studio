@@ -747,6 +747,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 原生组件在同一场景版本下拒绝过期 generation，并合并场景图同步前的连续请求，见 §14.228。
 - [ ] P09.3 使用有界帧仓/纹理槽，正确管理 Qt 和 GPU 消费结束；不会显示错误 t 或过期 revision 的纹理。
 - [ ] P09.4 合成视频、图片、图片序列与纯色背景；视频 contain/黑边、图片 cover/contain 与现有预览/导出保持一致。
+  - [x] Quick 画布以真实字幕直画叠加四类背景，验证等比与裁切、现有播放器时钟、窗口控件层次与鼠标穿透，见 §14.229。
 - [ ] P09.5 保留现有音频时钟；独立音频仅适用于非视频背景，禁止因更换预览容器引入双时钟。
 - [ ] P09.6 属性编辑、窗口缩放、真实多显示器 DPR、隐藏/显示、重建、关闭、项目切换、fallback 和恢复均使用正式 UI 路径验证；Qt device 重建采用完整宿主重建，不复用未验收的原窗口强制 purge 模式（§14.8）。
 - [ ] P09.7 分别记录 Windows Vulkan、Linux X11/Wayland Vulkan、macOS Metal 的直画结果、回读计数、CPU 拷贝和事件行为。
@@ -3141,6 +3142,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `prepare_skia_scene_ir` 是 sidecar 与直接呈现入口共用的字体度量、布局和字形资源解析入口。Qt Quick 以场景版本、generation 和媒体时间接收请求，在渲染线程同步前保留最后一条，拒绝同版本的旧 generation，重复请求同一帧时复用现有纹理。
 - Vulkan 验证层检查了连续提交两次后仅渲染最新时间，并在旧 generation 被拒绝后准确回访首帧。Windows **7 通过**，X11、Wayland 各 **5 通过、2 跳过**，独立 Windows/Linux Raster 各 **1 通过**，四份干净构建各通过 3 项 CTest。日志为 `build/p09-frame-generation-*.log`。
+
+### 14.229 P09.4 实际字幕与 Quick 背景合成（2026-11-21）
+
+- `SkiaQuickCanvas` 将黑边、纯色、普通图片、图片序列和视频组成一块不透明画布。视频沿用等比内接以及现有 `PlaybackController`，图片使用 cover/contain，序列路径沿用领域的有理帧率计算。字幕由 Qt GPU 纹理合成，画布允许鼠标事件穿过，上层 QWidget 继续处在最上方。
+- 静态图、全幅裁切、图片黑边、纯色、序列换帧和真实视频各一组。Windows Vulkan、WSL X11 及 Wayland 各 **6 通过**，字幕使用共同 IR 准备路径。日志为 `build/p09-real-backgrounds-*.log`。正式浮窗仍需接入此画布和播放控制器的代次变化。
 
 ## 15. 前期探针清理范围
 
