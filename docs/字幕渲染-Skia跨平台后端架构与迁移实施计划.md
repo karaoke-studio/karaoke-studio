@@ -3417,6 +3417,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 原工程的相同 **16 帧**在 D2D GPU → Vulkan、Vulkan → Raster 两组对照均达原预算。首行纯色无描边的覆盖 IoU 从 **0.800** 到 **0.987**，四条包围盒边沿与 D2D 相同。日志为 `build/p05-synthetic-bold-original-{geometry,parity-final}.log`、`build/p07-directwrite-bold-*.log`。
 - Windows Vulkan 与独立 Raster 干净构建各 **3/3 CTest**。Windows 字体、混排、回退及字形组合 **247 通过**，另有四项缺失 Vulkan loader 的产品用例在恢复测试所需的默认回退后全部通过。独立 Raster 专项 **4 通过**。WSL Vulkan 和独立 Raster 各 **3/3 CTest**，每种构建在 X11 与 Wayland 分别 **5 通过**，包含 TrueType、CFF、空格、组合标记和混合字体单位。
 
+### 14.270 P07/P11 Mac 托管 Metal 回归与验收包（2026-11-21）
+
+- 提交 `90879d22` 的 **5/5** 个 CI 作业通过。Intel 与 Apple Silicon 各 **2039** 项产品用例通过、**1346** 项跳过。两份无 SDK 的干净包各通过 **229** 项功能验证，下载的 **98** 份规范样例逐一比对 SHA-256 完全一致。该轮覆盖 §14.265 修正的两项预览用例与 §14.266 的角色画笔淡化。
+- 两包均报告 `functional_passed=true`。托管虚拟 Metal 的 `hardware_gate_passed=false`，硬件验收等待实际设备。§14.267–269 的光晕和粗体验证对应后续提交。 [Mac CI 44883921927](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44883921927)
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
