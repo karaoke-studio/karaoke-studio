@@ -576,11 +576,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");
         const bool verticalGlowNoWipe = noWipeGlow && features.contains("p07_vertical_glow_no_wipe");
+        const bool verticalShadowNoWipe = hasShadow && prepared.noWipe && !hasGlow
+            && features.contains("p07_vertical_shadow_no_wipe");
         const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
-            && (line.karaokeAnimation == "none" || verticalGlowNoWipe)
+            && (line.karaokeAnimation == "none" || verticalGlowNoWipe || verticalShadowNoWipe)
             && (verticalFade || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
@@ -588,7 +590,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || hasShadow))
-                || (line.wipeReverse && !reverseVerticalDecoration) || (prepared.noWipe && !noWipeGlow)
+                || (line.wipeReverse && !reverseVerticalDecoration) || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe))
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)

@@ -52,6 +52,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_vertical_shadow",
         "p06_vertical_ruby_decoration",
         "p07_vertical_glow_no_wipe",
+        "p07_vertical_shadow_no_wipe",
         "p07_vertical_decoration_fade",
         "p06_vertical_reverse_outline",
         "p06_vertical_columns_outline",
@@ -338,6 +339,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || verticalShadow || features.contains("p06_ruby_shadow") || features.contains("p07_line_fade")
             || reverseVertical || features.contains("p05_vertical_columns")))
         throw BackendError("Skia 竖排光晕整字变色缺少对应布局或装饰能力");
+    if (features.contains("p07_vertical_shadow_no_wipe")
+        && (!features.contains("p05_vertical_solid") || !features.contains("p07_no_wipe")
+            || (!verticalShadow && !(verticalRubyDecoration && features.contains("p06_ruby_shadow")))
+            || verticalGlow || features.contains("p06_ruby_glow") || features.contains("p07_line_fade")
+            || reverseVertical || features.contains("p05_vertical_columns")))
+        throw BackendError("Skia 竖排阴影整字变色缺少对应布局或装饰能力");
     if ((verticalGlow || verticalShadow)
         && (!features.contains("p05_vertical_solid") || !style.value("vertical").toBool()
             || (features.contains("p05_vertical_columns") != features.contains("p06_vertical_columns_decoration"))

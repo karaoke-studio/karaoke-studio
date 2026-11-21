@@ -23,11 +23,13 @@ struct StaticShadow {
     bool visible() const { return before.visible() || after.visible(); }
 
     template <class Cell> void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int time, const SkRect& ink,
-                                   bool vertical = false, bool reverse = false, float opacity = 1.f) const {
+                                   bool vertical = false, bool reverse = false, float opacity = 1.f,
+                                   bool noWipe = false) const {
         if (!visible() || ink.isEmpty()) return;
         const bool complete = lineWipeComplete(cells, time);
         const float low = vertical ? ink.top() : ink.left(), high = vertical ? ink.bottom() : ink.right();
-        const float edge = lineWipeFront(cells, time, reverse ? high : low, secondaryWidth / 2 + .5f, reverse, vertical);
+        const float edge = lineWipeFront(cells, time, reverse ? high : low, secondaryWidth / 2 + .5f,
+                                         reverse, vertical, noWipe);
         drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f, vertical, reverse, opacity);
     }
 

@@ -20,10 +20,16 @@ template <class Cell> bool lineWipeComplete(const std::vector<Cell>& cells, int 
     });
 }
 
-template <class Cell> float wipeCoordinate(const Cell& cell, int time, bool rightToLeft, bool vertical = false) {
-    const float position = cell.wipePoints.empty()
-        ? std::clamp(float(time - cell.startMs) / float(std::max(cell.endMs - cell.startMs, 1)), 0.f, 1.f)
-        : krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, time);
+template <class Cell> float wipeCoordinate(const Cell& cell, int time, bool rightToLeft, bool vertical = false,
+                                          bool noWipe = false) {
+    float position;
+    if (noWipe) {
+        position = time >= wipeEnd(cell) ? (cell.wipePoints.empty() ? 1.f : cell.wipePoints.back().position) : 0.f;
+    } else if (cell.wipePoints.empty()) {
+        position = std::clamp(float(time - cell.startMs) / float(std::max(cell.endMs - cell.startMs, 1)), 0.f, 1.f);
+    } else {
+        position = krok::subtitle::native::effects::wipePositionAt(cell.wipePoints, time);
+    }
     const float low = vertical ? cell.top : cell.left;
     const float high = vertical ? cell.bottom : cell.right;
     const float width = high - low;
@@ -32,18 +38,18 @@ template <class Cell> float wipeCoordinate(const Cell& cell, int time, bool righ
 
 // The global clip follows the active cell and rests between strokes in a gap.
 template <class Cell> float lineWipeFront(const std::vector<Cell>& cells, int time, float inkStart,
-                                        float restingPad, bool rightToLeft, bool vertical = false) {
+                                        float restingPad, bool rightToLeft, bool vertical = false, bool noWipe = false) {
     float edge = inkStart;
     for (std::size_t index = 0; index < cells.size(); ++index) {
         const auto& cell = cells[index];
         if (time < wipeStart(cell)) {
             if (index > 0) {
-                const float start = wipeCoordinate(cell, time, rightToLeft, vertical);
+                const float start = wipeCoordinate(cell, time, rightToLeft, vertical, noWipe);
                 edge = rightToLeft ? std::min(edge, start + restingPad) : std::max(edge, start - restingPad);
             }
             break;
         }
-        edge = wipeCoordinate(cell, time, rightToLeft, vertical);
+        edge = wipeCoordinate(cell, time, rightToLeft, vertical, noWipe);
         if (time <= wipeEnd(cell)) break;
     }
     return edge;

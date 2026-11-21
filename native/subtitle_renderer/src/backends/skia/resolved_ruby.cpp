@@ -154,13 +154,15 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool roleLineFade = features.contains("p07_role_line_fade") && fadeOnly;
     const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
         && features.contains("p07_ruby_line_animation");
-    const bool verticalGlowNoWipe = line.karaokeAnimation == "no_wipe" && staticLine
-        && features.contains("p07_vertical_glow_no_wipe");
+    const bool verticalNoWipe = line.karaokeAnimation == "no_wipe" && staticLine;
+    const bool verticalGlowNoWipe = verticalNoWipe && features.contains("p07_vertical_glow_no_wipe");
+    const bool verticalShadowNoWipe = verticalNoWipe && features.contains("p07_vertical_shadow_no_wipe");
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
-        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade)) || verticalGlowNoWipe)
+        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade)) || verticalGlowNoWipe || verticalShadowNoWipe)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowShadow = features.contains("p06_ruby_shadow")
-        && !rtl && (!vertical || allowVerticalDecoration) && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
+        && !rtl && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe)
+        && !line.zoomPulseEnabled
         && (staticLine || verticalFade);
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")

@@ -531,18 +531,20 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if style.vertical and (decorations or ruby_decorations):
         reverse_vertical = any(line.wipe_reverse for line in track.lines)
         columns = style.dual_line_layout
-        vertical_glow_no_wipe = (not columns and not reverse_vertical and 'shadow' not in decorations
-            and 'p06_ruby_shadow' not in ir['required_features'] and 'p07_line_fade' not in ir['required_features']
+        vertical_paints = set(decorations) | {kind for kind in ('shadow', 'glow')
+            if f'p06_ruby_{kind}' in ir['required_features']}
+        vertical_no_wipe = (not columns and not reverse_vertical and len(vertical_paints) == 1
+            and 'p07_line_fade' not in ir['required_features']
             and any(line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines']))
-        modes = {'none', 'no_wipe'} if vertical_glow_no_wipe else {'none'}
+        modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
         if ((columns or reverse_vertical) and vertical_ruby is not None
                 or any(line.get('karaoke_anim') not in modes or line.get('entry_anim') not in {'none', 'fade'}
                        or line.get('exit_anim') not in {'none', 'fade'} or line.get('scanline')
                        or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
             raise ValueError('Skia 竖排静态装饰超出已支持的走字组合')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
-        if vertical_glow_no_wipe:
-            ir['required_features'].append('p07_vertical_glow_no_wipe')
+        if vertical_no_wipe:
+            ir['required_features'].append(f'p07_vertical_{next(iter(vertical_paints))}_no_wipe')
         if columns:
             ir['required_features'].append('p06_vertical_columns_decoration')
             if reverse_vertical and any(not line.wipe_reverse for line in track.lines):
