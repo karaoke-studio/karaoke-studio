@@ -273,6 +273,65 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('body_glow', [False, True])
+def test_vertical_no_wipe_glow_changes_at_reading_end(binary, project, target, body_glow):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(1, 3))
+    blank = colors('#00000000', '#00000000')
+
+    def glow(before, after):
+        return replace(blank, before=replace(blank.before, shadow=PaintFill(color=before)),
+                       after=replace(blank.after, shadow=PaintFill(color=after)))
+
+    ruby = glow('#FFFF0000', '#FF0000FF')
+    body = glow('#FF00FF00', '#FF00FF00')
+    body_kind = 'glow' if body_glow else 'none'
+    style = replace(style, karaoke_anim='no_wipe', karaoke_colors=body, ruby_karaoke_colors=ruby,
+                    decoration_before_sync=False, decoration_kind=body_kind, decoration_kind_before=body_kind,
+                    ruby_decoration_kind='glow', ruby_decoration_kind_before='glow',
+                    ruby_glow_before_radius_px=6, ruby_glow_after_radius_px=6)
+    ir = ir_for(binary, (track, style))
+    feature = 'p07_vertical_glow_no_wipe'
+    assert feature in ir['required_features']
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    unit, = group['units']
+    end = unit['interval_ms'][1]
+    times = [end - 1, end, end + 1]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+    def coverage(frame, channel):
+        return (frame[..., channel].astype(np.int64) * frame[..., 3]).sum()
+
+    red = [coverage(frame, 0) for frame in frames]
+    blue = [coverage(frame, 2) for frame in frames]
+    # The GPU clips both glow sources at the fixed cell edge before completion.
+    assert red[0] > 0 and red[1:] == [0, 0]
+    assert blue[0] < blue[1] and blue[1] == blue[2]
+
+
+@GPU
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+def test_vertical_no_wipe_glow_matches_actual_gpu(binary, application, tmp_path, semantics):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'vertical')
+    style = replace(case.style, layout_semantics=semantics, karaoke_anim='no_wipe')
+    times = (300, 600, 1500, 2600, 3400, 3450, 3500, 3650, 3674, 3675, 3676, 3900,
+             4120, 4400, 4499, 4500, 4501, 5000)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('outlined', [False, True])
 def test_vertical_ruby_groups_keep_independent_decoration_clocks(binary, project, target, outlined):
     from krok_helper.subtitle_render.domain.paint import PaintFill

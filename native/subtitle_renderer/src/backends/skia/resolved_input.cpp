@@ -575,11 +575,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");
+        const bool verticalGlowNoWipe = noWipeGlow && features.contains("p07_vertical_glow_no_wipe");
         const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
-            && line.karaokeAnimation == "none"
+            && (line.karaokeAnimation == "none" || verticalGlowNoWipe)
             && (verticalFade || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
