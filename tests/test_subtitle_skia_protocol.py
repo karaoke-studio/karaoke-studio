@@ -356,12 +356,20 @@ def mixed_guide_title(tmp_path):
     return track, replace(style, title_overlays=[title])
 
 
-def animated_guide_title(tmp_path):
+def animated_guide_title(tmp_path, long_loop=False):
     from test_subtitle_skia_line_motion import animated_alpha_band
 
     track, style = bitmap_guide_title(tmp_path, inline=True)
     title = style.title_overlays[0]
     before = animated_alpha_band(tmp_path)
+    if long_loop:
+        path = Path(before)
+        gif = path.read_bytes()
+        control = bytes.fromhex('21 F9 04')
+        first = gif.index(control)
+        second = gif.index(control, first + len(control))
+        path.write_bytes(gif[:first] + gif[first:-1] * 30 + gif[first:second] + gif[-1:])
+        title = replace(title, custom_windows=[TitleTimeWindow(300, 9000, 0, 0)])
     def animate(guide):
         return replace(guide, bitmap_before_path=before, bitmap_fix_size=False, bitmap_zoom_percent=65)
     title = replace(title, guide_symbols={0: animate(title.guide_symbols[0])},
@@ -394,14 +402,16 @@ def test_animated_title_guides_follow_media_time_and_seek(binary, tmp_path, targ
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_animated_title_guides_match_actual_d2d_gpu(binary, tmp_path):
+@pytest.mark.parametrize('long_loop', [False, True], ids=['short', 'over_60_frames'])
+def test_animated_title_guides_match_actual_d2d_gpu(binary, tmp_path, long_loop):
     from types import SimpleNamespace
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
-    track, style = animated_guide_title(tmp_path)
+    track, style = animated_guide_title(tmp_path, long_loop)
+    times = ((7499, 7500, 7599, 7600, 7749, 7750, 7600) if long_loop
+             else (299, 349, 399, 400, 499, 500, 599, 600, 750, 900, 1000, 1500, 1600))
     assert_ruby_transition_gpu_parity(
-        binary, SimpleNamespace(track=track, style=style, case_id='animated_title_guides'),
-        (299, 349, 399, 400, 499, 500, 599, 600, 750, 900, 1000, 1500, 1600))
+        binary, SimpleNamespace(track=track, style=style, case_id=f'animated_title_guides_{long_loop}'), times)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

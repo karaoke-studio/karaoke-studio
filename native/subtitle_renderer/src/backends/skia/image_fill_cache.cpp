@@ -16,6 +16,7 @@ constexpr std::size_t kMaxImages = 64;
 constexpr int kMaxSide = 8192;
 constexpr std::size_t kMaxBytes = std::size_t(256) << 20;
 constexpr int kMaxImageFrames = 4096;
+constexpr int kGuideLoopFrames = 60; // Existing GPU loops over the first 60 guide frames.
 
 sk_sp<SkImage> copyPremultiplied(const QImage& image) {
     if (image.isNull() || image.width() > kMaxSide || image.height() > kMaxSide) return nullptr;
@@ -75,8 +76,8 @@ std::shared_ptr<const ::subtitle::skia::BitmapGuideAnimation> SkiaImageFillCache
     QImageReader reader(QString::fromStdWString(path));
     reader.setAutoTransform(false);
     const auto dimensions = reader.size();
-    const int frameCount = reader.imageCount();
-    if (frameCount <= 1 || frameCount > kMaxImageFrames || dimensions.isEmpty()
+    const int frameCount = std::min(reader.imageCount(), kGuideLoopFrames);
+    if (frameCount <= 1 || dimensions.isEmpty()
         || dimensions.width() > kMaxSide || dimensions.height() > kMaxSide)
         return {};
     auto sequence = std::make_shared<::subtitle::skia::BitmapGuideAnimation>();
