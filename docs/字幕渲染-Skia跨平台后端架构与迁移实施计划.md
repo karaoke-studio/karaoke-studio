@@ -3608,6 +3608,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - P00 `exit_utopia` 的无装饰及只开上注音光晕变体各 **19 帧**均通过实际 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原画面预算。Windows **15 通过**，独立 Windows Raster **2 通过**，WSL X11、Wayland 各 **4 通过、2 项 D2D 专用跳过**，三份干净构建各 **3 项 CTest**。
 - 带正文光晕的原样仍有低覆盖尾部差异。试验在 5100ms 的 D2D/Vulkan 遮罩 IoU 为 **0.96976**，低于 **0.97**，外框差 1px。仅启用正文光晕可复现，四舍五入到 8 位透明度未改变该帧结果。保留原样门槛。
 
+### 14.302 Mac 反向竖排、阴影与成对粒子和上游同步（2026-11-21）
+
+- `e16f8687` 的 [Mac CI 44904917692](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44904917692) 五项成功，覆盖反向竖排整字变色、右至左注音阴影、火焰/闪电及拼接/消散等成对出入场。arm64 与 x64 各 **2124 通过、1398 跳过**，两份干净包各 **229 通过**，**98 份**规范样本跨架构哈希一致。真实 Metal 硬件门槛仍待实机复验。
+- 同步上游 D2D 走字边缘与标题空格宽度修复后，在 `ebf981fb` 用重新构建的 D2D GPU 和 Skia 运行 **46 项**关联回归，并按 P00 原样重验 **108/129** 个场景的 **478 帧**。D2D GPU 对 Vulkan、Vulkan 对 Raster 均通过既定画面预算。日志为 `build/p07-sync-main-win-tests.log` 和 `build/p00-skia-current-pixels-ebf981fb.log`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
