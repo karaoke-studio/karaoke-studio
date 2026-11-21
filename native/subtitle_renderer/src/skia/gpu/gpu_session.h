@@ -31,6 +31,7 @@ public:
     const DeviceInfo& info() const { return info_; }
     sk_sp<SkSurface> makeSurface(int width, int height);
     void finish(SkSurface& surface);
+    void checkDevice() const;
 protected:
     GpuSession();
     sk_sp<GrDirectContext> context_;

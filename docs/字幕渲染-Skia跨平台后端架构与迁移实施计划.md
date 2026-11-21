@@ -815,6 +815,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] Skia 导出每批复用一份共享内存映射，范围结束或中断时释放，见 §14.240。
   - [x] Windows Skia 导出复用跨批次等尺寸共享内存分配，消除大块内存反复分配和清零引入的长停顿，见 §14.246。
   - [x] FFmpeg 同步消费 Skia 的已验证 RGBA 槽视图，省掉 Python 整帧拷贝，见 §14.248。
+  - [x] 离屏 GPU 回读统一等待渲染完成，保留设备失效检查，见 §14.272。
 - [ ] P11.8 架构检查、公共核心同源码、Qt 私有 API 禁入、文件职责、缓存归属和销毁顺序复核。
   - [x] 已核对 sidecar 与 Quick 共用核心、线程归属、图片资源及 Qt 接口边界，见 §14.243。
 - [ ] P11.9 跑与改动相关的分组测试；跨模块切换前完成仓库要求的全量回归，GPU 并行偶发失败按 AGENTS.md 串行确认。
@@ -3427,6 +3428,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 合成粗体校准后，保持 §14.239 原工程的保存样式，抽取每个有歌词的行的首字前、行中和行尾附近时刻并去重。共 **167** 帧，D2D GPU → Skia Vulkan、Skia Vulkan → Skia Raster 两组均 **167/167** 通过原画质预算。日志为 `build/p07-original-all-lines-parity.log`。
 - Windows RTX 3070 Ti Laptop、CPU 上限 **80%**、同一工程和背景视频、`libx264 ultrafast` 编码。Direct2D 条带回读使用 **4** 个 worker，首帧 **1.619s**、全程 **185.172s**（**77.841 帧/秒**）。Skia Vulkan 使用单 owner，首帧 **1.859s**、全程 **279.568s**（**51.558 帧/秒**）。两份输出均为 **1920×1080、60fps、14414 帧**，视频 **240.233333s**、音频 **240.232993s**。本次原样式的 Vulkan 导出吞吐仍低于 Direct2D。日志为 `build/p11-original-d2d-full-song.log`、`build/p11-original-vulkan-calibrated-full-song.log`。
+
+### 14.272 P11.7 合并离屏 GPU 等待与 RGBA 回读（2026-11-21）
+
+- 锁定 Skia 的 Ganesh 回读会提交生产该纹理的命令，Vulkan 与 Metal 的返回路径在交付 CPU 像素前等待复制完成。离屏 sidecar 由同步 RGBA 回读承担等待，并在回读后检查设备状态。`render_ms` 现在计主机录制，`readback_ms` 包含 GPU 完成和传输；前后版本用稳态交付、帧间分布及全程吞吐横向对照。
+- 以 §14.239 原样式在 12.2s、146s 各测 **600 帧**。稳态交付分别由 **61.19/59.51** 提升至 **62.96/62.45 帧/秒**，帧间隔 P95 由 **20.74/21.10ms** 降至 **20.63/19.96ms**。相同 **16** 个时间点的 Vulkan 和 Raster RGBA 哈希各逐一相等，D2D GPU → Vulkan、Vulkan → Raster 仍通过原画质预算。
+- Windows Vulkan、WSL Vulkan 原生构建各 **3/3 CTest**。真实产品导出、取消、批次、帧槽、回退与异常清理专项在 Windows、WSL X11 和 Wayland 各 **38 通过**。空注音光晕层试验的两段计时变动方向不同，保留原光晕绘制路径。日志为 `build/p11-readback-sync-*.log`、`build/p11-ruby-glow-{before,after}-*.log`。
 
 ## 15. 前期探针清理范围
 

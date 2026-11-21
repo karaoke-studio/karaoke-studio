@@ -98,9 +98,6 @@ ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
     using Clock = std::chrono::steady_clock;
     const auto begin = Clock::now();
     impl_->prepared->draw(*impl_->surface->getCanvas(), tMs);
-#ifdef KROK_SKIA_GPU_ENABLED
-    if (impl_->gpu) impl_->gpu->finish(*impl_->surface);
-#endif
     const auto rendered = Clock::now();
     ProbeResult result;
     auto& out = result.surface;
@@ -110,12 +107,16 @@ ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
     out.bytes.resize(std::size_t(out.stride) * out.height);
     auto info = SkImageInfo::Make(out.width, out.height, kRGBA_8888_SkColorType,
                                   kUnpremul_SkAlphaType, SkColorSpace::MakeSRGB());
-    if (!impl_->surface->readPixels(info, out.bytes.data(), out.stride, 0, 0)) {
+    // Ganesh flushes and synchronizes the producing commands during this
+    // read. Avoid a separate synchronous submission before the transfer.
+    const bool read = impl_->surface->readPixels(info, out.bytes.data(), out.stride, 0, 0);
 #ifdef KROK_SKIA_GPU_ENABLED
-        if (impl_->gpu) throw ::subtitle::skia::GpuDeviceError("Skia GPU RGBA readback failed");
-#endif
-        throw BackendError("Skia RGBA readback failed");
+    if (impl_->gpu) {
+        impl_->gpu->checkDevice();
+        if (!read) throw ::subtitle::skia::GpuDeviceError("Skia GPU RGBA readback failed");
     }
+#endif
+    if (!read) throw BackendError("Skia RGBA readback failed");
     result.renderMs = std::chrono::duration<double, std::milli>(rendered - begin).count();
     result.readbackMs = std::chrono::duration<double, std::milli>(Clock::now() - rendered).count();
     return result;

@@ -17,6 +17,10 @@ sk_sp<SkSurface> GpuSession::makeSurface(int width, int height) {
 }
 void GpuSession::finish(SkSurface& surface) {
     context_->flushAndSubmit(&surface, GrSyncCpu::kYes);
+    checkDevice();
+}
+
+void GpuSession::checkDevice() const {
     if (context_->abandoned()) throw GpuDeviceError("Ganesh GPU device lost");
 }
 }
