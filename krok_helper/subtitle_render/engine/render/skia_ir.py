@@ -208,7 +208,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
-    vertical_band = reverse_vertical_band = False
+    vertical_band = reverse_vertical_band = moving_vertical_band = False
     shapes = set()
     moving_shapes = shaped_singing = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -219,7 +219,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         particle_entry = index in particle_band_tracks
         bursts = line.get('fx_bursts', ())
         if look.vertical:
-            if (look.scanline_shape != 'band' or look.scanline_mode != 'color' or not ordinary
+            motion = not ordinary and _ordinary_line_animation(line) and not source.wipe_reverse
+            if (look.scanline_shape != 'band' or look.scanline_mode != 'color' or not (ordinary or motion)
                     or line.get('karaoke_anim') != 'none' or look.lower_ruby_enabled
                     or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
                 raise ValueError('Skia 竖排扫字线当前仅支持普通走字的实色高亮带')
@@ -227,6 +228,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
                 raise ValueError('Skia 竖排反向扫字线当前仅支持正文轨道')
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse
+            moving_vertical_band |= motion
             continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
@@ -270,6 +272,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         features.append('p07_vertical_scanline_band')
     if reverse_vertical_band:
         features.append('p07_vertical_reverse_scanline')
+    if moving_vertical_band:
+        features.append('p07_vertical_scanline_line_animation')
     if shapes:
         features.append('p07_scanline_shape')
     if 'image' in shapes:
@@ -278,7 +282,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         features.append('p07_composed_scanline')
     if line_motion:
         features.append('p07_scanline_line_animation')
-    if unscaled_line_motion:
+    if unscaled_line_motion or moving_vertical_band:
         features.append('p07_scanline_unscaled_line_animation')
     if moving_lower_readings:
         features.append('p07_lower_ruby_scanline_line_animation')

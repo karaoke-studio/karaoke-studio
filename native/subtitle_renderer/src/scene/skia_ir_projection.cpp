@@ -322,7 +322,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
             && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
-        const bool verticalBand = features.contains("p07_vertical_scanline_band") && staticScanline
+        const bool verticalScanlineMotion = movingUnscaledScanline && movingScanline
+            && features.contains("p07_vertical_scanline_line_animation");
+        const bool verticalBand = features.contains("p07_vertical_scanline_band") && (staticScanline || verticalScanlineMotion)
             && resolved.scanlineShape == "band" && resolved.scanlineMode == "color"
             && source.karaokeAnimation == "none" && !source.zoomPulseEnabled
             && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline"))

@@ -844,6 +844,71 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('entry,exit_,decoration', [('fade', 'fade', 'none'), ('rise', 'slide_out', 'glow')])
+def test_vertical_scanline_moves_and_fades_with_the_line(binary, project, entry, exit_, decoration):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, base = vertical_ruby_source(project, position='center')
+    line, = track.lines
+    track = replace(track, lines=[replace(line, display_end_override_ms=line.end_ms + 500)])
+    base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'), scanline_enabled=True,
+                   scanline_mode='color', scanline_shape='band', scanline_color='#00FFFF',
+                   scanline_width_px=28, scanline_glow_px=6, decoration_kind=decoration,
+                   glow_before_radius_px=5, glow_after_radius_px=6, ruby_decoration_kind=decoration,
+                   ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5)
+    style = replace(base, entry_anim=entry, exit_anim=exit_, entry_lead_ms=800, exit_fade_ms=500)
+    dpr = 1.5
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    static = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p07_vertical_scanline_line_animation'
+    assert {feature, 'p07_vertical_scanline_band', 'p07_scanline_unscaled_line_animation',
+            'p07_ruby_scanline'} <= set(ir['required_features'])
+    assert ir['skia_layout']['lines'] == static['skia_layout']['lines']
+    line, = ir['track']['lines']
+    assert line['entry_duration_ms'] and line['exit_duration_ms']
+    times = [line['display_start_ms'] + line['entry_duration_ms'] // 2, 350, 1530,
+             line['display_end_ms'] - line['exit_duration_ms'] // 2]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    targets = []
+
+    def band_mask(frame):
+        red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+        return (red < 40) & (green > 180) & (blue > 180) & (alpha > 25)
+
+    def center(frame):
+        alpha = frame[..., 3]
+        return np.array([np.average(np.arange(alpha.shape[1]), weights=alpha.sum(axis=0)),
+                         np.average(np.arange(alpha.shape[0]), weights=alpha.sum(axis=1))])
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, [times[0]], generation=2)
+            configure(process, static)
+            reference, _ = collect(process, times, generation=3)
+        assert np.array_equal(replay[0], frames[0])
+        for i in (1, 2):
+            assert band_mask(frames[i]).any() and np.array_equal(frames[i], reference[i])
+        for i in (0, 3):
+            assert not band_mask(frames[i]).any()
+            assert 0 < frames[i][..., 3].sum() < reference[i][..., 3].sum()
+        enter_x, enter_y = center(frames[0]) - center(reference[0])
+        leave_x, leave_y = center(frames[3]) - center(reference[3])
+        assert abs(enter_x) < 2 and abs(leave_y) < 2
+        if entry == 'rise':
+            assert enter_y > 4 and leave_x < -10
+        else:
+            assert abs(enter_y) < 2 and abs(leave_x) < 2
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),
