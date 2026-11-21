@@ -348,8 +348,9 @@ void SkiaSubtitleItem::publishGraphicsBackend(const QString& backend, bool accep
 
 void SkiaSubtitleItem::publishFrameSubmission(quint64 revision, quint64 generation, int timeMs) {
     const auto receipt = std::tuple{revision, generation, timeMs};
-    if (frame_.revision == revision && frame_.generation == generation && frame_.timeMs == timeMs
-        && lastReceipt_ != receipt) {
+    // A newer playback tick can be queued before this GPU submission reaches
+    // the GUI. Only scene replacement or a seek invalidates that submission.
+    if (frame_.revision == revision && frame_.generation == generation && lastReceipt_ != receipt) {
         lastReceipt_ = receipt;
         emit frameSubmitted(revision, generation, timeMs);
     }
