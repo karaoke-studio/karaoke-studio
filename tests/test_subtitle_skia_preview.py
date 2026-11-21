@@ -694,6 +694,7 @@ def test_quick_canvas_composites_background_and_subtitles_under_widgets(qml_dir,
 
 FLOATING_WINDOW = r"""
 import sys
+from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtGui import QImage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
@@ -731,6 +732,17 @@ def wait_for(predicate):
     else:
         raise AssertionError((frames, errors, panel.canvas.render_backend_label()))
 
+def close_preview():
+    transport.pause()
+    player.shutdown()
+    player.set_video_output(None)
+    window.close()
+    owner.close()
+    window.deleteLater()
+    owner.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
 assert panel.uses_skia_quick_preview
 panel.set_output_size(640, 360)
 panel.set_background_source(BackgroundSource(kind='solid', color='#204080'))
@@ -756,9 +768,7 @@ if '--require-hardware' in sys.argv:
         assert 'Skia Raster CPU' in panel.canvas.render_backend_label()
         assert errors[0].startswith('Skia 直画设备不可用'), errors
         print('Skia Raster fallback verified', flush=True)
-    window.close()
-    owner.close()
-    player.shutdown()
+    close_preview()
     sys.exit(0)
 wait_for(lambda: panel.skia_quick_target_established and frames)
 assert panel.current_subtitle_frame() is None
@@ -784,6 +794,7 @@ if '--compare-export' in sys.argv:
         wait_for(lambda: not grab.image().isNull())
         image = grab.image().convertToFormat(QImage.Format.Format_RGBA8888_Premultiplied)
         captures[index] = image.scaled(640, 360, transformMode=Qt.TransformationMode.SmoothTransformation)
+        del grab
 
     def pixels(image):
         assert (image.width(), image.height()) == (640, 360)
@@ -820,9 +831,7 @@ if '--compare-export' in sys.argv:
             delta = np.abs(expected.astype(np.int16) - preview.astype(np.int16))
             mean = delta[area | (preview[..., 3] > 0)].mean()
             assert overlap >= 0.97 and mean <= 5, (index, overlap, mean)
-    window.close()
-    owner.close()
-    player.shutdown()
+    close_preview()
     print('Quick, offscreen GPU and export pipe compared', flush=True)
     sys.exit(0)
 transport.set_time(1350)
@@ -854,9 +863,7 @@ panel.set_roll_plan(roll)
 assert not panel.uses_skia_quick_preview and panel.canvas._async_renderer.selection.target == 'gpu'
 panel.set_roll_plan(None)
 assert panel.uses_skia_quick_preview
-window.close()
-owner.close()
-player.shutdown()
+close_preview()
 print('floating preview verified', flush=True)
 """
 
@@ -873,7 +880,7 @@ def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None):
     args = ['--require-hardware'] if require_hardware else []
     if compare_path is not None:
         args += ['--compare-export', str(compare_path)]
-    result = subprocess.run([sys.executable, '-c', FLOATING_WINDOW, *args], env=env, capture_output=True,
+    result = subprocess.run([sys.executable, '-X', 'faulthandler', '-c', FLOATING_WINDOW, *args], env=env, capture_output=True,
                             text=True, encoding='utf-8', errors='replace', timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout

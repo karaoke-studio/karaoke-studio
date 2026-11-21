@@ -16,7 +16,7 @@ class SkiaQuickClock(QObject):
         self._time_ms = 0
         self._last_request = None
         self._playing = False
-        self._last_submit_ns = None
+        self._next_submit_ns = None
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -27,6 +27,10 @@ class SkiaQuickClock(QObject):
 
     def set_frame_rate(self, fps: int | float) -> None:
         self._play_interval_ns = max(1_000_000, ceil(1_000_000_000 / frame_rate(fps)))
+        self._next_submit_ns = None
+        if self._timer.isActive():
+            self._timer.stop()
+            self._schedule()
 
     def _scene_prepared(self, revision, accepted: bool, _error: str) -> None:
         if accepted:
@@ -37,12 +41,13 @@ class SkiaQuickClock(QObject):
         self._timer.stop()
         self._revision = 0
         self._last_request = None
+        self._next_submit_ns = None
         self._schedule()
 
     def set_playing(self, playing: bool) -> None:
         if self._playing != playing:
             self._playing = playing
-            self._last_submit_ns = None
+            self._next_submit_ns = None
             self._timer.stop()
             self._schedule()
 
@@ -61,20 +66,28 @@ class SkiaQuickClock(QObject):
     def _schedule(self) -> None:
         if (self._revision or self._canvas.has_timed_background) and not self._timer.isActive():
             delay = 0
-            if self._playing and self._last_submit_ns is not None:
-                remaining = self._last_submit_ns + self._play_interval_ns - monotonic_ns()
+            if self._playing and self._next_submit_ns is not None:
+                remaining = self._next_submit_ns - monotonic_ns()
                 delay = max(0, ceil(remaining / 1_000_000))
             self._timer.start(delay)
 
     def _submit_soon(self) -> None:
         if self._revision or self._canvas.has_timed_background:
+            self._next_submit_ns = None
             self._timer.start(0)
 
     def _submit_latest(self) -> None:
         request = (self._revision, self._generation, self._time_ms)
         if not self._revision:
             self.refresh_background()
-            self._last_submit_ns = monotonic_ns()
         elif request != self._last_request and self._canvas.request_frame(*request):
             self._last_request = request
-            self._last_submit_ns = monotonic_ns()
+        else:
+            return
+        if self._playing:
+            now = monotonic_ns()
+            deadline = self._next_submit_ns if self._next_submit_ns is not None else now
+            interval = self._play_interval_ns
+            # Skip expired deadlines and keep timer rounding from accumulating.
+            periods = max(1, (now - deadline) // interval + 1)
+            self._next_submit_ns = deadline + periods * interval

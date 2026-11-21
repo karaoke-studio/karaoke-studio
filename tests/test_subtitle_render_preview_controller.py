@@ -496,6 +496,21 @@ def test_skia_quick_clock_uses_remaining_playback_interval(qapp, monkeypatch):
     clock._submit_latest()
     assert requests == [(1, 1, 100), (1, 1, 117)]
 
+    now += 16_400_000
+    clock.set_time(133)
+    assert clock._timer.interval() == 0
+    clock._timer.stop()
+    clock._submit_latest()
+    assert requests[-1] == (1, 1, 133)
+
+    now += 59_000_000
+    clock.set_time(192)
+    assert clock._timer.interval() == 0
+    clock._timer.stop()
+    clock._submit_latest()
+    # A missed deadline submits just one frame at the latest transport time.
+    assert requests[-2:] == [(1, 1, 133), (1, 1, 192)]
+
     clock.seek(50)
     assert clock._timer.interval() == 0
     clock._timer.stop()
