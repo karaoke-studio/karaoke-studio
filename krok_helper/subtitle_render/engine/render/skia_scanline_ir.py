@@ -11,6 +11,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
+    reverse_vertical_palette = False
     shapes = set()
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -24,7 +25,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             motion = not ordinary and ordinary_line_animation(line) and not source.wipe_reverse
             singing = index in vertical_singing_tracks
             palette = (look.scanline_mode in {'brighten', 'follow_before', 'follow_after'}
-                       and ordinary and not source.wipe_reverse and not singing)
+                       and ordinary and not singing)
             if (look.scanline_shape != 'band' or (look.scanline_mode != 'color' and not palette) or not (ordinary or motion)
                     or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                     or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
@@ -34,6 +35,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             moving_vertical_band |= motion
             vertical_singing_band |= singing
             vertical_palette_band |= palette
+            reverse_vertical_palette |= palette and source.wipe_reverse
             continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         image_during_transition = particle_entry and look.scanline_shape == 'image'
@@ -87,6 +89,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_vertical_scanline_singing')
     if vertical_palette_band:
         features.append('p07_vertical_scanline_palette')
+    if reverse_vertical_palette:
+        features.append('p07_vertical_reverse_scanline_palette')
     if shapes:
         features.append('p07_scanline_shape')
     if 'image' in shapes:

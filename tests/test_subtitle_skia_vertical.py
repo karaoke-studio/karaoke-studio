@@ -444,23 +444,28 @@ def test_vertical_reverse_outline_uses_bottom_cells_first(binary, project, targe
     assert sung_rows(finished).min() < cells[1]['wipe_top']
 
 
-@pytest.mark.parametrize('dpr,softness,decoration', [
-    (1, 0, 'none'), (1.5, 8, 'glow'), (1.5, 8, 'shadow'),
+@pytest.mark.parametrize('dpr,softness,decoration,mode', [
+    (1, 0, 'none', 'color'), (1.5, 8, 'glow', 'color'), (1.5, 8, 'shadow', 'color'),
+    (1.5, 5, 'glow', 'brighten'), (1, 0, 'none', 'follow_before'), (1.5, 5, 'shadow', 'follow_after'),
 ])
-def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, project, dpr, softness, decoration):
+def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, project, dpr, softness, decoration, mode):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
     track, base = vertical_source(project, texts=['字', '字'], position='top', reverse=True)
-    base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'), decoration_kind=decoration,
+    palette = colors('#FF0000', '#00FF00') if mode == 'color' else colors('#700000', '#007000')
+    base = replace(base, karaoke_colors=palette, decoration_kind=decoration,
                    glow_before_radius_px=6, glow_after_radius_px=6, shadow_before_offset_x=8, shadow_offset_x=8)
     style = replace(base, scanline_enabled=True, scanline_forward_enabled=False, scanline_reverse_enabled=True,
-                    scanline_shape='band', scanline_mode='color', scanline_color='#00FFFF',
-                    scanline_width_px=28, scanline_glow_px=softness)
+                    scanline_shape='band', scanline_mode=mode, scanline_color='#00FFFF',
+                    scanline_brightness_pct=100, scanline_width_px=36, scanline_glow_px=softness)
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, base), dpr=dpr)
     feature = 'p07_vertical_reverse_scanline'
     assert {feature, 'p07_vertical_scanline_band', 'p05_reverse_wipe'} <= set(ir['required_features'])
+    if mode != 'color':
+        feature = 'p07_vertical_reverse_scanline_palette'
+        assert {feature, 'p07_vertical_scanline_palette'} <= set(ir['required_features'])
     line, = ir['track']['lines']
     (start, end), (_, last_end) = line['resolved_intervals']
     top, bottom = ir['skia_layout']['lines'][0]['cells']
@@ -483,7 +488,17 @@ def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, p
         centers = []
         for frame in frames[1:3]:
             red, green, blue, alpha = np.moveaxis(frame, -1, 0)
-            rows, _ = np.nonzero((red < 40) & (green > 180) & (blue > 180) & (alpha > 64))
+            if mode == 'color':
+                mask = (red < 40) & (green > 180) & (blue > 180)
+            else:
+                before = (red > 180) & (blue < 40) & (alpha > 64)
+                after = (green > 180) & (blue < 40) & (alpha > 64)
+                assert bool(before.any()) == (mode != 'follow_after')
+                assert bool(after.any()) == (mode != 'follow_before')
+                if mode == 'brighten':
+                    assert np.median(np.nonzero(after)[0]) > np.median(np.nonzero(before)[0])
+                mask = before | after
+            rows, _ = np.nonzero(mask & (alpha > 64))
             assert rows.size and rows.min() >= split
             centers.append(np.median(rows))
         assert centers[0] > centers[1] + 2

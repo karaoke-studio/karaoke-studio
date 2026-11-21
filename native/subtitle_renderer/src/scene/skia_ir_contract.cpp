@@ -160,6 +160,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_scanline_line_animation",
         "p07_vertical_scanline_singing",
         "p07_vertical_scanline_palette",
+        "p07_vertical_reverse_scanline_palette",
         "p07_vertical_scanline_decoration",
         "p07_scanline_line_animation",
         "p07_scanline_unscaled_line_animation",
@@ -688,6 +689,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_scanline_palette")
         && (!features.contains("p07_vertical_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 竖排扫字线取色缺少高亮带能力");
+    if (features.contains("p07_vertical_reverse_scanline_palette")
+        && (!features.contains("p07_vertical_reverse_scanline") || !verticalScanlinePalette))
+        throw BackendError("Skia 竖排反向扫字线缺少对应取色能力");
     if (features.contains("p07_vertical_scanline_decoration")
         && (!features.contains("p07_vertical_scanline_band")
             || !(features.contains("p06_vertical_glow") || features.contains("p06_vertical_shadow")

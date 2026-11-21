@@ -331,7 +331,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && features.contains("p07_vertical_scanline_line_animation");
         const bool mixedVerticalScanline = cfg.vertical && features.contains("p07_vertical_mixed_scanline");
         const bool verticalPaletteBand = features.contains("p07_vertical_scanline_palette")
-            && staticScanline && !source.wipeReverse && source.karaokeAnimation == "none"
+            && staticScanline && source.karaokeAnimation == "none"
+            && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_palette"))
             && (resolved.scanlineMode == "brighten" || resolved.scanlineMode == "follow_before"
                 || resolved.scanlineMode == "follow_after");
         const bool verticalBand = features.contains("p07_vertical_scanline_band") && (staticScanline || verticalScanlineMotion)
