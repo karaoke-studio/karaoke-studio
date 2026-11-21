@@ -59,7 +59,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.shadow = source.shadow;
         line.glow = PreparedGlow::prepare(source.glow);
         line.byteParticleEntryGlow = !line.glow.empty() && source.rubyGeometryComposition
-            && (source.characterGeometry.entry == "heart" || source.characterGeometry.entry == "petal")
+            && (source.characterGeometry.entry == "heart" || source.characterGeometry.entry == "petal"
+                || source.characterGeometry.entry == "feather"
+                || source.characterGeometry.entry == "snow" || source.characterGeometry.entry == "snow_solid")
             && (source.characterGeometry.exit.empty() || source.characterGeometry.exit == "note");
         if (line.byteParticleEntryGlow)
             for (auto& layer : line.glow) layer.prepareBytePasses();

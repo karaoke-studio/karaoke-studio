@@ -506,7 +506,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         body_glow = _uses_decoration(look, 'glow')
                         if ('shadow' in ruby_decorations or ('glow' in ruby_decorations and not body_glow)
                                 or (body_glow and (paired or (with_flame and not note_exit)
-                                                   or entry not in {'heart', 'petal'}))):
+                                                   or entry not in {'heart', 'petal', 'feather', 'snow', 'snow_solid'}))):
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
                         particle_entry_glow |= body_glow
                         particle_entry_lines.add(index)

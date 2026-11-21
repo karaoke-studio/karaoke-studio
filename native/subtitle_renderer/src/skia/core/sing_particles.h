@@ -42,7 +42,7 @@ struct ParticleVisibility {
 };
 
 inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs, bool front,
-                              std::string_view exitKind) {
+                              std::string_view sampledKind, std::string_view quantizedKind) {
     SkPaint paint;
     paint.setAntiAlias(true);
     for (const auto& item : bursts) {
@@ -51,7 +51,8 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
         const float colorAlpha = paint.getAlphaf();
         const bool flameBody = item.burst.kind == "flame";
         const bool flameCore = item.burst.kind == "flame_alt";
-        const bool sampled = (exitKind == "note" || exitKind == "snow") && item.burst.kind == exitKind;
+        const bool sampled = item.burst.kind == sampledKind;
+        const bool quantized = item.burst.kind == quantizedKind;
         for (const auto& particle : krok::subtitle::native::effects::burstParticlesAt(
                  item.burst, tMs, item.originX, item.originY, item.boxW, item.boxH)) {
             if (particle.alpha <= 0.f || particle.sizePx <= 0.f) continue;
@@ -60,7 +61,7 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
                 auto color = paint.getColor4f();
                 color.fA = alpha;
                 drawParticleRing(canvas, {particle.x, particle.y}, *item.ring, particle.sizePx / 1000.f,
-                                 color, exitKind == "ripple" && item.burst.kind == exitKind);
+                                 color, quantized);
                 continue;
             }
             auto transform = SkMatrix::Translate(particle.x, particle.y);
@@ -80,7 +81,7 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             // Give Skia the final physical outline, as for the subtitle glyphs.
             const auto outline = particle_detail::spriteOutline(item.sprite, transform);
             if (sampled)
-                drawSamplePatternPath(canvas, outline, paint);
+                drawSamplePatternPath(canvas, outline, paint, quantized);
             else
                 canvas.drawPath(outline, paint);
         }

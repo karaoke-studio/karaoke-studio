@@ -59,14 +59,25 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
     const bool particleEntryGlow = line.byteParticleEntryGlow && line.characterGeometry.inEntryWindow(tMs, line.startMs);
     const std::string_view exitKind = line.characterGeometry.exit;
+    const std::string_view entryKind = line.characterGeometry.entry;
+    auto sampledKind = exitKind == "note" || exitKind == "snow" ? exitKind : std::string_view{};
+    auto quantizedKind = exitKind == "ripple" ? exitKind : std::string_view{};
+    const bool snowEntry = line.rubyGeometryComposition && exitKind.empty()
+        && (entryKind == "snow" || entryKind == "snow_solid");
+    if (snowEntry) {
+        sampledKind = entryKind;
+        quantizedKind = entryKind;
+    } else if (line.byteParticleEntryGlow && entryKind == "feather") {
+        sampledKind = entryKind;
+    }
     const bool particleExitFade = rubyGeometryPhase && !line.particles.empty() && line.glow.empty() && !line.hasRubyGlow()
         && !line.shadow.visible() && !line.hasRubyShadow
         && line.characterGeometry.exitMs > 0 && tMs >= line.characterGeometry.exitStart(line.endMs);
     if (!textVisible) {
         if (particleExitFade)
             canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
-        drawSingParticles(canvas, line.particles, tMs, false, exitKind);
-        drawSingParticles(canvas, line.particles, tMs, true, exitKind);
+        drawSingParticles(canvas, line.particles, tMs, false, sampledKind, quantizedKind);
+        drawSingParticles(canvas, line.particles, tMs, true, sampledKind, quantizedKind);
         return;
     }
     // Fade the composed line, preserving overlaps and translucent strokes.
@@ -358,7 +369,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCell(index, layer, roles.empty() || paint < 0 ? shaders : roles[paint]);
         });
     };
-    if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false, exitKind);
+    if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false, sampledKind, quantizedKind);
     if (geometry)
         for (std::size_t i = 0; i < line.cells.size(); ++i) {
             const auto& state = states[i];
@@ -575,7 +586,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         SkAutoCanvasRestore keep(&canvas, false);
         if (particleExitFade && opacityTransition)
             canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
-        drawSingParticles(canvas, line.particles, tMs, true, exitKind);
+        drawSingParticles(canvas, line.particles, tMs, true, sampledKind, quantizedKind);
     }
     if (line.scanline.rubyHighlight && line.scanline.repaintsGlyphs()
         && line.scanline.frontAt(line.cells, tMs, line.inkStart))

@@ -321,7 +321,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
         const bool particleEntryGlow = features.contains("p07_ruby_particle_entry_glow")
             && (line.exitAnimation == "none" || petalNotePair)
-            && (line.entryAnimation == "heart" || line.entryAnimation == "petal")
+            && (line.entryAnimation == "heart" || line.entryAnimation == "petal" || line.entryAnimation == "feather"
+                || line.entryAnimation == "snow" || line.entryAnimation == "snow_solid")
             && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow")
             && (petalNotePair || !features.contains("p07_ruby_petal_entry_flame_singing"));
         const auto supportsParticleEntryDecoration = [particleEntryGlow](const auto& kind) {

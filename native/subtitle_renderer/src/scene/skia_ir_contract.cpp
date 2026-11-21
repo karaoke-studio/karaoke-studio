@@ -251,7 +251,8 @@ bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
     const bool allowFade = features.contains("p07_ruby_particle_fade");
     if (isSkiaEnergyTransition(kind)) return allowFade;
     if (exit.isEmpty()) return features.contains("p07_ruby_particle_entry")
-        && (kind == "petal" || kind == "feather" || kind == "heart" || kind == "sparkle");
+        && (kind == "petal" || kind == "feather" || kind == "heart" || kind == "sparkle"
+            || kind == "snow" || kind == "snow_solid");
     return allowFade && (kind == "petal" || kind == "feather"
         || kind == "snow" || kind == "snow_solid" || kind == "note"
         || kind == "heart" || kind == "ripple" || kind == "sparkle");

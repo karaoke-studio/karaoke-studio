@@ -5,6 +5,7 @@
 #include "include/core/SkPathUtils.h"
 #include "include/core/SkSurface.h"
 #include "include/effects/SkRuntimeEffect.h"
+#include <cmath>
 #include <stdexcept>
 
 namespace subtitle::skia {
@@ -49,7 +50,7 @@ void drawSupersampledSolidPath(SkCanvas& canvas, const SkPath& path, const SkPai
     canvas.drawImageRect(image, SkRect::Make(bounds), SkSamplingOptions(SkFilterMode::kLinear), &composite);
 }
 
-void drawSamplePatternPath(SkCanvas& canvas, const SkPath& path, const SkPaint& fill) {
+void drawSamplePatternPath(SkCanvas& canvas, const SkPath& path, const SkPaint& fill, bool quantize) {
     const auto devicePath = path.makeTransform(canvas.getTotalMatrix());
     auto bounds = devicePath.computeTightBounds().roundOut();
     if (!bounds.intersect(canvas.getDeviceClipBounds())) return;
@@ -78,7 +79,8 @@ void drawSamplePatternPath(SkCanvas& canvas, const SkPath& path, const SkPaint& 
     static const auto effect = SkRuntimeEffect::MakeForShader(SkString(R"(
         uniform shader mask;
         uniform float2 origin;
-        uniform half4 tint;
+        uniform float4 tint;
+        uniform int quantize;
         half4 main(float2 position) {
             float2 p = (position - origin) * 16.0 + 0.5;
             float count = mask.eval(p + float2(1,1)).a + mask.eval(p + float2(-1,-3)).a
@@ -89,7 +91,9 @@ void drawSamplePatternPath(SkCanvas& canvas, const SkPath& path, const SkPaint& 
                 + mask.eval(p + float2(-4,-6)).a + mask.eval(p + float2(-6,4)).a
                 + mask.eval(p + float2(-8,0)).a + mask.eval(p + float2(7,-4)).a
                 + mask.eval(p + float2(6,7)).a + mask.eval(p + float2(-7,-8)).a;
-            return tint * half(count / 16.0);
+            float amount = count / 16.0;
+            if (quantize != 0) return half4(floor(tint * amount * 255.0 + 0.5) / 255.0);
+            return half4(tint) * half(amount);
         }
     )"));
     if (!effect.effect) throw std::runtime_error(effect.errorText.c_str());
@@ -97,7 +101,10 @@ void drawSamplePatternPath(SkCanvas& canvas, const SkPath& path, const SkPaint& 
     builder.child("mask") = std::move(shader);
     builder.uniform("origin") = SkV2{float(bounds.left()), float(bounds.top())};
     const auto color = fill.getColor4f();
-    builder.uniform("tint") = SkV4{color.fR * color.fA, color.fG * color.fA, color.fB * color.fA, color.fA};
+    constexpr float opacitySteps = 4096.f;
+    const float alpha = quantize ? std::floor(color.fA * opacitySteps) / opacitySteps : color.fA;
+    builder.uniform("tint") = SkV4{color.fR * alpha, color.fG * alpha, color.fB * alpha, alpha};
+    builder.uniform("quantize") = int(quantize);
     auto coverage = builder.makeShader();
     if (!coverage) throw std::runtime_error("Skia 粒子采样覆盖着色器初始化失败");
     SkPaint paint;
