@@ -11,6 +11,8 @@ import uuid
 
 import numpy as np
 import pytest
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QImage
 
@@ -774,9 +776,33 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
             top, bottom = np.split(rows.reshape(image.height(), image.width(), 4)[..., 3], [image.height() // 2])
             assert top.max() > 200 and bottom.max() > 200
         assert "Skia" in canvas.render_backend_label()
-        assert canvas._async_renderer.current_backend_mode == ("gpu" if gpu and not missing_loader else "cpu")
-        canvas.set_gpu_preview_enabled(not gpu)
+        retired = canvas._async_renderer
+        assert retired.current_backend_mode == ("gpu" if gpu and not missing_loader else "cpu")
+        stale = QImage(2, 2, QImage.Format.Format_RGBA8888)
+        stale.fill(0)
+        stale.setText("preview_backend", "skia_" + retired.current_backend_mode)
+        delivered = []
+        deliver = canvas._on_async_frame
+
+        def record_delivery(image, time_ms):
+            delivered.append((image.size(), time_ms, image.text("preview_backend")))
+            deliver(image, time_ms)
+
+        monkeypatch.setattr(canvas, "_on_async_frame", record_delivery)
+        retired.frame_ready.emit(stale, 550)
+        assert canvas.set_gpu_preview_enabled(not gpu)
         assert canvas._async_renderer.selection.target == ("raster" if gpu else "gpu")
+        canvas.set_time(550)
+        deadline = time.monotonic() + 5
+        while (not delivered or not sip.isdeleted(retired)) and not errors and time.monotonic() < deadline:
+            QApplication.processEvents()
+            if not sip.isdeleted(retired):
+                QCoreApplication.sendPostedEvents(retired, QEvent.Type.DeferredDelete)
+            time.sleep(0.01)
+        assert not errors, errors
+        assert all(size != stale.size() for size, _, _ in delivered)
+        assert delivered and delivered[-1][1:] == (550, "skia_gpu" if not gpu else "skia_cpu")
+        assert sip.isdeleted(retired)
     finally:
         canvas._stop_async_renderer()
         canvas.close()

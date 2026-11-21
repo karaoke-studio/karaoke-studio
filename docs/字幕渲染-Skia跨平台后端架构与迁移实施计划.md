@@ -3298,6 +3298,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 同一 130 秒播放、12 次尺寸切换及首尾采样窗口，工作集增量 **70.9 → 21.6 MiB**，私有字节增量 **84.5 → 34.8 MiB**。完成 **7109** 次有效提交回执，无出帧停滞。较长周期的内存稳定性和缓存逐出仍待验证。日志为 `build/p11-memory-font-pool-size.log`。
 - Windows **91** 项字体和回退用例通过，WSL X11 在后续使用同一 native 构建的组合中通过 **182** 项。Windows Vulkan、Windows 独立 Raster、WSL Vulkan 各 **3 项 CTest 通过**。
 
+### 14.252 P11.3/P11.10 Skia 切换时的线程、窗口和帧归属（2026-11-21）
+
+- 切换 Skia GPU、Raster 或关闭预览时，原工作线程清除待处理请求和场景引用，解除与旧窗口的父子关系，完成 sidecar 和 IPC 清理后销毁 Qt 对象。共享帧接收端核对发起工作的 Skia 渲染器身份，即使旧帧与当前播放头时间一致也会丢弃。D2D 的帧连接仍用原槽。
+- 产品回归注入切换前排队的旧帧，验证切换后实际目标的图像到达和原 QObject 销毁，覆盖 Vulkan ↔ Raster 与 Vulkan 加载失败后回退。Windows 相关组合 **157 通过、16 跳过、2 未选**，WSL X11 **182 通过、40 跳过、2 未选**。以上组合未配置 QML 模块目录，直画切换另做浮窗长测。日志为 `build/p11-switch-owner-win-final.log`、`build/p11-switch-owner-wsl.log`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

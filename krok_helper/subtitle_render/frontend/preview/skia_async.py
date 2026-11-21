@@ -114,13 +114,18 @@ class SkiaAsyncSubtitleRenderer(QObject):
             except TypeError:
                 pass
         self._font_timer.stop()
+        # The thread can finish native cleanup after its old view is closed.
+        self.setParent(None)
         with self._condition:
             self._stopped = True
+            self._state = self._pending = self._last_request = None
             self._condition.notify_all()
             renderer = self._renderer
         if renderer is not None:
             renderer.abort(reason="Skia preview stopped")
         self._thread.join(timeout=3)
+        if not self._thread.is_alive():
+            self.deleteLater()
 
     def _run(self):
         renderer = None
@@ -205,7 +210,12 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         self.backend_label = "Skia 错误"
                         self.renderError.emit("Skia 字幕渲染失败：" + str(exc))
         finally:
-            if renderer is not None:
-                renderer.close()
-            with self._condition:
-                self._renderer = None
+            try:
+                if renderer is not None:
+                    renderer.close()
+            finally:
+                with self._condition:
+                    self._renderer = None
+                    if self._stopped:
+                        # A worker may outlive stop() while it finishes native cleanup.
+                        self.deleteLater()

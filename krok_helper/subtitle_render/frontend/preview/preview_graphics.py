@@ -455,8 +455,9 @@ class PreviewGraphicsView(QGraphicsView):
         self._render_busy_timer.setInterval(_RENDER_BUSY_POLL_MS)
         self._render_busy_timer.timeout.connect(self._update_render_busy_badge)
         from krok_helper.subtitle_render.native.backend import skia_requested
-        if async_preview_enabled() or skia_requested():
-            if skia_requested():
+        skia = skia_requested()
+        if async_preview_enabled() or skia:
+            if skia:
                 from .skia_async import SkiaAsyncSubtitleRenderer
                 renderer_cls = lambda w, h, parent: SkiaAsyncSubtitleRenderer(w, h, parent, gpu_enabled=gpu_preview_enabled())
             elif gpu_preview_enabled():
@@ -466,9 +467,7 @@ class PreviewGraphicsView(QGraphicsView):
             else:
                 renderer_cls = AsyncSubtitleRenderer
             self._async_renderer = renderer_cls(self._output_w, self._output_h, self)
-            self._async_renderer.frame_ready.connect(
-                self._on_async_frame, Qt.ConnectionType.QueuedConnection
-            )
+            self._connect_async_frame_signal(skia=skia)
             self._connect_render_progress_signal()
             self._connect_native_preview_signal()
             self._connect_gpu_fallback_signal()
@@ -649,9 +648,7 @@ class PreviewGraphicsView(QGraphicsView):
             self.renderBackendChanged.emit(self.render_backend_label())
             return True
         self._async_renderer = target_cls(self._output_w, self._output_h, self, **({"gpu_enabled": enabled} if skia else {}))
-        self._async_renderer.frame_ready.connect(
-            self._on_async_frame, Qt.ConnectionType.QueuedConnection
-        )
+        self._connect_async_frame_signal(skia=skia)
         self._connect_render_progress_signal()
         self._connect_native_preview_signal()
         self._connect_gpu_fallback_signal()
@@ -1036,6 +1033,19 @@ class PreviewGraphicsView(QGraphicsView):
         if self._video_playing:
             return _ASYNC_PLAYBACK_STALE_TOLERANCE_MS
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
+
+    def _connect_async_frame_signal(self, *, skia: bool) -> None:
+        renderer = self._async_renderer
+
+        def deliver_skia_frame(image: QImage, t_ms: int) -> None:
+            # An image queued by a retired worker can still match the current time.
+            if self._async_renderer is renderer:
+                self._on_async_frame(image, t_ms)
+
+        renderer.frame_ready.connect(
+            deliver_skia_frame if skia else self._on_async_frame,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
         if getattr(self, "uses_skia_quick_preview", False) or getattr(self, "_font_preparation_timer", None) is not None:
