@@ -856,6 +856,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P12.1 Windows 收集 Skia sidecar / 宿主模块 / 所需 Qt Quick 插件和运行时，保留现有 MSVC 运行时刷新步骤。
 - [ ] P12.2 macOS 按架构收集 `.dylib` / QML 模块、正确 rpath，纳入应用签名/分发流程；原生 SDK 与 PyQt runtime 均为 6.11.0。
 - [ ] P12.3 Linux 明确依赖与包形式、Vulkan loader/驱动要求、X11/Wayland Qt 插件、可执行权限和路径；不能宣称随包解决所有发行版驱动环境。
+  - [x] Linux 验证产物自动记录各 ELF 二进制直接引用的 glibc、libstdc++ 及 C++ ABI 版本，见 §14.309。
 - [ ] P12.4 更改 runtime 收集范围时按现有机制更新 `RUNTIME_PROFILE`，校验增量更新与旧包升级；资产名和 manifest 名保持既有兼容契约。
 - [ ] P12.5 在干净环境安装实际发布包，测试配置、预览、导出、重启、fallback、旧工程、升级；开发机源码运行不代替包验收。
 - [ ] P12.6 等待用户明确授权切换生产默认。获授权且 M3、三平台包验收均完成后，执行另行审查的默认切换，保留 GPU 偏好与环境变量覆盖。
@@ -3658,6 +3659,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 1080p 六种唱前唱后装饰组合各 **17 帧**通过实际 D2D GPU 对 Vulkan、Vulkan 对 Raster 的既有画面预算，覆盖双光晕、双阴影、阴影与光晕交替，以及单相阴影。
 - DPR 1.5 再对照六种组合各 **13 帧**，覆盖半透明正文、半透明内描边及独立外描边。另核对能力缺失的配置失败后，原场景仍可倒序回放。Windows 关联套件 **157 项通过**。
 - 独立 Windows Raster **12 通过**，WSL X11、Wayland 各 **25 通过、6 项 D2D 专用跳过**。Windows Vulkan、独立 Raster 和 WSL Vulkan 各通过 **3 项 CTest**。证据前缀为 `build/p06-horizontal-reverse-decor-*`。
+
+### 14.309 P12.3 Linux ELF 运行库基线证据（2026-11-22）
+
+- 有 `readelf` 时，Linux 构建将每个冒烟程序、sidecar 和实际构建的 Qt Quick 插件所需的最高 `GLIBC`、`GLIBCXX`、`CXXABI` 符号版本写入 `build-fingerprint.json` 的 `linux_runtime_versions`。字段仅记录该 ELF 的直接导入。
+- WSL Ubuntu 26.04 的 Vulkan 与独立 Raster 构建各通过 **3 项 CTest**。本机 sidecar 和 Qt Quick 插件均引用 **GLIBC 2.43、GLIBCXX 3.4.32**，Qt 6.11 SDK 的 `libQt6Core.so.6` 分别引用 **2.34、3.4.29**。旧系统分发仍需在目标 ABI 基线重建，并在干净环境实测。Windows 构建脚本单测 **24 项通过**。
 
 ## 15. 前期探针清理范围
 

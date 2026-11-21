@@ -16,7 +16,7 @@ import sysconfig
 
 from skia_build.configuration import configure, digest, gn_text, host_platform, validate_selection
 from skia_build.sources import fetch_sources, sha256, tools
-from skia_build.provenance import (native_needs_clean, record_request, renderer_digest,
+from skia_build.provenance import (elf_runtime_versions, native_needs_clean, record_request, renderer_digest,
                                    reset_relocated_cmake_cache)
 
 REPO = Path(__file__).resolve().parents[1]
@@ -175,6 +175,16 @@ def main(argv=None) -> int:
     evidence = {"fingerprint": fingerprint, "identity": identity, "artifacts": artifacts,
                 "native_fingerprint": native_fingerprint, "native_identity": native_identity,
                 "build_status": "passed", "smoke": smoke_evidence}
+    if system == "linux":
+        elf_paths = list(artifacts)
+        if options.qt_root:
+            elf_paths.append("krok_skia_subtitle_renderer")
+        if preview:
+            elf_paths.append("qml/Krok/SubtitleSkia/libsubtitle_skia_preview.so")
+        runtime_versions = {path: versions for path in elf_paths
+                            if (versions := elf_runtime_versions(native_output / path))}
+        if runtime_versions:
+            evidence["linux_runtime_versions"] = runtime_versions
     # Publish only after a successful build and all requested smoke runs.
     fingerprint_file.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     (native_output / "build-fingerprint.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")

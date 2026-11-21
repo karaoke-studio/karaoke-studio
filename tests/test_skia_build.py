@@ -15,7 +15,33 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from skia_build.configuration import gn_text, validate_selection  # noqa: E402
 from skia_build.sources import checkout, download, sha256  # noqa: E402
 from skia_build.provenance import (  # noqa: E402
-    native_needs_clean, record_request, renderer_digest, reset_relocated_cmake_cache)
+    elf_runtime_versions, native_needs_clean, record_request, renderer_digest, reset_relocated_cmake_cache)
+
+
+def test_elf_runtime_versions_only_report_highest_imports(monkeypatch, tmp_path):
+    from skia_build import provenance
+
+    binary = tmp_path / "sidecar"
+    stdout = """Version definition section '.gnu.version_d':
+  0x0020: Rev: 1 Flags: none Index: 2 Cnt: 1 Name: GLIBCXX_3.4.99
+Version needs section '.gnu.version_r':
+  0x0010: Name: GLIBC_2.9 Flags: none Version: 6
+  0x0020: Name: GLIBC_2.43 Flags: none Version: 5
+  0x0030: Name: GLIBCXX_3.4.32 Flags: none Version: 4
+  0x0040: Name: CXXABI_1.3.13 Flags: none Version: 3
+  0x0050: Name: GLIBC_PRIVATE Flags: none Version: 2
+"""
+    monkeypatch.setattr(provenance.shutil, "which", lambda name: name)
+
+    def inspect(command, **kwargs):
+        assert command == ["readelf", "--version-info", str(binary)]
+        assert kwargs["env"]["LC_ALL"] == "C"
+        return subprocess.CompletedProcess(command, 0, stdout)
+
+    monkeypatch.setattr(provenance.subprocess, "run", inspect)
+    assert elf_runtime_versions(binary) == {"GLIBC": "2.43", "GLIBCXX": "3.4.32", "CXXABI": "1.3.13"}
+    monkeypatch.setattr(provenance.shutil, "which", lambda _: None)
+    assert elf_runtime_versions(binary) == {}
 
 
 @pytest.mark.parametrize("system,arch,api,cpu", [

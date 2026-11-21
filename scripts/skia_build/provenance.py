@@ -5,7 +5,31 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import subprocess
+
+
+def elf_runtime_versions(binary: Path) -> dict[str, str]:
+    """Report the newest required symbol version for each Linux runtime namespace."""
+    readelf = shutil.which("readelf")
+    if readelf is None:
+        return {}
+    try:
+        output = subprocess.run([readelf, "--version-info", str(binary)], check=True, capture_output=True,
+                                text=True, encoding="utf-8", errors="replace", timeout=10,
+                                env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    # Only read imported versions. Definitions are provided by the binary
+    # itself and cannot establish the oldest runtime that can load it.
+    _, _, imported = output.partition("Version needs section")
+    required: dict[str, tuple[int, ...]] = {}
+    for name, version in re.findall(r"\bName: (GLIBC|GLIBCXX|CXXABI)_([0-9]+(?:\.[0-9]+)+)\b", imported):
+        numbers = tuple(map(int, version.split(".")))
+        if numbers > required.get(name, ()):
+            required[name] = numbers
+    return {name: ".".join(map(str, version)) for name, version in sorted(required.items())}
 
 
 def renderer_digest(repo: Path) -> str:
