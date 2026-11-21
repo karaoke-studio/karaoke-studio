@@ -846,6 +846,19 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                and any('lower_glow' in group or 'lower_shadow' in group for group in final['ruby_groups'])
                for source, final in zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True)):
             ir['required_features'].append('p07_lower_ruby_decoration_line_animation')
+    if animates_line and not (style.vertical or style.right_to_left or style.lower_ruby_enabled):
+        for index, item in enumerate(plan.lines):
+            source = ir['track']['lines'][item.track_index]
+            rubies = geometry.ruby.lines[index].rubies if geometry.ruby is not None else ()
+            shadow = _uses_decoration(item.layout_style, 'shadow') or any(
+                'shadow' in ruby_decoration_kinds(group.target.style) for group in rubies)
+            if (shadow and source.get('karaoke_anim') in {'none', 'no_wipe'}
+                    and {source.get('entry_anim'), source.get('exit_anim')} != {'none'} and _ordinary_line_animation(source)
+                    and not (source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash')
+                             or source.get('fx_bursts') or item.line.wipe_reverse or _inline_role_labels(item))
+                    and all(char.vector_glyph is None for char in item.render_line.chars)):
+                ir['required_features'].append('p07_horizontal_shadow_line_animation')
+                break
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
     _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines,

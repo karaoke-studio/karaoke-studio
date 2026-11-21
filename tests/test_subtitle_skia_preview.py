@@ -754,11 +754,18 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
     exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
 track = TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
     end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)])
-if '--effects' in sys.argv:
+if '--particle-scanline' in sys.argv:
     from dataclasses import replace
 
     style = replace(style, entry_anim='petal', entry_lead_ms=600, karaoke_anim='utopia_scanline',
                     sing_fx='flame', scanline_effect='star', ruby_decoration_kind='none')
+    track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
+if '--shadow-motion' in sys.argv:
+    from dataclasses import replace
+
+    style = replace(style, entry_anim='slide_in', exit_anim='rise', entry_lead_ms=600, exit_fade_ms=600,
+                    decoration_kind='shadow', ruby_decoration_kind='shadow', stroke_width_px=4,
+                    shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3)
     track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
 panel.set_style(style)
 panel.set_track(track)
@@ -790,7 +797,7 @@ if '--compare-export' in sys.argv:
     work = Path(sys.argv[-1])
     quick = panel.canvas._quick_preview
     binary = quick._binary
-    indices = {12: 200, 33: 550, 81: 1350}
+    indices = {24: 400, 48: 800, 90: 1500} if '--shadow-motion' in sys.argv else {12: 200, 33: 550, 81: 1350}
     captures = {}
     for index, time_ms in indices.items():
         transport.set_time(time_ms)
@@ -882,7 +889,7 @@ print('floating preview verified', flush=True)
 """
 
 
-def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None, effects=False):
+def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None, effects=None):
     binary = qml_dir.parent / ('krok_skia_subtitle_renderer.exe' if sys.platform == 'win32' else 'krok_skia_subtitle_renderer')
     env = desktop_environment() | {
         'KROK_SUBTITLE_RENDER_BACKEND': 'skia', 'KROK_SUBTITLE_SKIA_TARGET': 'gpu',
@@ -895,7 +902,7 @@ def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None, 
     if compare_path is not None:
         args += ['--compare-export', str(compare_path)]
     if effects:
-        args.insert(0, '--effects')
+        args.insert(0, f'--{effects}')
     result = subprocess.run([sys.executable, '-X', 'faulthandler', '-c', FLOATING_WINDOW, *args], env=env, capture_output=True,
                             text=True, encoding='utf-8', errors='replace', timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -906,7 +913,8 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
     assert 'floating preview verified' in run_floating_preview(qml_dir)
 
 
-@pytest.mark.parametrize('effects', [False, True], ids=['plain', 'particle-scanline'])
+@pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion'],
+                         ids=['plain', 'particle-scanline', 'shadow-motion'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     result = run_floating_preview(qml_dir, compare_path=tmp_path, effects=effects)
     assert 'Quick, offscreen GPU and export pipe compared' in result

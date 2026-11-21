@@ -172,7 +172,7 @@ def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p0
                 assert abs(delta).max() <= budget['max_bbox_edge_delta_px_at_1080'], (case, t, name, delta)
             iou = (left & right).sum() / union.sum()
             assert iou >= budget['min_alpha_iou'], (case, t, name, iou)
-            diff = abs(premultiplied(first)[union] - premultiplied(second)[union])
+            diff = abs(premultiplied(first[union]) - premultiplied(second[union]))
             assert diff.mean() <= budget['max_union_channel_mae'], (case, t, name, diff.mean())
             assert np.percentile(diff, 95) <= budget['max_union_p95'], (case, t, name)
 

@@ -230,6 +230,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || !projected.charStyles.empty()))
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
+        const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
+        const bool horizontalShadowMotion = features.contains("p07_horizontal_shadow_line_animation")
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse
+            && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
+            && (line.entryAnimation != "none" || line.exitAnimation != "none")
+            && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && !vectorGuides && !hasInlineRoles && !features.contains("p05_lower_ruby")
+            && (style.decorationKindForState(false) == "shadow" || style.decorationKindForState(true) == "shadow"
+                || (annotated && (style.rubyDecorationKindForState(false) == "shadow"
+                                  || style.rubyDecorationKindForState(true) == "shadow")));
         const bool petalScanline = line.scanlineEnabled && features.contains("p07_ruby_petal_entry_scanline")
             && line.entryAnimation == "petal" && line.exitAnimation == "none" && singingScale
             && style.scanlineShape == "band" && style.scanlineMode == "color";
@@ -509,7 +519,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                   projected.layoutReferenceScale);
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
-            rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr, totalCells, totalGroups);
+            rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
+            rtlRubyUnscaledMotion || horizontalShadowMotion, totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
@@ -581,7 +592,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 prepared.bodyGlowTransitionBounds = fill;
             }
         }
-        const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
         const bool lineGradientGlow = gradientGlow
             && ((prepared.glow.before.radius > 0 && style.beforeDecorPaint.mode != "solid")
                 || (prepared.glow.after.radius > 0 && style.afterDecorPaint.mode != "solid"));
@@ -648,9 +658,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || (hasShadow && !rtlShadow)))
                 || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
-                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
+                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow || horizontalShadowMotion
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
-                || (!(lineGlow || rtlRubyUnscaledMotion || (verticalDecoration && verticalFade)
+                || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion || (verticalDecoration && verticalFade)
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)

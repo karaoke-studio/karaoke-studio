@@ -174,6 +174,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         struct RubyGlowEntry { std::size_t index, nextCell; };
         std::map<std::pair<bool, int>, RubyGlowEntry> rubyGlowEntries;
         for (const auto& group : source.rubyGroups) {
+            line.hasRubyShadow |= group.shadow.visible();
             if (group.fadeOwner && *group.fadeOwner >= line.cells.size())
                 throw std::runtime_error("Skia 注音逐字淡化索引超限");
             totalCells += group.cells.size();

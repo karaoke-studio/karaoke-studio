@@ -135,7 +135,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
         const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
         GlowPaintSupport glowPaints,
-        const RolePaintBounds* roleBounds, std::size_t& totalCells, std::size_t& totalGroups) {
+        const RolePaintBounds* roleBounds, bool lineDecorationMotion, std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
         || ir.value("skia_layout").toObject().value("ruby_schema").toDouble(-1) != 1
@@ -163,13 +163,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool rtlShadow = rtl && features.contains("p06_rtl_ruby_shadow")
         && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe");
-    const bool rtlUnscaledMotion = rtl && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe")
-        && features.contains("p07_rtl_ruby_unscaled_line_animation");
     const bool allowShadow = features.contains("p06_ruby_shadow")
         && (!rtl || rtlShadow) && (!vertical || allowVerticalDecoration)
-        && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow)
+        && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || lineDecorationMotion)
         && !line.zoomPulseEnabled
-        && (staticLine || verticalFade || rtlUnscaledMotion);
+        && (staticLine || verticalFade || lineDecorationMotion);
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
@@ -184,8 +182,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade || rtlUnscaledMotion
-            || roleLineFade || gradientLineFade)
+        && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
+            || lineDecorationMotion || roleLineFade || gradientLineFade)
         && (scene.charStyles.empty() || roleGlow);
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"

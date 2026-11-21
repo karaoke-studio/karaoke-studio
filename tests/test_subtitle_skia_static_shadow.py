@@ -21,6 +21,68 @@ from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
 
 
+_LINE_MOTIONS = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
+
+
+def animated_shadow_style(style, effect, entry, exit_, body, ruby):
+    return replace(style, right_to_left=False, stroke_width_px=4, karaoke_anim=effect, entry_anim=entry,
+                   exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600, decoration_before_sync=False,
+                   decoration_kind_before=body[0], decoration_kind=body[1],
+                   ruby_decoration_kind_before=ruby[0], ruby_decoration_kind=ruby[1],
+                   shadow_before_offset_x=-7, shadow_before_offset_y=5, shadow_offset_x=9, shadow_offset_y=6,
+                   ruby_shadow_before_offset_x=-5, ruby_shadow_before_offset_y=3,
+                   ruby_shadow_offset_x=4, ruby_shadow_offset_y=3,
+                   glow_before_radius_px=6, glow_after_radius_px=6, ruby_glow_radius_px=4)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('effect', ['none', 'no_wipe'])
+@pytest.mark.parametrize('entry,exit_', _LINE_MOTIONS)
+def test_horizontal_shadow_motion_keeps_scene_and_replays(binary, reading, target, effect, entry, exit_):
+    track, style = reading
+    style = animated_shadow_style(style, effect, entry, exit_, ('glow', 'shadow'), ('shadow', 'glow'))
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_horizontal_shadow_line_animation'
+    assert feature in ir['required_features']
+    line, = ir['track']['lines']
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start + 4, start + 150, start + 650, end - 150, end - 48, end - 4]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    alpha = [int(frame[..., 3].sum()) for frame in frames]
+    assert 0 < alpha[0] < alpha[1] < alpha[2]
+    assert alpha[-1] == 0 < alpha[-2] < alpha[-3] < alpha[2]
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,exit_', _LINE_MOTIONS)
+@pytest.mark.parametrize('effect', ['none', 'no_wipe'])
+@pytest.mark.parametrize('layout,body,ruby', [
+    ('body', ('shadow', 'shadow'), ('none', 'none')),
+    ('ruby', ('none', 'none'), ('shadow', 'shadow')),
+    ('both', ('shadow', 'shadow'), ('shadow', 'shadow')),
+    ('both', ('glow', 'shadow'), ('shadow', 'glow')),
+])
+def test_horizontal_shadow_motion_matches_actual_gpu(binary, application, tmp_path, layout, body, ruby,
+                                                     effect, entry, exit_):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
+    track = replace(case.track, rubies=[]) if layout == 'body' else case.track
+    style = animated_shadow_style(case.style, effect, entry, exit_, body, ruby)
+    times = (299, 301, 307, 317, 336, 375, 500, 750, 899, 900, 1500, 3950,
+             4500, 4900, 5100, 5350, 5464, 5483, 5493, 5499, 5500)
+    assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
+
+
 TIMES = [0, 199, 200, 399, 599, 600, 750, 899, 900, 1200, 1799, 1800, 2200]
 CASES = ('before', 'after', 'both', 'transparent', 'plain', 'zero_offset')
 
