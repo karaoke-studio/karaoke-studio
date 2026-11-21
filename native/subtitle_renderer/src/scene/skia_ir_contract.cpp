@@ -199,6 +199,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_petal_entry_scanline",
         "p08_viewport",
         "p08_vertical_viewport",
+        "p08_vertical_scanline_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",
         "p08_decorated_shape_signal",
@@ -313,6 +314,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p08_viewport") || !features.contains("p05_vertical_solid")
             || !style.value("vertical").toBool()))
         throw BackendError("Skia 竖排视口变换缺少竖排布局或视口能力声明");
+    const bool verticalScanlineViewport = features.contains("p08_vertical_scanline_viewport");
+    if (verticalScanlineViewport
+        && (!features.contains("p08_vertical_viewport") || !features.contains("p07_vertical_scanline_band")
+            || features.contains("p07_vertical_reverse_scanline") || features.contains("p07_vertical_scanline_line_animation")
+            || features.contains("p07_vertical_scanline_singing")))
+        throw BackendError("Skia 竖排扫字线视口当前仅支持正向普通走字");
     if (features.contains("p08_viewport")) {
         integer(style, "viewport_scale_pct", 1, 400);
         integer(style, "viewport_rotation_deg", -180, 180);
@@ -323,8 +330,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         if (!anchors.contains(style.value("viewport_align")))
             throw BackendError("Skia 字幕视口锚点无效");
         const QJsonArray incompatible{"p06_image_fill", "p06_body_gradient", "p06_static_shadow",
-            "p06_ruby_shadow", "p07_noise_transition", "p07_scanline_band", "p07_sing_twinkle", "p07_stroke_flash",
+            "p06_ruby_shadow", "p07_noise_transition", "p07_sing_twinkle", "p07_stroke_flash",
             "p07_character_transform", "p07_character_fade", "p07_utopia_transition"};
+        if (features.contains("p07_scanline_band") && !verticalScanlineViewport)
+            throw BackendError("Skia 字幕视口变换暂不支持此扫字线组合");
         for (const auto& capability : incompatible) {
             if (features.contains(capability))
                 throw BackendError("Skia 字幕视口变换暂不支持此材质或特效");

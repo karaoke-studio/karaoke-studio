@@ -721,8 +721,8 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('overlap', [False, True])
-def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap):
+@pytest.mark.parametrize('overlap,scanline', [(False, False), (True, False), (False, True), (True, True)])
+def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap, scanline):
     from krok_helper.subtitle_render.domain.models import LyricsLayout
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
@@ -741,6 +741,10 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
                         ruby_decoration_kind='glow', ruby_glow_after_radius_px=5)
     else:
         style = replace(style, ruby_karaoke_colors=colors('#70FF00FF', '#AD0000FF'))
+    if scanline:
+        style = replace(style, scanline_enabled=True, scanline_shape='band', scanline_mode='color',
+                        scanline_color='#C000FFFF', scanline_width_px=28, scanline_glow_px=5,
+                        viewport_rotation_deg=-19 if not overlap else 0)
     ir = ir_for(binary, (main, style), dpr=1.5, extra_tracks=[extra])
     single = [ir_for(binary, (source, style), dpr=1.5) for source in (main, extra)]
     feature = 'p08_multiple_vertical_sources'
@@ -748,8 +752,13 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
     for actual, expected in zip((ir, *ir['skia_extra_sources']), single, strict=True):
         assert actual['skia_layout']['lines'] == expected['skia_layout']['lines']
         assert actual['track']['lines'] == expected['track']['lines']
+        assert ('p07_vertical_scanline_band' in actual['required_features']) == scanline
+        assert ('p08_vertical_scanline_viewport' in actual['required_features']) == scanline
     invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
+    if scanline:
+        invalid['skia_extra_sources'][0]['required_features'].remove('p08_vertical_scanline_viewport')
+    else:
+        invalid['required_features'].remove(feature)
     times = [320, 1420, 2450, 3250]
     captures = []
     for target in ('gpu', 'raster'):
@@ -770,6 +779,10 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
         assert not principal[2].any() and secondary[2].any()
         assert np.array_equal(frames[0], principal[0]) and np.array_equal(frames[2], secondary[2])
         assert not frames[-1].any() and np.array_equal(frames[1], replay[0])
+        if scanline:
+            for frame in (principal[0], secondary[1]):
+                red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+                assert np.any((red < 130) & (green > 140) & (blue > 85) & (alpha > 64))
         bottom = premultiplied(principal[1])
         top = premultiplied(secondary[1])
         expected = top + bottom * (1 - top[..., 3:4] / 255)
