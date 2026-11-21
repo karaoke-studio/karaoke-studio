@@ -634,11 +634,12 @@ def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, d
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('entry,exit_,two_lanes,decoration', [
-    ('slide_in', 'slide_out', False, 'glow'), ('rise', 'rise', True, 'shadow'),
-    ('fade', 'rise', True, 'glow'),
+@pytest.mark.parametrize('entry,exit_,two_lanes,decoration,karaoke', [
+    ('slide_in', 'slide_out', False, 'glow', 'none'), ('rise', 'rise', True, 'shadow', 'none'),
+    ('fade', 'rise', True, 'glow', 'none'), ('fade', 'fade', True, 'glow', 'no_wipe'),
+    ('slide_in', 'slide_out', False, 'glow', 'no_wipe'), ('rise', 'rise', True, 'shadow', 'no_wipe'),
 ])
-def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, exit_, two_lanes, decoration):
+def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, exit_, two_lanes, decoration, karaoke):
     from test_subtitle_skia_outline_ruby import premultiplied
 
     if two_lanes:
@@ -648,15 +649,18 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
         line, = track.lines
         track = replace(track, lines=[replace(line, display_start_override_ms=0,
                                               display_end_override_ms=line.end_ms + 800)])
-    base = replace(base, decoration_kind=decoration, glow_before_radius_px=6, glow_after_radius_px=7,
+    base = replace(base, karaoke_anim=karaoke, decoration_kind=decoration,
+                   glow_before_radius_px=6, glow_after_radius_px=7,
                    ruby_decoration_kind=decoration, ruby_decoration_kind_before=decoration,
                    ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5, shadow_offset_x=-8,
                    shadow_offset_y=6, ruby_shadow_offset_x=8, ruby_shadow_offset_y=4)
     style = replace(base, entry_anim=entry, exit_anim=exit_, entry_lead_ms=500, exit_fade_ms=500)
     ir = ir_for(binary, (track, style), dpr=1.5)
     plain = ir_for(binary, (track, base), dpr=1.5)
-    feature = 'p07_vertical_decoration_line_motion'
-    assert {feature, 'p07_line_motion', 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
+    feature = ('p07_vertical_decoration_no_wipe_animation' if karaoke == 'no_wipe'
+               else 'p07_vertical_decoration_line_motion')
+    animation_feature = 'p07_line_fade' if entry == exit_ == 'fade' else 'p07_line_motion'
+    assert {feature, animation_feature, 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     first = ir['track']['lines'][0]
     start, end = first['display_start_ms'], first['display_end_ms']
@@ -688,7 +692,8 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
             assert head[0] < -10 and tail[0] < -10, (head, tail)
             assert abs(head[1]) < 2 and abs(tail[1]) < 2, (head, tail)
         else:
-            assert tail[1] < -10 and abs(tail[0]) < 2, tail
+            expected_tail = tail[1] < -10 if exit_ == 'rise' else abs(tail[1]) < 2
+            assert expected_tail and abs(tail[0]) < 2, tail
             expected_head = head[1] > 8 if entry == 'rise' else abs(head[1]) < 2
             assert expected_head, head
         assert all(frames[i][..., 3].sum() < reference[i][..., 3].sum() for i in (0, 2))

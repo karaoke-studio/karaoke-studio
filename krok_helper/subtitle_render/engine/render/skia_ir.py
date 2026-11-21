@@ -615,10 +615,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         columns = style.dual_line_layout
         vertical_paints = set(decorations) | {kind for kind in ('shadow', 'glow')
             if f'p06_ruby_{kind}' in ir['required_features']}
-        vertical_no_wipe = (bool(vertical_paints)
-            and 'p07_line_fade' not in ir['required_features']
-            and 'p07_line_motion' not in ir['required_features']
-            and any(line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines']))
+        vertical_no_wipe = bool(vertical_paints) and any(
+            line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines'])
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
         if any((index not in vertical_singing and line.get('karaoke_anim') not in modes)
                or not _ordinary_line_animation(line) or line.get('scanline')
@@ -629,6 +627,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if vertical_no_wipe:
             kind = next(iter(vertical_paints)) if len(vertical_paints) == 1 else 'mixed_decoration'
             ir['required_features'].append(f'p07_vertical_{kind}_no_wipe')
+            if {'p07_line_fade', 'p07_line_motion'} & set(ir['required_features']):
+                ir['required_features'].append('p07_vertical_decoration_no_wipe_animation')
         if columns:
             ir['required_features'].append('p06_vertical_columns_decoration')
             if vertical_ruby is not None:

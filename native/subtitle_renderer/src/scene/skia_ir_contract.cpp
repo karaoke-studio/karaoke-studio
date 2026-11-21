@@ -61,6 +61,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_reverse_decoration_no_wipe",
         "p07_vertical_decoration_fade",
         "p07_vertical_decoration_line_motion",
+        "p07_vertical_decoration_no_wipe_animation",
         "p06_vertical_reverse_outline",
         "p06_vertical_columns_outline",
         "p06_vertical_columns_decoration",
@@ -424,12 +425,16 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool wholeMixed = features.contains("p07_vertical_mixed_decoration_no_wipe");
     const bool wholeColumns = features.contains("p07_vertical_columns_decoration_no_wipe");
     const bool wholeReverse = features.contains("p07_vertical_reverse_decoration_no_wipe");
+    const bool animatedWhole = features.contains("p07_vertical_decoration_no_wipe_animation");
+    if (animatedWhole != ((wholeGlow || wholeShadow || wholeMixed)
+        && (features.contains("p07_vertical_decoration_fade") || features.contains("p07_vertical_decoration_line_motion"))))
+        throw BackendError("Skia 竖排装饰整字变色与出入场能力不匹配");
     if (wholeGlow || wholeShadow || wholeMixed || wholeColumns || wholeReverse) {
         const bool hasGlow = verticalGlow || (verticalRubyDecoration && features.contains("p06_ruby_glow"));
         const bool hasShadow = verticalShadow || (verticalRubyDecoration && features.contains("p06_ruby_shadow"));
         if (!features.contains("p05_vertical_solid") || !features.contains("p07_no_wipe")
             || !style.value("vertical").toBool() || (hasGlow && !features.contains("p07_no_wipe_decoration"))
-            || features.contains("p07_line_fade") || wholeReverse != reverseVertical
+            || wholeReverse != reverseVertical
             || wholeGlow != (hasGlow && !hasShadow) || wholeShadow != (hasShadow && !hasGlow)
             || wholeMixed != (hasGlow && hasShadow)
             || wholeColumns != features.contains("p05_vertical_columns")

@@ -221,7 +221,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
         const bool verticalMotion = style.vertical && features.contains("p07_vertical_decoration_line_motion")
-            && ordinaryLineAnimation && line.karaokeAnimation == "none";
+            && ordinaryLineAnimation && (line.karaokeAnimation == "none"
+                || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
         const bool rtlRubyUnscaledMotion = rtlRuby && !singingScale && ordinaryLineAnimation
             && features.contains("p07_rtl_ruby_unscaled_line_animation");
         if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse

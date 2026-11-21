@@ -3755,6 +3755,8 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_vertical_decoration_line_motion` 让单列及多列的正文、读音、光晕与阴影共用整行出入场变换。测试从实际计划的时长取样，核对横移与升降的方向、整行透明度、唱字时钟、稳定帧和错误配置后的回放。覆盖纯横移、纯升降和淡入后升降退场。
 - Windows 关联 **72 项通过**，WSL X11 与 Wayland 各 **71 通过、1 项 Windows 专用跳过**。日志前缀 `build/p07-vertical-ruby-motion-*`。该批覆盖普通走字，含位移的整字变色与 Utopia 唱字组合保留独立验证条件。
+- `p07_vertical_decoration_no_wipe_animation` 将相同三种整行动画接入整字变色。正文和注音保留各自完成时刻，复用原合成次序。Windows 相关 **100 通过**，WSL X11 与 Wayland 各 **90 通过、10 项 Windows 专用跳过**。日志前缀 `build/p07-vertical-nowipe-motion-*`。
+- `b117c9d1` 的 [Mac CI 44944149610](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44944149610) 五项全部成功。两架构各 **2275 通过、1563 跳过**；两份干净验证包各 **233 通过**；**98 份**规范样本哈希一致。包含单列竖排 Utopia 和横排实色光晕动画，物理 Metal 仍待真机验证。
 
 ## 15. 前期探针清理范围
 
