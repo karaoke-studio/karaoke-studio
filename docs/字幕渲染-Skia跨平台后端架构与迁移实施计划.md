@@ -3514,6 +3514,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 用 P00 粒子变速样式去掉光晕、扫字线和唱字粒子，保留上注音与 Utopia，试验同一行花瓣入场、音符退场。50、100、200 档各采 **20 帧**。5480ms 的 Vulkan/Raster alpha 总量差在 50 档为 **4.90%**、100 档为 **6.78%**，超过原预算。
 - 仅保留音符退场时，同一批失败时间及测量值逐项重合。差异定位到音符退场尾部，组合保留原能力门槛。诊断为 `build/p00-skia-coverage/petal-note.json`、`build/p00-skia-coverage/note-only.json`，试验补丁为 `build/p07-ruby-petal-note-unverified.patch`。
 
+### 14.286 P07.1 无光晕的上注音逐字淡出复验（2026-11-21）
+
+- P00 `exit_char_fade` 去除光晕，分别按普通走字与 Utopia 取 **15 帧**。两组都在 5480ms 的 D2D/Vulkan 遮罩 IoU 为 **0.96651**，原预算为 **0.97**，外框差为 0px。提前把不透明度取整到 8 位时结果相同。直接按目标格式合成时该帧仍未通过，另在 5499ms 引入 Vulkan/Raster 的低 alpha 总量偏差。
+- 逐字淡出组合继续保持能力门槛。日志为 `build/p07-ruby-exit-fade-*-win-probe.log` 和 `build/p07-ruby-exit-fade-win-probe.log`，试验补丁为 `build/p07-ruby-exit-fade-unverified.patch`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
