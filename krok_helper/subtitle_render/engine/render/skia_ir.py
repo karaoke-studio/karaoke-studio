@@ -639,6 +639,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                                                 for group in reading.rubies)
         rtl_shadow = False
         rtl_motion = False
+        rtl_motion_without_scale = False
         if style.right_to_left:
             for item, reading in zip(plan.lines, geometry.ruby.lines, strict=True):
                 look = item.layout_style
@@ -646,15 +647,17 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 shadow = _uses_decoration(look, 'shadow') or any(
                     'shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
                 moving = {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                karaoke = source.get('karaoke_anim')
                 if (look.stroke_width_px <= 0 or item.line.wipe_reverse
-                        or source.get('karaoke_anim') not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
-                        or (moving and (source.get('karaoke_anim') != 'utopia' or not _ordinary_line_animation(source)))
+                        or karaoke not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
+                        or (moving and not _ordinary_line_animation(source))
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                         or _inline_role_labels(item)
-                        or (shadow and source.get('karaoke_anim') == 'utopia')):
+                        or (shadow and karaoke == 'utopia')):
                     raise ValueError('Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种')
                 rtl_shadow |= shadow
-                rtl_motion |= moving
+                rtl_motion |= moving and karaoke == 'utopia'
+                rtl_motion_without_scale |= moving and karaoke != 'utopia'
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         sources, indices = lower_sources(prepared[0])
         zoom_lines = {
@@ -691,6 +694,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 ir['required_features'].append('p06_rtl_ruby_shadow')
             if rtl_motion:
                 ir['required_features'].append('p07_rtl_ruby_line_animation')
+            if rtl_motion_without_scale:
+                ir['required_features'].append('p07_rtl_ruby_unscaled_line_animation')
             if singing_lines:
                 ir['required_features'].append('p07_rtl_ruby_singing_scale')
         if zoom_lines:

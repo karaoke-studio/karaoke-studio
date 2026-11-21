@@ -35,12 +35,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     paint.setAntiAlias(true);
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
-    const bool reverseDecoration = !line.vertical && line.wipeRightToLeft && line.rubyGroups.empty()
-        && (!line.glow.empty() || line.shadow.visible());
+    const bool reverseDecoration = line.rubyGroups.empty() && (!line.glow.empty() || line.shadow.visible());
+    const bool rtlRubyWithoutScale = !line.rubyGroups.empty() && !line.singingScale.active;
+    const bool fixedOpacity = !line.vertical && line.wipeRightToLeft && (reverseDecoration || rtlRubyWithoutScale);
     // Match the reference's fixed-point layer opacity before 8-bit blending.
     constexpr float opacitySteps = 4096.f;
-    const float lineOpacity = reverseDecoration ? std::floor(animation.opacity * opacitySteps) / opacitySteps
-                                               : animation.opacity;
+    const float lineOpacity = fixedOpacity ? std::floor(animation.opacity * opacitySteps) / opacitySteps
+                                           : animation.opacity;
     if (lineOpacity <= 0.f) return;
     SkAutoCanvasRestore restore(&canvas, true);
     if (animation.dx != 0 || animation.dy != 0)
@@ -70,7 +71,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         // Keep the same bounded destination-format layer at every opacity
         // for vertical decoration. Raster edge coverage depends on the target
         // origin when translucent outlines are composited over the shadow.
-        if (!line.roleBodyPaints.empty() || !line.roleGlows.empty() || reverseDecoration) {
+        if (!line.roleBodyPaints.empty() || !line.roleGlows.empty() || fixedOpacity) {
             // The GPU reference composites the paint stack into bytes,
             // then applies the 8-bit group opacity to its premultiplied pixels.
             SkPaint fade;

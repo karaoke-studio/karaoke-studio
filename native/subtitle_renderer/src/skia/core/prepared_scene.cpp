@@ -198,7 +198,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             if (needsPaintBounds) {
                 SkRect groupBounds = SkRect::MakeEmpty();
                 for (const auto& cell : group.cells) includeCellPaint(groupBounds, cell);
-                if (line.isolateVerticalDecoration) includeShadowPaint(groupBounds, group.shadow);
+                if (line.isolateVerticalDecoration || line.animation.active()) includeShadowPaint(groupBounds, group.shadow);
                 line.paintBounds.join(groupBounds);
             }
         }

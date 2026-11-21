@@ -400,19 +400,19 @@ def test_ruby_particle_entry_rejects_unverified_glow(binary, reading, layer):
         upper_ir(binary, (track, style), 1)
 
 
-def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None):
+def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None, dpr=1):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, case.style, times, force_warp=False,
-                                   track=case.track, width=1920, height=1080, dpr=1, realization_enabled=False,
+                                   track=case.track, width=1920, height=1080, dpr=dpr, realization_enabled=False,
                                    extra_tracks=extra_tracks)
-    reference = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    reference = [np.frombuffer(p, np.uint8).reshape(round(1080 * dpr), round(1920 * dpr), 4) for p in raw]
     rendered = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
-            process.configure(case.track, case.style, width=1920, height=1080, fps=60, extra_tracks=extra_tracks)
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60, extra_tracks=extra_tracks, dpr=dpr)
             frames, _ = collect(process, times)
             rendered.append(frames)
     assert_glow_parity(times, reference, *rendered, case.case_id, check_p00_edges=True)

@@ -294,19 +294,24 @@ _RTL_RUBY_LINE_PHASES = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', '
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('effect', ['utopia', 'none', 'no_wipe'])
 @pytest.mark.parametrize('entry,exit_', _RTL_RUBY_LINE_PHASES)
-def test_rtl_ruby_line_motion_keeps_clocks_and_replays(binary, reading, target, entry, exit_):
+def test_rtl_ruby_line_motion_keeps_clocks_and_replays(binary, reading, target, effect, entry, exit_):
     track, style = reading
     body = colors('#FFFFFFFF', '#FFFFFFFF')
     stroke = PaintFill(color='#FF000000')
     palette = replace(body, before=replace(body.before, stroke=stroke), after=replace(body.after, stroke=stroke))
+    decoration = {'utopia': 'none', 'none': 'shadow', 'no_wipe': 'glow'}[effect]
     style = replace(style, right_to_left=True, stroke_width_px=4, stroke2_enabled=False, karaoke_colors=palette,
-                    karaoke_anim='utopia', entry_anim=entry, exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600)
-    ir = ir_for(binary, (track, style))
-    feature = 'p07_rtl_ruby_line_animation'
+                    karaoke_anim=effect, entry_anim=entry, exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600,
+                    decoration_kind=decoration, ruby_decoration_kind=decoration, shadow_offset_x=9,
+                    shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3,
+                    glow_before_radius_px=6, glow_after_radius_px=6, ruby_glow_radius_px=4)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = ('p07_rtl_ruby_line_animation' if effect == 'utopia' else 'p07_rtl_ruby_unscaled_line_animation')
     assert feature in ir['required_features']
     line, = ir['track']['lines']
-    assert (line['entry_anim'], line['exit_anim']) == (entry, exit_)
+    assert (line['karaoke_anim'], line['entry_anim'], line['exit_anim']) == (effect, entry, exit_)
     times = [line['display_start_ms'] + 150, line['display_start_ms'] + 650, line['display_end_ms'] - 150]
     bad = copy.deepcopy(ir)
     bad['required_features'].remove(feature)
@@ -331,6 +336,36 @@ def test_rtl_ruby_line_motion_matches_actual_gpu(binary, application, tmp_path, 
     style = replace(case.style, entry_anim=entry, exit_anim=exit_)
     times = (299, 301, 375, 500, 750, 899, 900, 1500, 3950, 4500, 4900, 5100, 5350, 5499, 5500)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect,entry,exit_,before,after,dpr', [
+    (effect, entry, exit_, before, after, 1)
+    for effect in ('none', 'no_wipe')
+    for entry, exit_ in _RTL_RUBY_LINE_PHASES
+    for before, after in (('none', 'none'), ('shadow', 'shadow'), ('glow', 'glow'),
+                          ('shadow', 'glow'), ('glow', 'shadow'))
+] + [
+    ('none', 'fade', 'fade', 'none', 'none', 1.5),
+    ('none', 'slide_in', 'slide_out', 'shadow', 'shadow', 1.5),
+    ('no_wipe', 'rise', 'rise', 'glow', 'shadow', 1.5),
+])
+def test_rtl_ruby_unscaled_motion_matches_actual_gpu(binary, application, tmp_path, effect, entry, exit_, before, after, dpr):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
+    style = replace(case.style, karaoke_anim=effect, entry_anim=entry, exit_anim=exit_, decoration_before_sync=False,
+                    decoration_kind=after, decoration_kind_before=before,
+                    ruby_decoration_kind=after, ruby_decoration_kind_before=before,
+                    shadow_offset_x=9, shadow_offset_y=6, shadow_before_offset_x=9, shadow_before_offset_y=6,
+                    ruby_shadow_offset_x=4, ruby_shadow_offset_y=3,
+                    ruby_shadow_before_offset_x=4, ruby_shadow_before_offset_y=3)
+    times = (299, 301, 307, 317, 336, 375, 500, 750, 899, 900, 1500, 3950,
+             4500, 4900, 5100, 5350, 5464, 5483, 5493, 5499, 5500)
+    if dpr != 1:
+        times = (301, 307, 317, 336, 500, 900, 1500, 4500, 5350, 5464, 5483, 5493, 5499)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times, dpr=dpr)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
