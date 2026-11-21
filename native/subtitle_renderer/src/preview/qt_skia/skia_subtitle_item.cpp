@@ -124,9 +124,11 @@ protected:
     void initialize(QRhiCommandBuffer*) override {
         requireOwner();
         const auto backend = QString::fromLatin1(rhi()->backendName());
-        const auto device = rhi()->driverInfo().deviceType;
-        const bool hardware = device == QRhiDriverInfo::DiscreteDevice || device == QRhiDriverInfo::IntegratedDevice
-            || device == QRhiDriverInfo::ExternalDevice;
+        const auto driver = rhi()->driverInfo();
+        const auto deviceName = driver.deviceName.toLower();
+        const bool hardware = (driver.deviceType == QRhiDriverInfo::DiscreteDevice
+            || driver.deviceType == QRhiDriverInfo::IntegratedDevice || driver.deviceType == QRhiDriverInfo::ExternalDevice)
+            && !deviceName.contains("virtual") && !deviceName.contains("software");
         if (backend != backend_ || hardware != hardware_) reported_ = false;
         backend_ = backend;
         hardware_ = hardware;

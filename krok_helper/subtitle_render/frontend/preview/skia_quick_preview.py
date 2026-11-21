@@ -35,7 +35,7 @@ class SkiaQuickPreview(QObject):
     def activate(self, player, background, *, require_hardware: bool) -> None:
         self.active = True
         self._require_hardware = require_hardware
-        self._canvas.set_background_source(background)
+        self.set_background(background)
         player.set_video_output(self._canvas.video_output)
         self.resize()
         self._canvas.show()
@@ -56,6 +56,7 @@ class SkiaQuickPreview(QObject):
         self._canvas.setGeometry(self.parent().rect())
 
     def set_background(self, source) -> None:
+        self.clock.refresh_background()
         self._canvas.set_background_source(source)
 
     def set_target(self, width: int, height: int, dpr: float) -> None:

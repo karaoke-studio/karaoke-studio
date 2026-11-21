@@ -626,7 +626,18 @@ def report():
         QTimer.singleShot(200, verify_paused_seek)
     else:
         assert receipts == [(2, 3, 1300)], receipts
-        app.quit()
+        if case == 'sequence':
+            scene.clear()
+            transport.set_time(100)
+            QTimer.singleShot(450, verify_background_only)
+        else:
+            app.quit()
+
+def verify_background_only():
+    image = host.grab().toImage()
+    assert QColor(image.pixel(3, 3)).name() == '#203060'
+    assert receipts == [(2, 3, 1300)], receipts
+    app.quit()
 
 def verify_paused_seek():
     assert not player.is_playing()

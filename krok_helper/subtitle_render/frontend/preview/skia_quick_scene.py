@@ -93,7 +93,7 @@ class SkiaQuickScene(QObject):
             return
         if error:
             self.preparation_failed.emit(error)
-        elif not self._canvas.configure_scene_bytes(data, revision):
+        elif not self._canvas.configure_scene(data, revision):
             self.preparation_failed.emit('Skia 预览场景配置已失效')
 
     def _native_prepared(self, revision, accepted: bool, error: str) -> None:

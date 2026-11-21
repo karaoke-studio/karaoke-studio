@@ -3167,6 +3167,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 源码运行同时指定 `KROK_SUBTITLE_RENDER_BACKEND=skia` 和 `KROK_SUBTITLE_SKIA_DIRECT_PREVIEW=1` 时，程序在创建顶层窗口前准备 Vulkan 或 Metal，再把已有的传输条、播放控制器和工程状态接入 Quick 画布。直画使用 GPU 纹理，缺失组件、图形设备不可用或配置失败时回到已有 Skia sidecar 通路，继续遵循其执行目标与 Raster 回退设置。关闭 GPU 走 Skia Raster。前黑或后黑段项目当前由原预览宿主经 Skia sidecar 合成。
 - 正式浮窗使用真实字幕，验证上屏像素、暂停 seek、三次隐藏/缩放/重开、项目清空、Skia Raster 切换及前黑段切换。Windows Vulkan、WSL X11 和 Wayland 的相关矩阵各 **9 通过**，增加三次窗口转换后专项复跑各 **1 通过**。Windows 原有传输、CPU 预览、平台、播放与预览控制器回归 **232 通过**。日志为 `build/p09-floating-*.log`。物理多显示器 DPR、真实 Linux GPU 及 Mac 真机门槛仍待验收。
 
+### 14.233 P09.2/P09.4 播放限速与无字幕图片序列（2026-11-21）
+
+- 直画计时器以最近实际提交时间计算剩余间隔，避免来源按约 16ms 推进时再次等待一个完整周期。清空歌词后，图片序列继续按同一传输时钟换帧。虚拟或软件设备名称不计为直画硬件。
+- Windows、X11 和 Wayland 最终矩阵各 **9 通过**，两份原生构建各通过 3 项 CTest。Windows 传输与控制器回归 **200 通过**，覆盖连续 60fps 请求只等待剩余时间及暂停 seek。日志为 `build/p09-paced-clock-final-*.log`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

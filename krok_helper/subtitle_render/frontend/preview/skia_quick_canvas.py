@@ -1,7 +1,6 @@
 """Opaque Qt Quick canvas for direct Skia preview and external video output."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, Qt, QUrl, pyqtSignal
@@ -58,10 +57,17 @@ class SkiaQuickCanvas(QQuickWidget):
         if self._root.property('backgroundImage') != url:
             self._root.setProperty('backgroundImage', url)
 
-    def configure_scene(self, ir: dict, revision: int) -> bool:
-        return self.configure_scene_bytes(json.dumps(ir, ensure_ascii=False, allow_nan=False).encode('utf-8'), revision)
+    @property
+    def has_timed_background(self) -> bool:
+        return self._background.kind == 'image_sequence'
 
-    def configure_scene_bytes(self, data: bytes, revision: int) -> bool:
+    def set_background_time(self, time_ms: int) -> None:
+        if self._time_ms != time_ms:
+            self._time_ms = time_ms
+            if self.has_timed_background:
+                self._refresh_image()
+
+    def configure_scene(self, data: bytes, revision: int) -> bool:
         return bool(self._root.configureSubtitle(QByteArray(data), revision))
 
     def reserve_scene(self, revision: int) -> bool:
@@ -76,7 +82,5 @@ class SkiaQuickCanvas(QQuickWidget):
     def request_frame(self, revision: int, generation: int, time_ms: int) -> bool:
         accepted = self._root.requestSubtitleFrame(revision, generation, time_ms)
         if accepted:
-            self._time_ms = time_ms
-            if self._background.kind == 'image_sequence':
-                self._refresh_image()
+            self.set_background_time(time_ms)
         return bool(accepted)

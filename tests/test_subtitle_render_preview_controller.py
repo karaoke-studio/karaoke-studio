@@ -460,3 +460,44 @@ def test_preview_font_preparation_discards_superseded_state(qapp, qtbot, monkeyp
     host._cancel_font_preparation()
     qtbot.wait(20)
     assert commits == ["new"]
+
+
+def test_skia_quick_clock_uses_remaining_playback_interval(qapp, monkeypatch):
+    from PyQt6.QtCore import QObject, pyqtSignal
+    from krok_helper.subtitle_render.frontend.preview import skia_quick_clock
+
+    class Canvas(QObject):
+        scene_prepared = pyqtSignal(object, bool, str)
+        scene_cleared = pyqtSignal()
+        has_timed_background = False
+
+        def request_frame(self, *request):
+            requests.append(request)
+            return True
+
+    now = 10_000_000_000
+    requests = []
+    monkeypatch.setattr(skia_quick_clock, 'monotonic_ns', lambda: now)
+    canvas = Canvas()
+    clock = skia_quick_clock.SkiaQuickClock(canvas, fps=60)
+    canvas.scene_prepared.emit(1, True, '')
+    clock.set_playing(True)
+    clock.set_time(100)
+    assert clock._timer.interval() == 0
+    clock._timer.stop()
+    clock._submit_latest()
+
+    now += 16_000_000
+    clock.set_time(116)
+    clock.set_time(117)
+    assert clock._timer.interval() == 1
+    now += 1_000_000
+    clock._timer.stop()
+    clock._submit_latest()
+    assert requests == [(1, 1, 100), (1, 1, 117)]
+
+    clock.seek(50)
+    assert clock._timer.interval() == 0
+    clock._timer.stop()
+    clock._submit_latest()
+    assert requests[-1] == (1, 2, 50)
