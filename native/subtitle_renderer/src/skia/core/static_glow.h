@@ -39,13 +39,14 @@ public:
     };
 
     static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
+    void prepareBytePasses();
     void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I(), const GlowGradients& gradients = {});
     bool visible(bool after) const;
     SkRect sourceBounds() const;
     Source createSource(SkCanvas&, const SkRect& transitionBounds = SkRect::MakeEmpty()) const;
     void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                   const SkPath* posed = nullptr, float opacity = 1.f, bool vertical = false, bool reverse = false) const;
-    void composite(SkCanvas&, const Source&) const;
+    void composite(SkCanvas&, const Source&, bool bytePasses = false) const;
     void compositeTransformedCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                                   const SkMatrix&, float opacity) const;
 
@@ -59,6 +60,7 @@ private:
     SkPaint::Join join_;
     std::optional<bool> phase_;
     std::vector<sk_sp<SkImageFilter>> filters_;
+    std::vector<sk_sp<SkImageFilter>> byteFilters_;
     struct Cell { SkPath path; GlowGradients gradients; };
     std::vector<Cell> cells_;
     std::array<bool, 2> hasGradient_{};

@@ -179,6 +179,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_energy_pair",
         "p07_ruby_same_energy_pair",
         "p07_ruby_particle_entry",
+        "p07_ruby_particle_entry_glow",
         "p07_ruby_particle_entry_exit",
         "p07_ruby_mixed_particle_entry_exit",
         "p07_ruby_petal_entry_flame_singing",
@@ -261,6 +262,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if ((features.contains("p07_ruby_particle_entry_exit") || features.contains("p07_ruby_mixed_particle_entry_exit"))
         && !features.contains("p07_ruby_particle_entry"))
         throw BackendError("Skia 无装饰粒子出入场缺少粒子能力");
+    if (features.contains("p07_ruby_particle_entry_glow") && !features.contains("p07_ruby_particle_entry"))
+        throw BackendError("Skia 上注音粒子入场光晕缺少粒子入场能力");
     if (features.contains("p06_reverse_decoration") && (!features.contains("p05_reverse_wipe")
         || !(features.contains("p06_static_glow") || features.contains("p06_static_shadow"))))
         throw BackendError("Skia 横排反向走字的实色装饰缺少对应能力");

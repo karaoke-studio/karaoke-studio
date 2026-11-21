@@ -58,6 +58,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.images = source.images;
         line.shadow = source.shadow;
         line.glow = PreparedGlow::prepare(source.glow);
+        line.byteParticleEntryGlow = !line.glow.empty() && source.rubyGeometryComposition
+            && (source.characterGeometry.entry == "heart" || source.characterGeometry.entry == "petal")
+            && source.characterGeometry.exit.empty();
+        if (line.byteParticleEntryGlow)
+            for (auto& layer : line.glow) layer.prepareBytePasses();
         line.bodyGlowTransitionBounds = source.bodyGlowTransitionBounds;
         line.isolateVerticalDecoration = line.vertical && (line.shadow.visible() || !line.glow.empty()
             || std::ranges::any_of(source.rubyGroups, [](const auto& group) { return group.shadow.visible() || group.glow; }));

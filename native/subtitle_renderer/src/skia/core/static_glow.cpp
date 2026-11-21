@@ -1,9 +1,11 @@
 #include "static_glow.h"
 #include "include/core/SkCanvas.h"
+#include "include/core/SkColorFilter.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPathUtils.h"
 #include "include/effects/SkImageFilters.h"
+#include "include/effects/SkRuntimeEffect.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -121,13 +123,27 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     canvas.drawPath(path, paint);
 }
 
-void PreparedGlow::composite(SkCanvas& canvas, const Source& source) const {
+void PreparedGlow::prepareBytePasses() {
+    // Subtle coverage can cross an 8-bit step between the stacked blur passes.
+    // Apply the same quantization in Ganesh and Raster before each blend.
+    static const auto effect = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
+        float4 main(float4 color) {
+            return floor(color * 255.0 + 0.5) / 255.0;
+        }
+    )"));
+    if (!effect.effect) throw std::runtime_error("Skia 光晕透明度滤镜无法编译");
+    static const auto rounded = effect.effect->makeColorFilter(nullptr);
+    byteFilters_.reserve(filters_.size());
+    for (const auto& filter : filters_) byteFilters_.push_back(SkImageFilters::ColorFilter(rounded, filter));
+}
+
+void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePasses) const {
     auto image = source.surface->makeImageSnapshot();
     if (!image) throw std::runtime_error("Skia 字幕光晕临时表面无法取样");
     SkAutoCanvasRestore restore(&canvas, source.outputClip.has_value());
     if (source.outputClip) canvas.clipRect(*source.outputClip);
     SkPaint paint;
-    for (const auto& filter : filters_) {
+    for (const auto& filter : bytePasses ? byteFilters_ : filters_) {
         paint.setImageFilter(filter);
         canvas.drawImage(image, float(source.origin.x()), float(source.origin.y()), SkSamplingOptions(), &paint);
     }

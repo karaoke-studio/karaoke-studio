@@ -55,6 +55,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (placement.x() != 0 || placement.y() != 0) canvas.translate(placement.x(), placement.y());
     const bool rubyGeometryPhase = line.rubyGeometryComposition
         && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
+    const bool particleEntryGlow = line.byteParticleEntryGlow && line.characterGeometry.inEntryWindow(tMs, line.startMs);
     const bool particleExitFade = rubyGeometryPhase && !line.particles.empty() && line.glow.empty() && !line.hasRubyGlow()
         && !line.shadow.visible() && !line.hasRubyShadow
         && line.characterGeometry.exitMs > 0 && tMs >= line.characterGeometry.exitStart(line.endMs);
@@ -379,7 +380,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && std::ranges::any_of(states, [](const State& state) {
             return state.transform.opacity > 0.f && state.transform.opacity < 1.f;
         });
-    if (opacityTransition && !particleExitFade) {
+    if (opacityTransition && !particleExitFade && !particleEntryGlow) {
         const auto* bounds = line.characterFade.transforms() || rubyGeometryPhase || utopiaExitGlow ? nullptr : &line.paintBounds;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
@@ -457,7 +458,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt, posed, opacity);
             }
         });
-        layer.composite(canvas, source);
+        layer.composite(canvas, source, particleEntryGlow);
         if (compositingSpin)
             inPhaseOrder([&](std::size_t index, Phase phase) {
                 const auto& state = states[index];

@@ -80,6 +80,7 @@ private:
         std::vector<BodyPaint> roleBodyPaints;
         StaticShadow shadow;
         std::vector<PreparedGlow> glow;
+        bool byteParticleEntryGlow = false;
         SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();
         struct RoleGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> cells; };
         std::vector<RoleGlow> roleGlows;

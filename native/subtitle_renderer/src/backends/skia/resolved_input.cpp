@@ -297,9 +297,18 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedParticles)
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
+        const bool particleEntryGlow = features.contains("p07_ruby_particle_entry_glow") && line.exitAnimation == "none"
+            && (line.entryAnimation == "heart" || line.entryAnimation == "petal")
+            && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow")
+            && !features.contains("p07_ruby_petal_entry_flame_singing");
+        const auto supportsParticleEntryDecoration = [particleEntryGlow](const auto& kind) {
+            return kind == "none" || (particleEntryGlow && kind == "glow");
+        };
         if (particleComposition && features.contains("p07_ruby_particle_entry")
-            && (style.decorationKindForState(false) != "none" || style.decorationKindForState(true) != "none"
-                || style.rubyDecorationKindForState(false) != "none" || style.rubyDecorationKindForState(true) != "none"))
+            && (!supportsParticleEntryDecoration(style.decorationKindForState(false))
+                || !supportsParticleEntryDecoration(style.decorationKindForState(true))
+                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(false))
+                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(true))))
             throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         const bool fadeComposition = features.contains("p07_character_entry_fade_composition")

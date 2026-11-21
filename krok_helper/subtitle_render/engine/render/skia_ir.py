@@ -410,6 +410,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     energy_pair_lines = set()
     same_energy_pair = False
     particle_entry_lines = set()
+    particle_entry_glow = False
     repeated_particle_pair = False
     mixed_particle_pair = False
     petal_flame = False
@@ -444,10 +445,13 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     paired = both_phases and entry in RUBY_PAIRED_PARTICLES and leave in RUBY_PAIRED_PARTICLES
                     if paired or (leave == 'none' and effect in RUBY_PARTICLE_ENTRIES):
                         readings = geometry.ruby.lines[index].rubies
-                        if (_uses_decoration(item.layout_style, 'glow') or any(
-                                kind != 'none' for reading in readings
-                                for kind in ruby_decoration_kinds(reading.target.style))):
+                        ruby_decorations = {kind for reading in readings
+                                            for kind in ruby_decoration_kinds(reading.target.style)}
+                        body_glow = _uses_decoration(look, 'glow')
+                        if ('shadow' in ruby_decorations or ('glow' in ruby_decorations and not body_glow)
+                                or (body_glow and (paired or with_flame or entry not in {'heart', 'petal'}))):
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
+                        particle_entry_glow |= body_glow
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= paired and entry == leave
                         mixed_particle_pair |= paired and entry != leave
@@ -758,6 +762,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_same_energy_pair')
         if particle_entry_lines:
             ir['required_features'].append('p07_ruby_particle_entry')
+        if particle_entry_glow:
+            ir['required_features'].append('p07_ruby_particle_entry_glow')
         if repeated_particle_pair:
             ir['required_features'].append('p07_ruby_particle_entry_exit')
         if mixed_particle_pair:

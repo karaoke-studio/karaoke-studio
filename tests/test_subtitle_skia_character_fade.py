@@ -325,6 +325,30 @@ def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('effect', ['heart', 'petal'])
+def test_ruby_particle_entry_body_glow_replays(binary, reading, target, effect):
+    track, style = reading
+    style = replace(style, entry_anim=effect, entry_lead_ms=600, exit_anim='none', karaoke_anim='utopia',
+                    decoration_kind='glow', glow_before_radius_px=9, glow_after_radius_px=9,
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    ir = upper_ir(binary, (track, style), 1.5)
+    feature = 'p07_ruby_particle_entry_glow'
+    assert feature in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    start = ir['track']['lines'][0]['display_start_ms']
+    times = [start + 1, start + 2, start + 17, start + 150, start + 600]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames)
+    assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('scanline', [False, True])
 def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline):
     track, style = reading
@@ -594,6 +618,17 @@ def test_undecorated_ruby_particle_pair_matches_actual_gpu(binary, application, 
         times = (301, 650, 899, 1500, 4900, 5300, 5450, 5475, 5480, 5493, 5499, 5500)
     assert_ruby_transition_gpu_parity(
         binary, replace(case, case_id=f'{entry}_in_{exit_}_out_{speed}', style=style), times, dpr=dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['heart', 'petal'])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_ruby_particle_entry_body_glow_matches_actual_gpu(binary, application, tmp_path, effect, dpr):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == f'entry_{effect}')
+    times = tuple(sorted({*case.timestamps_ms, 240, 300, 302, 307, 310, 317, 336, 400, 550, 899, 900, 901}))
+    assert_ruby_transition_gpu_parity(binary, case, times, dpr=dpr)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
