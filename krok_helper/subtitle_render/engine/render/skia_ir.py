@@ -18,6 +18,7 @@ from krok_helper.subtitle_render.engine.style.style_semantics import style_for_r
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
+from .skia_ruby_paint_ir import ruby_decoration_kinds
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import declare_bitmap_guides, validate_bitmap_guides
@@ -27,7 +28,8 @@ from .skia_line_band_ir import write_line_band
 from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
-    ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS, RUBY_PARTICLE_EXITS, write_particle_anchors)
+    ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS,
+    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -391,6 +393,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     particle_fade_lines = set()
     particle_affine_lines = set()
     energy_pair_lines = set()
+    particle_entry_lines = set()
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
@@ -409,6 +412,13 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                               else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
                     if effect in {'assemble_in', 'dissolve_out'}:
                         assembly_lines.add(index)
+                    if leave == 'none' and effect in RUBY_PARTICLE_ENTRIES:
+                        readings = geometry.ruby.lines[index].rubies
+                        if (_uses_decoration(item.layout_style, 'glow') or any(
+                                kind != 'none' for reading in readings
+                                for kind in ruby_decoration_kinds(reading.target.style))):
+                            raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
+                        particle_entry_lines.add(index)
                     if effect in ENERGY_TRANSITIONS or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
                         particle_fade_lines.add(index)
                         if effect == 'flame':
@@ -437,7 +447,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if (source.get('entry_anim') == 'wave_in' and source.get('exit_anim') == 'scatter_out'
                     and source.get('entry_duration_ms', 0) > 0 and source.get('exit_duration_ms', 0) > 0):
                 paired_geometry_lines.add(index)
-    composed_particle_lines = assembly_lines | particle_fade_lines | energy_pair_lines
+    composed_particle_lines = assembly_lines | particle_fade_lines | energy_pair_lines | particle_entry_lines
     affine_geometry_lines = (affine_lines | stretch_lines | stretch_entry_lines | glow_lines
                              | paired_geometry_lines | particle_affine_lines)
     composed_geometry_lines = translation_lines | affine_geometry_lines | composed_particle_lines
@@ -636,6 +646,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_fade')
         if energy_pair_lines:
             ir['required_features'].append('p07_ruby_energy_pair')
+        if particle_entry_lines:
+            ir['required_features'].append('p07_ruby_particle_entry')
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
             track, ir, plan, measured, spin_lines, composed_geometry_lines)

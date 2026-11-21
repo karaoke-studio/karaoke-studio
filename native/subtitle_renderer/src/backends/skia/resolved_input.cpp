@@ -239,9 +239,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedEnergy)
-            && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind,
-                features.contains("p07_ruby_particle_assembly"), features.contains("p07_ruby_particle_fade"),
-                pairedEnergy);
+            && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
+        if (particleComposition && features.contains("p07_ruby_particle_entry")
+            && (style.decorationKindForState(false) != "none" || style.decorationKindForState(true) != "none"
+                || style.rubyDecorationKindForState(false) != "none" || style.rubyDecorationKindForState(true) != "none"))
+            throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         const bool fadeComposition = features.contains("p07_character_entry_fade_composition")
             && line.entryAnimation == "char_fade" && line.exitAnimation == "none"
