@@ -581,6 +581,59 @@ def test_vertical_ruby_columns_composite_independent_decoration(binary, project,
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('dpr,glow', [(1, False), (1.5, True)])
+def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, dpr, glow):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, base = annotated_column_project(project, 'n3_1074', True)
+    base = replace(base, karaoke_colors=colors('#00FF00', '#00FF00'))
+    if glow:
+        base = replace(base, decoration_kind='glow', glow_before_radius_px=6, glow_after_radius_px=7,
+                       ruby_decoration_kind='glow', ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5)
+    ir = ir_for(binary, (track, replace(base, karaoke_anim='utopia')), dpr=dpr)
+    plain = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p07_vertical_columns_singing_scale'
+    assert {feature, 'p07_vertical_singing_scale', 'p05_vertical_columns_ruby'} <= set(ir['required_features'])
+    starts_and_ends = []
+    regions = []
+    for line in ir['skia_layout']['lines'][:2]:
+        group, = line['ruby_groups']
+        unit, = group['units']
+        starts_and_ends.append(unit['interval_ms'])
+        x, y = unit['vertical_singing_pivot']
+        assert all(cell['layout_right'] < x for cell in line['cells'])
+        regions.append(np.s_[round((y - 40)*dpr):round((y + 40)*dpr),
+                             round((x - 18)*dpr):round((x + 18)*dpr)])
+    peaks = [start + min(100, (end - start) // 4) for start, end in starts_and_ends]
+    times = [*peaks, 1750]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, peaks[::-1], generation=2)
+            configure(process, plain)
+            baseline, _ = collect(process, times, generation=3)
+        assert np.array_equal(frames[0], replay[1]) and np.array_equal(frames[1], replay[0])
+        assert not frames[2].any()
+        for index, region in enumerate(regions):
+            def reading_pixels(frame):
+                _, green, blue, alpha = np.moveaxis(frame[region], -1, 0)
+                return np.count_nonzero((blue > 200) & (green < 24) & (alpha > 200))
+
+            sizes = [reading_pixels(frame) for frame in frames[:2]]
+            normal = [reading_pixels(frame) for frame in baseline[:2]]
+            assert sizes[index] > normal[index] and sizes[1 - index] == normal[1 - index]
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),

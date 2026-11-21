@@ -61,7 +61,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
 
 
 @pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'ruby', 'rtl',
-                                    'dual_ruby_utopia', 'dual_alt_grid', 'lower', 'offset'])
+                                    'dual_ruby_zoom_pulse', 'dual_alt_grid', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
@@ -72,9 +72,9 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=600, target_line_index=0,
                                                       target_char_start=0, target_char_end=1)])
     elif change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'dual_ruby_utopia':
+    elif change == 'dual_ruby_zoom_pulse':
         track, style = vertical_ruby_source(project)
-        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'], karaoke_anim='utopia')
+        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'], karaoke_anim='zoom_pulse')
     elif change == 'dual_alt_grid':
         track = replace(track, lines=[replace(line, layout_index=1)])
         style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],

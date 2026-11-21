@@ -3746,6 +3746,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p06_vertical_columns_ruby_decoration` 接通正文和注音各自的实色光晕与阴影。装饰沿用各列的走字与合成空间，覆盖普通走字、整字变色、整行淡化和相邻列正反方向。打开装饰后，最终列坐标、注音组和时间区间保持一致。
 - Windows 关联 **82 项通过**，WSL X11 与 Wayland 各 **74 通过、8 项 Windows 专用跳过**。三组验证均包含跨目标像素、拒绝错误配置后的回滚，以及换页和倒序回放。日志前缀 `build/p06-multicolumn-ruby-decoration-*`。
 
+### 14.317 P07.2 多列竖排独立 Utopia 唱字（2026-11-22）
+
+- `p07_vertical_columns_singing_scale` 扩展已有 Utopia 唱字。各列正文和注音分别使用所属单元的时钟与规范轴心。两列错峰的测试按注音颜色单独核对遮罩面积，确认放大只影响当前读音；覆盖双描边、光晕、DPR 1/1.5、错误配置回滚和乱序回放。
+- Windows 关联 **34 项通过**，WSL X11 与 Wayland 各 **33 通过、1 项 Windows 专用跳过**。日志前缀 `build/p07-multicolumn-ruby-utopia-*`。独立整字放大、反向列的 Utopia 和逐字出入场继续另行验收。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
