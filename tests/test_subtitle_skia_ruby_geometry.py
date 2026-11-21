@@ -287,11 +287,25 @@ def test_nonfinite_ruby_glyph_snapshot_is_rejected(binary,annotated,value):
             measure_readings([('字',style)],resolve_font=resolve_skia_font,measure=measure)
 
 
-@pytest.mark.parametrize('change',[{'vertical':True},{'right_to_left':True}])
-def test_unimplemented_geometry_direction_is_explicitly_rejected(binary,annotated,change):
-    track,style=annotated
-    with pytest.raises(ValueError,match='正向横排上注音'):
-        prepare(binary,track,replace(style,**change))
+def test_horizontal_geometry_rejects_vertical_annotation(binary, annotated):
+    track, style = annotated
+    with pytest.raises(ValueError, match='仅支持横排注音'):
+        prepare(binary, track, replace(style, vertical=True))
+
+
+def test_rtl_geometry_reorders_ink_without_retiming_annotation(binary, annotated):
+    track, style = annotated
+    _, left_to_right = prepare(binary, track, style)
+    _, right_to_left = prepare(binary, track, replace(style, right_to_left=True))
+    ltr, = left_to_right.lines
+    rtl, = right_to_left.lines
+    assert rtl.intervals == ltr.intervals
+    assert rtl.gaps == (0,) * len(rtl.main.cells)
+    assert [ruby.target.indices for ruby in rtl.rubies] == [ruby.target.indices for ruby in ltr.rubies]
+    for left, right in zip(ltr.rubies, rtl.rubies, strict=True):
+        assert left.glyph_units == right.glyph_units
+        positions = [cell['layout_left'] for cell in right.cells]
+        assert positions == sorted(positions, reverse=True)
 
 
 @pytest.mark.skipif(sys.platform!='win32',reason='Direct2D GPU geometry reference is Windows-only')
