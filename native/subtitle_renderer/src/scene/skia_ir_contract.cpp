@@ -545,7 +545,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_scanline_image") && !features.contains("p07_scanline_shape"))
         throw BackendError("Skia 图片扫字线缺少形态能力声明");
     if (features.contains("p07_scanline_shape_line_animation")
-        && (!features.contains("p07_scanline_shape") || !features.contains("p07_scanline_line_animation")))
+        && (!features.contains("p07_scanline_shape")
+            || !(features.contains("p07_scanline_line_animation")
+                || features.contains("p07_scanline_unscaled_line_animation"))))
         throw BackendError("Skia 异形扫字线缺少形态或整行出入场能力声明");
     const bool fittedLineBand = features.contains("p08_line_band_fit");
     const bool slicedLineBand = features.contains("p08_line_band_slices");

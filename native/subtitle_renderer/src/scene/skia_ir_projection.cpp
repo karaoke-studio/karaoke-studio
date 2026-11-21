@@ -301,9 +301,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineMode == "color" && !source.wipeReverse
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && (source.fxBursts.empty() || shapedSinging);
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
-        const bool movingUnscaledBand = features.contains("p07_scanline_unscaled_line_animation")
-            && source.karaokeAnimation == "none" && resolved.scanlineShape == "band" && !source.wipeReverse;
-        const bool movingScanline = (movingUtopiaScanline || movingUnscaledBand)
+        const bool movingUnscaledScanline = features.contains("p07_scanline_unscaled_line_animation")
+            && source.karaokeAnimation == "none" && !source.wipeReverse;
+        const bool movingScanline = (movingUtopiaScanline || movingUnscaledScanline)
             && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)

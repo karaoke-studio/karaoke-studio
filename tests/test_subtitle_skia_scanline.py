@@ -387,6 +387,8 @@ SCANLINE_MOTION_CASES = [
 ] + [
     (shape, entry, leave, 'none', mode) for shape, entry, leave in SCANLINE_MOTIONS if shape == 'band'
     for mode in ('color', 'brighten', 'follow_before', 'follow_after')
+] + [
+    (shape, entry, leave, 'none', 'color') for shape, entry, leave in SCANLINE_MOTIONS if shape != 'band'
 ]
 SHAPED_SCANLINE_SINGING = [('flame', 'note'), ('bubble', 'flame'), ('animated', 'lightning')]
 
@@ -412,9 +414,9 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
         style = replace(style, scanline_shape=shape)
     ir = upper_ir(binary, (track, style), 1)
     bare = upper_ir(binary, (track, replace(style, scanline_enabled=False)), 1)
-    feature = ('p07_scanline_unscaled_line_animation' if karaoke == 'none' else
-               'p07_scanline_line_animation' if shape == 'band' else 'p07_scanline_shape_line_animation')
-    assert feature in ir['required_features']
+    motion_feature = ('p07_scanline_unscaled_line_animation' if karaoke == 'none' else 'p07_scanline_line_animation')
+    feature = motion_feature if shape == 'band' else 'p07_scanline_shape_line_animation'
+    assert {motion_feature, feature} <= set(ir['required_features'])
     assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
     times = [0, 450, 550, 1100, 1880, 2050, 2200]
     bad = copy.deepcopy(ir)
@@ -437,6 +439,9 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
     ('band', 'fade', 'fade', 'none', 'color', 1.5),
     ('band', 'rise', 'rise', 'none', 'brighten', 1.5),
     ('band', 'slide_in', 'slide_out', 'none', 'follow_after', 1.5),
+    ('flame', 'slide_in', 'slide_out', 'none', 'color', 1.5),
+    ('bubble', 'rise', 'rise', 'none', 'color', 1.5),
+    ('animated', 'fade', 'fade', 'none', 'color', 1.5),
 ])
 def test_upper_ruby_scanline_line_animation_matches_actual_gpu(binary, application, tmp_path, shape, entry, leave,
                                                                karaoke, mode, dpr):

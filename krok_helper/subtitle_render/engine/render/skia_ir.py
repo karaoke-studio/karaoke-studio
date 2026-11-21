@@ -201,8 +201,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
                        and (not bursts or shape_with_singing))
         motion = (not ordinary and _ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and look.scanline_mode != 'role'
-                  and (line.get('karaoke_anim') == 'utopia'
-                       or (line.get('karaoke_anim') == 'none' and look.scanline_shape == 'band'))
+                  and line.get('karaoke_anim') in {'none', 'utopia'}
                   and not source.wipe_reverse
                   and not (line.get('zoom_pulse') or line.get('stroke_flash') or line.get('fx_bursts')))
         shape = solid_shape and (ordinary or motion)
