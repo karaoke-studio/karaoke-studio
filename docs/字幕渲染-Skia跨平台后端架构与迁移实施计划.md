@@ -3706,6 +3706,8 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 正向横排普通走字及整字变色也可叠加正文阴影、上注音阴影和唱前唱后的阴影、光晕交替。正文与注音共享已经校准的整行透明度合成，动画位移仍连续。原生输入按当前行判定能力，并把结果交给注音解析层。
 - Windows 的 **24 组、504 帧**通过 1080p 的 D2D/Vulkan 和 Vulkan/Raster 对照。新增回放覆盖 DPR 1.5、退场末帧透明、乱序与被拒绝的配置；正式浮窗的入场、唱中和退场也与离屏 Vulkan 比较，离屏与导出管道字节一致。Windows **57 项**专项通过，独立 Windows Raster **15 通过**。WSL X11、Wayland 各 **33 通过、24 项 D2D 专用跳过**，三份干净构建各通过 **3 项 CTest**。日志前缀为 `build/p07-horizontal-shadow-motion-*`。
 - `7a3b3bfd` 再次用同一批 D2D、Vulkan、Raster 进程逐案重配，**109 个原样场景、484 帧**全部通过。记录为 `build/p00-skia-coverage/original-warm-pixels-7a3b3bfd.json`。
+- 正向横排正文和上注音的实色光晕可叠加淡化、横移和升降。普通走字与整字变色共 **12 组、252 帧**，在 1080p 和 DPR 1.5 通过 D2D/Vulkan 与 Vulkan/Raster 两组画面对照。整行使用已有的 12 位透明度与 8 位预乘合成，修正极暗首帧的透明度偏差。
+- Windows 相关回归 **81 通过**，追加整字变色专项 **8 通过**。WSL X11 与 Wayland 各 **42 通过、47 项 Windows 专用跳过**，Windows 和 WSL Vulkan 各通过 **3 项 CTest**。日志前缀 `build/p07-horizontal-glow-motion-*` 和 `build/p07-horizontal-glow-nowipe-*`。
 
 ### 14.311 P05.7 / P07.2 单列正向竖排的 Utopia 唱字（2026-11-22）
 

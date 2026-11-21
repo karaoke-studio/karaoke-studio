@@ -240,12 +240,19 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && !vectorGuides && !hasInlineRoles;
-        const bool horizontalShadowMotion = unscaledLineMotion
-            && !line.scanlineEnabled && features.contains("p07_horizontal_shadow_line_animation")
-            && !features.contains("p05_lower_ruby")
-            && (style.decorationKindForState(false) == "shadow" || style.decorationKindForState(true) == "shadow"
-                || (annotated && (style.rubyDecorationKindForState(false) == "shadow"
-                                  || style.rubyDecorationKindForState(true) == "shadow")));
+        const auto usesDecoration = [&](const char* kind) {
+            return style.decorationKindForState(false) == kind || style.decorationKindForState(true) == kind
+                || (annotated && (style.rubyDecorationKindForState(false) == kind
+                                  || style.rubyDecorationKindForState(true) == kind));
+        };
+        const bool horizontalDecorationMotion = unscaledLineMotion && !line.scanlineEnabled
+            && !features.contains("p05_lower_ruby");
+        const bool horizontalShadowMotion = horizontalDecorationMotion
+            && features.contains("p07_horizontal_shadow_line_animation") && usesDecoration("shadow");
+        const bool horizontalGlowMotion = horizontalDecorationMotion && glowPaints == GlowPaintSupport::Solid
+            && features.contains("p07_horizontal_glow_line_animation")
+            && (!prepared.noWipe || features.contains("p07_no_wipe_decoration"))
+            && usesDecoration("glow") && !usesDecoration("shadow");
         const bool lowerUnscaledMotion = unscaledLineMotion && features.contains("p07_lower_ruby_unscaled_line_animation")
             && (!line.scanlineEnabled || features.contains("p07_lower_ruby_scanline_line_animation"))
             && std::ranges::any_of(source.value("ruby_groups").toArray(), [](const auto& value) {
@@ -359,7 +366,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                               line.entryAnimation == "slide_in" ? slide : 0.f,
                               line.entryAnimation == "rise" ? rise : 0.f,
                               line.exitAnimation == "slide_out" ? slide : 0.f,
-                              line.exitAnimation == "rise" ? -rise : 0.f};
+                              line.exitAnimation == "rise" ? -rise : 0.f,
+                              horizontalGlowMotion};
         const int delay = cells.size() > 1 ? 350 / (int(cells.size()) - 1) : 0;
         prepared.characterFade = {charEntry && line.entryDurationMs > 0, charExit && line.exitDurationMs > 0,
                                   line.endMs, delay, kindOf(line.entryAnimation), kindOf(line.exitAnimation)};
@@ -544,7 +552,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
-            {rtlRubyUnscaledMotion || horizontalShadowMotion, lowerUnscaledMotion || lowerUtopiaMotion},
+            {rtlRubyUnscaledMotion || horizontalShadowMotion || horizontalGlowMotion,
+             lowerUnscaledMotion || lowerUtopiaMotion},
             totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
@@ -633,7 +642,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool unscaledScanlineMotion = line.scanlineEnabled && line.karaokeAnimation == "none" && ordinaryLineAnimation
             && features.contains("p07_scanline_unscaled_line_animation");
-        const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion
+        const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion || horizontalGlowMotion
             || fadeComposition || noiseComposition || spinComposition
             || geometryComposition || rubyUtopiaExit)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
@@ -687,7 +696,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || (hasShadow && !rtlShadow)))
                 || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
-                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow || horizontalShadowMotion
+                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
+                    || horizontalShadowMotion || horizontalGlowMotion
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
                 || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion || (verticalDecoration && verticalFade)
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))

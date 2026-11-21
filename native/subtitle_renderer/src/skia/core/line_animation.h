@@ -9,6 +9,7 @@ struct LineAnimation {
     int inMs = 0;
     int outMs = 0;
     float inDx = 0, inDy = 0, outDx = 0, outDy = 0;
+    bool quantizeOpacity = false;
 
     bool active() const { return inMs > 0 || outMs > 0; }
 

@@ -202,6 +202,52 @@ def glowing_ruby(reading, case):
     return track, style
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('karaoke', ['none', 'no_wipe'])
+def test_horizontal_glow_line_motion_keeps_glow_and_scene(binary, reading, target, karaoke):
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, karaoke_anim=karaoke, entry_anim='fade', exit_anim='fade',
+                    entry_lead_ms=600, exit_fade_ms=600)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_horizontal_glow_line_animation'
+    assert feature in ir['required_features']
+    line, = ir['track']['lines']
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start + 30, start + 200, start + 650, end - 200, end - 30]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+        without_glow = ir_for(binary, (track, replace(style, decoration_kind='none', decoration_kind_before='none',
+                                                      ruby_decoration_kind='none', ruby_decoration_kind_before='none')),
+                              dpr=1.5)
+        configure(process, without_glow)
+        plain, _ = collect(process, times, generation=3)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+    assert all(np.any(glow[..., 3] > bare[..., 3]) for glow, bare in zip(frames, plain, strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,exit_', [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+@pytest.mark.parametrize('karaoke', ['none', 'no_wipe'])
+def test_horizontal_glow_line_motion_matches_actual_gpu(binary, application, tmp_path, entry, exit_, dpr, karaoke):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'scanline_band')
+    style = replace(case.style, scanline_enabled=False, karaoke_anim=karaoke, entry_anim=entry, exit_anim=exit_,
+                    ruby_decoration_kind='glow', ruby_decoration_kind_before='glow',
+                    ruby_glow_before_radius_px=5, ruby_glow_after_radius_px=7)
+    times = (299, 301, 307, 317, 336, 375, 500, 750, 899, 900, 1500, 3950,
+             4500, 4900, 5100, 5350, 5464, 5483, 5493, 5499, 5500)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times, dpr=dpr)
+
+
 PLAIN_GRADIENT_CASES = [
     ('gradient_horizontal', False, False, False),
     ('gradient_vertical', False, False, True),
