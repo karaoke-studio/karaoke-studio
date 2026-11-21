@@ -1,5 +1,6 @@
 #include "resolved_role_paints.h"
 #include "image_fill_cache.h"
+#include "scene_input.h"
 #include "../../model/text_line.h"
 #include "../../model/text_style.h"
 #include "../render_backend.h"
@@ -52,5 +53,25 @@ RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, cons
         if (!line.cells[index].path.isEmpty())
             line.cells[index].bodyPaintIndex = bounds.roles.at(source.chars[index].styleIndex).paintIndex;
     return bounds;
+}
+
+void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
+                      std::span<const TextStyle> styles) {
+    std::map<int, int> groups;
+    // The existing GPU composites phase layers in first-use role order.
+    for (std::size_t index = 0; index < line.cells.size(); ++index) {
+        const int role = source.chars[index].styleIndex;
+        auto [it, inserted] = groups.try_emplace(role, -1);
+        if (inserted) {
+            const auto& style = role < 0 ? base : styles[role];
+            const auto glow = skiaStaticGlow(style);
+            if (glow.before.radius > 0 || glow.after.radius > 0) {
+                it->second = int(line.roleGlows.size());
+                line.roleGlows.push_back({glow, {}});
+            }
+        }
+        if (it->second >= 0 && !line.cells[index].path.isEmpty())
+            line.roleGlows[it->second].cells.push_back(index);
+    }
 }
 }

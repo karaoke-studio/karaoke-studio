@@ -339,6 +339,25 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     for (const auto& layer : line.rubyGlow) drawRubyGlow(layer, false);
     for (const auto& layer : line.lowerGlow) drawRubyGlow(layer, true);
+    for (const auto& group : line.roleGlows) {
+        for (const auto& layer : group.phases) {
+            const bool after = layer.visible(true);
+            if (!after && !layer.visible(false)) continue;
+            const auto visible = [after](const State& state) {
+                return state.phase != (after ? Phase::Before : Phase::After);
+            };
+            if (std::ranges::none_of(group.cells, [&](std::size_t index) { return visible(states[index]); })) continue;
+            const auto source = layer.createSource(canvas);
+            if (!source.surface) continue;
+            for (std::size_t local = 0; local < group.cells.size(); ++local) {
+                const auto& state = states[group.cells[local]];
+                if (!visible(state)) continue;
+                const auto edge = state.phase == Phase::Wiping ? std::optional(state.edge) : std::nullopt;
+                layer.drawCell(*source.surface->getCanvas(), local, after, edge);
+            }
+            layer.composite(canvas, source);
+        }
+    }
     for (const auto& layer : line.glow) {
         const bool before = layer.visible(false), after = layer.visible(true);
         if (std::ranges::none_of(states, [=](const State& state) {

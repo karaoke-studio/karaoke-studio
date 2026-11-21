@@ -97,7 +97,8 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
         throw BackendError("Skia 实色描边暂不支持行内样式");
     for (const auto& style : scene.charStyles)
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
-            .bodyGradients = caps.roleBodyPaints, .imageFills = caps.roleBodyPaints});
+            .bodyGradients = caps.roleBodyPaints, .imageFills = caps.roleBodyPaints,
+            .staticGlow = caps.roleStaticGlow});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;

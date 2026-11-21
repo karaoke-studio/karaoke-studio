@@ -157,6 +157,65 @@ def test_ruby_role_paints_match_actual_d2d_gpu(binary, application, tmp_path, di
     assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 3500, 3900, 4499))
 
 
+def glowing_role_scheme(scheme, before, after, radii, concentration):
+    palette = scheme.karaoke_colors
+    return replace(scheme, decoration_kind='glow', decoration_kind_before='glow', decoration_before_sync=False,
+                   glow_before_radius_px=radii[0], glow_after_radius_px=radii[1],
+                   glow_before_concentration_level=0, glow_concentration_level=concentration,
+                   karaoke_colors=replace(palette,
+                       before=replace(palette.before, shadow=PaintFill(color=before)),
+                       after=replace(palette.after, shadow=PaintFill(color=after))))
+
+
+def role_static_glow_style(style, *, base=False):
+    schemes = style.custom_style_schemes
+    result = replace(style, decoration_kind='none', custom_style_schemes={
+        'a': glowing_role_scheme(schemes['a'], '#B0F02440', '#FF22B355', (7, 11), 1),
+        'b': glowing_role_scheme(schemes['b'], '#FF2669F2', '#A0F3BA10', (11, 6), 2),
+    })
+    return glowing_role_scheme(result, '#90FA21DA', '#C01DAED2', (8, 9), 0) if base else result
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_role_static_glow_follows_the_local_wipe_and_seek(binary, project, tmp_path, target):
+    track, plain = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    style = role_static_glow_style(plain)
+    ir = ir_for(binary, (track, style))
+    assert 'p06_role_static_glow' in ir['required_features']
+    undeclared = copy.deepcopy(ir)
+    undeclared['required_features'].remove('p06_role_static_glow')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [150, 300, 500, 150])
+        process._send({'cmd': 'configure', 'ir': undeclared})
+        with pytest.raises(NativeRendererError):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [300], generation=2)
+        process.configure(track, replace(plain, decoration_kind='none'), width=640, height=360, fps=60)
+        no_glow, _ = collect(process, [150], generation=3)
+    assert np.array_equal(frames[0], frames[-1]) and np.array_equal(frames[1], replay[0])
+    assert not np.array_equal(frames[1], frames[2])
+    assert np.count_nonzero((frames[0][..., 3] > 0) & (no_glow[0][..., 3] == 0)) > 20
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('painted,base_glow', [(False, False), (True, True)])
+def test_role_static_glow_matches_actual_d2d_gpu(binary, application, tmp_path, painted, base_glow):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    baseline = next(case for case in build_cases(tmp_path) if case.case_id == 'n3_grid')
+    style = replace(baseline.style, stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0,
+                    decoration_kind='none', karaoke_anim='none')
+    track, style = textured_roles(baseline.track, style, tmp_path, 'gradient_horizontal')
+    if not painted:
+        style = replace(style, custom_style_schemes={name: replace(scheme, karaoke_colors=role_outline_palette())
+                                                    for name, scheme in style.custom_style_schemes.items()})
+    case = replace(baseline, case_id=f'role_static_glow_{painted}_{base_glow}',
+                   track=track, style=role_static_glow_style(style, base=base_glow))
+    assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 3500, 3900, 4499))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('with_ruby', [False, True], ids=['body', 'ruby'])
 def test_body_role_outlines_follow_their_cell_clock(binary, project, target, with_ruby):

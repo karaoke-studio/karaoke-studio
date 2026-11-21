@@ -79,6 +79,8 @@ private:
         std::vector<BodyPaint> roleBodyPaints;
         StaticShadow shadow;
         std::vector<PreparedGlow> glow;
+        struct RoleGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> cells; };
+        std::vector<RoleGlow> roleGlows;
         std::vector<PreparedGlow> rubyGlow;
         std::vector<PreparedGlow> lowerGlow;
         bool hasRubyGlow() const { return !rubyGlow.empty() || !lowerGlow.empty(); }

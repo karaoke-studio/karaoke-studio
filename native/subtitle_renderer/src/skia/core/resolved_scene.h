@@ -75,6 +75,8 @@ struct ResolvedLine {
     std::vector<BodyPaint> roleBodyPaints;
     StaticShadow shadow;
     StaticGlow glow;
+    struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; };
+    std::vector<RoleGlow> roleGlows;
     NoiseTransition noise;
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;

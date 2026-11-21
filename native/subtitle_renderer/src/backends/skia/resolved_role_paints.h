@@ -23,4 +23,5 @@ struct RolePaintBounds {
 
 RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
                                     std::span<const TextStyle>, SkiaImageFillCache&, float layoutScale);
+void resolveRoleGlows(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&, std::span<const TextStyle>);
 }

@@ -67,6 +67,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
+    const bool roleStaticGlow = features.contains("p06_role_static_glow");
     const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
     const bool outlineGradients = features.contains("p06_outline_gradient");
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
@@ -80,7 +81,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .volumeSignal = features.contains("p08_volume_signal"),
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
-            || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints});
+            || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
+        .roleStaticGlow = roleStaticGlow});
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -502,6 +504,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
+        const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
+        if (roleStaticGlow && hasInlineRoles) {
+            resolveRoleGlows(prepared, line, style, projected.charStyles);
+            prepared.glow = {};
+        }
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
         const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled;
         const bool hasDecoration = hasGlow || hasShadow;
@@ -546,7 +553,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
-                || !projected.charStyles.empty() || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
+                || hasInlineRoles || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (!roleBodyPaints && (gradient || image)) {

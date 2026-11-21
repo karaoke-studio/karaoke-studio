@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positio
 from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
     validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs, vertical_solid_schema)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
@@ -86,6 +87,15 @@ def _uses_decoration(style, kind):
     return style.decoration_kind == kind or (
         not style.decoration_before_sync and style.decoration_kind_before == kind
     )
+
+
+def _uses_role_glow(item):
+    look = item.layout_style
+    labels = {cell.role_label for cell in item.render_line.chars
+              if cell.role_label in look.custom_style_schemes}
+    return bool(labels) and (_uses_decoration(look, 'glow') or any(
+        _uses_decoration(style_for_role_in_layout(look, label), 'glow') for label in labels
+    ))
 
 
 def _ordinary_line_animation(source):
@@ -492,6 +502,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     decorations = [kind for kind in ('shadow', 'glow') if any(
         _uses_decoration(item.layout_style, kind) for item in plan.lines)]
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
+    if any(_uses_role_glow(item) for item in plan.lines):
+        ir['required_features'].append('p06_role_static_glow')
     ruby_decorations = vertical_ruby is not None and any(
         vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('shadow', 'glow'))
     if style.vertical and (decorations or ruby_decorations):

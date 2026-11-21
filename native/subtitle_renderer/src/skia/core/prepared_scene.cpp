@@ -147,6 +147,14 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                                   cell.bitmap ? std::make_shared<const PreparedBitmapGuide>(*cell.bitmap, remainingBitmapHaloBytes)
                                               : nullptr, cell.bodyPaintIndex});
         }
+        for (const auto& group : source.roleGlows) {
+            auto layers = PreparedGlow::prepare(group.glow, false);
+            for (auto index : group.cells) {
+                if (index >= line.cells.size()) throw std::runtime_error("Skia 角色光晕单元索引无效");
+                for (auto& layer : layers) layer.appendCell(line.cells[index].path);
+            }
+            line.roleGlows.push_back({std::move(layers), group.cells});
+        }
         if (line.utopiaTransition.leave) {
             line.followingDone.resize(line.cells.size());
             const Cell* next = nullptr;

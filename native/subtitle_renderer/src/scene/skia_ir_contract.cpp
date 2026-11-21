@@ -100,6 +100,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_static_shadow",
         "p06_ruby_shadow",
         "p06_static_glow",
+        "p06_role_static_glow",
         "p06_ruby_glow",
         "p06_lower_ruby_glow",
         "p06_lower_ruby_shadow",
@@ -583,7 +584,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (layout.value("secondary_solid_outline_schema").toDouble(-1) != 1
             || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 二重实色描边布局版本无效");
-    if (features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints")) {
+    const bool roleStaticGlow = features.contains("p06_role_static_glow");
+    if (features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints") || roleStaticGlow) {
         static const QJsonArray allowed{
             "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
             "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
@@ -591,11 +593,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_resolved_ruby", "p05_upper_ruby", "p05_lower_ruby", "p05_ruby_units",
             "p05_ruby_markers", "p05_standalone_marks", "p06_outline_ruby", "p06_ruby_solid_outline",
             "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines",
-            "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines"
+            "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines",
+            "p06_static_glow", "p06_role_static_glow"
         };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
-            || (roleBodyPaints && !features.contains("p05_inline_roles"))
+            || ((roleBodyPaints || roleStaticGlow) && !features.contains("p05_inline_roles"))
             || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
             throw BackendError("Skia 正文角色画笔当前支持正向横排和普通走字");
     }
