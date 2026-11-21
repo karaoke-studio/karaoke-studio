@@ -33,6 +33,15 @@ def _transition_layers(kind, entry):
     return _TRANSITION_LAYERS.get((kind, entry), {kind})
 
 
+def petal_entry_with_flame(line, style):
+    return line.get('entry_anim') == 'petal' and line.get('exit_anim') == 'none' and style.sing_fx == 'flame'
+
+
+def petal_entry_with_scanline(line, style):
+    return (petal_entry_with_flame(line, style) and line.get('scanline') and line.get('karaoke_anim') == 'utopia'
+            and style.scanline_shape == 'band' and style.scanline_mode == 'color')
+
+
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
@@ -48,9 +57,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
         annotated = bool(track.rubies)
-        petal_with_flame = (annotated and entry == 'petal' and exit_ == 'none' and look.sing_fx == 'flame'
+        petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
-        petal_with_band = (petal_with_flame and band and look.scanline_shape == 'band' and look.scanline_mode == 'color'
+        petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
         singing_under_shape = (annotated and band and not animated and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])

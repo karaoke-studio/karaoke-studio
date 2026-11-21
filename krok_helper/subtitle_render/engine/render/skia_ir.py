@@ -29,7 +29,8 @@ from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS,
-    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_REPEATED_PARTICLES, write_particle_anchors)
+    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_REPEATED_PARTICLES,
+    petal_entry_with_flame, petal_entry_with_scanline, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -125,7 +126,7 @@ def _composes_character_fade(source, item):
             and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars))
 
 
-def _write_utopia_pivots(ir, plan, measured, transition_lines):
+def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tracks):
     singing, transition, singing_ruby = False, False, False
     role_singing = False
     with_line_animation = False
@@ -141,7 +142,7 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
         with_character_transition = index in transition_lines
         with_noise = _noise_animation(source) and 'p07_noise_composition' in ir['required_features']
         scanline_motion = (line_animation and 'p07_scanline_line_animation' in ir['required_features']
-                           or with_character_transition and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
+                           or item.track_index in particle_band_tracks)
         ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
         inline_roles = any(c.role_label is not None for c in item.render_line.chars)
         role_scale = inline_roles and scales and animations == {'none'} and not source.get('zoom_pulse')
@@ -402,16 +403,15 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     same_energy_pair = False
     particle_entry_lines = set()
     repeated_particle_pair = False
-    petal_entry_with_flame = False
+    petal_flame = False
     particle_band_tracks = set()
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
             entry, leave = source.get('entry_anim'), source.get('exit_anim')
             look = item.layout_style
-            with_flame = entry == 'petal' and leave == 'none' and look.sing_fx == 'flame'
-            with_band = (with_flame and source.get('scanline') and source.get('karaoke_anim') == 'utopia'
-                         and look.scanline_shape == 'band' and look.scanline_mode == 'color')
+            with_flame = petal_entry_with_flame(source, look)
+            with_band = petal_entry_with_scanline(source, look)
             if (source.get('karaoke_anim') not in {'none', 'utopia'} or source.get('zoom_pulse')
                     or (source.get('scanline') and not with_band) or source.get('stroke_flash')
                     or _uses_decoration(look, 'shadow')):
@@ -441,7 +441,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= matching
-                        petal_entry_with_flame |= with_flame
+                        petal_flame |= with_flame
                         if with_band:
                             particle_band_tracks.add(item.track_index)
                     if effect in ENERGY_TRANSITIONS or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
@@ -729,7 +729,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_entry')
         if repeated_particle_pair:
             ir['required_features'].append('p07_ruby_particle_entry_exit')
-        if petal_entry_with_flame:
+        if petal_flame:
             ir['required_features'].append('p07_ruby_petal_entry_flame_singing')
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
@@ -827,7 +827,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_lower_ruby_decoration_line_animation')
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
-    _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines)
+    _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines,
+                        particle_band_tracks)
     role_glow = any(feature in ir['required_features'] for feature in ('p06_role_static_glow', 'p06_ruby_role_glow'))
     if 'p07_line_fade' in ir['required_features'] and (role_glow or any(
             feature in ir['required_features'] for feature in ('p06_role_solid_outlines', 'p06_role_body_paints'))):

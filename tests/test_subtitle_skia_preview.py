@@ -699,7 +699,7 @@ from PyQt6.QtGui import QImage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
 from krok_helper.subtitle_render.domain.background import BackgroundSource
-from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.models import RubyAnnotation, Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
 from krok_helper.subtitle_render.domain.roll import RollSegmentConfig, RollTimelinePlan
 from krok_helper.subtitle_render.frontend.preview.playback import PlaybackController
@@ -752,9 +752,15 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
         after=KaraokeColorState(text=PaintFill(color='#10FF10'))), decoration_kind='none',
     stroke_width_px=0, stroke2_enabled=False, dual_line_layout=False, karaoke_anim='none', entry_anim='none',
     exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
-panel.set_style(style)
 track = TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
     end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)])
+if '--effects' in sys.argv:
+    from dataclasses import replace
+
+    style = replace(style, entry_anim='petal', entry_lead_ms=600, karaoke_anim='utopia_scanline',
+                    sing_fx='flame', scanline_effect='star', ruby_decoration_kind='none')
+    track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
+panel.set_style(style)
 panel.set_track(track)
 window.show()
 if '--require-hardware' in sys.argv:
@@ -876,7 +882,7 @@ print('floating preview verified', flush=True)
 """
 
 
-def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None):
+def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None, effects=False):
     binary = qml_dir.parent / ('krok_skia_subtitle_renderer.exe' if sys.platform == 'win32' else 'krok_skia_subtitle_renderer')
     env = desktop_environment() | {
         'KROK_SUBTITLE_RENDER_BACKEND': 'skia', 'KROK_SUBTITLE_SKIA_TARGET': 'gpu',
@@ -888,6 +894,8 @@ def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None):
     args = ['--require-hardware'] if require_hardware else []
     if compare_path is not None:
         args += ['--compare-export', str(compare_path)]
+    if effects:
+        args.insert(0, '--effects')
     result = subprocess.run([sys.executable, '-X', 'faulthandler', '-c', FLOATING_WINDOW, *args], env=env, capture_output=True,
                             text=True, encoding='utf-8', errors='replace', timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -898,8 +906,10 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
     assert 'floating preview verified' in run_floating_preview(qml_dir)
 
 
-def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path):
-    assert 'Quick, offscreen GPU and export pipe compared' in run_floating_preview(qml_dir, compare_path=tmp_path)
+@pytest.mark.parametrize('effects', [False, True], ids=['plain', 'particle-scanline'])
+def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
+    result = run_floating_preview(qml_dir, compare_path=tmp_path, effects=effects)
+    assert 'Quick, offscreen GPU and export pipe compared' in result
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='Software Vulkan fallback on Linux')
