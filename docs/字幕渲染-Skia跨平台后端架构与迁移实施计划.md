@@ -699,6 +699,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 同一范围的异形扫字线与唱字粒子同场，见 §14.166。
 - [ ] P07.7 扫字线粒子沿锋面发射、reverse、emit 窗口、换字拖尾；分别验证粒子速度与该类不使用 time_scale 的规则。
   - [x] 正向竖排的实色扫字带独立跟随正文和注音沿 Y 轴推进，含柔化，见 §14.321。
+  - [x] 单列和双列的正向竖排实色扫字带可与正文、上注音的实色发光及阴影叠加，见 §14.322。
   - [x] 正向横排实色扫字线六种粒子、发射窗、只缩放拖尾的速度和回跳，见 §14.74。
   - [x] 横排反向扫字粒子按演唱顺序绑定字格，覆盖右侧先发、换字拖尾和回跳，见 §14.75。
   - [x] 正向实色唱字粒子与扫字线粒子同场，保留两套时钟、调速和前后层，见 §14.80。
@@ -3777,6 +3778,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 专项及横排柔化回归 **57 通过**，WSL X11、Wayland 各 **43 通过、14 项 Windows 专用跳过**。独立 Windows Raster 的 **4 帧**与 Vulkan sidecar 的 Raster 模式逐字节一致。日志前缀 `build/p07-vertical-scanline-*`。
 - `cc07a857` 的 Windows 竖排和架构全套 **287 通过**。原始样本中已纳入严格双对照的 **111 个场景、496 张 1080p 帧**复验通过。Windows D2D 走实际 GPU，Skia 对照走 Vulkan 和 Raster。日志 `build/p07-vertical-full-closeout.log`，逐帧证据 `build/p00-skia-coverage/original-warm-pixels-cc07a857.json`。
 - 横排 Utopia 的 DPR 1 测试保留原有时钟边界，再加 50ms 等间隔采样。暂停区间的所有采样都要求没有高亮带。原有墨迹、走字锋面、高亮边缘的 **1px** 预算与最低命中数继续适用。Windows 实际 D2D GPU 对 Vulkan **6 通过**，日志 `build/p07-scanline-dense-utopia-d2d.log`。
+
+### 14.322 P07.7 竖排扫字带叠加正文和注音装饰（2026-11-22）
+
+- 仅为通过正向竖排实色高亮带校验的布局声明 `p07_vertical_scanline_decoration`。单列和双列复用已有阴影与发光图层，扫字带在固定文字描边和字面上着色，正文与注音分别保留自身走字时钟。旧 sidecar 缺少该能力时拒绝场景。
+- Windows Vulkan 与 Raster 专项 **13 通过**。独立 Windows Raster 的 **5 帧**与 Vulkan sidecar 的 Raster 模式逐字节一致。测试覆盖仅正文发光、仅注音阴影、正文阴影加注音发光、双列正文发光加注音阴影，以及删去声明后的场景回滚。日志前缀 `build/p07-vertical-scanline-decoration-*`。
+- WSL 中 X11 与 Wayland 各 **13 通过**，Linux Vulkan 构建的 **3 项 CTest** 通过。真实 Linux GPU 仍待验收。
 
 ## 15. 前期探针清理范围
 

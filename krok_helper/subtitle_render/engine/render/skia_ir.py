@@ -204,7 +204,7 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
 
 
 def _validate_scanline_band(track, style, lines, particle_band_tracks):
-    """Validate the horizontal solid-color band."""
+    """Validate scanline modes and their supported compositions."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
@@ -633,10 +633,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines'])
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
         if any((index not in vertical_singing and line.get('karaoke_anim') not in modes)
-               or not _ordinary_line_animation(line) or line.get('scanline')
+               or not _ordinary_line_animation(line)
                or line.get('stroke_flash') or line.get('fx_bursts')
                for index, line in enumerate(ir['track']['lines'])):
             raise ValueError('Skia 竖排静态装饰超出已支持的走字组合')
+        if 'p07_vertical_scanline_band' in ir['required_features']:
+            ir['required_features'].append('p07_vertical_scanline_decoration')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
         if vertical_no_wipe:
             kind = next(iter(vertical_paints)) if len(vertical_paints) == 1 else 'mixed_decoration'

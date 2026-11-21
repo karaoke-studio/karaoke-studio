@@ -537,6 +537,7 @@ def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, 
     ('none', 'glow', 'none', False, False), ('glow', 'glow', 'none', True, False),
     ('glow', 'none', 'no_wipe', False, False), ('shadow', 'shadow', 'no_wipe', False, False),
     ('glow', 'shadow', 'none', False, True),
+    ('glow', 'shadow', 'scanline', False, False),
 ])
 def test_vertical_ruby_columns_composite_independent_decoration(binary, project, body, ruby, karaoke, fade, reverse):
     from test_subtitle_skia_outline_ruby import premultiplied
@@ -551,11 +552,16 @@ def test_vertical_ruby_columns_composite_independent_decoration(binary, project,
                     glow_before_radius_px=6, glow_after_radius_px=7, ruby_glow_before_radius_px=4,
                     ruby_glow_after_radius_px=5, shadow_offset_x=-6, shadow_before_offset_x=-6,
                     ruby_shadow_offset_x=8, ruby_shadow_before_offset_x=8)
+    if karaoke == 'scanline':
+        style = replace(style, scanline_enabled=True, scanline_shape='band', scanline_mode='color',
+                        scanline_color='#00FFFF', scanline_width_px=28)
+        base = replace(base, karaoke_anim='none')
     dpr = 1.5
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, base), dpr=dpr)
     feature = 'p06_vertical_columns_ruby_decoration'
     assert {feature, 'p06_vertical_columns_decoration', 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
+    assert ('p07_vertical_scanline_decoration' in ir['required_features']) == (karaoke == 'scanline')
     final = ir['skia_layout']['lines']
     assert final == plain['skia_layout']['lines']
     assert bool(final[1]['ruby_groups']) != reverse
@@ -576,6 +582,10 @@ def test_vertical_ruby_columns_composite_independent_decoration(binary, project,
         assert np.array_equal(frames[1], replay[0]) and not frames[4].any()
         for columns in (slice(None, split), slice(split, None)):
             assert np.any(frames[1][:, columns, 3] > baseline[1][:, columns, 3])
+            if karaoke == 'scanline':
+                pixels = np.stack(frames[:4])[:, :, columns]
+                red, green, blue, alpha = np.moveaxis(pixels, -1, 0)
+                assert np.any((red < 40) & (green > 180) & (blue > 180) & (alpha > 64))
         targets.append(np.stack(frames))
     diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
@@ -764,8 +774,11 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('dpr,softness,has_ruby', [(1, 0, True), (1.5, 8, True), (1.5, 8, False)])
-def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr, softness, has_ruby):
+@pytest.mark.parametrize('dpr,softness,has_ruby,body,ruby', [
+    (1, 0, True, 'none', 'none'), (1.5, 8, True, 'none', 'none'), (1.5, 8, False, 'none', 'none'),
+    (1, 0, False, 'glow', 'none'), (1, 0, True, 'none', 'shadow'), (1.5, 8, True, 'shadow', 'glow'),
+])
+def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr, softness, has_ruby, body, ruby):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
@@ -773,13 +786,18 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
     if not has_ruby:
         track = replace(track, rubies=[])
     base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'))
+    bare = ir_for(binary, (track, base), dpr=dpr) if body != 'none' or ruby != 'none' else None
+    base = replace(base, decoration_kind=body, glow_before_radius_px=6, glow_after_radius_px=6,
+                   shadow_before_offset_x=-9, shadow_offset_x=-9, ruby_decoration_kind=ruby,
+                   ruby_decoration_kind_before=ruby, ruby_shadow_before_offset_x=6, ruby_shadow_offset_x=6,
+                   ruby_glow_before_radius_px=6, ruby_glow_after_radius_px=6)
     style = replace(base, karaoke_anim='scanline', scanline_enabled=True, scanline_mode='color',
                     scanline_shape='band', scanline_color='#00FFFF', scanline_width_px=18,
                     scanline_glow_px=softness)
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, base), dpr=dpr)
-    feature = 'p07_vertical_scanline_band'
-    assert {feature, 'p07_scanline_band'} <= set(ir['required_features'])
+    feature = 'p07_vertical_scanline_decoration' if bare else 'p07_vertical_scanline_band'
+    assert {feature, 'p07_scanline_band', 'p07_vertical_scanline_band'} <= set(ir['required_features'])
     assert ('p07_ruby_scanline' in ir['required_features']) == has_ruby
     line, = ir['skia_layout']['lines']
     assert line == plain['skia_layout']['lines'][0]
@@ -804,6 +822,10 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
             replay, _ = collect(process, [second, first], generation=2)
             configure(process, plain)
             reference, _ = collect(process, times, generation=3)
+            if bare:
+                configure(process, bare)
+                undecorated, _ = collect(process, [times[0]], generation=4)
+                assert np.any((frames[0][..., 3] > 16) & (undecorated[0][..., 3] == 0))
         assert np.array_equal(frames[1], replay[1]) and np.array_equal(frames[2], replay[0])
         assert np.array_equal(frames[0], reference[0]) and np.array_equal(frames[-1], reference[-1])
         if has_ruby:

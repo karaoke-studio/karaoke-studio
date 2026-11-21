@@ -674,6 +674,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_vertical_shadow_no_wipe");
         const bool verticalMixedNoWipe = style.vertical && prepared.noWipe
             && features.contains("p07_vertical_mixed_decoration_no_wipe");
+        const bool verticalScanlineDecoration = style.vertical && line.scanlineEnabled
+            && features.contains("p07_vertical_scanline_decoration");
         const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
@@ -681,7 +683,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || (verticalSinging && !hasShadow)
                 || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
             && (verticalFade || verticalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+            && (!line.scanlineEnabled || verticalScanlineDecoration) && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
@@ -707,7 +709,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                       || (verticalDecoration && (verticalFade || verticalMotion))
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
-                || (line.scanlineEnabled && !scanlineGlow)
+                || (line.scanlineEnabled && !(scanlineGlow || verticalScanlineDecoration))
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
                 || hasInlineRoles || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
