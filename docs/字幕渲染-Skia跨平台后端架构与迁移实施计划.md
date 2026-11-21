@@ -3623,6 +3623,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows Vulkan 与 Raster 各在 DPR 1、1.5 验证半透明正文的整帧像素及独立光晕的 alpha 遮罩，最终 **8 项通过**。旧正文裁切和旧光晕裁切分别复现 **4 项失败**。另外 **122 项**关联用例通过，覆盖注音、光晕与出入场，包括实际 D2D GPU 对照。
 - 先复测正文和注音裁切，再复测叠加光晕裁切的最终版本，两轮均为 **108/129** 个原样场景、**478 帧**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原画面预算。最终日志为 `build/p07-skia-seam-final-p00.log`，证据为 `build/p00-skia-coverage/original-pixels-wipe-and-glow-seam.json`。
 - 独立 Windows Raster **13 项通过**，WSL X11、Wayland 各 **26 项通过**。Windows Vulkan、独立 Raster 与 WSL Vulkan 构建各通过 **3 项 CTest**。WSL 使用软件 Vulkan。
+- `a4dc3ec4` 的 [Mac 双架构 CI 44912443775](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44912443775) 五项成功。arm64、x64 各 **2143 通过、1403 跳过**，两份干净验证包各 **229 通过**，**98 份**规范样本跨架构哈希一致。托管设备功能通过，真实 Metal 硬件门槛仍待实机复验。
 
 ### 14.304 P07.1 Utopia 退场的正文与上注音光晕（2026-11-21）
 
