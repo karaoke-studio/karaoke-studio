@@ -39,25 +39,29 @@ const SkRect& RolePaintBounds::forRole(int role) const {
     return it == roles.end() ? line : it->second.ink;
 }
 
-RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
-                           std::span<const TextStyle> styles, SkiaImageFillCache& images, float scale) {
-    const auto appearance = [&](int index) -> const TextStyle& { return index < 0 ? base : styles[index]; };
+RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine& line, const TextLine& source,
+                                      const TextStyle& base, std::span<const TextStyle> styles, float scale) {
     RolePaintBounds bounds;
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
         if (line.cells[index].path.isEmpty()) continue;
         const int role = source.chars[index].styleIndex;
-        const auto& look = appearance(role);
-        for (const auto* paint : {&look.beforeStrokePaint, &look.afterStrokePaint,
-                                  &look.beforeStroke2Paint, &look.afterStroke2Paint})
-            if (paint->mode != "solid") throw BackendError("Skia 角色正文画笔暂不支持复杂描边");
+        const auto& look = role < 0 ? base : styles[role];
         const auto ink = line.cells[index].path.computeTightBounds();
         bounds.roles[role].ink.join(ink);
         bounds.line.join(ink);
         bounds.outlinePad = std::max(bounds.outlinePad,
             ::subtitle::skia::outlineVisualPad(look.strokeWidth, look.stroke2Width, scale));
     }
+    return bounds;
+}
+
+void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
+                         std::span<const TextStyle> styles, RolePaintBounds& bounds, SkiaImageFillCache& images, float scale) {
     for (auto& [role, domain] : bounds.roles) {
-        const auto& look = appearance(role);
+        const auto& look = role < 0 ? base : styles[role];
+        for (const auto* paint : {&look.beforeStrokePaint, &look.afterStrokePaint,
+                                  &look.beforeStroke2Paint, &look.afterStroke2Paint})
+            if (paint->mode != "solid") throw BackendError("Skia 角色正文画笔暂不支持复杂描边");
         if (look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid") continue;
         domain.paintIndex = int(line.roleBodyPaints.size());
         ::subtitle::skia::BodyPaint prepared;
@@ -78,7 +82,6 @@ RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, cons
     for (std::size_t index = 0; index < line.cells.size(); ++index)
         if (!line.cells[index].path.isEmpty())
             line.cells[index].bodyPaintIndex = bounds.roles.at(source.chars[index].styleIndex).paintIndex;
-    return bounds;
 }
 
 void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,

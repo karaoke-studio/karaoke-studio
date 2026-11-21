@@ -202,6 +202,78 @@ def glowing_ruby(reading, case):
     return track, style
 
 
+PLAIN_GRADIENT_CASES = [
+    ('gradient_horizontal', False, False, False),
+    ('gradient_vertical', False, False, True),
+    ('split_vertical', False, False, False),
+    ('gradient_horizontal', True, False, False),
+    ('gradient_horizontal', True, True, True),
+    ('split_vertical', True, False, False),
+]
+
+
+def plain_gradient_glow(project, reading, mode, ruby, shared, fade):
+    track, style = glowing_ruby(reading, 'two_groups') if ruby else glow_source(project, 'split')
+    paint = PaintFill(mode=mode, start_color='#CCF02440', end_color='#CC247CE0',
+                     split_stops=[(0, '#CCF02440'), (45, '#CC247CE0'), (100, '#CC247CE0')])
+
+    def apply(palette):
+        if mode == 'split_vertical':
+            return replace(palette, after=replace(palette.after, shadow=paint))
+        return replace(palette, before=replace(palette.before, shadow=paint))
+
+    style = replace(style, karaoke_colors=apply(style.karaoke_colors))
+    if ruby:
+        style = replace(style, ruby_colors_follow_main=False, ruby_karaoke_colors=apply(style.ruby_karaoke_colors),
+                        ruby_horizontal_gradient_with_main=shared)
+    if fade:
+        style = replace(style, entry_anim='fade', entry_lead_ms=300, exit_anim='fade', exit_fade_ms=300)
+    return track, style
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('mode,ruby,shared,fade', PLAIN_GRADIENT_CASES)
+def test_plain_gradient_glow_keeps_previous_scene_when_capability_is_missing(
+        binary, project, reading, target, mode, ruby, shared, fade):
+    track, style = plain_gradient_glow(project, reading, mode, ruby, shared, fade)
+    ir = upper_ir(binary, (track, style), 1)
+    assert 'p06_gradient_glow' in ir['required_features']
+    assert 'p06_role_body_paints' not in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_gradient_glow')
+    times = (299, 750, 1750)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, tuple(reversed(times)), generation=2)
+    assert any(frame[..., 3].max() > 16 for frame in frames)
+    for frame, again in zip(frames, reversed(replay), strict=True):
+        np.testing.assert_array_equal(frame, again)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('mode,ruby,shared,fade', PLAIN_GRADIENT_CASES)
+def test_plain_gradient_glow_matches_actual_gpu(binary, project, reading, mode, ruby, shared, fade):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = plain_gradient_glow(project, reading, mode, ruby, shared, fade)
+    times = sorted({*TIMES, *UPPER_TIMES}) if ruby else TIMES
+    ir = upper_ir(binary, (track, style), 1)
+    if fade:
+        line = ir['track']['lines'][0]
+        start, end = line['display_start_ms'], line['display_end_ms']
+        assert line['entry_duration_ms'] > 50 and line['exit_duration_ms'] > 150
+        times = sorted({*times, start + 50, end - 150, end - 50})
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                   width=640, height=360, dpr=1, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(360, 640, 4) for p in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs, gpu, raster, (mode, ruby, shared, fade), check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('singing', [False, True])
 def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, singing, tmp_path):

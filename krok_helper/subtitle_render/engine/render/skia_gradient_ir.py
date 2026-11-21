@@ -83,15 +83,19 @@ def write_body_gradient_bounds(ir, plan):
     by the line's visual outline pad (applied natively at the reference scale).
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
+    glow_features = {'p06_static_glow', 'p06_role_static_glow', 'p06_ruby_glow'}
+    glow_paints = (_gradient_glow_paints(ir['skia_layout'], plan)
+                   if glow_features.intersection(ir['required_features']) else set())
     if _declare_role_body_paints(ir, plan):
         if _has_textured_upper_ruby(ir['skia_layout'], plan):
             ir['required_features'].append('p06_ruby_role_paints')
-        glow_paints = _gradient_glow_paints(ir['skia_layout'], plan)
         if glow_paints:
             feature = ('p06_vertical_gradient_glow' if glow_paints == {'gradient_vertical'}
                        else 'p06_role_gradient_glow')
             ir['required_features'].append(feature)
         return
+    if glow_paints:
+        ir['required_features'].append('p06_gradient_glow')
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     ruby_image = False
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):

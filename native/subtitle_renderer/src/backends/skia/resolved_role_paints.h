@@ -23,8 +23,10 @@ struct RolePaintBounds {
     const SkRect& forRole(int role) const;
 };
 
-RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
-                                    std::span<const TextStyle>, SkiaImageFillCache&, float layoutScale);
+RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
+                                      std::span<const TextStyle>, float layoutScale);
+void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
+                          std::span<const TextStyle>, RolePaintBounds&, SkiaImageFillCache&, float layoutScale);
 void resolveRoleGlows(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
                       std::span<const TextStyle>, const RolePaintBounds* gradientBounds);
 void splitLatinOutlineStyles(RenderScene&);

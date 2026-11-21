@@ -69,7 +69,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
-    const auto glowPaints = features.contains("p06_role_gradient_glow") ? GlowPaintSupport::LineGradients
+    const bool gradientGlowWithoutTexturedRoles = features.contains("p06_gradient_glow");
+    const auto glowPaints = (gradientGlowWithoutTexturedRoles || features.contains("p06_role_gradient_glow"))
+        ? GlowPaintSupport::LineGradients
         : features.contains("p06_vertical_gradient_glow") ? GlowPaintSupport::VerticalGradient : GlowPaintSupport::Solid;
     const bool gradientGlow = glowPaints != GlowPaintSupport::Solid;
     const bool latinPrimaryOutline = features.contains("p06_latin_primary_outline");
@@ -148,6 +150,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto source = lines[index].toObject();
         const auto& line = projected.lines[index];
         const auto& style = projected.lineStyles[index];
+        if (gradientGlowWithoutTexturedRoles && (style.vertical || style.rightToLeft || line.wipeReverse
+            || line.karaokeAnimation != "none" || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
+            || (line.entryAnimation != "none" && line.entryAnimation != "fade")
+            || (line.exitAnimation != "none" && line.exitAnimation != "fade")))
+            throw BackendError("Skia 渐变光晕需要正向横排普通走字，可选整行淡化");
         if (!source.value("cells").isArray()) throw BackendError("Skia 最终布局缺少单元");
         const auto cells = source.value("cells").toArray();
         const auto original = originalLines[index].toObject();
@@ -455,11 +462,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))
             rubyTransition = RubyTransition::Affine;
         std::optional<RolePaintBounds> rolePaintBounds;
+        if (roleBodyPaints || gradientGlowWithoutTexturedRoles)
+            rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
+                                                     projected.layoutReferenceScale);
         if (roleBodyPaints) {
             if (source.contains("body_gradient_bounds"))
                 throw BackendError("Skia 角色画笔不能携带整行画笔范围");
-            rolePaintBounds = resolveRoleBodyPaints(prepared, line, style, projected.charStyles, imageCache,
-                                                   projected.layoutReferenceScale);
+            resolveRoleBodyPaints(prepared, line, style, projected.charStyles, *rolePaintBounds, imageCache,
+                                  projected.layoutReferenceScale);
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr, totalCells, totalGroups);

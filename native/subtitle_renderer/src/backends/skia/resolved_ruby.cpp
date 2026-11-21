@@ -146,13 +146,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool vertical = scene.lineStyles[lineIndex].vertical;
     const auto features = ir.value("required_features").toArray();
     const bool allowOutlines = features.contains("p06_ruby_solid_outline");
-    const bool verticalFade = vertical && features.contains("p07_vertical_decoration_fade")
-        && (line.entryAnimation == "none" || line.entryAnimation == "fade")
+    const bool fadeOnly = (line.entryAnimation == "none" || line.entryAnimation == "fade")
         && (line.exitAnimation == "none" || line.exitAnimation == "fade");
+    const bool verticalFade = vertical && features.contains("p07_vertical_decoration_fade") && fadeOnly;
     const bool staticLine = line.entryAnimation == "none" && line.exitAnimation == "none";
-    const bool roleLineFade = features.contains("p07_role_line_fade")
-        && (line.entryAnimation == "none" || line.entryAnimation == "fade")
-        && (line.exitAnimation == "none" || line.exitAnimation == "fade");
+    const bool roleLineFade = features.contains("p07_role_line_fade") && fadeOnly;
+    const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
+        && features.contains("p07_ruby_line_animation");
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
         && line.karaokeAnimation == "none" && (staticLine || verticalFade)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
@@ -173,7 +173,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade || roleLineFade)
+        && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
+            || roleLineFade || gradientLineFade)
         && (scene.charStyles.empty() || roleGlow);
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
