@@ -26,6 +26,7 @@
 namespace krok::subtitle::preview {
 namespace {
 Q_LOGGING_CATEGORY(lcPreview, "krok.subtitle.skia.preview", QtWarningMsg)
+Q_LOGGING_CATEGORY(lcPreviewResources, "krok.subtitle.skia.resources", QtWarningMsg)
 
 // Platform branches live only in this adapter: which API is accepted, how Qt's device is
 // borrowed, and how one frame's texture is wrapped and handed back. Drawing is shared.
@@ -145,6 +146,7 @@ protected:
             context_.reset();
             deviceRhi_ = rhi();
             reported_ = false;
+            nextResourceSampleMs_ = 0;
             try {
                 context_ = bridge_.connect(*rhi());
             } catch (const std::exception& error) {
@@ -203,6 +205,19 @@ private:
             << " renderer=" << quintptr(this) << " thread=" << quintptr(owner_)
             << " gui=" << (owner_ == QCoreApplication::instance()->thread());
     }
+    void traceResources() {
+        if (!lcPreviewResources().isDebugEnabled()) return;
+        const auto timeMs = clock_.elapsed();
+        if (timeMs < nextResourceSampleMs_) return;
+        nextResourceSampleMs_ = timeMs + 10000;
+        int count = 0;
+        std::size_t bytes = 0;
+        context_->getResourceCacheUsage(&count, &bytes);
+        qCDebug(lcPreviewResources) << "GPU cache" << backend_ << "elapsed-ms" << timeMs
+            << "resources" << count << "used-bytes" << quint64(bytes)
+            << "purgeable-bytes" << quint64(context_->getResourceCachePurgeableBytes())
+            << "budget-bytes" << quint64(context_->getResourceCacheLimit());
+    }
     bool drawWithSkia() {
         if (!context_ || (!motionProbe_ && !frame_.scene)) return false;
         QRhiTexture& texture = *colorTexture();
@@ -218,6 +233,7 @@ private:
                 frame_.scene->draw(canvas, frame_.timeMs);
             }
             bridge_.submit(*context_, *surface, texture);
+            traceResources();
             if (!motionProbe_) qCDebug(lcPreview) << "scene-time" << frame_.timeMs
                 << "generation" << frame_.generation << "revision" << frame_.revision;
             trace("rendered");
@@ -241,6 +257,7 @@ private:
     quint64 submittedTextureObject_ = 0;
     QSize submittedTextureSize_;
     QElapsedTimer clock_;
+    qint64 nextResourceSampleMs_ = 0;
     QRhi* deviceRhi_ = nullptr;
     PlatformBridge bridge_;
     sk_sp<GrDirectContext> context_;

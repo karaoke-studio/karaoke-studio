@@ -951,6 +951,40 @@ def test_product_export_cancel_removes_partial_pngs(binary, monkeypatch, tmp_pat
     assert not job.output_path.exists()
 
 
+def test_product_export_reports_sidecar_exit_and_cleans_earlier_frames(binary, monkeypatch, tmp_path, supported_project):
+    from krok_helper.errors import ProcessingError
+    from krok_helper.subtitle_render.engine.renderer import render_subtitle_video
+
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_TARGET', 'gpu')
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_FALLBACK', 'raster')
+    # Let the first range finish so the export has real frames in FFmpeg.
+    # Kill the sidecar just before it accepts the next range.
+    monkeypatch.setenv('KROK_SUBTITLE_NATIVE_EXPORT_CHUNK_BYTES', str(320 * 180 * 4 * 12))
+    start_range = SkiaRendererProcess.start_render_range
+    failures = []
+
+    def start_or_exit(process, timestamps, **kwargs):
+        if kwargs['generation'] == 2:
+            child = process._process
+            assert child is not None and child.poll() is None
+            child.kill()
+            failures.append(child.wait(timeout=5))
+        return start_range(process, timestamps, **kwargs)
+
+    monkeypatch.setattr(SkiaRendererProcess, 'start_render_range', start_or_exit)
+    ffmpeg = export_ffmpeg(tmp_path)
+    job = transparent_sequence_job(tmp_path, supported_project, gpu=True)
+    progress, processes = [], []
+    with pytest.raises(ProcessingError, match='native 字幕渲染器导出失败'):
+        render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent,
+                              on_progress=lambda done, total: progress.append(done), on_process_started=processes.append)
+    assert len(failures) == 1 and failures[0] != 0
+    assert progress == list(range(1, 13))
+    assert len(processes) == 2 and processes[-1] is None and processes[0].poll() is not None
+    assert not job.output_path.exists()
+
+
 def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monkeypatch, tmp_path, supported_project):
     from krok_helper.errors import ProcessingError
     from krok_helper.subtitle_render.engine import renderer
