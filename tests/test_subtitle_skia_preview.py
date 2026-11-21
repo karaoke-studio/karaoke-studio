@@ -514,7 +514,7 @@ from krok_helper.subtitle_render.frontend.preview.preview_view import TransportB
 from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
 from krok_helper.subtitle_render.frontend.preview.skia_quick_canvas import SkiaQuickCanvas
 from krok_helper.subtitle_render.frontend.preview.skia_quick_clock import SkiaQuickClock
-from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
+from krok_helper.subtitle_render.frontend.preview.skia_quick_scene import SkiaQuickScene
 select_quick_graphics_api()
 from PyQt6.QtCore import QPoint, QRect, QTimer
 from PyQt6.QtGui import QColor, QImage, QLinearGradient, QPainter
@@ -568,13 +568,15 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
     karaoke_colors=KaraokeColors(before=color, after=color), decoration_kind='none',
     stroke_width_px=0, stroke2_enabled=False, dual_line_layout=False, karaoke_anim='none', entry_anim='none',
     exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
-ir = prepare_skia_scene_ir(track, style, executable=binary, width=640, height=360, fps=60)
 blocker = QFrame(host)                      # stands in for overlaid controls (transport bar)
 blocker.setStyleSheet("background: #ff0000;")
 band = QRect(0, int(H * 0.45), W, 12)
 blocker.setGeometry(band); blocker.raise_()
 player = None
 clock = SkiaQuickClock(canvas, fps=30)
+scene = SkiaQuickScene(canvas)
+errors = []
+scene.preparation_failed.connect(errors.append)
 transport = TransportBar(host)
 transport.hide()
 transport.set_duration(4000)
@@ -593,7 +595,7 @@ if case == 'video':
     transport.attach_playback_controller(player)
 
 def prepared(revision, accepted, error):
-    assert revision == 1 and accepted, error
+    assert revision == 2 and accepted, error
     if player:
         transport.play()
     else:
@@ -618,25 +620,26 @@ def report():
         assert 3 < len(receipts) <= 44, receipts
         emitted = iter([0, *transport_times])
         for revision, generation, t in receipts:
-            assert revision == generation == 1 and t in emitted, (receipts, transport_times)
+            assert revision == 2 and generation == 1 and t in emitted, (receipts, transport_times)
         transport.pause()
         transport.set_time(500)
         QTimer.singleShot(200, verify_paused_seek)
     else:
-        assert receipts == [(1, 3, 1300)], receipts
+        assert receipts == [(2, 3, 1300)], receipts
         app.quit()
 
 def verify_paused_seek():
     assert not player.is_playing()
-    assert receipts[-1] == (1, 2, 500), receipts
+    assert receipts[-1] == (2, 2, 500), receipts
     assert sum(generation == 2 for _, generation, _ in receipts) == 1, receipts
     if player:
         player.shutdown()
     app.quit()
 
-QTimer.singleShot(12000, lambda: (print("timeout"), app.quit()))
+QTimer.singleShot(18000, lambda: (print("timeout", errors), app.quit()))
 canvas.scene_prepared.connect(prepared)
-assert canvas.configure_scene(ir, 1)
+assert scene.set_scene(track, style, executable=binary, width=640, height=360, fps=60) == 1
+assert scene.set_scene(track, style, executable=binary, width=640, height=360, fps=60) == 2
 host.show()
 sys.exit(app.exec())
 """
@@ -644,7 +647,8 @@ sys.exit(app.exec())
 
 def run_canvas(qml_dir, tmp_path, case):
     env = desktop_environment() | {
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "QT_FORCE_STDERR_LOGGING": "1"}
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "QT_FORCE_STDERR_LOGGING": "1",
+        "KROK_SUBTITLE_RENDER_BACKEND": "skia"}
     result = subprocess.run([sys.executable, "-c", QUICK_CANVAS, str(qml_dir), str(tmp_path), case], env=env,
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=tmp_path)
     assert result.returncode == 0, result.stderr

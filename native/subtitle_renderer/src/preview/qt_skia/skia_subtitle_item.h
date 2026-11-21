@@ -37,6 +37,7 @@ public:
     bool motionProbeEnabled() const { return motionProbeEnabled_; }
     void setMotionProbeEnabled(bool enabled);
     Q_INVOKABLE bool configureScene(const QByteArray& ir, quint64 revision);
+    Q_INVOKABLE bool reserveScene(quint64 revision);
     Q_INVOKABLE bool clearScene(quint64 revision);
     Q_INVOKABLE bool requestFrame(quint64 revision, quint64 generation, int timeMs);
     // Read only during synchronize() while Qt blocks the GUI thread.
@@ -59,6 +60,7 @@ private:
     QFutureWatcher<PreviewSceneResult> preparation_;
     std::optional<PendingConfig> pendingConfig_;
     quint64 requestedRevision_ = 0;
+    bool awaitingConfig_ = false;
     quint64 preparingRevision_ = 0;
     quint64 sceneRevision_ = 0;
     std::shared_ptr<const ::subtitle::skia::PreparedScene> scene_;

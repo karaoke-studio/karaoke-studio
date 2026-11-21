@@ -252,9 +252,20 @@ void SkiaSubtitleItem::setMotionProbeEnabled(bool enabled) {
     emit motionProbeEnabledChanged();
 }
 
-bool SkiaSubtitleItem::configureScene(const QByteArray& ir, quint64 revision) {
-    if (revision <= requestedRevision_ || ir.isEmpty()) return false;
+bool SkiaSubtitleItem::reserveScene(quint64 revision) {
+    if (revision <= requestedRevision_) return false;
     requestedRevision_ = revision;
+    pendingConfig_.reset();
+    awaitingConfig_ = true;
+    update();
+    return true;
+}
+
+bool SkiaSubtitleItem::configureScene(const QByteArray& ir, quint64 revision) {
+    if (ir.isEmpty()) return false;
+    if (revision > requestedRevision_) reserveScene(revision);
+    if (revision != requestedRevision_ || !awaitingConfig_) return false;
+    awaitingConfig_ = false;
     pendingConfig_ = PendingConfig{ir, revision};
     if (!preparingRevision_) startPreparation();
     update();
@@ -262,9 +273,8 @@ bool SkiaSubtitleItem::configureScene(const QByteArray& ir, quint64 revision) {
 }
 
 bool SkiaSubtitleItem::clearScene(quint64 revision) {
-    if (revision <= requestedRevision_) return false;
-    requestedRevision_ = revision;
-    pendingConfig_.reset();
+    if (!reserveScene(revision)) return false;
+    awaitingConfig_ = false;
     scene_.reset();
     sceneRevision_ = 0;
     frame_ = {};

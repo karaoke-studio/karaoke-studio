@@ -19,6 +19,10 @@ Rectangle {
         return subtitle.configureScene(data, revision)
     }
 
+    function reserveSubtitle(revision) {
+        return subtitle.reserveScene(revision)
+    }
+
     function clearSubtitle(revision) {
         return subtitle.clearScene(revision)
     }

@@ -61,6 +61,9 @@ class SkiaQuickCanvas(QQuickWidget):
     def configure_scene_bytes(self, data: bytes, revision: int) -> bool:
         return bool(self._root.configureSubtitle(QByteArray(data), revision))
 
+    def reserve_scene(self, revision: int) -> bool:
+        return bool(self._root.reserveSubtitle(revision))
+
     def clear_scene(self, revision: int) -> bool:
         return bool(self._root.clearSubtitle(revision))
 
