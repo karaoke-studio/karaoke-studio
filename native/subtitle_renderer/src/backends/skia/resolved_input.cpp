@@ -242,6 +242,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || line.entryAnimation == "rise")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
+        const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
+            && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if (utopia && (style.vertical || style.rightToLeft || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
@@ -255,7 +258,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
                 || utopiaEntry || utopiaExit))
-            || !projected.charStyles.empty()))
+            || (!projected.charStyles.empty() && !roleSinging)))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
         if (singingScale && annotated) {
@@ -417,7 +420,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
                     };
                     const bool paintedSinging = singingScale && !transforms && !line.zoomPulseEnabled
-                        && features.contains("p06_utopia_main_paint");
+                        && (features.contains("p06_utopia_main_paint") || (roleSinging && roleBodyPaints));
                     if (!paintedSinging && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
                         || (glyph.outerOutline && !opaque(*glyph.outerOutline))))
                         throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");

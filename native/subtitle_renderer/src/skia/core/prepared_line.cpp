@@ -136,7 +136,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         }();
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
-            && (cell.outline || cell.outerOutline || transform.glowAlpha > 0 || !line.glow.empty() || line.hasStrokeFlash))
+            && (cell.outline || cell.outerOutline || cell.bodyPaintIndex >= 0 || transform.glowAlpha > 0
+                || !line.glow.empty() || line.hasStrokeFlash))
             animatedInk = cell.path.makeTransform(transform.matrix);
         states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
                           transform, std::move(animatedInk)});
@@ -229,12 +230,19 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const bool atFront = (line.vertical || drawOutline || animatedClip) && phase == Phase::Wiping;
         const bool before = !atFront && progress == 0;
         const bool after = !atFront && progress == 1;
+        // The existing GPU poses the cached rings that protect translucent
+        // paint with their glyph. Opaque outlines retain their drawn width.
+        const bool poseProtected = utopia && drawOutline && animatedInk && stroke->protectBody;
+        const auto posedStroke = poseProtected ? std::optional(path.makeTransform(transform.matrix)) : std::nullopt;
         const auto draw = [&](bool sung) {
             if (drawOutline && stroke->protectBody) {
                 const auto& body = animatedInk ? *animatedInk : cell.path;
                 canvas.clipPath(body, SkClipOp::kDifference, true);
                 if (layer == Layer::OuterOutline && cell.outline) {
-                    const auto inner = animatedInk ? prepareOutlinePath(body, cell.outline->width) : cell.outline->path;
+                    auto inner = cell.outline->path;
+                    if (animatedInk)
+                        inner = poseProtected ? inner.makeTransform(transform.matrix)
+                                              : prepareOutlinePath(body, cell.outline->width);
                     canvas.clipPath(inner, SkClipOp::kDifference, true);
                 }
             }
@@ -244,7 +252,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                                                : (sung ? cell.after : cell.before));
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
             if (animatedInk) {
-                if (drawOutline) drawFixedOutline(canvas, *animatedInk, paint, stroke->width);
+                if (posedStroke) canvas.drawPath(*posedStroke, paint);
+                else if (drawOutline) drawFixedOutline(canvas, *animatedInk, paint, stroke->width);
                 else canvas.drawPath(*animatedInk, paint);
                 return;
             }

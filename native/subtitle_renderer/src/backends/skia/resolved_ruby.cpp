@@ -258,7 +258,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool allowFillPaint = !vertical && staticLine && lowerWipe && line.karaokeAnimation != "no_wipe"
             && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
             && line.bursts.empty();
-        const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints");
+        const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints")
+            && (line.karaokeAnimation == "none" || features.contains("p07_role_singing_scale"));
         const bool allowGradientFill = allowFillPaint && (allowRoleFill ||
             (scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")));
         const bool allowImageFill = allowFillPaint && (allowRoleFill ||

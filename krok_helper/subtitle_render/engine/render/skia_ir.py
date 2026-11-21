@@ -125,6 +125,7 @@ def _composes_character_fade(source, item):
 
 def _write_utopia_pivots(ir, plan, measured, transition_lines):
     singing, transition, singing_ruby = False, False, False
+    role_singing = False
     with_line_animation = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
@@ -139,6 +140,9 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
         with_noise = _noise_animation(source) and 'p07_noise_composition' in ir['required_features']
         scanline_motion = line_animation and 'p07_scanline_line_animation' in ir['required_features']
         ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
+        inline_roles = any(c.role_label is not None for c in item.render_line.chars)
+        role_scale = inline_roles and scales and animations == {'none'} and not source.get('zoom_pulse')
+        role_scale = role_scale and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
         if (style.vertical or style.right_to_left or item.line.wipe_reverse
                 or (annotated and ((source.get('zoom_pulse') and not ruby_zoom)
                                    or (animations != {'none'} and not (line_animation or with_character_transition or with_noise))))
@@ -149,16 +153,19 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines):
                     and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
                 or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12)
-                or any(c.role_label is not None for c in item.render_line.chars)):
+                or (inline_roles and not role_scale)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
         singing = singing or scales
+        role_singing = role_singing or role_scale
         transition = transition or 'utopia' in animations
         singing_ruby = singing_ruby or (scales and annotated)
         with_line_animation = with_line_animation or line_animation
     if singing:
         ir['required_features'].append('p07_singing_scale')
         ir['skia_layout']['singing_scale_schema'] = 1
+    if role_singing:
+        ir['required_features'].append('p07_role_singing_scale')
     if transition:
         ir['required_features'].append('p07_utopia_transition')
         ir['skia_layout']['utopia_transition_schema'] = 1
