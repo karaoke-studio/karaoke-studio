@@ -208,11 +208,14 @@ def test_invalid_image_fill_keeps_previous_scene(binary, project, images, mutati
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-@pytest.mark.parametrize('change', ['roles', 'fade', 'scanline'])
+@pytest.mark.parametrize('change', ['role_outline_image', 'fade', 'scanline'])
 def test_unverified_image_fill_combinations_are_rejected(binary, project, images, change):
     track, style = image_source(project, images, 'body')
-    if change == 'roles':
-        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
+    if change == 'role_outline_image':
+        colors = style.karaoke_colors
+        role_colors = replace(colors, before=replace(colors.before, stroke=image_paint(images['opaque'])))
+        scheme = SubtitleStyleScheme(font_size_px=70, stroke_width_px=3, karaoke_colors=role_colors)
+        style = replace(style, custom_style_schemes={'lead': scheme})
         line = track.lines[0]
         track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])])
     elif change == 'fade':
