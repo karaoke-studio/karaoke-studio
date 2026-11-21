@@ -764,8 +764,11 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P10.1 Skia session 输出接入当前 rawvideo pipe，60/120fps 的 frame index -> t 公式沿用原规则。
   - [x] Skia 原始帧写入编码管道时检查编号、媒体时间和尺寸，验证 60、120、60000/1001 fps，见 §14.234。
 - [ ] P10.2 MP4 的背景、音轨、前黑/后黑、包含/铺满、编码器选择、进度、取消、异常和部分文件处理通过。
+  - [x] Windows 和 WSL 已验证 60fps MP4 的前黑、本段、后黑、音轨对齐、图片包含和铺满，见 §14.236。
 - [ ] P10.3 透明/含背景 PNG 序列、命名、独立目录和重名拦截通过。
+  - [x] Windows 和 WSL 的两种序列均已验证 120fps、实写编号、中文与日文路径、重名拦截和编码像素，见 §14.236。
 - [ ] P10.4 ProRes 4444、qtrle 两种透明 MOV 的像素/alpha/音频通过；用解码像素与支持 alpha 的合成环境验收。
+  - [x] Windows 和 WSL 上实解码同一时刻的 MOV 帧，核对 alpha、颜色和逐采样 PCM 音频，见 §14.236。
 - [ ] P10.5 RGB/alpha 转换、条带或 packed 回读若启用，逐项与全帧参考对照；不能沿用 D2D 格式假设。
 - [ ] P10.6 有界异步回读/编码交付、导出取消、设备失败有限重试与 CPU fallback 均不乱帧、不重复帧、不漏帧。
   - [x] Windows 和 WSL 已验证 GPU/Raster 导出中途取消，以及设备故障获准后完整重启为 Raster，见 §14.235。
@@ -3186,6 +3189,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - Skia sidecar 对 GPU 渲染面分配失败、Ganesh 上下文失效和 GPU RGBA 回读失败发出 `skia_gpu_device`。实际执行目标为 GPU 且已授权 `fallback=raster` 时，导出结束当前 FFmpeg、清理部分产物，再以原始作业从第 0 帧重新启动一次 Skia Raster。场景错误、通信超时与 sidecar 意外退出继续报错。取消优先返回已停止状态。
 - 在真实导出中提交 12 帧后注入协议设备错误，检查两次编码器依次退出、重启后 72 张 PNG 与独立 Raster 导出逐文件字节相同。回退关闭、非设备错误、GPU/Raster 取消均检查部分 PNG 清理。Windows Vulkan、WSL X11 和 Wayland 的软件 Vulkan 各 **14 通过**，独立 Raster 构建在 Windows 和 WSL X11 各 **4 通过**。四份原生构建各 **3 项 CTest 通过**。限额复验日志为 `build/p10-device-retry-capped-*.log`。Metal 留待阶段验收。
+
+### 14.236 P10.2–P10.4/P10.8/P10.9 Skia 五种导出格式（2026-11-21）
+
+- 真实 FFmpeg 编码、解码 60fps H.264 MP4。逐段检查前黑、本段、后黑的背景 RGB，分别校验 4:3 图像包含、铺满及正片字幕。检查 96 帧连续进度、AAC 样本长度和三段频率独立的对齐音轨。
+- 透明 PNG、带背景 PNG、qtrle 和 ProRes 4444 各实际导出 120 帧。PNG 验证编号、独立目录、保护已有序列和 Unicode 文件名。透明帧与同一后端离屏结果比较，透明 PNG/qtrle 的 alpha 逐像素相同，ProRes 4444 的 alpha 最大差 1。带背景 PNG 检查不透明度、背景颜色和字幕区域的混合结果。两种 MOV 的独立 PCM 音频与源波形逐采样相同。
+- Windows Vulkan、WSL X11 和 Wayland 软件 Vulkan 各 **12 通过**，包含 GPU 和 Raster 两组。独立 Windows Raster、WSL X11 Raster 各 **6 通过**。WSL 使用无 `.exe` 的 FFmpeg。日志为 `build/p10-formats-final-*.log`。已接入现有 Mac CI 和实机验收脚本，Metal 与支持 alpha 的剪辑软件待验收。
 
 ## 15. 前期探针清理范围
 

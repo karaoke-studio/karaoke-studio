@@ -214,7 +214,8 @@ def main(argv=None) -> int:
     }
     if (gpu / "krok_skia_subtitle_renderer").is_file():
         steps["subtitle_protocol"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
-                                      "tests/test_subtitle_skia_protocol.py", "--basetemp", logs / "protocol-tests"]
+                                      "tests/test_subtitle_skia_protocol.py", "tests/test_subtitle_skia_export_formats.py",
+                                      "--basetemp", logs / "protocol-tests"]
     if manifest.get("text_metrics_schema") == 1:
         steps["text_metrics"] = [python, "-m", "pytest", "--noconftest", "-rs", "-v",
                                  "tests/test_subtitle_skia_text.py", "--basetemp", logs / "text-tests"]
