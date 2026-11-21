@@ -254,6 +254,8 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
     const float bandAlpha = band.alphaAt(timeMs);
     if (bandAlpha <= 0.f) return;
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
+    const float inkStart = vertical_ ? bounds_.top() : bounds_.left();
+    const float inkEnd = vertical_ ? bounds_.bottom() : bounds_.right();
     SkPaint brush;
     brush.setAntiAlias(true);
     if (scale.active) {
@@ -263,8 +265,9 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
             if (source.path.isEmpty() || !(source.startMs < timeMs && timeMs < source.endMs)) continue;
             const auto posed = posedUnit(source, scale.at(timeMs, source.startMs, source.endMs, source.pivot));
             const auto& cell = posed ? *posed : source;
-            const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
-            if (edge + band.halfWidth <= bounds_.left() - pad || edge - band.halfWidth >= bounds_.right() + pad)
+            const float edge = vertical_ ? wipeCoordinate(source, timeMs, false, true)
+                                        : singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
+            if (edge + band.halfWidth <= inkStart - pad || edge - band.halfWidth >= inkEnd + pad)
                 continue;
             band.drawSlices(canvas, edge, [&](int layer, bool after, float opacity) {
                 paintRubyLayer(canvas, brush, cell, layer,
@@ -274,8 +277,6 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
         }
         return;
     }
-    const float inkStart = vertical_ ? bounds_.top() : bounds_.left();
-    const float inkEnd = vertical_ ? bounds_.bottom() : bounds_.right();
     const float front = frontAt(timeMs, inkStart);
     if (front + band.halfWidth <= inkStart - pad || front - band.halfWidth >= inkEnd + pad) return;
     for (const auto& cell : cells_) {

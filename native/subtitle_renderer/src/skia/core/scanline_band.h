@@ -73,9 +73,8 @@ struct ScanlineBand {
         }
     }
     // Utopia singing: the line front only gates the band. Each sweeping cell
-    // repaints its posed layers in feather slices around its own transformed
-    // front, as the existing GPU does per character (both phases, all layers).
-    // edgeOf(index) is that front; paintLayer(index, layer, after, opacity).
+    // repaints its posed layers around its own front. Horizontal glyphs
+    // use their transformed edge, while vertical glyphs use a fixed cell.
     template <class Cell, class EdgeOf, class PaintLayer>
     void drawPosed(SkCanvas& canvas, const std::vector<Cell>& cells, int t, float inkStart,
                    EdgeOf&& edgeOf, PaintLayer&& paintLayer) const {
@@ -84,7 +83,9 @@ struct ScanlineBand {
             const auto& c = cells[i];
             if (!sweeping(c, t)) continue;
             const float edge = edgeOf(i);
-            if (!(edge - halfWidth < c.right + solidPad && c.left - solidPad < edge + halfWidth)) continue;
+            const float start = vertical ? c.top : c.left;
+            const float end = vertical ? c.bottom : c.right;
+            if (!(edge - halfWidth < end + solidPad && start - solidPad < edge + halfWidth)) continue;
             drawSlices(canvas, edge, [&](int layer, bool after, float opacity) { paintLayer(i, layer, after, opacity); });
         }
     }

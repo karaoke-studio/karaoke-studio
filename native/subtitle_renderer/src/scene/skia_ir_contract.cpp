@@ -157,6 +157,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
         "p07_vertical_scanline_line_animation",
+        "p07_vertical_scanline_singing",
         "p07_vertical_scanline_decoration",
         "p07_scanline_line_animation",
         "p07_scanline_unscaled_line_animation",
@@ -649,6 +650,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_scanline_line_animation")
         && (!features.contains("p07_vertical_scanline_band") || !features.contains("p07_scanline_unscaled_line_animation")))
         throw BackendError("Skia 竖排扫字线缺少对应行出入场能力");
+    if (features.contains("p07_vertical_scanline_singing")
+        && (!features.contains("p07_vertical_scanline_band") || !features.contains("p07_vertical_singing_scale")
+            || scanlineVersion < 5))
+        throw BackendError("Skia 竖排扫字线缺少对应 Utopia 唱字能力");
     if (features.contains("p07_vertical_scanline_decoration")
         && (!features.contains("p07_vertical_scanline_band")
             || !(features.contains("p06_vertical_glow") || features.contains("p06_vertical_shadow")

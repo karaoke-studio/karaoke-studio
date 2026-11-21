@@ -134,7 +134,7 @@ def _vertical_singing_lines(ir, plan):
         if (look.vertical and not (look.right_to_left or item.line.wipe_reverse)
                 and source.get('karaoke_anim') == 'utopia'
                 and {source.get('entry_anim'), source.get('exit_anim')} == {'none'}
-                and not any(source.get(key) for key in ('zoom_pulse', 'scanline', 'stroke_flash', 'fx_bursts'))
+                and not any(source.get(key) for key in ('zoom_pulse', 'stroke_flash', 'fx_bursts'))
                 and not _uses_decoration(look, 'shadow')
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):
             tracks.add(item.track_index)
@@ -203,12 +203,12 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
         ir['required_features'].append('p07_utopia_line_animation')
 
 
-def _validate_scanline_band(track, style, lines, particle_band_tracks):
+def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_singing_tracks):
     """Validate scanline modes and their supported compositions."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
-    vertical_band = reverse_vertical_band = moving_vertical_band = False
+    vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = False
     shapes = set()
     moving_shapes = shaped_singing = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -220,15 +220,17 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         bursts = line.get('fx_bursts', ())
         if look.vertical:
             motion = not ordinary and _ordinary_line_animation(line) and not source.wipe_reverse
+            singing = index in vertical_singing_tracks
             if (look.scanline_shape != 'band' or look.scanline_mode != 'color' or not (ordinary or motion)
-                    or line.get('karaoke_anim') != 'none' or look.lower_ruby_enabled
+                    or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                     or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
-                raise ValueError('Skia 竖排扫字线当前仅支持普通走字的实色高亮带')
+                raise ValueError('Skia 竖排扫字线当前仅支持普通走字或正向 Utopia 的实色高亮带')
             if source.wipe_reverse and track.rubies:
                 raise ValueError('Skia 竖排反向扫字线当前仅支持正文轨道')
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse
             moving_vertical_band |= motion
+            vertical_singing_band |= singing
             continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
@@ -274,6 +276,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         features.append('p07_vertical_reverse_scanline')
     if moving_vertical_band:
         features.append('p07_vertical_scanline_line_animation')
+    if vertical_singing_band:
+        features.append('p07_vertical_scanline_singing')
     if shapes:
         features.append('p07_scanline_shape')
     if 'image' in shapes:
@@ -607,7 +611,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if fade_lines:
             ir['required_features'].append('p07_character_entry_fade_composition')
     if any(line.get('scanline') for line in ir['track']['lines']):
-        ir['required_features'] += _validate_scanline_band(track, style, ir['track']['lines'], particle_band_tracks)
+        ir['required_features'] += _validate_scanline_band(
+            track, style, ir['track']['lines'], particle_band_tracks, vertical_singing)
         if vertical_ruby is not None:
             ir['required_features'].append('p07_ruby_scanline')
     decorations = [kind for kind in ('shadow', 'glow') if any(

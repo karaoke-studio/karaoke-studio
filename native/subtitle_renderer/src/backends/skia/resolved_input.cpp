@@ -238,7 +238,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!style.dualLineLayout || features.contains("p07_vertical_columns_singing_scale"))
             && !style.rightToLeft && !line.zoomPulseEnabled && !vectorGuides
             && !hasInlineRoles && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+            && (!line.scanlineEnabled || features.contains("p07_vertical_scanline_singing"))
+            && !line.strokeFlashEnabled && line.bursts.empty();
         const bool unscaledLineMotion = !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
             && (line.entryAnimation != "none" || line.exitAnimation != "none")

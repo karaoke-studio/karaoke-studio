@@ -500,7 +500,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // The GPU repaints the sweeping cells after the body.
     const float scanlineAlpha = line.scanline.alphaAt(tMs);
     if (utopia) {
-        line.scanline.drawPosed(canvas, line.cells, tMs, line.inkStart, transformedEdge,
+        line.scanline.drawPosed(canvas, line.cells, tMs, line.inkStart,
+            [&](std::size_t index) { return line.vertical ? states[index].edge : transformedEdge(index); },
             [&](std::size_t index, int layer, bool after, float slice) {
                 const auto& cell = line.cells[index];
                 const auto& state = states[index];

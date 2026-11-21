@@ -591,8 +591,8 @@ def test_vertical_ruby_columns_composite_independent_decoration(binary, project,
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('dpr,glow', [(1, False), (1.5, True)])
-def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, dpr, glow):
+@pytest.mark.parametrize('dpr,glow,scanline', [(1, False, False), (1.5, True, False), (1.5, True, True)])
+def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, dpr, glow, scanline):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
@@ -601,10 +601,15 @@ def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, d
     if glow:
         base = replace(base, decoration_kind='glow', glow_before_radius_px=6, glow_after_radius_px=7,
                        ruby_decoration_kind='glow', ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5)
+    if scanline:
+        base = replace(base, scanline_enabled=True, scanline_mode='color', scanline_shape='band',
+                       scanline_color='#00FFFF', scanline_width_px=24, scanline_glow_px=5,
+                       ruby_karaoke_colors=colors('#0000FF', '#0000FF'))
     ir = ir_for(binary, (track, replace(base, karaoke_anim='utopia')), dpr=dpr)
     plain = ir_for(binary, (track, base), dpr=dpr)
     feature = 'p07_vertical_columns_singing_scale'
     assert {feature, 'p07_vertical_singing_scale', 'p05_vertical_columns_ruby'} <= set(ir['required_features'])
+    assert ('p07_vertical_scanline_singing' in ir['required_features']) == scanline
     starts_and_ends = []
     regions = []
     for line in ir['skia_layout']['lines'][:2]:
@@ -613,8 +618,9 @@ def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, d
         starts_and_ends.append(unit['interval_ms'])
         x, y = unit['vertical_singing_pivot']
         assert all(cell['layout_right'] < x for cell in line['cells'])
+        left, right = (unit['wipe_left'] - 2, unit['wipe_right'] + 2) if scanline else (x - 18, x + 18)
         regions.append(np.s_[round((y - 40)*dpr):round((y + 40)*dpr),
-                             round((x - 18)*dpr):round((x + 18)*dpr)])
+                             round(left*dpr):round(right*dpr)])
     peaks = [start + min(100, (end - start) // 4) for start, end in starts_and_ends]
     times = [*peaks, 1750]
     invalid = copy.deepcopy(ir)
@@ -633,12 +639,16 @@ def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, d
         assert not frames[2].any()
         for index, region in enumerate(regions):
             def reading_pixels(frame):
-                _, green, blue, alpha = np.moveaxis(frame[region], -1, 0)
-                return np.count_nonzero((blue > 200) & (green < 24) & (alpha > 200))
+                red, green, blue, alpha = np.moveaxis(frame[region], -1, 0)
+                other = red if scanline else green
+                return np.count_nonzero((blue > 200) & (other < 24) & (alpha > 200))
 
             sizes = [reading_pixels(frame) for frame in frames[:2]]
             normal = [reading_pixels(frame) for frame in baseline[:2]]
             assert sizes[index] > normal[index] and sizes[1 - index] == normal[1 - index]
+            if scanline:
+                red, green, blue, alpha = np.moveaxis(frames[index][region], -1, 0)
+                assert np.any((red < 40) & (green > 160) & (blue > 180) & (alpha > 64))
         targets.append(np.stack(frames))
     diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
@@ -774,30 +784,35 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('dpr,softness,has_ruby,body,ruby', [
-    (1, 0, True, 'none', 'none'), (1.5, 8, True, 'none', 'none'), (1.5, 8, False, 'none', 'none'),
-    (1, 0, False, 'glow', 'none'), (1, 0, True, 'none', 'shadow'), (1.5, 8, True, 'shadow', 'glow'),
+@pytest.mark.parametrize('dpr,softness,has_ruby,body,ruby,mode', [
+    (1, 0, True, 'none', 'none', 'none'), (1.5, 8, True, 'none', 'none', 'none'),
+    (1.5, 8, False, 'none', 'none', 'none'), (1, 0, False, 'glow', 'none', 'none'),
+    (1, 0, True, 'none', 'shadow', 'none'), (1.5, 8, True, 'shadow', 'glow', 'none'),
+    (1, 0, False, 'none', 'none', 'utopia'), (1.5, 8, True, 'glow', 'glow', 'utopia'),
 ])
-def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr, softness, has_ruby, body, ruby):
+def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr, softness, has_ruby, body, ruby, mode):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
     track, base = vertical_ruby_source(project)
     if not has_ruby:
         track = replace(track, rubies=[])
-    base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'))
+    base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'), karaoke_anim=mode)
     bare = ir_for(binary, (track, base), dpr=dpr) if body != 'none' or ruby != 'none' else None
     base = replace(base, decoration_kind=body, glow_before_radius_px=6, glow_after_radius_px=6,
                    shadow_before_offset_x=-9, shadow_offset_x=-9, ruby_decoration_kind=ruby,
                    ruby_decoration_kind_before=ruby, ruby_shadow_before_offset_x=6, ruby_shadow_offset_x=6,
                    ruby_glow_before_radius_px=6, ruby_glow_after_radius_px=6)
-    style = replace(base, karaoke_anim='scanline', scanline_enabled=True, scanline_mode='color',
+    style = replace(base, scanline_enabled=True, scanline_mode='color',
                     scanline_shape='band', scanline_color='#00FFFF', scanline_width_px=18,
                     scanline_glow_px=softness)
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, base), dpr=dpr)
     feature = 'p07_vertical_scanline_decoration' if bare else 'p07_vertical_scanline_band'
     assert {feature, 'p07_scanline_band', 'p07_vertical_scanline_band'} <= set(ir['required_features'])
+    if mode == 'utopia':
+        feature = 'p07_vertical_scanline_singing'
+        assert {feature, 'p07_vertical_singing_scale'} <= set(ir['required_features'])
     assert ('p07_ruby_scanline' in ir['required_features']) == has_ruby
     line, = ir['skia_layout']['lines']
     assert line == plain['skia_layout']['lines'][0]
