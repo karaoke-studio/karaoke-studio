@@ -270,6 +270,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool petalScanline = line.scanlineEnabled && features.contains("p07_ruby_petal_entry_scanline")
             && line.entryAnimation == "petal" && (line.exitAnimation == "none" || noteExit) && singingScale
             && style.scanlineShape == "band" && style.scanlineMode == "color";
+        const bool petalNotePair = noteExit && petalScanline;
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
             && (!line.scanlineEnabled || petalScanline) && !line.strokeFlashEnabled
@@ -308,16 +309,17 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool pairedParticles = (features.contains("p07_ruby_energy_pair")
                 || features.contains("p07_ruby_particle_assembly_pair")
                 || features.contains("p07_ruby_particle_entry_exit")
-                || features.contains("p07_ruby_mixed_particle_entry_exit") || (noteExit && petalScanline))
+                || features.contains("p07_ruby_mixed_particle_entry_exit") || petalNotePair)
             && line.entryDurationMs > 0 && line.exitDurationMs > 0;
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedParticles)
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
-        const bool particleEntryGlow = features.contains("p07_ruby_particle_entry_glow") && line.exitAnimation == "none"
+        const bool particleEntryGlow = features.contains("p07_ruby_particle_entry_glow")
+            && (line.exitAnimation == "none" || petalNotePair)
             && (line.entryAnimation == "heart" || line.entryAnimation == "petal")
             && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow")
-            && !features.contains("p07_ruby_petal_entry_flame_singing");
+            && (petalNotePair || !features.contains("p07_ruby_petal_entry_flame_singing"));
         const auto supportsParticleEntryDecoration = [particleEntryGlow](const auto& kind) {
             return kind == "none" || (particleEntryGlow && kind == "glow");
         };

@@ -349,15 +349,19 @@ def test_ruby_particle_entry_body_glow_replays(binary, reading, target, effect):
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('scanline,exit_', [(False, 'none'), (True, 'none'), (True, 'note')])
-def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline, exit_):
+@pytest.mark.parametrize('scanline,exit_,glow', [
+    (False, 'none', False), (True, 'none', False), (True, 'note', False), (True, 'note', True),
+])
+def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target, scanline, exit_, glow):
     track, style = reading
     style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim=exit_, exit_fade_ms=600,
                     sing_fx='flame', anim_fx_speed_pct=50, fx_particle_speed_pct=200,
                     karaoke_anim='utopia_scanline' if scanline else 'utopia', scanline_enabled=scanline,
                     scanline_effect='star' if scanline else 'none',
-                    decoration_kind='none', decoration_kind_before='none',
-                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+                    decoration_kind='glow' if glow else 'none',
+                    decoration_kind_before='glow' if glow else 'none',
+                    ruby_decoration_kind='glow' if glow else 'none',
+                    ruby_decoration_kind_before='glow' if glow else 'none')
     if exit_ == 'note':
         from test_subtitle_skia_roles import colors
 
@@ -389,6 +393,7 @@ def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, read
     if exit_ == 'note':
         feature = 'p07_ruby_petal_scanline_note_exit'
     assert feature in ir['required_features']
+    assert ('p07_ruby_particle_entry_glow' in ir['required_features']) == glow
     missing = copy.deepcopy(ir)
     missing['required_features'].remove(feature)
     bad_sweep = copy.deepcopy(ir)
@@ -566,12 +571,13 @@ def test_ruby_petal_entry_and_singing_scanline_match_actual_gpu(binary, applicat
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('speed', [50, 200])
-def test_ruby_petal_scanline_with_note_exit_matches_actual_gpu(binary, application, tmp_path, speed):
+@pytest.mark.parametrize('glow', [False, True])
+def test_ruby_petal_scanline_with_note_exit_matches_actual_gpu(binary, application, tmp_path, speed, glow):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == f'particles_speed_{speed}')
-    style = replace(case.style, decoration_kind='none', decoration_kind_before='none',
-                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    style = case.style if glow else replace(case.style, decoration_kind='none', decoration_kind_before='none',
+                                            ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     times = (100, 299, 301, 600, 1000, 1300, 1500, 2600, 4500, 4899, 4900, 4901,
              5100, 5300, 5498, 5499, 5500, 5510, 5900)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)

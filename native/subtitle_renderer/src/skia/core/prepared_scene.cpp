@@ -60,7 +60,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.glow = PreparedGlow::prepare(source.glow);
         line.byteParticleEntryGlow = !line.glow.empty() && source.rubyGeometryComposition
             && (source.characterGeometry.entry == "heart" || source.characterGeometry.entry == "petal")
-            && source.characterGeometry.exit.empty();
+            && (source.characterGeometry.exit.empty() || source.characterGeometry.exit == "note");
         if (line.byteParticleEntryGlow)
             for (auto& layer : line.glow) layer.prepareBytePasses();
         line.bodyGlowTransitionBounds = source.bodyGlowTransitionBounds;
