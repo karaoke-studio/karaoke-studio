@@ -3434,6 +3434,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 锁定 Skia 的 Ganesh 回读会提交生产该纹理的命令，Vulkan 与 Metal 的返回路径在交付 CPU 像素前等待复制完成。离屏 sidecar 由同步 RGBA 回读承担等待，并在回读后检查设备状态。`render_ms` 现在计主机录制，`readback_ms` 包含 GPU 完成和传输；前后版本用稳态交付、帧间分布及全程吞吐横向对照。
 - 以 §14.239 原样式在 12.2s、146s 各测 **600 帧**。稳态交付分别由 **61.19/59.51** 提升至 **62.96/62.45 帧/秒**，帧间隔 P95 由 **20.74/21.10ms** 降至 **20.63/19.96ms**。相同 **16** 个时间点的 Vulkan 和 Raster RGBA 哈希各逐一相等，D2D GPU → Vulkan、Vulkan → Raster 仍通过原画质预算。
 - Windows Vulkan、WSL Vulkan 原生构建各 **3/3 CTest**。真实产品导出、取消、批次、帧槽、回退与异常清理专项在 Windows、WSL X11 和 Wayland 各 **38 通过**。空注音光晕层试验的两段计时变动方向不同，保留原光晕绘制路径。日志为 `build/p11-readback-sync-*.log`、`build/p11-ruby-glow-{before,after}-*.log`。
+- 按 §14.271 的同一工程与 CPU 上限复跑完整 Vulkan 导出，输出仍为 **14414** 帧，视频和音频的流时长相同。全程 **270.358s**（**53.314 帧/秒**），比本轮基线节省 **9.210s**，首帧 **1.922s**。日志为 `build/p11-original-vulkan-sync-full-song.log`。
 
 ## 15. 前期探针清理范围
 
