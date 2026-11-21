@@ -695,6 +695,7 @@ def test_quick_canvas_composites_background_and_subtitles_under_widgets(qml_dir,
 FLOATING_WINDOW = r"""
 import sys
 from dataclasses import replace
+from pathlib import Path
 from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtGui import QImage
 from PyQt6.QtTest import QTest
@@ -763,6 +764,10 @@ effect_styles = {
                           shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3),
     'particle-pair': dict(entry_anim='petal', exit_anim='heart', entry_lead_ms=500, exit_fade_ms=600,
                           karaoke_anim='utopia', ruby_decoration_kind='none', stroke_width_px=4),
+    'particle-image-band': dict(entry_anim='petal', exit_anim='note', entry_lead_ms=600, exit_fade_ms=600,
+                                karaoke_anim='utopia', sing_fx='flame', scanline_enabled=True,
+                                scanline_shape='image', scanline_mode='color', decoration_kind='glow',
+                                ruby_decoration_kind='none', line_band_enabled=True, line_band_image='preset:staff_scroll'),
     'band-motion': dict(entry_anim='slide_in', exit_anim='rise', entry_lead_ms=600, exit_fade_ms=600,
                         karaoke_anim='scanline', scanline_enabled=True, scanline_mode='color',
                         scanline_width_px=36, scanline_glow_px=6, scanline_color='#FFE000'),
@@ -774,8 +779,9 @@ effect_styles = {
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 if effect:
     style = replace(style, **effect_styles[effect])
+    if effect == 'particle-image-band':
+        style = replace(style, scanline_image_path=str(Path(sys.argv[-1]) / 'scanline.gif'))
     if effect == 'vertical-scanline':
-        from pathlib import Path
         from PyQt6.QtGui import QFontDatabase
 
         font_id = QFontDatabase.addApplicationFont(str(Path(sys.argv[-1]) / 'vertical.ttf'))
@@ -808,7 +814,6 @@ if '--require-hardware' in sys.argv:
 wait_for(lambda: panel.skia_quick_target_established and frames)
 assert panel.current_subtitle_frame() is None
 if '--compare-export' in sys.argv:
-    from pathlib import Path
     from types import SimpleNamespace
     import numpy as np
     from PyQt6.QtCore import QSize, Qt
@@ -822,6 +827,7 @@ if '--compare-export' in sys.argv:
     indices = {
         'shadow-motion': {24: 400, 48: 800, 90: 1500},
         'particle-pair': {18: 300, 57: 950, 108: 1800},
+        'particle-image-band': {18: 300, 33: 550, 48: 800, 93: 1550, 105: 1750},
         'band-motion': {24: 400, 48: 800, 90: 1500, 93: 1550},
         'vertical-scanline': {23: 383, 33: 550, 48: 800, 81: 1350},
     }.get(effect, {12: 200, 33: 550, 81: 1350})
@@ -861,7 +867,7 @@ if '--compare-export' in sys.argv:
         process = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
         process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000)
         preview_reference = process
-        if effect in {'band-motion', 'vertical-scanline'}:
+        if effect in {'band-motion', 'vertical-scanline', 'particle-image-band'}:
             # The scanline feather spans device pixels. Compare the preview
             # at its actual rendering scale and keep the export reference at 1x.
             preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
@@ -962,14 +968,18 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
 
 
 @pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair',
-                                     'band-motion', 'vertical-scanline'],
+                                     'band-motion', 'vertical-scanline', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
-                              'band-motion', 'vertical-scanline'])
+                              'band-motion', 'vertical-scanline', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects == 'vertical-scanline':
         from skia_text_fixture import make_font
 
         make_font(tmp_path / 'vertical.ttf')
+    if effects == 'particle-image-band':
+        from shutil import copyfile
+
+        copyfile(Path(__file__).with_name('data') / 'guide_anim_3frames.gif', tmp_path / 'scanline.gif')
     result = run_floating_preview(qml_dir, compare_path=tmp_path, effects=effects)
     assert 'Quick, offscreen GPU and export pipe compared' in result
 
