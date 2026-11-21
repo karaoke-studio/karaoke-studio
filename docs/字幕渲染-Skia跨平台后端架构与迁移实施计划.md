@@ -3835,6 +3835,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p07_ruby_petal_scanline_image` 允许花瓣入场、唱字火焰、Utopia 和音符退场场景使用图片扫字层。五线谱背景带位于文字下方，按相同显示窗淡入淡出。两类动画资源使用各自既有播放时钟。
 - 原样 `combined_effects` 与关闭背景带的变体各 **18 张 1080p 帧**通过两组画面对照。Windows **21 通过**，独立 Raster **7 通过**，WSL X11 与 Wayland 各 **14 通过、7 项 Windows 专用跳过**。覆盖背景带、图像、粒子时序与旧能力拒绝后的回跳。日志前缀 `build/p08-combined-petal-note-staff-*`。
 - P09 正式浮窗、离屏 GPU 与 P10 正式导出写帧在 Windows 真机 Vulkan、WSL X11 和 Wayland 各 **1 通过**。五处采样覆盖入场、唱字扫字和退场，浮窗满足原画质预算，离屏 GPU 与导出逐字节一致。日志前缀 `build/p09-combined-petal-note-staff-*`。
+- `26f0a05a` 原样全套回归为 **114/129 个场景、515 张 1080p 帧**通过两组画面对照。逐帧证据为 `build/p00-skia-coverage/original-warm-pixels-26f0a05a.json`。
 
 ## 15. 前期探针清理范围
 
