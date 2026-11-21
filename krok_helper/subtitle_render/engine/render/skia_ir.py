@@ -208,7 +208,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
-    vertical_band = False
+    vertical_band = reverse_vertical_band = False
     shapes = set()
     moving_shapes = shaped_singing = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -220,10 +220,13 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         bursts = line.get('fx_bursts', ())
         if look.vertical:
             if (look.scanline_shape != 'band' or look.scanline_mode != 'color' or not ordinary
-                    or line.get('karaoke_anim') != 'none' or source.wipe_reverse or look.lower_ruby_enabled
+                    or line.get('karaoke_anim') != 'none' or look.lower_ruby_enabled
                     or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
-                raise ValueError('Skia 竖排扫字线当前仅支持正向普通走字的实色高亮带')
+                raise ValueError('Skia 竖排扫字线当前仅支持普通走字的实色高亮带')
+            if source.wipe_reverse and track.rubies:
+                raise ValueError('Skia 竖排反向扫字线当前仅支持正文轨道')
             vertical_band = True
+            reverse_vertical_band |= source.wipe_reverse
             continue
         shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
         shape_with_singing = (shape_style and ordinary and bool(track.rubies) and bool(bursts)
@@ -265,6 +268,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
     features = []
     if vertical_band:
         features.append('p07_vertical_scanline_band')
+    if reverse_vertical_band:
+        features.append('p07_vertical_reverse_scanline')
     if shapes:
         features.append('p07_scanline_shape')
     if 'image' in shapes:

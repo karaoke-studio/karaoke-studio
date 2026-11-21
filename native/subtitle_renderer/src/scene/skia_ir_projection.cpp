@@ -324,7 +324,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool verticalBand = features.contains("p07_vertical_scanline_band") && staticScanline
             && resolved.scanlineShape == "band" && resolved.scanlineMode == "color"
-            && source.karaokeAnimation == "none" && !source.wipeReverse && !source.zoomPulseEnabled
+            && source.karaokeAnimation == "none" && !source.zoomPulseEnabled
+            && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline"))
             && !source.strokeFlashEnabled && source.fxBursts.empty();
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")

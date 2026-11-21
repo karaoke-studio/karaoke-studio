@@ -84,7 +84,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                              || !std::isfinite(band.softness) || band.softness < 0 || band.softness > band.halfWidth
                              || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
                              || band.vertical != source.vertical || band.rightToLeft != source.wipeRightToLeft
-                             || (band.vertical && (band.rightToLeft || band.shape || band.image
+                             || (band.vertical && ((band.rightToLeft && !source.rubyGroups.empty()) || band.shape || band.image
                                  || band.paint.mode != ScanlineColorMode::Color || source.singingScale.active
                                  || source.utopiaTransition.active()))
                              || source.noWipe || (!band.rubyHighlight && !source.rubyGroups.empty())))
@@ -224,8 +224,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
-            if (!ink.isEmpty())
-                line.inkStart = line.scanline.vertical ? ink.fTop : line.scanline.rightToLeft ? ink.fRight : ink.fLeft;
+            if (!ink.isEmpty()) {
+                if (line.scanline.vertical)
+                    line.inkStart = line.scanline.rightToLeft ? ink.bottom() : ink.top();
+                else
+                    line.inkStart = line.scanline.rightToLeft ? ink.right() : ink.left();
+            }
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
             if (!ink.isEmpty()) line.inkCenter = ink.centerX();
             if (line.shadow.visible()) line.decorationInk = ink;

@@ -444,6 +444,54 @@ def test_vertical_reverse_outline_uses_bottom_cells_first(binary, project, targe
     assert sung_rows(finished).min() < cells[1]['wipe_top']
 
 
+@pytest.mark.parametrize('dpr,softness,decoration', [
+    (1, 0, 'none'), (1.5, 8, 'glow'), (1.5, 8, 'shadow'),
+])
+def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, project, dpr, softness, decoration):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, base = vertical_source(project, texts=['字', '字'], position='top', reverse=True)
+    base = replace(base, karaoke_colors=colors('#FF0000', '#00FF00'), decoration_kind=decoration,
+                   glow_before_radius_px=6, glow_after_radius_px=6, shadow_before_offset_x=8, shadow_offset_x=8)
+    style = replace(base, scanline_enabled=True, scanline_forward_enabled=False, scanline_reverse_enabled=True,
+                    scanline_shape='band', scanline_mode='color', scanline_color='#00FFFF',
+                    scanline_width_px=28, scanline_glow_px=softness)
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    plain = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p07_vertical_reverse_scanline'
+    assert {feature, 'p07_vertical_scanline_band', 'p05_reverse_wipe'} <= set(ir['required_features'])
+    line, = ir['track']['lines']
+    (start, end), (_, last_end) = line['resolved_intervals']
+    top, bottom = ir['skia_layout']['lines'][0]['cells']
+    split = round((top['wipe_bottom'] + bottom['wipe_top']) * dpr / 2)
+    times = [start - 1, start + (end - start) // 3, end - (end - start) // 3, last_end + 1]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[1:3][::-1], generation=2)
+            configure(process, plain)
+            reference, _ = collect(process, times, generation=3)
+        assert np.array_equal(frames[1], replay[1]) and np.array_equal(frames[2], replay[0])
+        assert np.array_equal(frames[0], reference[0]) and np.array_equal(frames[-1], reference[-1])
+        centers = []
+        for frame in frames[1:3]:
+            red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+            rows, _ = np.nonzero((red < 40) & (green > 180) & (blue > 180) & (alpha > 64))
+            assert rows.size and rows.min() >= split
+            centers.append(np.median(rows))
+        assert centers[0] > centers[1] + 2
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',
                                       'rotated_text', 'horizontal_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
