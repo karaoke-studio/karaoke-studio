@@ -190,7 +190,8 @@ private:
                 frame_.scene->draw(canvas, frame_.timeMs);
             }
             bridge_.submit(*context_, *surface, texture);
-            if (!motionProbe_) qCDebug(lcPreview) << "scene-time" << frame_.timeMs;
+            if (!motionProbe_) qCDebug(lcPreview) << "scene-time" << frame_.timeMs
+                << "generation" << frame_.generation << "revision" << frame_.revision;
             trace("rendered");
             return true;
         } catch (const std::exception& error) {
@@ -253,9 +254,13 @@ void SkiaSubtitleItem::finishPreparation() {
     if (revision == requestedRevision_) emit scenePrepared(revision, bool(result.scene), result.error);
 }
 
-bool SkiaSubtitleItem::requestFrame(quint64 revision, int timeMs) {
+bool SkiaSubtitleItem::requestFrame(quint64 revision, quint64 generation, int timeMs) {
     if (!scene_ || revision != sceneRevision_) return false;
-    frame_ = {scene_, timeMs};
+    if (frame_.revision == revision) {
+        if (generation < frame_.generation) return false;
+        if (generation == frame_.generation && timeMs == frame_.timeMs) return true;
+    }
+    frame_ = {scene_, revision, generation, timeMs};
     update();
     return true;
 }

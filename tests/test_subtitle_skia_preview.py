@@ -178,11 +178,8 @@ from PyQt6.QtGui import QGuiApplication, QImage
 from PyQt6.QtQuick import QQuickView
 from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
-from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 from krok_helper.subtitle_render.frontend.preview.quick_graphics_api import select_quick_graphics_api
-from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
-from krok_helper.subtitle_render.native.skia_fonts import resolve_skia_font
-from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
+from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
 
 select_quick_graphics_api()
 app = QGuiApplication(sys.argv)
@@ -194,10 +191,7 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
         after=KaraokeColorState(text=PaintFill(color='#14FF14'))), decoration_kind='none',
     stroke_width_px=0, stroke2_enabled=False, dual_line_layout=False, karaoke_anim='none', entry_anim='none',
     exit_anim='none', line_horizontal_layout='center', line_y_position='center', smart_horizontal='none')
-with SkiaTextMetricsProcess(binary) as metrics:
-    ir = build_skia_render_ir(track, style, measure=metrics.measure, resolve_font=resolve_skia_font,
-        width=640, height=360, fps=60)
-apply_resolved_font_faces(ir)
+ir = prepare_skia_scene_ir(track, style, executable=binary, width=640, height=360, fps=60)
 
 class Source(QObject):
     @pyqtProperty(QByteArray, constant=True)
@@ -224,7 +218,8 @@ Rectangle {
     function start() {
         return renderer.configureScene(sceneSource.bad, 1) && renderer.configureScene(sceneSource.good, 2)
     }
-    function seek(revision, timeMs) { return renderer.requestFrame(revision, timeMs) }
+    function seek(revision, generation, timeMs) { return renderer.requestFrame(revision, generation, timeMs) }
+    function seekPair() { return renderer.requestFrame(2, 2, 1250) && renderer.requestFrame(2, 2, 1350) }
     function rejectScene() { return renderer.configureScene(sceneSource.bad, 3) }
     SkiaSubtitleItem {
         id: renderer; anchors.fill: parent
@@ -245,7 +240,7 @@ view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
 view.resize(640, 360)
 view.show()
 assert root.start()
-assert not root.seek(1, 100)
+assert not root.seek(1, 1, 100)
 
 def capture(done):
     if validate_only:
@@ -267,11 +262,12 @@ def first_frame():
         return
     timer.stop()
     assert root.property('accepted'), root.property('failure')
-    assert root.seek(2, 100)
+    assert root.seek(2, 1, 100)
     QTimer.singleShot(250, lambda: capture(capture_before))
 
 def capture_before():
-    assert root.seek(2, 1350)
+    assert root.seekPair()
+    assert not root.seek(2, 1, 1400)
     QTimer.singleShot(250, lambda: capture(capture_after))
 
 def capture_after():
@@ -285,8 +281,8 @@ def verify_rollback():
         return
     timer.stop()
     assert not root.property('accepted') and root.property('failure')
-    assert not root.seek(3, 100)
-    assert root.seek(2, 100)
+    assert not root.seek(3, 3, 100)
+    assert root.seek(2, 3, 100)
     QTimer.singleShot(250, lambda: capture(capture_revisit))
 
 def capture_revisit():
@@ -330,8 +326,9 @@ def test_quick_native_scene_handoff_under_vulkan_validation(qml_dir, tmp_path):
     result = subprocess.run([sys.executable, '-c', REAL_SCENE, str(qml_dir), 'validation'],
                             env=env, capture_output=True, text=True, timeout=90)
     assert result.returncode == 0 and 'validated scene' in result.stdout, result.stdout + result.stderr
-    times = [int(t) for t in re.findall(r'\bscene-time (\d+)\b', result.stderr)]
-    assert 1350 in times and times[0] == 100 and times[-1] == 100, result.stderr
+    frames = [(int(t), int(g), int(r)) for t, g, r in re.findall(
+        r'\bscene-time (\d+) generation (\d+) revision (\d+)\b', result.stderr)]
+    assert list(dict.fromkeys(frames)) == [(100, 1, 2), (1350, 2, 2), (100, 3, 2)], result.stderr
     assert_vulkan_validation_clean(log)
 
 

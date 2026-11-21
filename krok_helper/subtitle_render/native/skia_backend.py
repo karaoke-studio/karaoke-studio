@@ -199,17 +199,9 @@ class SkiaRendererProcess(SkiaSidecarProcess):
         return ready
 
     def configure(self, track, style, *, progress=None, **kwargs):
-        from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
-        from .skia_text import SkiaTextMetricsProcess
-        from .skia_fonts import SkiaFontResolver
-        from .protocol import apply_resolved_font_faces
-        try:
-            with SkiaTextMetricsProcess(self.executable_path) as metrics:
-                ir = build_skia_render_ir(track, style, measure=metrics.measure,
-                                          resolve_font=SkiaFontResolver(), **kwargs)
-            apply_resolved_font_faces(ir)
-        except (ValueError, OSError) as exc:
-            raise NativeRendererError(str(exc)) from exc
+        from .skia_scene import prepare_skia_scene_ir
+
+        ir = prepare_skia_scene_ir(track, style, executable=self.executable_path, **kwargs)
         if progress is not None:
             progress()
         self._send({"cmd": "configure", "ir": ir})

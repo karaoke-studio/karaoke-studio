@@ -8,6 +8,8 @@
 namespace krok::subtitle::preview {
 struct PreviewFrame {
     std::shared_ptr<const ::subtitle::skia::PreparedScene> scene;
+    quint64 revision = 0;
+    quint64 generation = 0;
     int timeMs = 0;
 };
 
@@ -32,7 +34,7 @@ public:
     bool motionProbeEnabled() const { return motionProbeEnabled_; }
     void setMotionProbeEnabled(bool enabled);
     Q_INVOKABLE bool configureScene(const QByteArray& ir, quint64 revision);
-    Q_INVOKABLE bool requestFrame(quint64 revision, int timeMs);
+    Q_INVOKABLE bool requestFrame(quint64 revision, quint64 generation, int timeMs);
     // Read only during synchronize() while Qt blocks the GUI thread.
     bool usesMotionProbe() const { return motionProbeEnabled_ && requestedRevision_ == 0; }
     PreviewFrame frameRequest() const { return frame_; }
