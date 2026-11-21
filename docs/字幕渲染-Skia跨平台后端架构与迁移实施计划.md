@@ -762,20 +762,21 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 ### P10：全格式正式导出
 
-- [ ] P10.1 Skia session 输出接入当前 rawvideo pipe，60/120fps 的 frame index -> t 公式沿用原规则。
+- [x] P10.1 Skia session 输出接入当前 rawvideo pipe，60/120fps 的 frame index -> t 公式沿用原规则。
   - [x] Skia 原始帧写入编码管道时检查编号、媒体时间和尺寸，验证 60、120、60000/1001 fps，见 §14.234。
 - [ ] P10.2 MP4 的背景、音轨、前黑/后黑、包含/铺满、编码器选择、进度、取消、异常和部分文件处理通过。
   - [x] Windows 和 WSL 已验证 60fps MP4 的前黑、本段、后黑、音轨对齐、图片包含和铺满，见 §14.236。
-- [ ] P10.3 透明/含背景 PNG 序列、命名、独立目录和重名拦截通过。
+- [x] P10.3 透明/含背景 PNG 序列、命名、独立目录和重名拦截通过。
   - [x] Windows 和 WSL 的两种序列均已验证 120fps、实写编号、中文与日文路径、重名拦截和编码像素，见 §14.236。
 - [ ] P10.4 ProRes 4444、qtrle 两种透明 MOV 的像素/alpha/音频通过；用解码像素与支持 alpha 的合成环境验收。
   - [x] Windows 和 WSL 上实解码同一时刻的 MOV 帧，核对 alpha、颜色和逐采样 PCM 音频，见 §14.236。
 - [ ] P10.5 RGB/alpha 转换、条带或 packed 回读若启用，逐项与全帧参考对照；不能沿用 D2D 格式假设。
 - [ ] P10.6 有界异步回读/编码交付、导出取消、设备失败有限重试与 CPU fallback 均不乱帧、不重复帧、不漏帧。
   - [x] Windows 和 WSL 已验证 GPU/Raster 导出中途取消，以及设备故障获准后完整重启为 Raster，见 §14.235。
-- [ ] P10.7 抽样比较正式预览、GPU 离屏帧和编码前帧；编码损失与字幕绘制差异分开统计。
+- [x] P10.7 抽样比较正式预览、GPU 离屏帧和编码前帧；编码损失与字幕绘制差异分开统计。
   - [x] Windows 和 WSL 已用实际浮窗逐时刻抽样并核对离屏帧、编码输入，见 §14.237。
 - [ ] P10.8 核对 Linux/macOS 工具发现、无 `.exe` 的可执行文件、权限和中文/日文路径；不能只改 renderer 路径却保留 ffmpeg 工具查找中的 Windows 假设。
+  - [x] WSL 和两种托管 Mac 均通过无 `.exe` 的 FFmpeg、Unicode 目录和五种格式导出，见 §14.236、§14.244。
 - [ ] P10.9 GPU 与 Raster 分别导出所有格式，比较编码前字幕帧；GPU 中途失败后按既有取消/重试策略正确重渲染或恢复，不混用错误时间帧。
   - [x] Windows 和 WSL 已验证处理结构化 GPU 设备错误及回退后的完整帧序列，见 §14.235。
 
@@ -3240,6 +3241,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `cmake/SkiaRenderer.cmake` 维护唯一的 `subtitle_skia_core` 源码集合。Metal、Vulkan 设备对象进入 GPU 适配层，Quick 与 sidecar 经同一个 `resolvedSkiaInput` 校验字幕场景，再交给 `PreparedScene`。分页、字形和帧时间的权威输入分别来自共享布局、规范度量和产品传输时钟；绘图核心看的是最终值和请求时刻。
 - sidecar 导出设备由 `OwnerBackendSession` 单线程创建、调用与销毁，最多一项在途工作。Quick 的 `QQuickRhiItemRenderer` 借用 Qt 设备及目标纹理，销毁时在渲染线程 flush 并释放 Skia context。场景准备各自保留一个运行任务和最新待处理版本。两端的图片解码由 `SkiaImageFillCache` 所属配置器约束，每份场景 64 个解码资产及 256 MiB 像素预算。GPU 内部缓存的压力和逐出需另测。
 - `Qt6::GuiPrivate` 所提供的 `<rhi/qrhi.h>` 只出现在 Quick 设备桥和测试控制目标的依赖边界。它要求 Qt SDK 与运行时版本固定，并保留 Qt 升级时的验证层与资源寿命复验。公共绘制核心、Raster 和独立 sidecar 都可脱离该桥构建运行。
+
+### 14.244 P10 导出 Mac CI 复验（2026-11-21）
+
+- 指定提交 `17ecfe58` 两种托管 Mac 架构各通过 **2026** 项产品用例、**1339** 项跳过和 **229** 项干净包用例。两份产品 JUnit 中，五种格式、60/120/60000/1001 帧时间、取消、设备错误与 Raster 重新导出共 **23 项全部通过**。包含正式浮窗、GPU 离屏与编码前对照的 Quick 套件两架构均通过。
+- **98** 份规范样例逐字节一致。此次 Metal 使用托管虚拟设备。macOS 硬件、实际剪辑软件对透明视频的验收及之后的共享内存变更留在对应门槛。见 [CI 44866267370](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44866267370)。
 
 ## 15. 前期探针清理范围
 
