@@ -244,7 +244,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool affineComposition = transformedRuby && line.bursts.empty()
             && ((line.exitDurationMs > 0 && (affineExit || waveScatter)) || stretchEntry || glowTransition);
         const bool pairedParticles = (features.contains("p07_ruby_energy_pair")
-                || features.contains("p07_ruby_particle_assembly_pair"))
+                || features.contains("p07_ruby_particle_assembly_pair")
+                || features.contains("p07_ruby_particle_entry_exit"))
             && line.entryDurationMs > 0 && line.exitDurationMs > 0;
         const bool particleComposition = transformedRuby && !line.bursts.empty()
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")

@@ -29,7 +29,7 @@ from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS,
-    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, write_particle_anchors)
+    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_REPEATED_PARTICLES, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -397,6 +397,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     energy_pair_lines = set()
     same_energy_pair = False
     particle_entry_lines = set()
+    repeated_particle_pair = False
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
@@ -421,13 +422,15 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                               else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
                     if effect in {'assemble_in', 'dissolve_out'}:
                         assembly_lines.add(index)
-                    if leave == 'none' and effect in RUBY_PARTICLE_ENTRIES:
+                    matching = both_phases and entry == leave and entry in RUBY_REPEATED_PARTICLES
+                    if matching or (leave == 'none' and effect in RUBY_PARTICLE_ENTRIES):
                         readings = geometry.ruby.lines[index].rubies
                         if (_uses_decoration(item.layout_style, 'glow') or any(
                                 kind != 'none' for reading in readings
                                 for kind in ruby_decoration_kinds(reading.target.style))):
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
                         particle_entry_lines.add(index)
+                        repeated_particle_pair |= matching
                     if effect in ENERGY_TRANSITIONS or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
                         particle_fade_lines.add(index)
                         if effect == 'flame':
@@ -680,6 +683,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_same_energy_pair')
         if particle_entry_lines:
             ir['required_features'].append('p07_ruby_particle_entry')
+        if repeated_particle_pair:
+            ir['required_features'].append('p07_ruby_particle_entry_exit')
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
         ir['skia_layout']['horizontal_rtl_schema'] = 1

@@ -260,6 +260,35 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
 
 
 _UNDECORATED_RUBY_PARTICLE_ENTRIES = ['sparkle', 'heart', 'petal', 'feather']
+_UNDECORATED_RUBY_PARTICLE_PAIRS = ['heart', 'petal', 'feather']
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('effect', _UNDECORATED_RUBY_PARTICLE_PAIRS)
+def test_undecorated_ruby_particle_pair_preserves_phase_clocks(binary, reading, target, effect):
+    track, style = reading
+    style = replace(style, entry_anim=effect, exit_anim=effect, entry_lead_ms=600, exit_fade_ms=600,
+                    karaoke_anim='utopia', decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_particle_entry_exit'
+    assert feature in ir['required_features']
+    line, = ir['track']['lines']
+    opening = line['display_start_ms']
+    entry = next(burst for burst in line['fx_bursts'] if burst['start_ms'] < opening + 600)
+    leave = max(line['fx_bursts'], key=lambda burst: burst['start_ms'])
+    assert leave['start_ms'] > entry['end_ms']
+    entering, leaving = ((burst['start_ms'] + burst['end_ms']) // 2 for burst in (entry, leave))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [entering, leaving])
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, [leaving, entering], generation=2)
+    assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -385,6 +414,18 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
     elif case_id == 'entry_flame':
         times = tuple(sorted({*times, 735, 780, 840}))
     assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', _UNDECORATED_RUBY_PARTICLE_PAIRS)
+def test_undecorated_ruby_particle_pair_matches_actual_gpu(binary, application, tmp_path, effect):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == f'entry_{effect}')
+    style = replace(case.style, exit_anim=effect, decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    times = (100, 240, 299, 301, 450, 650, 899, 901, 1500, 4500, 4900, 5100, 5300, 5450, 5480, 5499, 5500, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
