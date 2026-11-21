@@ -304,6 +304,54 @@ def mixed_guide_title(tmp_path):
     return track, replace(style, title_overlays=[title])
 
 
+def animated_guide_title(tmp_path):
+    from test_subtitle_skia_line_motion import animated_alpha_band
+
+    track, style = bitmap_guide_title(tmp_path, inline=True)
+    title = style.title_overlays[0]
+    before = animated_alpha_band(tmp_path)
+    def animate(guide):
+        return replace(guide, bitmap_before_path=before, bitmap_fix_size=False, bitmap_zoom_percent=65)
+    title = replace(title, guide_symbols={0: animate(title.guide_symbols[0])},
+                    inline_guide_symbols={(0, 2): animate(title.inline_guide_symbols[0, 2])})
+    return track, replace(style, title_overlays=[title], timing_offset_ms=200)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_animated_title_guides_follow_media_time_and_seek(binary, tmp_path, target):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = animated_guide_title(tmp_path)
+    ir = ir_for(binary, (track, style), roll_shift_ms=340)
+    source = ir['skia_titles'][0]['source']
+    assert 'p08_animated_title_guides' in source['required_features']
+    forged = copy.deepcopy(ir)
+    forged['skia_titles'][0]['source']['required_features'].remove('p08_animated_title_guides')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process._send({'cmd': 'configure', 'ir': ir})
+        process._expect_ok(process._read_until_event('configured'))
+        frames, _ = collect(process, [499, 500, 599, 600, 750, 1000, 1500, 1600, 500])
+        process._send({'cmd': 'configure', 'ir': forged})
+        with pytest.raises(NativeRendererError, match='动图'):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [600], generation=2)
+    assert all(np.array_equal(frames[1], frames[i]) for i in (2, 4, 6, 8))
+    assert np.array_equal(frames[3], frames[7]) and np.array_equal(frames[3], replay[0])
+    assert not frames[5].any()
+    assert np.count_nonzero(frames[1][..., 3] != frames[3][..., 3]) > 100
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_animated_title_guides_match_actual_d2d_gpu(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = animated_guide_title(tmp_path)
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='animated_title_guides'),
+        (299, 349, 399, 400, 499, 500, 599, 600, 750, 900, 1000, 1500, 1600))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_mixed_title_guides_share_a_static_layout(binary, tmp_path, target):
     from test_subtitle_skia_resolved import ir_for

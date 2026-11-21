@@ -10,7 +10,8 @@
 
 namespace subtitle::skia {
 PreparedBitmapGuide::PreparedBitmapGuide(const BitmapGuide& guide, std::size_t& remainingHaloBytes)
-    : before_(guide.before), after_(guide.after), box_(guide.box), clipPad_(guide.clipPad) {
+    : before_(guide.before), after_(guide.after), box_(guide.box), clipPad_(guide.clipPad),
+      animation_(guide.animation) {
     if (!box_.isFinite() || box_.isEmpty() || !std::isfinite(clipPad_) || clipPad_ < 0
         || (!before_ && !after_))
         throw std::runtime_error("Skia 图片导唱符的图片或绘制框无效");
@@ -57,8 +58,14 @@ std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const Sk
     return passes;
 }
 
-void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity) const {
-    const auto& image = after ? after_ : before_;
+void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity, int mediaTimeMs) const {
+    const SkImage* image = (after ? after_ : before_).get();
+    if (!after && animation_ && !animation_->empty()) {
+        const auto phase = std::max(mediaTimeMs, 0) % animation_->back().endMs;
+        const auto frame = std::upper_bound(animation_->begin(), animation_->end(), phase,
+            [](auto t, const BitmapGuideFrame& item) { return t < item.endMs; });
+        image = frame->image.get();
+    }
     if (!image || opacity <= 0) return;
     const SkSamplingOptions linear(SkFilterMode::kLinear, SkMipmapMode::kNone);
     const float scaleX = box_.width() / std::max(float(image->width()), 1.f);

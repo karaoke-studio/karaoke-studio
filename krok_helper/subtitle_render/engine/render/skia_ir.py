@@ -327,6 +327,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
 
 def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
     prepared = []
+    animated_title_guides = False
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
@@ -339,7 +340,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if source_style.vertical:
             validate_vertical_source(source)
         validate_vector_guides(source, source_style)
-        validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
+        nonlocal animated_title_guides
+        animated_title_guides = validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -730,4 +732,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])
     declare_bitmap_guides(plan.lines, ir, static_title=adjust_position is not None)
+    if animated_title_guides:
+        ir['required_features'].append('p08_animated_title_guides')
     return ir

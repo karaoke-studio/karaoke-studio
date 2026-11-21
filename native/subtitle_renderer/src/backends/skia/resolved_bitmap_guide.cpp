@@ -21,14 +21,20 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
 ::subtitle::skia::ResolvedCell resolvedBitmapGuideCell(const QJsonObject& cell, const BitmapGuide& guide,
                                                      SkiaImageFillCache& images, const TextStyle& style, double dpr,
                                                      int start, int end, std::uint32_t before, std::uint32_t after,
-                                                     double wipePad) {
+                                                     double wipePad, bool animatedTitle) {
     if (style.beforeDecorPaint.mode != "solid" || style.afterDecorPaint.mode != "solid")
         throw BackendError("Skia 图片导唱符光晕仅支持实色装饰");
-    for (const auto* path : {&guide.beforePath, &guide.afterPath}) {
-        if (!path->empty() && QImageReader(QString::fromStdWString(*path)).imageCount() > 1)
-            throw BackendError("Skia 图片导唱符暂不支持动图");
-    }
-    const auto beforeImage = images.staticImage(guide.beforePath, guide.beforeModifiedMs, guide.beforeSize);
+    const auto animated = [](const std::wstring& path) {
+        return !path.empty() && QImageReader(QString::fromStdWString(path)).imageCount() > 1;
+    };
+    const bool beforeAnimated = animated(guide.beforePath);
+    if (!animatedTitle && (beforeAnimated || animated(guide.afterPath)))
+        throw BackendError("Skia 图片导唱符暂不支持动图");
+    const auto animation = beforeAnimated
+        ? images.animatedGuide(guide.beforePath, guide.beforeModifiedMs, guide.beforeSize) : nullptr;
+    if (beforeAnimated && !animation) throw BackendError("Skia 标题动图无法解码或超过场景图片预算");
+    const auto beforeImage = animation ? animation->front().image
+        : images.staticImage(guide.beforePath, guide.beforeModifiedMs, guide.beforeSize);
     const auto afterImage = images.staticImage(guide.afterPath, guide.afterModifiedMs, guide.afterSize);
     if ((!guide.beforePath.empty() && !beforeImage) || (!guide.afterPath.empty() && !afterImage)
         || (!beforeImage && !afterImage))
@@ -69,7 +75,7 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
         SkRect::MakeLTRB(float((x + ink[0]) * dpr), float((y + ink[1]) * dpr),
                          float((x + ink[2]) * dpr), float((y + ink[3]) * dpr)),
         skiaStaticGlow(style), !guide.noDecor,
-        std::max(style.strokeWidth + style.stroke2Width, 2.f) + 4.f};
+        std::max(style.strokeWidth + style.stroke2Width, 2.f) + 4.f, animation};
     return out;
 }
 }

@@ -101,7 +101,8 @@ private:
         std::optional<float> rubyInkTop;       // Highest reading ink; scanline shapes reach up to it.
         SkRect paintBounds = SkRect::MakeEmpty();
     };
-    void drawLine(SkCanvas&, const Line&, int time, bool textVisible, float titleOpacity = 1.f) const;
+    void drawLine(SkCanvas&, const Line&, int time, bool textVisible, float titleOpacity = 1.f,
+                  int mediaTimeMs = 0) const;
     void drawLineBands(SkCanvas&, int time) const;
     int width_, height_;
     SkMatrix viewport_ = SkMatrix::I();

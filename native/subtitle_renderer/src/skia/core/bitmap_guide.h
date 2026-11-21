@@ -4,11 +4,19 @@
 #include "include/core/SkRect.h"
 #include "static_glow.h"
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 class SkCanvas;
 
 namespace subtitle::skia {
+struct BitmapGuideFrame {
+    sk_sp<SkImage> image;
+    std::int64_t endMs = 0;
+};
+using BitmapGuideAnimation = std::vector<BitmapGuideFrame>;
+
 // bitmap_guide_schema=1: a line-prefix image guide as the existing GPU draws
 // it. The before/after images are decoded at the platform boundary; the box
 // is final physical geometry. Glow follows the GPU: the image alpha tinted
@@ -21,6 +29,7 @@ struct BitmapGuide {
     StaticGlow glow;
     bool decorate = true;
     float clipPad = 0; // Wipe clip reach beyond the box (stroke widths + 4).
+    std::shared_ptr<const BitmapGuideAnimation> animation; // Title before image, looping on media time.
 };
 
 class PreparedBitmapGuide {
@@ -29,7 +38,7 @@ public:
     bool wipes() const { return bool(after_); }
     const SkRect& box() const { return box_; }
     float clipPad() const { return clipPad_; }
-    void draw(SkCanvas&, bool after, float opacity) const;
+    void draw(SkCanvas&, bool after, float opacity, int mediaTimeMs = 0) const;
 
 private:
     struct Halo {
@@ -41,5 +50,6 @@ private:
     SkRect box_;
     float clipPad_;
     std::vector<Halo> halo_[2];
+    std::shared_ptr<const BitmapGuideAnimation> animation_;
 };
 }

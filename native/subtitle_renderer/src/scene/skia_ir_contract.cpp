@@ -61,6 +61,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vector_guides",
         "p05_vector_guide_composition",
         "p08_bitmap_guides",
+        "p08_animated_title_guides",
         "p08_static_line_band",
         "p08_line_band_fit",
         "p08_line_band_slices",
@@ -378,7 +379,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
             "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
             "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
-            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides",
+            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides", "p08_animated_title_guides",
             "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
             "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};

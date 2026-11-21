@@ -9,7 +9,8 @@
 #include <array>
 
 namespace subtitle::skia {
-void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible, float titleOpacity) const {
+void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible, float titleOpacity,
+                             int mediaTimeMs) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
@@ -171,6 +172,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto drawBitmapGuide = [&](std::size_t index) {
         const auto& cell = line.cells[index];
         const auto& guide = *cell.bitmap;
+        if (!line.titleWindows.empty()) {
+            guide.draw(canvas, false, titleOpacity, mediaTimeMs);
+            return;
+        }
         const auto phase = states[index].phase;
         if (!guide.wipes() || phase != Phase::Wiping) {
             guide.draw(canvas, guide.wipes() && phase == Phase::After, titleOpacity);

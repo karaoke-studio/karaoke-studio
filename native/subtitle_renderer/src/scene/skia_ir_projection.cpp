@@ -39,6 +39,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     if (!parsed) throw BackendError(error.toStdString());
     const auto& cfg = *parsed;
     const auto features = ir.value("required_features").toArray();
+    if (features.contains("p08_animated_title_guides") && (!staticTitle || !features.contains("p08_bitmap_guides")))
+        throw BackendError("Skia 动图导唱符必须属于标题布局");
     if (!staticTitle && features.contains("p08_bitmap_guides") && features.contains("p05_vector_guides"))
         throw BackendError("Skia 正文当前不支持混用位图和矢量导唱符");
     const bool markerFeature = features.contains("p05_ruby_markers");

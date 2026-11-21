@@ -298,7 +298,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
             const float tail = window.fadeOutMs ? float(window.endMs - tMs) / window.fadeOutMs : 1.f;
             opacity = std::max(opacity, std::min({1.f, head, tail}));
         }
-        if (opacity > 0.f) drawLine(canvas, line, 0, true, opacity);
+        if (opacity > 0.f) drawLine(canvas, line, 0, true, opacity, tMs);
     }
     SkAutoCanvasRestore restore(&canvas, !viewport_.isIdentity());
     if (!viewport_.isIdentity()) canvas.concat(viewport_);

@@ -15,7 +15,15 @@ namespace {
 constexpr std::size_t kMaxImages = 64;
 constexpr int kMaxSide = 8192;
 constexpr std::size_t kMaxBytes = std::size_t(256) << 20;
-constexpr int kMaxScanlineFrames = 4096;
+constexpr int kMaxImageFrames = 4096;
+
+sk_sp<SkImage> copyPremultiplied(const QImage& image) {
+    if (image.isNull() || image.width() > kMaxSide || image.height() > kMaxSide) return nullptr;
+    // Format_ARGB32_Premultiplied is native-endian 0xAARRGGBB, i.e. BGRA bytes.
+    static_assert(Q_BYTE_ORDER == Q_LITTLE_ENDIAN, "Skia image fills assume little-endian ARGB32");
+    const auto info = SkImageInfo::Make(image.width(), image.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType);
+    return SkImages::RasterFromPixmapCopy(SkPixmap(info, image.constBits(), std::size_t(image.bytesPerLine())));
+}
 
 sk_sp<SkImage> decode(const std::wstring& path) {
     // Frame zero, no orientation or colour-space conversion, premultiplied:
@@ -24,12 +32,7 @@ sk_sp<SkImage> decode(const std::wstring& path) {
     reader.setAutoTransform(false);
     const QSize size = reader.size();
     if (size.isValid() && (size.width() > kMaxSide || size.height() > kMaxSide)) return nullptr;
-    const QImage image = reader.read().convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    if (image.isNull() || image.width() > kMaxSide || image.height() > kMaxSide) return nullptr;
-    // Format_ARGB32_Premultiplied is native-endian 0xAARRGGBB, i.e. BGRA bytes.
-    static_assert(Q_BYTE_ORDER == Q_LITTLE_ENDIAN, "Skia image fills assume little-endian ARGB32");
-    const auto info = SkImageInfo::Make(image.width(), image.height(), kBGRA_8888_SkColorType, kPremul_SkAlphaType);
-    return SkImages::RasterFromPixmapCopy(SkPixmap(info, image.constBits(), std::size_t(image.bytesPerLine())));
+    return copyPremultiplied(reader.read().convertToFormat(QImage::Format_ARGB32_Premultiplied));
 }
 
 std::size_t imageBytes(int width, int height) {
@@ -55,13 +58,44 @@ sk_sp<SkImage> SkiaImageFillCache::staticImage(const std::wstring& path, std::ui
     if (path.empty()) return {};
     const Key key{path, modifiedMs, size};
     if (const auto found = images_.find(key); found != images_.end()) return found->second;
-    if (images_.size() + scanlineImages_.size() >= kMaxImages) return {};
+    if (images_.size() + scanlineImages_.size() + guideAnimations_.size() >= kMaxImages) return {};
     auto image = decode(path);
     const std::size_t bytes = image ? imageBytes(image->width(), image->height()) : 0;
     if (!reserveDecodedBytes(bytes)) image = nullptr;
     // Failures are remembered too, so one configure decodes each key once.
     images_.emplace(key, image);
     return image;
+}
+
+std::shared_ptr<const ::subtitle::skia::BitmapGuideAnimation> SkiaImageFillCache::animatedGuide(
+        const std::wstring& path, std::uint64_t modifiedMs, std::uint64_t size) {
+    const Key key{path, modifiedMs, size};
+    if (const auto found = guideAnimations_.find(key); found != guideAnimations_.end()) return found->second;
+    if (images_.size() + scanlineImages_.size() + guideAnimations_.size() >= kMaxImages) return {};
+    QImageReader reader(QString::fromStdWString(path));
+    reader.setAutoTransform(false);
+    const auto dimensions = reader.size();
+    const int frameCount = reader.imageCount();
+    if (frameCount <= 1 || frameCount > kMaxImageFrames || dimensions.isEmpty()
+        || dimensions.width() > kMaxSide || dimensions.height() > kMaxSide)
+        return {};
+    auto sequence = std::make_shared<::subtitle::skia::BitmapGuideAnimation>();
+    sequence->reserve(frameCount);
+    std::size_t bytes = 0;
+    std::int64_t endMs = 0;
+    for (int index = 0; index < frameCount; ++index) {
+        const auto frame = reader.read().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        if (frame.isNull() || frame.size() != dimensions) return {};
+        bytes += imageBytes(frame.width(), frame.height());
+        if (bytes > kMaxBytes - bytes_) return {};
+        auto image = copyPremultiplied(frame);
+        if (!image) return {};
+        endMs += std::max(reader.nextImageDelay(), 10);
+        sequence->push_back({std::move(image), endMs});
+    }
+    bytes_ += bytes;
+    guideAnimations_.emplace(key, sequence);
+    return sequence;
 }
 
 std::shared_ptr<const ::subtitle::skia::ScanlineImage> SkiaImageFillCache::scanline(
@@ -76,7 +110,7 @@ std::shared_ptr<const ::subtitle::skia::ScanlineImage> SkiaImageFillCache::scanl
         style.scanlineColor, style.scanlineImageTintStrength, style.scanlineImageTint, style.scanlineImageBandEnabled};
     for (const auto& [cached, image] : scanlineImages_)
         if (cached == key) return image;
-    if (images_.size() + scanlineImages_.size() >= kMaxImages) return {};
+    if (images_.size() + scanlineImages_.size() + guideAnimations_.size() >= kMaxImages) return {};
 
     using ::subtitle::skia::ScanlineImage;
     const auto load = [&]() -> std::shared_ptr<const ScanlineImage> {
@@ -92,7 +126,7 @@ std::shared_ptr<const ::subtitle::skia::ScanlineImage> SkiaImageFillCache::scanl
         const float sceneScale = std::max(key.height / 1080.f * scale, .01f);
         std::size_t bytes = 0;
         std::int64_t endMs = 0;
-        for (int index = 0; index < kMaxScanlineFrames; ++index) {
+        for (int index = 0; index < kMaxImageFrames; ++index) {
             const auto frame = reader.read().convertToFormat(QImage::Format_ARGB32_Premultiplied);
             if (frame.isNull()) break;
             const int width = frame.width(), height = frame.height();

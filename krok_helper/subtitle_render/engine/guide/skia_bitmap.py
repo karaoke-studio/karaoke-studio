@@ -76,9 +76,10 @@ def validate_bitmap_guides(track, style, *, static_title=False):
     Verified subset: horizontal LTR forward lines with a pre-roll/anchored
     prefix (never replacement or inline), static images, no roles, and only
     solid glow decoration. Shadows, animated images and other effects stay
-    rejected rather than approximated.
+    rejected in lyrics. Static title layout may carry animated bitmaps.
     """
     from ..layout.line.style import style_for_line
+    animated = False
     for line in track.lines:
         cells = [c for c in render_line_with_guide_symbols(line).chars if guide_symbol_is_bitmap(c.vector_glyph)]
         if not cells:
@@ -91,7 +92,9 @@ def validate_bitmap_guides(track, style, *, static_title=False):
         paths = {path for image in images for path in (image.bitmap_before_path, image.bitmap_after_path) if path}
         for path in sorted(paths):
             if QImageReader(path).imageCount() > 1:
-                raise ValueError('Skia 图片导唱符暂不支持动图')
+                if not static_title:
+                    raise ValueError('Skia 图片导唱符暂不支持动图')
+                animated = True
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
@@ -101,6 +104,7 @@ def validate_bitmap_guides(track, style, *, static_title=False):
         if appearance.decoration_kind == 'shadow' or (
                 not appearance.decoration_before_sync and appearance.decoration_kind_before == 'shadow'):
             raise ValueError('Skia 图片导唱符暂不支持阴影装饰')
+    return animated
 
 
 # Verified with the P00 line-prefix bitmap guide: Utopia singing, upper ruby,

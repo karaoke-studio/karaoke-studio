@@ -1,4 +1,5 @@
 #pragma once
+#include "core/bitmap_guide.h"
 #include "core/image_fill.h"
 #include "core/scanline_image.h"
 #include "../../model/paint_types.h"
@@ -19,6 +20,8 @@ class SkiaImageFillCache {
 public:
     ::subtitle::skia::ImageFill fill(const PaintStyle& paint, float layoutScale);
     sk_sp<SkImage> staticImage(const std::wstring& path, std::uint64_t modifiedMs, std::uint64_t size);
+    std::shared_ptr<const ::subtitle::skia::BitmapGuideAnimation> animatedGuide(
+        const std::wstring& path, std::uint64_t modifiedMs, std::uint64_t size);
     bool reserveDecodedBytes(std::size_t bytes);
     std::shared_ptr<const ::subtitle::skia::ScanlineImage> scanline(const TextStyle&, int canvasHeight);
 
@@ -34,6 +37,7 @@ private:
         bool operator==(const ScanlineKey&) const = default;
     };
     std::map<Key, sk_sp<SkImage>> images_;
+    std::map<Key, std::shared_ptr<const ::subtitle::skia::BitmapGuideAnimation>> guideAnimations_;
     std::vector<std::pair<ScanlineKey, std::shared_ptr<const ::subtitle::skia::ScanlineImage>>> scanlineImages_;
     std::size_t bytes_ = 0;
 };
