@@ -3827,6 +3827,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 花瓣入场、唱字火焰、扫字星光和音符退场保留原始实色光晕。花瓣入场沿用已校验的光晕合成，退场音符复用固定位置覆盖采样。测试核对各粒子层的时钟、种子与配色，以及缺少组合能力时的回滚。
 - `particles_speed_50` 与 `particles_speed_200` 原样配置的加密采样共 **38 张 1080p 帧**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 两组画质预算。Windows **21 通过**，独立 Raster **4 通过**，WSL X11 与 Wayland 各 **12 通过、9 项 Windows 专用跳过**。日志前缀 `build/p07-petal-scanline-note-glow-*`。
+- `f98b306e` 原样全套回归为 **113/129 个场景、508 张 1080p 帧**通过两组画面对照。逐帧证据为 `build/p00-skia-coverage/original-warm-pixels-f98b306e.json`。本批双架构验证已提交至 [Mac CI 44956181891](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44956181891)。
 
 ## 15. 前期探针清理范围
 
