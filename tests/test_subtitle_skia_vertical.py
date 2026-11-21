@@ -689,7 +689,8 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['combined_unit', 'middle_dot', 'latin', 'overlap_groups', 'reverse', 'lower', 'role'])
+@pytest.mark.parametrize('change', ['combined_unit', 'middle_dot', 'latin', 'overlap_groups',
+                                    'reverse_utopia', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     reading = {'combined_unit': 'か\u309a', 'middle_dot': '・', 'latin': 'A'}.get(change, '字')
     extra = None
@@ -699,8 +700,9 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
         other, _ = vertical_ruby_source(project, span=(1, 3))
         extra = other.rubies
     track, style = vertical_ruby_source(project, reading=reading, span=span, extra=extra)
-    if change == 'reverse':
+    if change == 'reverse_utopia':
         track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
+        style = replace(style, reverse_karaoke_anim='utopia')
     elif change == 'lower':
         style = replace(style, lower_ruby_enabled=True)
     elif change == 'role':
