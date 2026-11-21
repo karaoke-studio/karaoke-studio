@@ -578,11 +578,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool verticalGlowNoWipe = noWipeGlow && features.contains("p07_vertical_glow_no_wipe");
         const bool verticalShadowNoWipe = hasShadow && prepared.noWipe && !hasGlow
             && features.contains("p07_vertical_shadow_no_wipe");
+        const bool verticalMixedNoWipe = style.vertical && prepared.noWipe
+            && features.contains("p07_vertical_mixed_decoration_no_wipe");
         const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
-            && (line.karaokeAnimation == "none" || verticalGlowNoWipe || verticalShadowNoWipe)
+            && (line.karaokeAnimation == "none" || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
             && (verticalFade || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
@@ -590,7 +592,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
         if (hasDecoration
             && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || hasShadow))
-                || (line.wipeReverse && !reverseVerticalDecoration) || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe))
+                || (line.wipeReverse && !reverseVerticalDecoration)
+                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe))
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)

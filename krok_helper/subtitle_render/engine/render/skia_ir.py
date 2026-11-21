@@ -533,7 +533,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         columns = style.dual_line_layout
         vertical_paints = set(decorations) | {kind for kind in ('shadow', 'glow')
             if f'p06_ruby_{kind}' in ir['required_features']}
-        vertical_no_wipe = (not columns and not reverse_vertical and len(vertical_paints) == 1
+        vertical_no_wipe = (not columns and not reverse_vertical and bool(vertical_paints)
             and 'p07_line_fade' not in ir['required_features']
             and any(line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines']))
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
@@ -544,7 +544,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             raise ValueError('Skia 竖排静态装饰超出已支持的走字组合')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
         if vertical_no_wipe:
-            ir['required_features'].append(f'p07_vertical_{next(iter(vertical_paints))}_no_wipe')
+            kind = next(iter(vertical_paints)) if len(vertical_paints) == 1 else 'mixed_decoration'
+            ir['required_features'].append(f'p07_vertical_{kind}_no_wipe')
         if columns:
             ir['required_features'].append('p06_vertical_columns_decoration')
             if reverse_vertical and any(not line.wipe_reverse for line in track.lines):

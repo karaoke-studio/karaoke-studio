@@ -274,8 +274,10 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
-@pytest.mark.parametrize('kind', ['glow', 'shadow'])
-def test_vertical_no_wipe_decoration_changes_at_reading_end(binary, project, target, body_decoration, kind):
+@pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),
+                                         ('shadow', 'glow'), ('glow', 'shadow')],
+                         ids=['glow', 'shadow', 'shadow_to_glow', 'glow_to_shadow'])
+def test_vertical_no_wipe_decoration_changes_at_reading_end(binary, project, target, body_decoration, before, after):
     from krok_helper.subtitle_render.domain.paint import PaintFill
     from test_subtitle_skia_roles import colors
 
@@ -288,14 +290,16 @@ def test_vertical_no_wipe_decoration_changes_at_reading_end(binary, project, tar
 
     ruby = palette('#FFFF0000', '#FF0000FF')
     body = palette('#FF00FF00', '#FF00FF00')
-    body_kind = kind if body_decoration else 'none'
+    body_before = before if body_decoration else 'none'
+    body_after = after if body_decoration else 'none'
     style = replace(style, karaoke_anim='no_wipe', karaoke_colors=body, ruby_karaoke_colors=ruby,
-                    decoration_before_sync=False, decoration_kind=body_kind, decoration_kind_before=body_kind,
-                    ruby_decoration_kind=kind, ruby_decoration_kind_before=kind,
+                    decoration_before_sync=False, decoration_kind=body_after, decoration_kind_before=body_before,
+                    ruby_decoration_kind=after, ruby_decoration_kind_before=before,
                     ruby_glow_before_radius_px=6, ruby_glow_after_radius_px=6,
                     shadow_offset_x=-9, shadow_before_offset_x=-9,
                     ruby_shadow_offset_x=4, ruby_shadow_before_offset_x=4)
     ir = ir_for(binary, (track, style))
+    kind = before if before == after else 'mixed_decoration'
     feature = f'p07_vertical_{kind}_no_wipe'
     assert feature in ir['required_features']
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
@@ -319,24 +323,29 @@ def test_vertical_no_wipe_decoration_changes_at_reading_end(binary, project, tar
     blue = [coverage(frame, 2) for frame in frames]
     # With two shadow colors, Direct2D retains the before shadow beneath the after shadow.
     assert red[0] > red[1] and red[1] == red[2]
-    if kind == 'glow':
+    if kind != 'shadow':
         assert red[1] == 0
     assert blue[0] < blue[1] and blue[1] == blue[2]
 
 
 @GPU
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
-@pytest.mark.parametrize('kind', ['glow', 'shadow'])
-def test_vertical_no_wipe_decoration_matches_actual_gpu(binary, application, tmp_path, semantics, kind):
+@pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),
+                                         ('shadow', 'glow'), ('glow', 'shadow')],
+                         ids=['glow', 'shadow', 'shadow_to_glow', 'glow_to_shadow'])
+def test_vertical_no_wipe_decoration_matches_actual_gpu(binary, application, tmp_path, semantics, before, after):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == 'vertical')
     style = replace(case.style, layout_semantics=semantics, karaoke_anim='no_wipe')
-    if kind == 'shadow':
-        style = replace(style, decoration_kind='shadow', decoration_kind_before='shadow',
-                        ruby_decoration_kind='shadow', ruby_decoration_kind_before='shadow',
-                        shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3)
+    if 'shadow' in (before, after):
+        style = replace(style, decoration_before_sync=before == after,
+                        decoration_kind=after, decoration_kind_before=before,
+                        ruby_decoration_kind=after, ruby_decoration_kind_before=before,
+                        shadow_offset_x=9, shadow_offset_y=6, ruby_shadow_offset_x=4, ruby_shadow_offset_y=3,
+                        shadow_before_offset_x=9, shadow_before_offset_y=6,
+                        ruby_shadow_before_offset_x=4, ruby_shadow_before_offset_y=3)
     times = (300, 600, 1500, 2600, 3400, 3450, 3500, 3650, 3674, 3675, 3676, 3900,
              4120, 4400, 4499, 4500, 4501, 5000)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
