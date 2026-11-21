@@ -4,8 +4,10 @@ from .unit_layout import measured_ruby_origins
 
 
 def reading_origins(target, metrics, left, width):
-    return measured_ruby_origins(metrics.unit_layouts, left, width,
-                                 style=target.style, base_text=target.effective.kanji)
+    rtl = target.style.right_to_left
+    units = metrics.unit_layouts[::-1] if rtl else metrics.unit_layouts
+    origins = measured_ruby_origins(units, left, width, style=target.style, base_text=target.effective.kanji)
+    return origins[::-1] if rtl else origins
 
 
 def resolve_line_spacing(main, appearance, targets, readings):

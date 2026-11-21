@@ -111,8 +111,8 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             zip(track.lines, rendered_lines, line_styles, prefix_counts, strict=True)):
         # Reverse singing is not text direction. The shared selection below
         # returns no annotation for a reverse line, exactly as the GPU does.
-        if appearance.vertical or appearance.right_to_left:
-            raise ValueError('Skia 当前注音几何准备仅支持正向横排上注音')
+        if appearance.vertical:
+            raise ValueError('Skia 当前注音几何准备仅支持横排注音')
         clock = measured.snapshot.resolve_intervals(line, style)
         intervals.append(clock)
         # Resolve annotation ownership in authored cells before projecting the
@@ -139,11 +139,16 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             track.lines, rendered_lines, line_styles, measured.lines, intervals, targets, prefix_counts, strict=True):
         reading_metrics = ruby_metrics.readings[offset:offset + len(line_targets)]
         offset += len(line_targets)
-        gaps, left_overflow, right_overflow = resolve_line_spacing(main, appearance, line_targets, reading_metrics)
-        local = (local_line_geometry(main, appearance, char_gaps=gaps) if line_targets
-                 else local_line_geometry(main, appearance))
-        lefts = char_left_positions(main.widths, 0, False, appearance.letter_spacing_px, char_gaps=gaps,
-                                    n3_no_backtracking=appearance.layout_semantics == 'n3_1074')
+        # The existing GPU keeps RTL main cells in their original slots.
+        if appearance.right_to_left:
+            gaps, left_overflow, right_overflow = [0] * len(main.widths), 0, 0
+            local = local_line_geometry(main, appearance)
+            lefts = [cell['origin_x'] - pen for cell, pen in zip(local.cells, main.offsets, strict=True)]
+        else:
+            gaps, left_overflow, right_overflow = resolve_line_spacing(main, appearance, line_targets, reading_metrics)
+            local = local_line_geometry(main, appearance, char_gaps=gaps if line_targets else None)
+            lefts = char_left_positions(main.widths, 0, False, appearance.letter_spacing_px, char_gaps=gaps,
+                                        n3_no_backtracking=appearance.layout_semantics == 'n3_1074')
         ranges = [(x, x + w) for x, w in zip(lefts, main.widths, strict=True)]
         initial_lefts = char_left_positions(main.widths, 0, False, appearance.letter_spacing_px,
                                            n3_no_backtracking=appearance.layout_semantics == 'n3_1074')

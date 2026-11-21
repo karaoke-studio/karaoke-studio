@@ -45,8 +45,10 @@ def _main_endpoints(cells, measured, dpr, reverse, right_to_left):
     return tuple(main)
 
 
-def _ruby_endpoints(rubies, dpr):
+def _ruby_endpoints(rubies, dpr, right_to_left):
     ends = [[1.]*len(g.cells) for g in rubies]
+    endpoint = _reverse_endpoint if right_to_left else _endpoint
+    following_edge = 'layout_right' if right_to_left else 'layout_left'
     previous = None
     for index, group in sorted(enumerate(rubies), key=lambda p: (p[1].target.lower, min(p[1].target.indices))):
         if previous is not None and rubies[previous[0]].target.lower != group.target.lower:
@@ -55,7 +57,7 @@ def _ruby_endpoints(rubies, dpr):
             if previous is not None:
                 gi, ui = previous
                 before = rubies[gi].cells[ui]
-                ends[gi][ui] = _endpoint(before['layout_left'], before['layout_right'], cell['layout_left'], dpr)
+                ends[gi][ui] = endpoint(before['layout_left'], before['layout_right'], cell[following_edge], dpr)
             previous = index, unit
     return tuple(tuple(row) for row in ends)
 
@@ -70,9 +72,8 @@ def line_endpoints(main_cells, measured, rubies=(), *, dpr=1, reverse=False, rig
     _valid_dpr(dpr)
     if reverse and rubies:
         raise ValueError('Skia 反向走字行不能携带注音组（现有 GPU 省略该行注音）')
-    if right_to_left and rubies:
-        raise ValueError('Skia 右至左单元排列暂不支持注音组合')
-    return _main_endpoints(main_cells, measured, dpr, reverse, right_to_left), _ruby_endpoints(rubies, dpr)
+    return (_main_endpoints(main_cells, measured, dpr, reverse, right_to_left),
+            _ruby_endpoints(rubies, dpr, right_to_left))
 
 
 def reverse_main_endpoints(cells, measured, *, dpr=1):
@@ -80,8 +81,8 @@ def reverse_main_endpoints(cells, measured, *, dpr=1):
     return line_endpoints(cells, measured, dpr=dpr, reverse=True)[0]
 
 
-def prepare_overlap_wipes(local, measured, timing, *, dpr=1, reverse=False):
+def prepare_overlap_wipes(local, measured, timing, *, dpr=1, reverse=False, right_to_left=False):
     """Endpoints for a prepared annotation line; ``timing`` fixes the cell count."""
     if len(timing.main) != len(local.main.cells):
         raise ValueError('Skia 走字终点与正文单元数量不一致')
-    return line_endpoints(local.main.cells, measured, local.rubies, dpr=dpr, reverse=reverse)
+    return line_endpoints(local.main.cells, measured, local.rubies, dpr=dpr, reverse=reverse, right_to_left=right_to_left)

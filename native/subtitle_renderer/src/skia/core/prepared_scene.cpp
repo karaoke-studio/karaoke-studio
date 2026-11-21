@@ -92,8 +92,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.particleVisibility = source.particleVisibility;
         line.shapeSignal = source.shapeSignal;
         line.volumeSignal = source.volumeSignal;
-        // Annotation groups currently support only a forward front.
-        if (source.wipeRightToLeft && !source.rubyGroups.empty())
+        if (source.wipeRightToLeft && std::ranges::any_of(source.rubyGroups, [](const auto& ruby) {
+                return !ruby.rightToLeft;
+            }))
             throw std::runtime_error("Skia 反向走字行不能携带注音组");
         if (source.translations.size() > 4096) throw std::runtime_error("Skia 页面位移窗口数量超限");
         for (const auto& translation : source.translations) {

@@ -355,8 +355,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
-        if source_style.right_to_left and (source.rubies or source_style.lower_ruby_enabled):
-            raise ValueError('Skia 右至左单元排列暂不支持注音组合')
+        if source_style.right_to_left and source_style.lower_ruby_enabled:
+            raise ValueError('Skia 右至左单元排列暂不支持下方注音组合')
         if source_style.right_to_left:
             if any(len(char.text) > 1 and not _validated_rtl_cell(char.text) for line in source.lines for char in line.chars):
                 raise ValueError('Skia 右至左排列的多码点单元包含尚未验证的字符')
@@ -562,23 +562,19 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if vertical_japanese_glyphs(track):
             ir['required_features'].append('p05_vertical_japanese_glyphs')
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
-    if style.right_to_left:
-        ir['required_features'].append('p05_horizontal_rtl')
-        ir['skia_layout']['horizontal_rtl_schema'] = 1
-        for final in lines:
-            final['text_flow'] = 'rtl'
-        if any(len(char.text) > 1 for item in plan.lines for char in item.line.chars):
-            ir['required_features'].append('p05_horizontal_rtl_cells')
-            ir['skia_layout']['horizontal_rtl_cell_schema'] = 1
-        if any(_rtl_kana_cell(char.text) for item in plan.lines for char in item.line.chars):
-            ir['required_features'].append('p05_horizontal_rtl_kana_cells')
-            ir['skia_layout']['horizontal_rtl_kana_schema'] = 1
-        if any(any(c in '\u3099\u309a' for c in char.text) and len(char.text) > 1
-               for item in plan.lines for char in item.line.chars):
-            ir['required_features'].append('p05_horizontal_rtl_kana_marks')
-            ir['skia_layout']['kana_mark_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
+        if style.right_to_left:
+            for item, reading in zip(plan.lines, geometry.ruby.lines, strict=True):
+                look = item.layout_style
+                source = ir['track']['lines'][item.track_index]
+                if (look.stroke_width_px <= 0 or item.line.wipe_reverse or _uses_decoration(look, 'shadow')
+                        or source.get('karaoke_anim') != 'none' or source.get('zoom_pulse')
+                        or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                        or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
+                        or _inline_role_labels(item)
+                        or any('shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)):
+                    raise ValueError('Skia 右至左上注音当前需要有描边的普通走字，支持实色光晕')
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         sources, indices = lower_sources(prepared[0])
         zoom_lines = {
@@ -602,6 +598,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['vector_guide_schema'] = 1
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
+        if style.right_to_left:
+            ir['required_features'].append('p05_horizontal_rtl_ruby')
         if zoom_lines:
             ir['required_features'].append('p07_ruby_zoom_pulse')
         if 'p07_scanline_band' in ir['required_features']:
@@ -648,6 +646,21 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_energy_pair')
         if particle_entry_lines:
             ir['required_features'].append('p07_ruby_particle_entry')
+    if style.right_to_left:
+        ir['required_features'].append('p05_horizontal_rtl')
+        ir['skia_layout']['horizontal_rtl_schema'] = 1
+        for final in ir['skia_layout']['lines']:
+            final['text_flow'] = 'rtl'
+        if any(len(char.text) > 1 for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_cells')
+            ir['skia_layout']['horizontal_rtl_cell_schema'] = 1
+        if any(_rtl_kana_cell(char.text) for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_kana_cells')
+            ir['skia_layout']['horizontal_rtl_kana_schema'] = 1
+        if any(any(c in '\u3099\u309a' for c in char.text) and len(char.text) > 1
+               for item in plan.lines for char in item.line.chars):
+            ir['required_features'].append('p05_horizontal_rtl_kana_marks')
+            ir['skia_layout']['kana_mark_schema'] = 1
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
             track, ir, plan, measured, spin_lines, composed_geometry_lines)

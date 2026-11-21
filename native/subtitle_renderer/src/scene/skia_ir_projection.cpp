@@ -70,8 +70,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         // Source annotations remain provenance only. Their layout and clocks
         // were materialized by Python; never invoke legacy Qt ruby projection.
     }
+    const bool rtlRuby = cfg.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
     if (cfg.rightToLeft && (!features.contains("p05_horizontal_rtl")
-        || !cfg.rubies.empty()))
+        || (!cfg.rubies.empty() && !rtlRuby)))
         throw BackendError("Skia 右至左单元排列缺少能力声明或携带未支持注音");
     // Fixed-cell columns. Readings require a separately versioned feature.
     if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft
@@ -85,7 +86,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const bool reverseVerticalOutline = cfg.vertical && features.contains("p06_vertical_reverse_outline");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
-            || cfg.rightToLeft || (cfg.dualLineLayout && !multiLaneOutline)
+            || (cfg.rightToLeft && !rtlRuby) || (cfg.dualLineLayout && !multiLaneOutline)
             || (features.contains("p05_reverse_wipe") && !reverseVerticalOutline)
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应布局能力");

@@ -10,7 +10,7 @@ import pytest
 from test_subtitle_skia_reverse import application, binary, project, source as reverse_source
 from test_subtitle_skia_roles import colors
 from test_subtitle_skia_resolved import ir_for
-from test_subtitle_skia_ruby_groups import configure
+from test_subtitle_skia_ruby_groups import annotated, configure, mixed, pages, reading
 from test_subtitle_skia_protocol import collect, selection
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
@@ -197,6 +197,51 @@ def test_unvalidated_rtl_combinations_stay_explicitly_gated(binary,project,kind)
     elif kind=='lower':style=replace(style,lower_ruby_enabled=True)
     else:style=replace(style,vertical=True)
     with pytest.raises(ValueError):ir_for(binary,(track,style))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, semantics):
+    track, style = reading
+    style = replace(style, right_to_left=True, stroke_width_px=4, karaoke_anim='none', layout_semantics=semantics)
+    ir = ir_for(binary, (track, style))
+    ltr = ir_for(binary, (track, replace(style, right_to_left=False)))
+    feature = 'p05_horizontal_rtl_ruby'
+    assert feature in ir['required_features']
+    units = ir['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    plain = ltr['skia_layout']['lines'][0]['ruby_groups'][0]['units']
+    assert units[0]['origin_x'] > units[1]['origin_x']
+    assert [cell['interval_ms'] for cell in units] == [cell['interval_ms'] for cell in plain]
+    start, end = units[0]['interval_ms']
+    times = [start - 1, (start + end) // 2, units[-1]['interval_ms'][1]]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+    green = (frames[1][..., 1] > frames[1][..., 0]) & (frames[1][..., 3] > 15)
+    red = (frames[1][..., 0] > frames[1][..., 1]) & (frames[1][..., 3] > 15)
+    assert np.nonzero(green)[1].mean() > np.nonzero(red)[1].mean()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+@pytest.mark.parametrize('glow', [False, True])
+def test_rtl_upper_reading_matches_actual_gpu(binary, application, tmp_path, semantics, glow):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
+    style = replace(case.style, layout_semantics=semantics, karaoke_anim='none')
+    if not glow:
+        style = replace(style, decoration_kind='none', decoration_kind_before='none',
+                        ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    times = (300, 600, 1500, 2600, 3400, 3450, 3500, 3650, 3900, 4120, 4400, 4499, 4500, 4501, 5000)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 
 # horizontal_rtl_cell_schema=1: GPU-validated multi-codepoint authored cells

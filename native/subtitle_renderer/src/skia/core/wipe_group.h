@@ -22,6 +22,7 @@ public:
 private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible,
                      float opacity, float viewportHeight) const;
+    float wipeStart() const;
     float frontAt(int timeMs, float startEdge) const;
     sk_sp<SkShader> fillShader(const SkCanvas&, bool after) const;
     std::vector<ResolvedCell> cells_;
@@ -32,6 +33,7 @@ private:
     bool antialiasClip_ = false;
     bool noWipe_ = false;
     bool vertical_ = false;
+    bool rightToLeft_ = false;
     std::optional<SkPoint> spinPivot_;
     bool affine_ = false;
     bool lower_ = false;

@@ -46,7 +46,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
         if reverse and (local.rubies or any(curve is not None for curve in timing.main)):
             raise ValueError('Skia 反向走字行不能携带注音组或注音分段时钟（现有 GPU 省略该行注音）')
         # The GPU adjusts every main/annotation endpoint (skia_overlap).
-        overlap = prepare_overlap_wipes(local, measured.lines[item.track_index], timing, dpr=dpr, reverse=reverse)
+        rtl = item.layout_style.right_to_left
+        overlap = prepare_overlap_wipes(local, measured.lines[item.track_index], timing,
+                                        dpr=dpr, reverse=reverse, right_to_left=rtl)
         cells = positioned_cells(local.main, position)
         for index, (cell, curve) in enumerate(zip(cells, timing.main, strict=True)):
             cell['wipe_end_position'] = overlap[0][index]

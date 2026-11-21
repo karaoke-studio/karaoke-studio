@@ -210,6 +210,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
+        const bool rtlRuby = style.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
+        if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse || line.karaokeAnimation != "none"
+            || line.entryAnimation != "none" || line.exitAnimation != "none" || line.zoomPulseEnabled
+            || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
+            || !projected.charStyles.empty()))
+            throw BackendError("Skia 右至左上注音当前需要有描边的普通走字，支持实色光晕");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
@@ -346,7 +352,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || layout.value("horizontal_rtl_schema").toDouble(-1) != 1
                 || !source.value("text_flow").isString()
                 || source.value("text_flow").toString() != (style.rightToLeft ? "rtl" : "ltr")
-                || !source.value("ruby_groups").toArray().isEmpty())
+                || (!source.value("ruby_groups").toArray().isEmpty()
+                    && !rtlRuby))
                 throw BackendError("Skia 右至左单元排列缺少能力声明或最终方向无效");
         }
         // The existing GPU places vertical columns from margins only; page offsets do not apply.
@@ -576,7 +583,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
         if (hasDecoration
-            && ((style.vertical && !verticalDecoration) || style.rightToLeft
+            && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || hasShadow))
                 || (line.wipeReverse && !reverseVerticalDecoration) || (prepared.noWipe && !noWipeGlow)
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))

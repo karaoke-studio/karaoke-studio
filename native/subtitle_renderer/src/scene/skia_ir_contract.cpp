@@ -37,6 +37,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_no_wipe",
         "p07_zero_ruby_no_wipe",
         "p05_horizontal_rtl",
+        "p05_horizontal_rtl_ruby",
         "p05_horizontal_rtl_cells",
         "p05_vertical_solid",
         "p05_vertical_japanese_glyphs",

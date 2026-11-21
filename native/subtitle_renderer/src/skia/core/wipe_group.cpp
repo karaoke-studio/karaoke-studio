@@ -65,7 +65,8 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
     : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
-      noWipe_(noWipe), vertical_(vertical), spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
+      noWipe_(noWipe), vertical_(vertical), rightToLeft_(group.rightToLeft),
+      spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
       fillGradients_(group.fillGradients), fillImages_(group.fillImages) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
@@ -153,10 +154,9 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
     const bool before = std::ranges::all_of(cells_, [=](const auto& cell) { return timeMs <= cell.startMs; });
     const bool complete = !before && lineWipeComplete(cells_, timeMs);
     if (after ? before : complete) return;
-    const auto edge = before || complete ? std::nullopt
-        : std::optional(frontAt(timeMs, vertical_ ? bounds_.top() : bounds_.left()));
+    const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, wipeStart()));
     for (std::size_t i = 0; i < cells_.size(); ++i)
-        glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity, vertical_);
+        glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity, vertical_, rightToLeft_);
 }
 
 void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
@@ -190,6 +190,11 @@ void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingSc
     });
 }
 
+float PreparedWipeGroup::wipeStart() const {
+    if (vertical_) return bounds_.top();
+    return rightToLeft_ ? bounds_.right() : bounds_.left();
+}
+
 float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {
     float edge = startEdge;
     for (const auto& cell : cells_) {
@@ -200,7 +205,8 @@ float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {
         const float endpoint = cell.wipePoints.empty() ? 1.f : cell.wipePoints.back().position;
         const float low = vertical_ ? cell.top : cell.left;
         const float high = vertical_ ? cell.bottom : cell.right;
-        edge = low + (high - low) * (progress * endpoint);
+        const float width = (high - low) * (progress * endpoint);
+        edge = rightToLeft_ ? high - width : low + width;
         if (timeMs <= cell.endMs) break;
     }
     return edge;
@@ -247,10 +253,11 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
 void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX,
                              float opacity, float viewportHeight, const SkMatrix& pose, SkPoint ownerPivot) const {
     if (bounds_.isEmpty() || opacity <= 0) return;
-    const float startEdge = vertical_ ? bounds_.top() : bounds_.left();
+    const float startEdge = wipeStart();
     const float edge = frontAt(timeMs, startEdge);
+    const bool revealed = rightToLeft_ ? edge < startEdge : edge > startEdge;
     if (scale.active) {
-        drawSinging(canvas, timeMs, scale, originX, edge > startEdge, opacity, viewportHeight);
+        drawSinging(canvas, timeMs, scale, originX, revealed, opacity, viewportHeight);
         return;
     }
     SkPaint paint;
@@ -279,8 +286,9 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     const bool before = std::all_of(cells_.begin(), cells_.end(), [&](const auto& c) { return timeMs <= c.startMs; });
     const bool complete = lineWipeComplete(cells_, timeMs);
     const auto clip = [&](bool after) {
-        const float low = after ? -1e6f : edge;
-        const float high = after ? edge : 1e6f;
+        const bool clipLow = after != rightToLeft_;
+        const float low = clipLow ? -1e6f : edge;
+        const float high = clipLow ? edge : 1e6f;
         clipViewportWipe(canvas, vertical_ ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)
                                            : SkRect::MakeLTRB(low, -1e6f, high, 1e6f),
                          viewportHeight, antialiasClip_);
@@ -292,7 +300,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
         // through that endpoint (or uncut if the whole group is complete).
         // This singular boundary intentionally preserves that alpha overlap.
         if (noWipe_ && cells_.front().startMs == cells_.front().endMs
-            && timeMs == cells_.front().startMs && edge > startEdge) {
+            && timeMs == cells_.front().startMs && revealed) {
             canvas.save();
             if (!complete)
                 clip(true);
@@ -307,7 +315,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     clip(false);
     draw(false);
     canvas.restore();
-    if (edge > startEdge) {
+    if (revealed) {
         canvas.save();
         clip(true);
         draw(true);

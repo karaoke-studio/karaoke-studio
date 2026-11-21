@@ -144,6 +144,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     std::vector<::subtitle::skia::ResolvedRubyGroup> groups;
     const auto& line = scene.lines[lineIndex];
     const bool vertical = scene.lineStyles[lineIndex].vertical;
+    const bool rtl = scene.lineStyles[lineIndex].rightToLeft;
     const auto features = ir.value("required_features").toArray();
     const bool allowOutlines = features.contains("p06_ruby_solid_outline");
     const bool fadeOnly = (line.entryAnimation == "none" || line.entryAnimation == "fade")
@@ -157,7 +158,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && line.karaokeAnimation == "none" && (staticLine || verticalFade)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowShadow = features.contains("p06_ruby_shadow")
-        && (!vertical || allowVerticalDecoration) && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
+        && !rtl && (!vertical || allowVerticalDecoration) && line.karaokeAnimation != "no_wipe" && !line.zoomPulseEnabled
         && (staticLine || verticalFade);
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
@@ -208,6 +209,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
+        if (rtl && lower) throw BackendError("Skia 右至左单元排列暂不支持下方注音组合");
         const bool animatedOwner = transition != RubyTransition::None;
         const bool spinComposition = transition == RubyTransition::Spin;
         const bool affineComposition = transition == RubyTransition::Affine;
@@ -461,7 +463,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
-                          roleGlow && !lower ? role : -1, std::move(glowGradients)});
+                          roleGlow && !lower ? role : -1, std::move(glowGradients), rtl});
     }
     return groups;
 }

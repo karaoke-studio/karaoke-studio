@@ -54,6 +54,7 @@ struct ResolvedRubyGroup {
     std::array<ImageFill, 2> fillImages;
     int glowStyle = -1;
     GlowGradients glowGradients;
+    bool rightToLeft = false;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
