@@ -717,6 +717,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['skia_layout']['character_fade_schema'] = 1
     _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines)
     role_glow = any(feature in ir['required_features'] for feature in ('p06_role_static_glow', 'p06_ruby_role_glow'))
+    if 'p07_line_fade' in ir['required_features'] and (role_glow or any(
+            feature in ir['required_features'] for feature in ('p06_role_solid_outlines', 'p06_role_body_paints'))):
+        ir['required_features'].append('p07_role_line_fade')
     if 'p07_singing_scale' in ir['required_features'] and (
             role_glow or 'p06_static_glow' in ir['required_features'] or 'p06_ruby_glow' in ir['required_features']):
         ir['required_features'].append('p07_singing_glow')

@@ -107,6 +107,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_lower_ruby_glow",
         "p06_lower_ruby_shadow",
         "p07_line_fade",
+        "p07_role_line_fade",
         "p07_line_motion",
         "p07_ruby_line_animation",
         "p07_lower_ruby_decoration_line_animation",
@@ -616,8 +617,15 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 二重实色描边布局版本无效");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
-    if (features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints") || roleStaticGlow
-        || rubyRoleGlow) {
+    const bool roleLayers = features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints")
+        || roleStaticGlow || rubyRoleGlow;
+    const bool roleLineFade = features.contains("p07_role_line_fade");
+    if (roleLineFade != (roleLayers && features.contains("p07_line_fade"))
+        || (roleLineFade && (roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow")
+            || features.contains("p06_ruby_glow") || features.contains("p05_lower_ruby")
+            || features.contains("p07_singing_scale"))))
+        throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字及无光晕的正文和上注音");
+    if (roleLayers) {
         static const QJsonArray allowed{
             "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
             "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
@@ -628,7 +636,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines",
             "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
             "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale",
-            "p07_singing_glow", "p07_role_singing_glow"
+            "p07_singing_glow", "p07_role_singing_glow",
+            "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
         };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))

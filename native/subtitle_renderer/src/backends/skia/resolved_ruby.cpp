@@ -147,6 +147,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.entryAnimation == "none" || line.entryAnimation == "fade")
         && (line.exitAnimation == "none" || line.exitAnimation == "fade");
     const bool staticLine = line.entryAnimation == "none" && line.exitAnimation == "none";
+    const bool roleLineFade = features.contains("p07_role_line_fade")
+        && (line.entryAnimation == "none" || line.entryAnimation == "fade")
+        && (line.exitAnimation == "none" || line.exitAnimation == "fade");
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
         && line.karaokeAnimation == "none" && (staticLine || verticalFade)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
@@ -256,7 +259,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool gradientFill = !lower && (rubyFillGradientMode(paint.rubyBeforeFillPaint)
                                            || rubyFillGradientMode(paint.rubyAfterFillPaint));
         const bool imageFill = !lower && (paint.rubyBeforeFillPaint.mode == "image" || paint.rubyAfterFillPaint.mode == "image");
-        const bool allowFillPaint = !vertical && staticLine && lowerWipe && line.karaokeAnimation != "no_wipe"
+        const bool allowFillPaint = !vertical && (staticLine || roleLineFade) && lowerWipe && line.karaokeAnimation != "no_wipe"
             && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
             && line.bursts.empty();
         const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints")

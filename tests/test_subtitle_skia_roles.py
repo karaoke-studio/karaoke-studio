@@ -299,6 +299,53 @@ def test_latin_outline_with_role_paints_and_upper_glow_matches_actual_gpu(binary
     assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 2800, 3500, 3900, 4499))
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, tmp_path, target):
+    from test_subtitle_skia_line_fade import premultiplied
+    from test_subtitle_skia_ruby_groups import configure
+
+    track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    track = replace(track, rubies=[RubyAnnotation(kanji='A字', reading='AA', pos_start_ms=200, pos_end_ms=600)])
+    fade = replace(style, entry_anim='fade', entry_lead_ms=200, exit_anim='fade', exit_fade_ms=400)
+    ir = ir_for(binary, (track, fade), dpr=1.5)
+    opaque = ir_for(binary, (track, style), dpr=1.5)
+    features = set(ir['required_features'])
+    assert {'p06_role_body_paints', 'p06_ruby_role_paints', 'p07_role_line_fade'} <= features
+    line, = ir['track']['lines']
+    entry, exit_ = line['entry_duration_ms'], line['exit_duration_ms']
+    assert entry > 0 and exit_ > 0
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start + entry // 2, start + entry, end - exit_ // 2, end - 1]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_role_line_fade')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='角色画笔整行淡化'):
+            configure(process, bad)
+        replay, _ = collect(process, list(reversed(times)), generation=2)
+        configure(process, opaque)
+        full, _ = collect(process, times, generation=3)
+    for actual, again in zip(frames, reversed(replay), strict=True):
+        np.testing.assert_array_equal(actual, again)
+    opacity = [0.75, 1.0, 0.25, 1.0 / exit_**2]
+    for time_ms, actual, baseline, strength in zip(times, frames, full, opacity, strict=True):
+        assert baseline[..., 3].max() == 255
+        difference = np.abs(premultiplied(actual) - premultiplied(baseline) * strength)
+        assert difference.max() <= 2, (time_ms, strength, difference.max())
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction', ['gradient_horizontal', 'gradient_vertical'])
+def test_role_line_fade_with_body_and_ruby_paints_matches_actual_gpu(binary, tmp_path, direction):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = ruby_role_paints_case(tmp_path, direction, True)
+    style = replace(case.style, entry_anim='fade', entry_lead_ms=600, exit_anim='fade', exit_fade_ms=600)
+    case = replace(case, case_id=f'role_paint_line_fade_{direction}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (300, 420, 650, 900, 1950, 3900, 5100, 5450, 5500))
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 def test_ruby_role_glow_with_static_title_and_extra_track(binary, application, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases

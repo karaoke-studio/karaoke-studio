@@ -4,11 +4,31 @@
 #include "stroke_flash.h"
 #include "wipe_front.h"
 #include "include/core/SkCanvas.h"
+#include "include/core/SkColorFilter.h"
 #include "include/core/SkPaint.h"
+#include "include/effects/SkRuntimeEffect.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <stdexcept>
 
 namespace subtitle::skia {
+namespace {
+sk_sp<SkColorFilter> roleFadeFilter(float opacity) {
+    static const auto compiled = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
+        uniform float opacityByte;
+        float4 main(float4 color) {
+            float4 stored = floor(color * 255.0 + 0.5);
+            return floor(stored * (opacityByte / 255.0) + 0.5) / 255.0;
+        }
+    )"));
+    if (!compiled.effect) throw std::runtime_error("Skia 角色整行淡化滤镜无法编译");
+    SkRuntimeColorFilterBuilder builder(compiled.effect);
+    builder.uniform("opacityByte") = std::round(opacity * 255.f);
+    return builder.makeColorFilter();
+}
+}
+
 void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool textVisible, float titleOpacity,
                              int mediaTimeMs) const {
     SkPaint paint;
@@ -44,7 +64,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         // Keep the same bounded destination-format layer at every opacity
         // for vertical decoration. Raster edge coverage depends on the target
         // origin when translucent outlines are composited over the shadow.
-        if (!line.vertical && (!line.glow.empty() || line.hasRubyGlow())) {
+        if (!line.roleBodyPaints.empty()) {
+            // The GPU reference composites the role paint stack into bytes,
+            // then applies the 8-bit group opacity to its premultiplied pixels.
+            SkPaint fade;
+            fade.setColorFilter(roleFadeFilter(animation.opacity));
+            canvas.saveLayer(bounds, &fade);
+        } else if (!line.vertical && (!line.glow.empty() || line.hasRubyGlow())) {
             // Keep the halo coverage and the line opacity at float precision
             // until the composed line is written to the 8-bit output.
             SkPaint fade;
