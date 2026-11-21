@@ -172,6 +172,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_same_energy_pair",
         "p07_ruby_particle_entry",
         "p07_ruby_particle_entry_exit",
+        "p07_ruby_petal_entry_flame_singing",
         "p08_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",
@@ -248,6 +249,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 拼接入场与消散退场缺少粒子能力");
     if (features.contains("p07_ruby_particle_entry_exit") && !features.contains("p07_ruby_particle_entry"))
         throw BackendError("Skia 同类无装饰粒子出入场缺少粒子能力");
+    if (features.contains("p07_ruby_petal_entry_flame_singing") && !features.contains("p07_ruby_particle_entry"))
+        throw BackendError("Skia 花瓣入场与唱字火焰缺少粒子入场能力");
     if (ir.contains("required_features") && !ir.value("required_features").isArray())
         throw BackendError("Skia IR: required_features must be an array");
     if (ir.contains("skia_extra_sources") || features.contains("p08_multiple_sources")

@@ -321,6 +321,46 @@ def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, reading, target):
+    track, style = reading
+    style = replace(style, entry_anim='petal', entry_lead_ms=600, exit_anim='none', karaoke_anim='utopia',
+                    sing_fx='flame', anim_fx_speed_pct=50, fx_particle_speed_pct=200,
+                    decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    ir = upper_ir(binary, (track, style), 1)
+    petals = upper_ir(binary, (track, replace(style, sing_fx='none')), 1)
+    flames = upper_ir(binary, (track, replace(style, entry_anim='none')), 1)
+    source, = ir['track']['lines']
+    bursts = source['fx_bursts']
+    petal_bursts = [burst for burst in bursts if burst['kind'] == 'petal']
+    flame_bursts = [burst for burst in bursts if burst['kind'] != 'petal']
+    assert petal_bursts and flame_bursts
+    for mixed, separate in [(petal_bursts, petals), (flame_bursts, flames)]:
+        standalone = separate['track']['lines'][0]['fx_bursts']
+        for after, before in zip(mixed, standalone, strict=True):
+            assert {key: value for key, value in after.items() if key != 'color_id'} == {
+                key: value for key, value in before.items() if key != 'color_id'}
+            assert ir['fx_color_table'][after['color_id']] == separate['fx_color_table'][before['color_id']]
+    feature = 'p07_ruby_petal_entry_flame_singing'
+    assert feature in ir['required_features']
+    missing = copy.deepcopy(ir)
+    missing['required_features'].remove(feature)
+    bad_sweep = copy.deepcopy(ir)
+    flame = next(burst for burst in bad_sweep['track']['lines'][0]['fx_bursts'] if burst['kind'] == 'flame')
+    flame['sweep'] = 1
+    times = [source['display_start_ms'] + 180, flame['start_ms'] + 100]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        for invalid in (missing, bad_sweep):
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_ruby_assembly_pair_owns_both_phases_and_replays(binary, reading, target):
     from test_subtitle_skia_static_glow import glowing_ruby
 
@@ -429,6 +469,21 @@ def test_ruby_utopia_exit_uses_last_base_unit(binary, reading, target, glow):
     assert frames[0].any() and frames[1].any() and not frames[2].any()
     assert not np.array_equal(frames[0], frames[1])
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('speed', [50, 100, 200])
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_ruby_petal_entry_and_singing_flame_match_actual_gpu(binary, application, tmp_path, speed, karaoke):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'entry_petal')
+    style = replace(case.style, karaoke_anim=karaoke, sing_fx='flame',
+                    anim_fx_speed_pct=speed, fx_particle_speed_pct=speed,
+                    decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    times = (100, 240, 299, 301, 450, 650, 900, 1000, 1200, 1300, 1500, 1750, 2600, 3700, 4500, 5500, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

@@ -29,6 +29,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool scanlineWithSinging = shapedSinging || bandSinging;
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit, features);
+    const bool petalWithFlame = composedTransition && entry == "petal" && exit.isEmpty()
+        && features.contains("p07_ruby_petal_entry_flame_singing");
     const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
@@ -52,16 +54,18 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             || (version >= 10 && animated && fx.kind == "sparkle");
         const bool assemblySprite = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
-        const bool validSweep = animated
-            ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
-                || (!exit.isEmpty() && fx.sweep == exitSweep && isSkiaTransitionLayer(exit, fx.kind, false))
-            : !falling || fx.sweep == 0;
         // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
         const bool impact = version >= 11 && animated
             && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
                                             || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
+        const int singingFlameSweep = fx.kind == "flame" || fx.kind == "flame_alt" ? 2 : 0;
+        const bool validSweep = animated
+            ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
+                || (!exit.isEmpty() && fx.sweep == exitSweep && isSkiaTransitionLayer(exit, fx.kind, false))
+                || (petalWithFlame && flame && fx.sweep == singingFlameSweep)
+            : !falling || fx.sweep == 0;
         const bool scanline = version >= 7 && fx.kind == "scanline";
         const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke"
             || (impact && fx.kind == "shockwave");

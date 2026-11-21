@@ -398,6 +398,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     same_energy_pair = False
     particle_entry_lines = set()
     repeated_particle_pair = False
+    petal_entry_with_flame = False
     if geometry.ruby is not None:
         for index, item in enumerate(plan.lines):
             source = ir['track']['lines'][item.track_index]
@@ -406,8 +407,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     or _uses_decoration(item.layout_style, 'shadow')):
                 continue
             if source.get('fx_bursts'):
-                if len(plan.lines) == 1 and item.layout_style.sing_fx == 'none':
-                    entry, leave = source.get('entry_anim'), source.get('exit_anim')
+                entry, leave = source.get('entry_anim'), source.get('exit_anim')
+                with_flame = (entry == 'petal' and leave == 'none' and item.layout_style.sing_fx == 'flame')
+                if len(plan.lines) == 1 and (item.layout_style.sing_fx == 'none' or with_flame):
                     both_phases = source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0
                     if both_phases and (entry, leave) == ('assemble_in', 'dissolve_out'):
                         assembly_lines.add(index)
@@ -431,6 +433,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= matching
+                        petal_entry_with_flame |= with_flame
                     if effect in ENERGY_TRANSITIONS or (entry == 'none' and effect in RUBY_PARTICLE_EXITS):
                         particle_fade_lines.add(index)
                         if effect == 'flame':
@@ -716,6 +719,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_entry')
         if repeated_particle_pair:
             ir['required_features'].append('p07_ruby_particle_entry_exit')
+        if petal_entry_with_flame:
+            ir['required_features'].append('p07_ruby_petal_entry_flame_singing')
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
         ir['skia_layout']['horizontal_rtl_schema'] = 1

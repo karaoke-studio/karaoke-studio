@@ -22,7 +22,8 @@ _TRANSITION_LAYERS = {
     ('lightning', True): {'lightning', 'lightning_glow'} | _IMPACT,
     ('lightning', False): {'lightning', 'lightning_glow'} | _IMPACT,
 }
-_ENERGY_PARTICLES = {'lightning', 'lightning_glow', 'flame', 'flame_alt', 'flame_glow', 'smoke', 'ember', 'spark'}
+_FLAME_SINGING_SWEEPS = {'flame': 2, 'flame_alt': 2, 'flame_glow': 0, 'smoke': 0, 'ember': 0, 'spark': 0}
+_ENERGY_PARTICLES = {'lightning', 'lightning_glow'} | _FLAME_SINGING_SWEEPS.keys()
 _BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke', 'shockwave'}
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
@@ -47,6 +48,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
         annotated = bool(track.rubies)
+        petal_with_flame = (annotated and entry == 'petal' and exit_ == 'none' and look.sing_fx == 'flame'
+                           and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         singing_under_shape = (annotated and band and not animated and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         singing_under_band = (annotated and band and not animated and look.scanline_shape == 'band'
@@ -60,7 +63,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (source.get('karaoke_anim') != 'none' and not scaled_singing)
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
-                or (animated and (len(plan.lines) != 1 or band or look.sing_fx != 'none'))
+                or (animated and (len(plan.lines) != 1 or band or (look.sing_fx != 'none' and not petal_with_flame)))
                 or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
                 or (not annotated and (look.stroke_width_px > 0
                     or (look.stroke2_enabled and look.stroke2_width_px > 0)))
@@ -79,7 +82,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             if animated:
                 sweep = burst['sweep']
                 if not ((entry_kind and sweep == entry_sweep and kind in _transition_layers(entry_kind, True))
-                        or (exit_kind and sweep == exit_sweep and kind in _transition_layers(exit_kind, False))):
+                        or (exit_kind and sweep == exit_sweep and kind in _transition_layers(exit_kind, False))
+                        or (petal_with_flame and sweep == _FLAME_SINGING_SWEEPS.get(kind))):
                     raise ValueError('Skia 粒子出入场暂不支持与唱字粒子同场')
             elif kind in {'fireball', 'flash', 'shockwave', 'ash'}:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
