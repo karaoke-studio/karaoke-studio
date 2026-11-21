@@ -744,6 +744,21 @@ panel.set_style(style)
 panel.set_track(TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
     end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)]))
 window.show()
+if '--require-hardware' in sys.argv:
+    wait_for(lambda: errors or panel.skia_quick_target_established)
+    if panel.skia_quick_target_established:
+        print('real hardware available', flush=True)
+    else:
+        wait_for(lambda: panel.current_subtitle_frame() is not None)
+        assert not panel.uses_skia_quick_preview
+        assert panel.canvas._async_renderer.current_backend_mode == 'cpu'
+        assert 'Skia Raster CPU' in panel.canvas.render_backend_label()
+        assert errors[0].startswith('Skia 直画设备不可用'), errors
+        print('Skia Raster fallback verified', flush=True)
+    window.close()
+    owner.close()
+    player.shutdown()
+    sys.exit(0)
 wait_for(lambda: panel.skia_quick_target_established and frames)
 assert panel.current_subtitle_frame() is None
 transport.set_time(1350)
@@ -782,14 +797,29 @@ print('floating preview verified', flush=True)
 """
 
 
-def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
+def run_floating_preview(qml_dir, *, require_hardware=False):
     binary = qml_dir.parent / ('krok_skia_subtitle_renderer.exe' if sys.platform == 'win32' else 'krok_skia_subtitle_renderer')
     env = desktop_environment() | {
         'KROK_SUBTITLE_RENDER_BACKEND': 'skia', 'KROK_SUBTITLE_SKIA_TARGET': 'gpu',
         'KROK_SUBTITLE_SKIA_DIRECT_PREVIEW': '1', 'KROK_SUBTITLE_GPU_PREVIEW': '1',
-        'KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE': '1' if sys.platform == 'win32' else '0',
+        'KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE': '1' if require_hardware or sys.platform == 'win32' else '0',
+        'KROK_SUBTITLE_SKIA_FALLBACK': 'raster',
         'KROK_SUBTITLE_SKIA_RENDERER': str(binary), 'QT_FORCE_STDERR_LOGGING': '1',
     }
-    result = subprocess.run([sys.executable, '-c', FLOATING_WINDOW], env=env, capture_output=True,
+    args = ['--require-hardware'] if require_hardware else []
+    result = subprocess.run([sys.executable, '-c', FLOATING_WINDOW, *args], env=env, capture_output=True,
                             text=True, encoding='utf-8', errors='replace', timeout=90)
-    assert result.returncode == 0 and 'floating preview verified' in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
+
+
+def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
+    assert 'floating preview verified' in run_floating_preview(qml_dir)
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Software Vulkan fallback on Linux')
+def test_floating_preview_uses_skia_raster_when_hardware_required(qml_dir):
+    output = run_floating_preview(qml_dir, require_hardware=True)
+    if 'real hardware available' in output:
+        pytest.skip('Needs a software Vulkan device')
+    assert 'Skia Raster fallback verified' in output, output

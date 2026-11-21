@@ -3171,6 +3171,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 直画计时器以最近实际提交时间计算剩余间隔，避免来源按约 16ms 推进时再次等待一个完整周期。清空歌词后，图片序列继续按同一传输时钟换帧。虚拟或软件设备名称不计为直画硬件。
 - Windows、X11 和 Wayland 最终矩阵各 **9 通过**，两份原生构建各通过 3 项 CTest。Windows 传输与控制器回归 **200 通过**，覆盖连续 60fps 请求只等待剩余时间及暂停 seek。日志为 `build/p09-paced-clock-final-*.log`。
+- WSL 软件 Vulkan 上要求真 GPU 后，现有浮窗拒绝直画设备，Skia sidecar 实际以 Raster CPU 上屏，且与允许软件 Vulkan 的直画用例在 X11、Wayland 各 **2 通过**。日志为 `build/p09-hardware-fallback-linux.log`。
 
 ## 15. 前期探针清理范围
 
