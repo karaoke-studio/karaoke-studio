@@ -56,13 +56,13 @@ def fallback_requests(track, style):
 
 def scene_fallback_requests(track, style, extra_tracks=()):
     from krok_helper.subtitle_render.engine.render.render_ir import titles_to_ir
-    from krok_helper.subtitle_render.engine.render.skia_title_ir import solid_title_style, title_rows
+    from krok_helper.subtitle_render.engine.render.skia_title_ir import title_style, title_rows
     requests = fallback_requests(track, style)
     for source in extra_tracks or ():
         for slot, texts in fallback_requests(source, style).items():
             requests[slot].update(texts)
     for title in titles_to_ir(track, style):
-        appearance = solid_title_style(title)
+        appearance = title_style(title)
         if appearance is None:
             continue
         for row in title_rows(title):

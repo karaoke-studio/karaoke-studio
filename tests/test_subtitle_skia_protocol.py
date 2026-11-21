@@ -201,6 +201,51 @@ def test_title_roles_match_actual_d2d_gpu(binary):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+def painted_title(tmp_path, mode):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style = sample()
+    track = replace(track, meta=replace(track.meta, offset_ms=5000))
+    if mode == 'image':
+        texture = write_png(tmp_path / 'title-texture.png', pattern('transparent'))
+        fill = PaintFill(mode='image', image_path=str(texture), color='#483CE1', image_scale_pct=135)
+    else:
+        fill = PaintFill(mode=mode, start_color='#F83408', end_color='#08A3F8')
+    title = replace(solid_title(style), text_template='Skia\nRenderer', anchor='center', fill=fill)
+    return track, replace(style, title_overlays=[title], custom_style_schemes={})
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('mode', ['gradient_horizontal', 'image'])
+def test_title_paints_keep_each_row_domain_and_replay(binary, tmp_path, target, mode):
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = painted_title(tmp_path, mode)
+    ir = ir_for(binary, (track, style))
+    source = ir['skia_titles'][0]['source']
+    assert ('p06_image_fill' if mode == 'image' else 'p06_body_gradient') in source['required_features']
+    if mode != 'image':
+        first, second = [row['body_gradient_bounds'] for row in source['skia_layout']['lines']]
+        assert first[2] - first[0] < second[2] - second[0] and first[3] < second[1]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [400, 500, 1400, 1000, 500])
+    assert 0 < frames[0][..., 3].sum() < frames[1][..., 3].sum()
+    assert not frames[3].any() and np.array_equal(frames[1], frames[2]) and np.array_equal(frames[1], frames[4])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('mode', ['gradient_horizontal', 'gradient_vertical', 'image'])
+def test_title_paints_match_actual_d2d_gpu(binary, tmp_path, mode):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = painted_title(tmp_path, mode)
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id=f'title_paint_{mode}'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def vector_guide_title():
     track, style = sample()
     track = replace(track, meta=replace(track.meta, offset_ms=5000))

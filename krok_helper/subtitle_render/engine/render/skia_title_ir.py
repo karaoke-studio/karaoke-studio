@@ -3,7 +3,8 @@
 from functools import partial
 
 from ...domain.models import GuideSymbol, Style, SubtitleStyleScheme, TimingChar, TimingLine, TimingTrack, title_line_units
-from ...domain.paint import KaraokeColorState, KaraokeColors, PaintFill
+from ...domain.paint import KaraokeColorState, KaraokeColors
+from ...serialization.paint import paint_fill_from_dict
 from ...serialization.timing import guide_symbol_from_dict
 from ..layout.line.skia_placement import LinePosition
 
@@ -45,18 +46,21 @@ def _title_position(local, item, measured, width, height, *, title, row_count):
 
 
 def _title_color(title):
-    return KaraokeColorState(text=PaintFill(color=title['fill']['color']),
-                              stroke=PaintFill(color=title['stroke']['color']),
-                              stroke2=PaintFill(color=title['stroke2']['color']),
-                              shadow=PaintFill(color=title['shadow']['color']))
+    return KaraokeColorState(text=paint_fill_from_dict(title['fill']),
+                             stroke=paint_fill_from_dict(title['stroke']),
+                             stroke2=paint_fill_from_dict(title['stroke2']),
+                             shadow=paint_fill_from_dict(title['shadow']))
 
 
-def solid_title_style(title):
+def title_style(title):
     roles = title['role_styles']
-    if (any(paint[part]['mode'] != 'solid' for paint in (title, *roles.values())
-                   for part in ('fill', 'stroke', 'stroke2', 'shadow'))):
+    paints = (title, *roles.values())
+    if any(paint['shadow']['mode'] != 'solid' for paint in paints):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
+    textured = any(paint[layer]['mode'] != 'solid' for paint in paints for layer in ('fill', 'stroke', 'stroke2'))
+    if textured and (roles or guides or title['decoration_kind'] != 'none'):
+        return None
     if guides and (roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
         return None
     if roles and any(paint['stroke_width_px'] or paint['stroke2_width_px'] or paint['decoration_kind'] != 'none'
@@ -141,7 +145,7 @@ def build_title_sources(titles, build_source, **kwargs):
         windows = [window for window in title['windows'] if window[0] < window[1]]
         if not windows:
             continue
-        style = solid_title_style(title)
+        style = title_style(title)
         if style is None:
             raise ValueError('Skia 标题包含尚未支持的外观、角色组合或导唱符')
         rows = list(title_rows(title))
