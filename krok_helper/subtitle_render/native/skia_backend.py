@@ -36,6 +36,12 @@ class SkiaSelection:
         )
 
 
+class SkiaGpuDeviceError(NativeRendererError):
+    def __init__(self, message: str, *, raster_allowed: bool):
+        super().__init__(message)
+        self.raster_allowed = raster_allowed
+
+
 class SkiaRendererProcess(SkiaSidecarProcess):
     def __init__(self, executable_path=None, *, selection: SkiaSelection | None = None, on_backend_info=None, **kwargs) -> None:
         self._posix_rings = OwnedPosixRings()
@@ -217,8 +223,17 @@ class SkiaRendererProcess(SkiaSidecarProcess):
                               f"回退原因={info.get('fallback_reason') or '无'}")
         return out
 
+    def _expect_ok(self, response):
+        if (not response.get('ok') and response.get('error_code') == 'skia_gpu_device'
+                and self.skia_info.get('execution_target') == 'gpu'):
+            raise SkiaGpuDeviceError(str(response.get('error') or 'Skia GPU 设备故障'),
+                                     raster_allowed=self.selection.fallback == 'raster')
+        return super()._expect_ok(response)
+
     def read_event(self):
         event = super().read_event()
+        if event.get('error_code') == 'skia_gpu_device':
+            self._expect_ok(event)
         if event.get("event") == "frame_ready" and event.get("payload") == "shared_memory":
             alpha = {"rgba8888": "straight", "bgra8888_premultiplied": "premultiplied"}.get(event.get("pixel_format"))
             if alpha is None or event.get("alpha_type") != alpha or event.get("origin") != "top_left" or event.get("color_space") != "srgb":

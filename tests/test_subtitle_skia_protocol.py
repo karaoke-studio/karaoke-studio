@@ -783,19 +783,24 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
         canvas.deleteLater()
 
 
+def export_ffmpeg(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        import imageio_ffmpeg
+        tools = tmp_path / "ffmpeg-bin"
+        tools.mkdir(exist_ok=True)
+        ffmpeg = str(tools / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg"))
+        shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), ffmpeg)
+    return Path(ffmpeg)
+
+
 @pytest.mark.parametrize("gpu,missing_loader", [(True, False), (False, False), (True, True)])
 def test_product_export_short_mp4_uses_skia(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader,
                                             *, side_track=None):
     from krok_helper.subtitle_render.engine import renderer
     from krok_helper.subtitle_render.engine.export.render_job import RenderJob
     from krok_helper.subtitle_render.domain.background import BackgroundSource
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        import imageio_ffmpeg
-        tools = tmp_path / "ffmpeg-bin"
-        tools.mkdir()
-        ffmpeg = str(tools / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg"))
-        shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), ffmpeg)
+    ffmpeg = export_ffmpeg(tmp_path)
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
     if missing_loader:
         if sys.platform == "darwin": pytest.skip("Vulkan loader failure injection")
@@ -866,6 +871,84 @@ def test_skia_export_pipe_uses_exact_frame_times(binary, monkeypatch, tmp_path, 
         reference, _ = collect(process, times)
     assert len(set(committed)) > 3
     assert [committed[index] for index in indices] == [sha256(frame).digest() for frame in reference]
+
+
+def transparent_sequence_job(tmp_path, project, *, gpu):
+    from krok_helper.subtitle_render.engine.export.render_job import OUTPUT_FORMAT_PNG_TRANSPARENT, RenderJob
+
+    track, style = project
+    return RenderJob(track, style, tmp_path / 'unused', tmp_path / '字幕', width=320, height=180,
+                     fps=60, duration_ms=1200, include_audio=False, gpu_export_enabled=gpu,
+                     output_format=OUTPUT_FORMAT_PNG_TRANSPARENT)
+
+
+@pytest.mark.parametrize('policy,failure', [('raster', 'skia_gpu_device'), ('none', 'skia_gpu_device'), ('raster', 'invalid_scene')])
+def test_product_export_retry_only_for_gpu_device_failure(binary, monkeypatch, tmp_path, supported_project, policy, failure):
+    from krok_helper.errors import ProcessingError
+    from krok_helper.subtitle_render.engine.renderer import render_subtitle_video
+
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_TARGET', 'gpu')
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_FALLBACK', policy)
+    ffmpeg = export_ffmpeg(tmp_path)
+    job = transparent_sequence_job(tmp_path, supported_project, gpu=True)
+    progress, processes, logs = [], [], []
+    live_event = NativeRendererProcess.read_event
+    injected = False
+
+    def next_event(process):
+        nonlocal injected
+        event = live_event(process)
+        if (isinstance(process, SkiaRendererProcess) and not injected and progress == list(range(1, 13))
+                and process.skia_info.get('execution_target') == 'gpu' and event.get('event') == 'frame_ready'):
+            injected = True
+            return {'ok': False, 'event': 'range_done', 'generation': event['generation'],
+                    'error_code': failure, 'error': 'synthetic failure after 12 GPU frames'}
+        return event
+
+    monkeypatch.setattr(NativeRendererProcess, 'read_event', next_event)
+    def render(job):
+        return render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent, logger=logs.append,
+            on_progress=lambda done, total: progress.append(done), on_process_started=processes.append)
+
+    if policy == 'raster' and failure == 'skia_gpu_device':
+        output = render(job)
+        assert progress == [*range(1, 13), *range(1, 73)]
+        assert processes[1::2] == [None, None] and len(processes) == 4
+        assert all(process.poll() is not None for process in processes[::2])
+        assert any('Skia GPU 导出设备故障' in line for line in logs)
+        assert any('Skia 字幕后端：Raster CPU' in line for line in logs)
+        reference = render(replace(job, gpu_export_enabled=False, output_path=tmp_path / 'CPU参考'))
+        actual = sorted(output.glob('*.png'))
+        expected = sorted(reference.glob('*.png'))
+        assert len(actual) == len(expected) == 72
+        assert [path.read_bytes() for path in actual] == [path.read_bytes() for path in expected]
+    else:
+        with pytest.raises(ProcessingError, match='synthetic failure'):
+            render(job)
+        assert len(processes) == 2 and processes[-1] is None and processes[0].poll() is not None
+        assert progress == list(range(1, 13))
+        assert not job.output_path.exists()
+    assert injected
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_product_export_cancel_removes_partial_pngs(binary, monkeypatch, tmp_path, supported_project, target):
+    from krok_helper.errors import ExportCancelled
+    from krok_helper.subtitle_render.engine.renderer import render_subtitle_video
+
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_TARGET', target)
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_FALLBACK', 'none')
+    ffmpeg = export_ffmpeg(tmp_path)
+    job = transparent_sequence_job(tmp_path, supported_project, gpu=target == 'gpu')
+    progress, processes = [], []
+    with pytest.raises(ExportCancelled):
+        render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent, should_cancel=lambda: len(progress) >= 12,
+            on_progress=lambda done, total: progress.append(done), on_process_started=processes.append)
+    assert progress == list(range(1, 13))
+    assert len(processes) == 2 and processes[-1] is None and processes[0].poll() is not None
+    assert not job.output_path.exists()
 
 
 def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monkeypatch, tmp_path, supported_project):

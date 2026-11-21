@@ -361,6 +361,7 @@ def _render_subtitle_video_prepared(
         job = replace(job, style=resolved_style)
     logger = logger or (lambda _message: None)
     _validate_job(job)
+    source_job = job
     ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)
 
     roll_plan = _resolve_roll_plan(job)
@@ -383,7 +384,7 @@ def _render_subtitle_video_prepared(
     from krok_helper.subtitle_render.native.backend import skia_requested
     skia_active = skia_requested()
     if skia_active:
-        from krok_helper.subtitle_render.native.skia_backend import resolve_skia_renderer_path
+        from krok_helper.subtitle_render.native.skia_backend import SkiaGpuDeviceError, resolve_skia_renderer_path
     native_export_requested = skia_active or _native_export_requested(job)
     native_renderer_path = (resolve_skia_renderer_path() if skia_active else resolve_native_renderer_path()) if native_export_requested else None
     native_export_active = native_renderer_path is not None
@@ -525,6 +526,7 @@ def _render_subtitle_video_prepared(
 
     return_code: int | None = None
     hw_encoder_pipe_failure = False
+    retry_skia_raster_reason: str | None = None
     try:
         assert process.stdin is not None
         # 预扫（条带/多带）阶段可被取消，但取消后原实现仍会走完 Popen 并拉起
@@ -635,7 +637,10 @@ def _render_subtitle_video_prepared(
                 preview_image_path=preview_image_path,
                 preview_width=preview_width,
             )
-        raise ProcessingError(f"native 字幕渲染器导出失败: {exc}") from exc
+        if skia_active and isinstance(exc, SkiaGpuDeviceError) and exc.raster_allowed:
+            retry_skia_raster_reason = str(exc)
+        else:
+            raise ProcessingError(f"native 字幕渲染器导出失败: {exc}") from exc
     except (BrokenPipeError, OSError) as exc:
         terminate_process(process)
         _remove_incomplete_output(job, logger)
@@ -676,6 +681,16 @@ def _render_subtitle_video_prepared(
     if should_cancel is not None and should_cancel():
         _remove_incomplete_output(job, logger)
         raise ExportCancelled("已停止导出。")
+    if retry_skia_raster_reason is not None:
+        logger(f"Skia GPU 导出设备故障，使用 Skia Raster 从头重新导出。原因：{retry_skia_raster_reason}")
+        if monitor is not None:
+            monitor.clear_stall_action()
+            monitor.note_retry("Skia GPU 回退 Raster")
+        return _render_subtitle_video_prepared(
+            replace(source_job, gpu_export_enabled=False), ffmpeg_dir=ffmpeg_dir, logger=logger,
+            should_cancel=should_cancel, on_process_started=on_process_started, on_progress=on_progress,
+            preview_image_path=preview_image_path, preview_width=preview_width,
+        )
     retry_hw_encoder_with_cpu = hw_encoder_pipe_failure or (
         monitor is not None
         and monitor.stall_action == "restart_cpu"

@@ -110,8 +110,12 @@ ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
     out.bytes.resize(std::size_t(out.stride) * out.height);
     auto info = SkImageInfo::Make(out.width, out.height, kRGBA_8888_SkColorType,
                                   kUnpremul_SkAlphaType, SkColorSpace::MakeSRGB());
-    if (!impl_->surface->readPixels(info, out.bytes.data(), out.stride, 0, 0))
+    if (!impl_->surface->readPixels(info, out.bytes.data(), out.stride, 0, 0)) {
+#ifdef KROK_SKIA_GPU_ENABLED
+        if (impl_->gpu) throw ::subtitle::skia::GpuDeviceError("Skia GPU RGBA readback failed");
+#endif
         throw BackendError("Skia RGBA readback failed");
+    }
     result.renderMs = std::chrono::duration<double, std::milli>(rendered - begin).count();
     result.readbackMs = std::chrono::duration<double, std::milli>(Clock::now() - rendered).count();
     return result;

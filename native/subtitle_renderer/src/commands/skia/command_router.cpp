@@ -5,12 +5,20 @@
 #include "../../backends/skia/resolved_input.h"
 #include "../../scene/skia_ir_projection.h"
 #include "../../protocol/json_protocol.h"
+#include "gpu/gpu_session.h"
 #include <future>
 #include <QtCore/QJsonArray>
 
 namespace krok::subtitle::native::commands {
 using protocol::response;
 using protocol::writeJson;
+namespace {
+void addFailure(QJsonObject& reply, const std::exception& error) {
+    reply.insert("error", QString::fromUtf8(error.what()));
+    if (dynamic_cast<const ::subtitle::skia::GpuDeviceError*>(&error))
+        reply.insert("error_code", "skia_gpu_device");
+}
+}
 QJsonObject SkiaCommandRouter::info(RenderBackend& backend) const {
     const auto caps = backend.capabilities();
     return {{"backend", "skia"}, {"api", QString::fromStdString(caps.api)},
@@ -119,7 +127,7 @@ bool SkiaCommandRouter::dispatch(const QJsonObject& request) {
                 out.insert("shm_key", key);
                 if (result.error) {
                     try { std::rethrow_exception(result.error); }
-                    catch (const std::exception& e) { out.insert("error", QString::fromUtf8(e.what())); }
+                    catch (const std::exception& e) { addFailure(out, e); }
                 }
                 writeJson(out);
             });
@@ -135,7 +143,7 @@ bool SkiaCommandRouter::dispatch(const QJsonObject& request) {
         } else synchronous(request);
     } catch (const std::exception& e) {
         auto out = response(false, "error");
-        out.insert("error", QString::fromUtf8(e.what()));
+        addFailure(out, e);
         out.insert("cmd", cmd);
         writeJson(out);
     }

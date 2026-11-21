@@ -2,10 +2,16 @@
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkSurface.h"
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 class GrDirectContext;
 namespace subtitle::skia {
+class GpuDeviceError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 struct DeviceInfo {
     std::string api;
     std::string device;
