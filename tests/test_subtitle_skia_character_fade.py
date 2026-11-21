@@ -386,14 +386,22 @@ def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entr
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_undecorated_ruby_utopia_exit_uses_last_base_unit(binary, reading, target):
+@pytest.mark.parametrize('glow', [False, True])
+def test_ruby_utopia_exit_uses_last_base_unit(binary, reading, target, glow):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
     track, style = reading
+    if glow:
+        track, style = glowing_ruby(reading, 'independent')
+    ruby_decoration = 'glow' if glow else 'none'
     style = replace(style, entry_anim='none', exit_anim='utopia', karaoke_anim='utopia', line_tail_ms=0,
                     decoration_kind='none', decoration_kind_before='none',
-                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+                    ruby_decoration_kind=ruby_decoration, ruby_decoration_kind_before=ruby_decoration)
     ir = upper_ir(binary, (track, style), 1)
     feature = 'p07_ruby_utopia_exit'
     assert feature in ir['required_features']
+    glow_feature = 'p07_ruby_utopia_exit_glow'
+    assert (glow_feature in ir['required_features']) == glow
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     assert group['utopia_exit_owner'] == 1
     assert 'fade_owner' not in group
@@ -406,6 +414,11 @@ def test_undecorated_ruby_utopia_exit_uses_last_base_unit(binary, reading, targe
         frames, _ = collect(process, times)
         with pytest.raises(NativeRendererError):
             configure(process, without_owner)
+        if glow:
+            missing = copy.deepcopy(ir)
+            missing['required_features'].remove(glow_feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, missing)
         replay, _ = collect(process, times[::-1], generation=2)
     assert frames[0].any() and frames[1].any() and not frames[2].any()
     assert not np.array_equal(frames[0], frames[1])
@@ -413,13 +426,16 @@ def test_undecorated_ruby_utopia_exit_uses_last_base_unit(binary, reading, targe
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_undecorated_ruby_utopia_exit_matches_actual_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('glow', [False, True])
+def test_ruby_utopia_exit_matches_actual_gpu(binary, application, tmp_path, glow):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_utopia')
+    ruby_decoration = 'glow' if glow else 'none'
     style = replace(case.style, decoration_kind='none', decoration_kind_before='none',
-                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
-    times = (299, 301, 1500, 3400, 3600, 3900, 4000, 4500, 4501, 4700, 4900, 5100, 5249, 5250, 5499, 5900)
+                    ruby_decoration_kind=ruby_decoration, ruby_decoration_kind_before=ruby_decoration)
+    times = (299, 301, 1500, 2800, 3000, 3200, 3400, 3600, 3900, 4000, 4500,
+             4501, 4700, 4900, 5100, 5249, 5250, 5499, 5900)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 

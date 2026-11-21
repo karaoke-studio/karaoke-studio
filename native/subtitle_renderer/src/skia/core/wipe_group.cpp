@@ -60,6 +60,13 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
     return transformedWipeEdge(originX, ink.left(), ink.right(), progress, cell.pivot.wipePad, rtl);
 }
 
+CharacterTransformState readingExit(const UtopiaTransition& exit, const ResolvedCell& cell, int time, int done) {
+    auto pivot = cell.pivot;
+    // The reading layout retains its visual center separately from its left edge.
+    pivot.layoutRight = 2 * pivot.layoutRight - pivot.layoutLeft;
+    return exit.at(time, 0, 0, 0, done, pivot, {}, cell.startMs, cell.endMs);
+}
+
 }
 
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
@@ -115,10 +122,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
         if (cell.path.isEmpty()) continue;
         CharacterTransformState transform;
         if (exit) {
-            auto pivot = cell.pivot;
-            // The final reading layout retains its visual center separately from its left edge.
-            pivot.layoutRight = 2 * pivot.layoutRight - pivot.layoutLeft;
-            transform = exit->at(timeMs, 0, 0, 0, followingDone, pivot, scale, cell.startMs, cell.endMs);
+            transform = readingExit(*exit, cell, timeMs, followingDone);
             exitOpacity = transform.opacity;
             if (exitOpacity <= 0.f) return;
         } else {
@@ -150,20 +154,28 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
 }
 
 void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
-                                      const SingingScale& scale, float originX, float opacity) const {
+                                      const SingingScale& scale, float originX, float opacity,
+                                      const UtopiaTransition* exit, int followingDone) const {
     if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
-    if (scale.active) {
+    if (scale.active || exit) {
         for (std::size_t index = 0; index < cells_.size(); ++index) {
             const auto& cell = cells_[index];
             const bool before = timeMs <= cell.startMs;
             const bool complete = !before && timeMs >= cell.endMs;
             if (cell.path.isEmpty() || (after ? before : complete)) continue;
-            const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+            const auto transform = exit ? readingExit(*exit, cell, timeMs, followingDone)
+                                        : scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+            if (transform.opacity <= 0.f) continue;
             std::optional<SkPath> posed;
             if (transform.transformed) posed = cell.path.makeTransform(transform.matrix);
-            const auto edge = before || complete ? std::nullopt : std::optional(singingFront(
-                cell, timeMs, originX, (posed ? *posed : cell.path).computeTightBounds(), rightToLeft_));
-            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr, opacity, false, rightToLeft_);
+            std::optional<float> edge;
+            if (!before && !complete) {
+                const auto ink = (posed ? *posed : cell.path).computeTightBounds();
+                edge = exit ? transformedWipeEdge(originX, ink.left(), ink.right(), 1.f, cell.pivot.wipePad)
+                            : singingFront(cell, timeMs, originX, ink, rightToLeft_);
+            }
+            glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr,
+                          opacity * transform.opacity, false, rightToLeft_);
         }
         return;
     }

@@ -346,13 +346,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Accumulate faint fill, outline and halo contributions before rounding
     // the final pixel to the destination's 8-bit channels.
     const bool hasGlow = !line.glow.empty() || line.hasRubyGlow();
-    const bool highPrecisionFade = (line.characterFade.active() || rubyGeometryPhase)
+    const bool utopiaExitGlow = line.utopiaTransition.leave && line.hasRubyGlow();
+    const bool highPrecisionFade = (line.characterFade.active() || rubyGeometryPhase || utopiaExitGlow)
         && (hasGlow || !line.rubyGroups.empty())
         && std::ranges::any_of(states, [](const State& state) {
             return state.transform.opacity > 0.f && state.transform.opacity < 1.f;
         });
     if (highPrecisionFade) {
-        const auto* bounds = line.characterFade.transforms() || rubyGeometryPhase ? nullptr : &line.paintBounds;
+        const auto* bounds = line.characterFade.transforms() || rubyGeometryPhase || utopiaExitGlow ? nullptr : &line.paintBounds;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
     // Tracking and wave restore static glow as each unit settles. Spin keeps
@@ -360,13 +361,19 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto drawRubyGlow = [&](const PreparedGlow& layer, const std::vector<std::size_t>& readings) {
         const bool after = layer.visible(true);
         if (!after && !layer.visible(false)) return;
-        const auto source = layer.createSource(canvas);
+        SkRect transitionBounds = SkRect::MakeEmpty();
+        if (line.utopiaTransition.leave)
+            for (const auto index : readings) transitionBounds.join(line.rubyGroups[index].inkBounds());
+        const auto source = layer.createSource(canvas, transitionBounds);
         if (source.surface) {
             for (const auto index : readings) {
                 const auto& group = line.rubyGroups[index];
+                const auto owner = group.utopiaExitOwner();
+                const int done = owner ? line.followingDone[*owner] : 0;
                 if (rubyPose(group).isIdentity())
                     group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
-                                         rubyScale, line.rubySingingOrigin, rubyOpacity(group));
+                                         rubyScale, line.rubySingingOrigin, rubyOpacity(group),
+                                         owner && tMs > done ? &line.utopiaTransition : nullptr, done);
             }
             layer.composite(canvas, source);
         }

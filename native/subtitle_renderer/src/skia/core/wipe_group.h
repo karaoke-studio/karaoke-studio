@@ -10,6 +10,7 @@ public:
                                std::optional<std::size_t> glowOffset = std::nullopt);
     std::optional<std::size_t> fadeOwner() const { return fadeOwner_; }
     std::optional<std::size_t> utopiaExitOwner() const { return utopiaExitOwner_; }
+    const SkRect& inkBounds() const { return bounds_; }
     bool spins() const { return spinPivot_.has_value(); }
     bool lower() const { return lower_; }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
@@ -19,7 +20,8 @@ public:
     void drawUtopiaExit(SkCanvas&, int timeMs, int followingDone, const UtopiaTransition&,
                         float originX, float viewportHeight) const;
     void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
-                        const SingingScale&, float originX, float opacity) const;
+                        const SingingScale&, float originX, float opacity,
+                        const UtopiaTransition* exit = nullptr, int followingDone = 0) const;
     void compositeSpinGlow(SkCanvas&, const PreparedGlow&, int timeMs, bool after, float opacity, const SkMatrix&) const;
     void drawScanline(SkCanvas&, const ScanlineBand&, int timeMs, const SingingScale&, float originX) const;
 private:

@@ -64,21 +64,29 @@ SkRect PreparedGlow::sourceBounds() const {
     return ink_.isEmpty() ? ink_ : ink_.makeOutset(margin, margin);
 }
 
-PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas) const {
+PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas, const SkRect& transitionBounds) const {
     auto source = sourceBounds();
     const float margin = 3.f * radius_ + 2.f;
     auto sampled = canvas.getLocalClipBounds().makeOutset(margin, margin);
+    std::optional<SkRect> outputClip;
+    if (!transitionBounds.isEmpty()) {
+        const float expansion = 3.f * radius_ + 16.f;
+        const float padding = expansion + strokeWidth_;
+        outputClip = transitionBounds.makeOutset(padding, padding);
+        source = outputClip->makeOutset(expansion, expansion);
+    }
     if (source.isEmpty() || !source.intersect(sampled)) return {};
-    return makeSource(canvas, source, false);
+    auto layer = makeSource(canvas, source, false);
+    layer.outputClip = outputClip;
+    return layer;
 }
 
 PreparedGlow::Source PreparedGlow::makeSource(SkCanvas& canvas, const SkRect& rectangle, bool canonical) const {
     const auto bounds = rectangle.roundOut();
     const auto colorSpace = canvas.imageInfo().refColorSpace();
-    auto target = canonical
-        ? SkSurfaces::Raster(SkImageInfo::Make(bounds.width(), bounds.height(), kRGBA_F16_SkColorType,
-                                              kPremul_SkAlphaType, colorSpace))
-        : canvas.makeSurface(SkImageInfo::MakeN32Premul(bounds.width(), bounds.height(), colorSpace));
+    const auto type = canonical ? kRGBA_F16_SkColorType : kN32_SkColorType;
+    const auto info = SkImageInfo::Make(bounds.width(), bounds.height(), type, kPremul_SkAlphaType, colorSpace);
+    auto target = canonical ? SkSurfaces::Raster(info) : canvas.makeSurface(info);
     if (!target) throw std::runtime_error("Skia 字幕光晕临时表面分配失败");
     auto& layer = *target->getCanvas();
     layer.clear(SK_ColorTRANSPARENT);
@@ -114,6 +122,8 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
 void PreparedGlow::composite(SkCanvas& canvas, const Source& source) const {
     auto image = source.surface->makeImageSnapshot();
     if (!image) throw std::runtime_error("Skia 字幕光晕临时表面无法取样");
+    SkAutoCanvasRestore restore(&canvas, source.outputClip.has_value());
+    if (source.outputClip) canvas.clipRect(*source.outputClip);
     SkPaint paint;
     for (const auto& filter : filters_) {
         paint.setImageFilter(filter);

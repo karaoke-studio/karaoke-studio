@@ -588,6 +588,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p05_vertical_japanese_glyphs')
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
     utopia_exit_lines = set()
+    utopia_exit_ruby_glow = False
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
         if not lower_enabled:
@@ -599,10 +600,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
                         and not (look.right_to_left or item.line.wipe_reverse or _inline_role_labels(item))
                         and not any(_uses_decoration(look, kind) for kind in ('glow', 'shadow'))
-                        and all(kind == 'none' for group in reading.rubies
+                        and all(kind != 'shadow' for group in reading.rubies
                                 for kind in ruby_decoration_kinds(group.target.style))
                         and all(cell.vector_glyph is None for cell in item.render_line.chars)):
                     utopia_exit_lines.add(index)
+                    utopia_exit_ruby_glow |= any('glow' in ruby_decoration_kinds(group.target.style)
+                                                for group in reading.rubies)
         rtl_shadow = False
         rtl_motion = False
         if style.right_to_left:
@@ -647,6 +650,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if utopia_exit_lines:
             ir['required_features'].append('p07_ruby_utopia_exit')
+        if utopia_exit_ruby_glow:
+            ir['required_features'].append('p07_ruby_utopia_exit_glow')
         if style.right_to_left:
             ir['required_features'].append('p05_horizontal_rtl_ruby')
             if rtl_shadow:

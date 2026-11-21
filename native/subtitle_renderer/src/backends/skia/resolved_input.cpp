@@ -226,10 +226,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.scanlineEnabled && !line.strokeFlashEnabled
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
+        const auto readingDecor = [&](bool after) {
+            const auto kind = style.rubyDecorationKindForState(after);
+            return kind == "none" || (kind == "glow" && features.contains("p07_ruby_utopia_exit_glow"));
+        };
         const bool rubyUtopiaExit = transformedRuby && utopiaExit && singingScale && line.entryAnimation == "none"
             && line.bursts.empty() && features.contains("p07_ruby_utopia_exit")
             && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
-            && style.rubyDecorationKindForState(false) == "none" && style.rubyDecorationKindForState(true) == "none";
+            && readingDecor(false) && readingDecor(true);
         const bool spinComposition = transformedRuby && features.contains("p07_ruby_character_exit_spin")
             && line.bursts.empty() && line.entryAnimation == "none" && line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")

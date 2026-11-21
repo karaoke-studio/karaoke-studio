@@ -35,13 +35,14 @@ public:
     struct Source {
         sk_sp<SkSurface> surface;
         SkIPoint origin;
+        std::optional<SkRect> outputClip;
     };
 
     static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
     void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I(), const GlowGradients& gradients = {});
     bool visible(bool after) const;
     SkRect sourceBounds() const;
-    Source createSource(SkCanvas&) const;
+    Source createSource(SkCanvas&, const SkRect& transitionBounds = SkRect::MakeEmpty()) const;
     void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                   const SkPath* posed = nullptr, float opacity = 1.f, bool vertical = false, bool reverse = false) const;
     void composite(SkCanvas&, const Source&) const;
