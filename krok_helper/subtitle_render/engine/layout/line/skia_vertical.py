@@ -59,8 +59,6 @@ def validate_vertical_style(style):
 
 def validate_vertical_source(track):
     for line in track.lines:
-        if track.rubies and line.wipe_reverse:
-            raise ValueError('Skia 竖排注音当前仅支持正向走字')
         for char in line.chars:
             if not _supported_text(char.text) or char.role_label is not None:
                 raise ValueError('Skia 竖排单元包含未验证字符、多码点或行内角色')

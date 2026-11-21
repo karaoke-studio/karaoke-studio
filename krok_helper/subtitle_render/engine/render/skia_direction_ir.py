@@ -41,6 +41,8 @@ def project_reverse_wipe(ir):
     if reverse:
         ir['required_features'].append('p05_reverse_wipe')
         ir['skia_layout']['reverse_wipe_schema'] = 1
+        if 'p05_vertical_ruby' in ir['required_features']:
+            ir['required_features'].append('p05_vertical_reverse_ruby_track')
     # Endpoints on reverse cells or reverse lines inside an annotation layout
     # are new to 14.36 sidecars, which must be rejected before selection.
     if overlap or (reverse and 'p05_resolved_ruby' in ir['required_features']):

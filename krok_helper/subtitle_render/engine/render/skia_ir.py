@@ -615,7 +615,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             and 'p07_line_fade' not in ir['required_features']
             and any(line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines']))
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
-        if ((columns or reverse_vertical) and vertical_ruby is not None
+        if (columns and vertical_ruby is not None
                 or any((index not in vertical_singing and line.get('karaoke_anim') not in modes)
                        or line.get('entry_anim') not in {'none', 'fade'}
                        or line.get('exit_anim') not in {'none', 'fade'} or line.get('scanline')

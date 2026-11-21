@@ -406,6 +406,63 @@ def test_vertical_viewport_rotates_body_and_reading_wipes(binary, project, angle
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('karaoke', ['none', 'no_wipe'])
+@pytest.mark.parametrize('decorated', [False, True])
+def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke, decorated):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(0, 1), position='center')
+    first, = track.lines
+    second = replace(first, track_line_index=1, wipe_reverse=True, display_start_override_ms=3000,
+                     display_end_override_ms=5200, end_ms=first.end_ms + 3000,
+                     chars=[replace(cell, start_ms=cell.start_ms + 3000) for cell in first.chars])
+    authored, = track.rubies
+    reverse_ruby = replace(authored, target_line_index=1, pos_start_ms=authored.pos_start_ms + 3000,
+                           pos_end_ms=authored.pos_end_ms + 3000)
+    track = replace(track, lines=[first, second], rubies=[authored, reverse_ruby])
+    style = replace(style, karaoke_anim=karaoke, reverse_karaoke_anim=karaoke,
+                    karaoke_colors=colors('#FF0000', '#0000FF'))
+    if decorated:
+        style = replace(style, stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=2,
+                        decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    bare = ir_for(binary, (replace(track, rubies=[]), style), dpr=1.5)
+    feature = 'p05_vertical_reverse_ruby_track'
+    assert {'p05_vertical_ruby', 'p05_reverse_wipe', feature} <= set(ir['required_features'])
+    assert len(ir['track']['rubies']) == 2
+    forward, reverse = ir['skia_layout']['lines']
+    assert len(forward['ruby_groups']) == 1 and reverse['ruby_groups'] == []
+    assert reverse['cells'] == bare['skia_layout']['lines'][1]['cells']
+    assert [cell['clock_index'] for cell in reverse['cells']] == list(range(len(second.chars) - 1, -1, -1))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    bad_group = copy.deepcopy(ir)
+    bad_group['skia_layout']['lines'][1]['ruby_groups'] = forward['ruby_groups']
+    times = [400, 3300, 3800, 4300]
+    captures = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            for invalid in (bad, bad_group):
+                with pytest.raises(NativeRendererError):
+                    configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+            assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
+            configure(process, bare)
+            plain, _ = collect(process, times, generation=3)
+        assert not np.array_equal(frames[0], plain[0])
+        assert all(a.any() and np.array_equal(a, b) for a, b in zip(frames[1:], plain[1:], strict=True))
+        r, g, b, alpha = np.moveaxis(frames[2], -1, 0)
+        red = np.nonzero((r > 210) & (b < 16) & (g < 16) & (alpha > 128))[0]
+        blue = np.nonzero((b > 210) & (r < 16) & (g < 16) & (alpha > 128))[0]
+        assert red.size and blue.size and np.median(blue) > np.median(red)
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),
