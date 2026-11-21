@@ -3410,6 +3410,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 同一原样工程在 **80%** CPU 上限内完成真实 **1080p60** 导出。用 RTX 3070 Ti Laptop 的 Vulkan 渲染字幕，FFmpeg 使用 `libx264 ultrafast` 编码并合成背景。输出 **14414** 帧，视频 **240.233333s**，音频 **240.232993s**，首帧 **1.694s**，全程 **282.074s**（**51.10 帧/秒**）。日志为 `build/p07-original-vulkan-full-song.log`。
 - Windows Vulkan 干净构建 **3/3 CTest**，角色画笔及光晕专项 **19 通过**，静态光晕与逐字淡化回归 **128 通过**。Windows 独立 Raster 干净构建 **3/3 CTest**，专项 **3 通过**。WSL Vulkan 构建 **3/3 CTest**，X11 与 Wayland 各 **10 通过、9 跳过**，跳过项为 Direct2D GPU 对照。
 
+### 14.269 P05.2 合成粗体与后续歌词单元的位置（2026-11-21）
+
+- §14.268 的首行偏差可在纯色无描边正文中复现。逐字检查发现，使用合成粗体的首字使后续 **14** 个字整体右移 **2px**。通过 DirectWrite 接口测量 1000 和 2048 UPEM 的字体，合成粗体扩张量为约 **2% em** 并舍入到整数设计单位。TrueType 轮廓的纵向扩张比其度量盒少 **1** 个设计单位，CFF 轮廓使用完整扩张量。
+- Skia 共用字体层按该度量准备 FreeType 轮廓。HarfBuzz 在执行 GPOS 前获得有墨迹字形的额外推进，空格维持原推进，零推进组合标记保留零推进和附着锚点。合成粗体的快照身份升级为 `skia-m150-hb-ft-v8`，已校验的常规实例继续使用 `v7`。
+- 原工程的相同 **16 帧**在 D2D GPU → Vulkan、Vulkan → Raster 两组对照均达原预算。首行纯色无描边的覆盖 IoU 从 **0.800** 到 **0.987**，四条包围盒边沿与 D2D 相同。日志为 `build/p05-synthetic-bold-original-{geometry,parity-final}.log`、`build/p07-directwrite-bold-*.log`。
+- Windows Vulkan 与独立 Raster 干净构建各 **3/3 CTest**。Windows 字体、混排、回退及字形组合 **247 通过**，另有四项缺失 Vulkan loader 的产品用例在恢复测试所需的默认回退后全部通过。独立 Raster 专项 **4 通过**。WSL Vulkan 和独立 Raster 各 **3/3 CTest**，每种构建在 X11 与 Wayland 分别 **5 通过**，包含 TrueType、CFF、空格、组合标记和混合字体单位。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

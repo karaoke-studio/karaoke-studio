@@ -134,10 +134,10 @@ def test_mixed_face_geometry_normalizes_size_scale_and_different_em_units(binary
     cell=ir['skia_layout']['lines'][0]['cells'][0]['metrics']
     assert cell['selected_font']==-1
     # The trailing mark-free fi keeps nominal f+i advances (cell_glyph_schema=1).
-    assert cell['advance']==pytest.approx(30+112.5+30+15+10,abs=.001)
+    assert cell['advance']==pytest.approx(30+112.5+30.6+15+10,abs=.001)
     # All design terms use the primary face's logical em; raw 2000 and 1000
     # design units must never be added directly.
-    assert cell['design_advance']==pytest.approx(600+2250+600+300+200,abs=.001)
+    assert cell['design_advance']==pytest.approx(600+2250+612+300+200,abs=.001)
     assert cell['glyphs'][2]['x']==pytest.approx(142.5,abs=.001)
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:configure(process,ir)
 

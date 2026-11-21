@@ -4,12 +4,14 @@
 #include "include/core/SkPathBuilder.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_FONT_FORMATS_H
 #include FT_OUTLINE_H
 #include FT_MULTIPLE_MASTERS_H
 #include FT_COLOR_H
 #include <cmath>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 
 namespace subtitle::skia::text {
 namespace {
@@ -40,6 +42,7 @@ struct GlyphOutlineSource::Impl {
     FT_Face face = nullptr;
     float size;
     bool bold, italic;
+    bool trueTypeOutlines = false;
     std::mutex mutex;
     ~Impl() { if (face) FT_Done_Face(face); if (library) FT_Done_FreeType(library); }
 };
@@ -50,6 +53,7 @@ GlyphOutlineSource::GlyphOutlineSource(const FontSpec& spec) : impl_(std::make_u
     check(FT_Init_FreeType(&out.library));
     check(FT_New_Memory_Face(out.library, out.resource->bytes.data(), FT_Long(out.resource->bytes.size()),
                              out.resource->faceIndex, &out.face));
+    if (const char* format = FT_Get_Font_Format(out.face)) out.trueTypeOutlines = std::string_view(format) == "TrueType";
     if (FT_HAS_MULTIPLE_MASTERS(out.face)) {
         FT_MM_Var* variation = nullptr;
         check(FT_Get_MM_Var(out.face, &variation));
@@ -93,14 +97,22 @@ std::optional<GlyphGeometry> GlyphOutlineSource::load(SkGlyphID glyph) const {
     out.advance = float(slot->linearHoriAdvance) / 65536;
     out.leftBearing = float(m.horiBearingX) / 64;
     out.rightBearing = float(m.horiAdvance - m.horiBearingX - m.width) / 64;
+    const auto boldUnits = in.bold && slot->outline.n_points > 0 ? syntheticBoldDesignUnits(in.face->units_per_EM) : 0;
+    if (boldUnits > 0) {
+        if (out.advance > 0) out.advance += boldUnits;
+        else out.rightBearing -= boldUnits;
+        // TrueType synthetic outlines grow one fewer vertical unit than the
+        // design metric box. The CFF outline grows by the full strength.
+        const auto verticalUnits = boldUnits - int(in.trueTypeOutlines);
+        check(FT_Outline_EmboldenXY(&slot->outline, FT_Pos(boldUnits) * 64, FT_Pos(verticalUnits) * 64));
+    }
     if (in.italic) {
         // DirectWrite derives synthetic bearings from the sheared design
         // metric box, which can be wider than the transformed ink itself.
         const float slope = -kSyntheticItalicSkewX / 64.f;
         out.leftBearing += std::floor(float(m.horiBearingY - m.height) * slope);
-        out.rightBearing -= std::floor(float(m.horiBearingY) * slope);
+        out.rightBearing -= std::floor(float(m.horiBearingY + boldUnits * 64) * slope);
     }
-    if (in.bold) check(FT_Outline_Embolden(&slot->outline, FT_Pos(in.face->units_per_EM) * 64 / 24));
     Builder builder;
     const FT_Outline_Funcs callbacks{Builder::move, Builder::line, Builder::conic, Builder::cubic, 0, 0};
     check(FT_Outline_Decompose(&slot->outline, &callbacks, &builder));

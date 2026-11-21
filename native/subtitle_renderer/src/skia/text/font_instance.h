@@ -11,6 +11,8 @@ struct hb_font_t;
 namespace subtitle::skia::text {
 // DirectWrite's synthetic oblique shear in y-down font coordinates.
 inline constexpr float kSyntheticItalicSkewX = -87.f / 256.f;
+// DirectWrite adds 2% of an em, rounded to a whole design unit.
+inline constexpr int syntheticBoldDesignUnits(int em) { return (em + 25) / 50; }
 
 struct Axis { std::uint32_t tag; float value; };
 struct FontResource {

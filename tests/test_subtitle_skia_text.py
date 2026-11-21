@@ -84,6 +84,32 @@ def test_simulations_and_horizontal_scale_are_explicit_instances(binary, font):
         assert bold['ink'] != plain['ink'] and italic['ink'] != plain['ink']
 
 
+@pytest.mark.parametrize('outline', ['truetype', 'cff'])
+def test_synthetic_bold_expands_vector_geometry_and_keeps_empty_glyph_advances(binary, tmp_path, outline):
+    from skia_text_fixture import make_cff_font, make_font
+
+    is_ttf = outline == 'truetype'
+    path = make_font(tmp_path / 'bold.ttf') if is_ttf else make_cff_font(tmp_path / 'bold.otf')
+    texts = ['A', 'AA', ' '] + (['\u0301'] if is_ttf else [])
+    with SkiaTextMetricsProcess(binary) as process:
+        upright = run(process, path, texts, size=50)
+        bold = run(process, path, texts, size=50, synthetic_bold=True)
+
+    a, pair, space = bold[:3]
+    assert a['font_identity'].startswith('skia-m150-hb-ft-v8:')
+    assert a['design_advance'] == 620 and a['advance'] == 31
+    assert a['design_left_bearing'] == a['design_right_bearing'] == 50
+    assert a['ink'] == pytest.approx([2.5, -35.95 if is_ttf else -36, 28.5, 0], abs=.001)
+    assert pair['advance'] == 62 and pair['glyphs'][1]['x'] == 31
+    assert pair['design_advance'] == 1240
+    assert space['ink'] == upright[2]['ink'] and space['advance'] == upright[2]['advance']
+    assert space['design_advance'] == upright[2]['design_advance'] == 250
+    if is_ttf:
+        mark = bold[3]
+        assert mark['design_advance'] == mark['advance'] == 0
+        assert mark['design_right_bearing'] == upright[3]['design_right_bearing'] - 20
+
+
 def test_synthetic_italic_shears_ink_and_design_bearings(binary, tmp_path):
     from skia_text_fixture import make_font
 
@@ -251,6 +277,7 @@ def test_opentype_positioning_applies_only_to_shaped_cells(binary, tmp_path):
         font.save(path)
     with SkiaTextMetricsProcess(binary) as process:
         pair, marked = run(process, path, ['AW', 'a\u0301'], size=50)
+        bold_marked, = run(process, path, ['a\u0301'], size=50, synthetic_bold=True)
     # A mark-free cell is nominal (existing GPU rule): GPOS kerning is not applied.
     assert pair['advance'] == 70
     assert pair['glyphs'][1]['x'] == 30
@@ -259,6 +286,8 @@ def test_opentype_positioning_applies_only_to_shaped_cells(binary, tmp_path):
     assert marked['advance'] == 25
     assert (marked['glyphs'][1]['x'], marked['glyphs'][1]['y']) == (12.5, 2.5)
     assert {(g['cluster_start'], g['cluster_end']) for g in marked['glyphs']} == {(0, 3)}
+    assert bold_marked['advance'] == 26
+    assert bold_marked['glyphs'][1] == marked['glyphs'][1]
 
 
 def test_registered_unicode_family_exports_physical_snapshot_and_invalidates_on_registry_change(binary, tmp_path):

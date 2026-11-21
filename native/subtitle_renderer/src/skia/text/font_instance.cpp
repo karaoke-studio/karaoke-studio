@@ -22,6 +22,28 @@ using FontOwner = std::shared_ptr<const FontResource>;
 void releaseFontOwner(void* owner) {
     delete static_cast<FontOwner*>(owner);
 }
+
+hb_position_t boldGlyphAdvance(hb_font_t* font, void*, hb_codepoint_t glyph, void*) {
+    auto* parent = hb_font_get_parent(font);
+    const auto advance = hb_font_get_glyph_h_advance(parent, glyph);
+    hb_glyph_extents_t ink{};
+    if (advance <= 0 || !glyph || !hb_font_get_glyph_extents(parent, glyph, &ink)
+        || (ink.width == 0 && ink.height == 0)) return advance;
+    int xScale = 0;
+    hb_font_get_scale(font, &xScale, nullptr);
+    const int em = int(hb_face_get_upem(hb_font_get_face(font)));
+    return advance + hb_position_t(std::lround(double(syntheticBoldDesignUnits(em)) * xScale / em));
+}
+
+hb_font_funcs_t* boldFontFunctions() {
+    static const auto functions = [] {
+        auto value = std::shared_ptr<hb_font_funcs_t>(hb_font_funcs_create(), hb_font_funcs_destroy);
+        hb_font_funcs_set_glyph_h_advance_func(value.get(), boldGlyphAdvance, nullptr, nullptr);
+        hb_font_funcs_make_immutable(value.get());
+        return value;
+    }();
+    return functions.get();
+}
 }
 FontInstance::FontInstance(const FontSpec& spec) {
     if (!spec.resource || spec.resource->bytes.empty() || spec.resource->sha256.size() != 64
@@ -80,7 +102,8 @@ FontInstance::FontInstance(const FontSpec& spec) {
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
-    key << "skia-m150-hb-ft-v7:" << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
+    key << (spec.syntheticBold ? "skia-m150-hb-ft-v8:" : "skia-m150-hb-ft-v7:")
+        << source.sha256 << ':' << source.faceIndex << ':' << std::bit_cast<std::uint32_t>(spec.size)
         << ':' << std::bit_cast<std::uint32_t>(spec.scaleX) << ':' << spec.syntheticBold << ':' << spec.syntheticItalic;
     for (const auto& axis : coordinates) key << ':' << axis.axis << '=' << std::bit_cast<std::uint32_t>(axis.value);
     identity_ = key.str();
@@ -99,6 +122,13 @@ FontInstance::FontInstance(const FontSpec& spec) {
     std::vector<hb_variation_t> variations;
     for (const auto& axis : coordinates) variations.push_back({axis.axis, axis.value});
     hb_font_set_variations(shapingFace_.get(), variations.data(), unsigned(variations.size()));
+    if (spec.syntheticBold) {
+        // Feed the changed advances into positioning so attached marks keep
+        // their original anchors. Other metrics still come from the OT font.
+        auto synthetic = std::shared_ptr<hb_font_t>(hb_font_create_sub_font(shapingFace_.get()), hb_font_destroy);
+        hb_font_set_funcs(synthetic.get(), boldFontFunctions(), nullptr, nullptr);
+        shapingFace_ = std::move(synthetic);
+    }
     // vertical_metrics_schema=1: line-box ascent/descent follow the existing
     // GPU's font metrics, i.e. OS/2 typo when USE_TYPO_METRICS is set and OS/2
     // win otherwise (never hhea). A face without a usable OS/2 keeps Skia's.
