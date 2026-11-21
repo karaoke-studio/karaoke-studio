@@ -1,4 +1,5 @@
 """Inline roles share canonical timing/geometry and per-cell solid paints."""
+import copy
 from dataclasses import replace
 import json
 import sys
@@ -25,6 +26,62 @@ from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
 def colors(before,after):
     return KaraokeColors(before=KaraokeColorState(text=PaintFill(color=before)),
                          after=KaraokeColorState(text=PaintFill(color=after)))
+
+
+def role_outline_palette():
+    return KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color='#F4E7C0'), stroke=PaintFill(color='#48207C'),
+                                 stroke2=PaintFill(color='#C21834')),
+        after=KaraokeColorState(text=PaintFill(color='#177FDC'), stroke=PaintFill(color='#15742C'),
+                                stroke2=PaintFill(color='#EFAC24')),
+    )
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_body_role_outlines_follow_their_cell_clock(binary, project, target):
+    track, style = project
+    line = track.lines[0]
+    chars = [replace(char, role_label='edge' if i in {0, 2, 4} else None)
+             for i, char in enumerate(line.chars)]
+    line = replace(line, chars=chars, display_start_override_ms=0, display_end_override_ms=3000)
+    track = replace(track, lines=[line])
+    style = replace(style, custom_style_schemes={'edge': SubtitleStyleScheme(
+        stroke_width_px=5, stroke2_width_px=3, stroke2_enabled=True, karaoke_colors=role_outline_palette())})
+    ir = ir_for(binary, (track, style))
+    assert {'p06_role_solid_outlines', 'p06_secondary_solid_outline'} <= set(ir['required_features'])
+    plain = copy.deepcopy(ir)
+    plain['required_features'].remove('p06_role_solid_outlines')
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [100, 1400, 2700, 3000, 1400])
+        process._send({'cmd': 'configure', 'ir': plain})
+        with pytest.raises(NativeRendererError):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [1400], generation=2)
+    assert not frames[3].any() and np.array_equal(frames[1], frames[-1])
+    assert np.array_equal(frames[1], replay[0])
+    for frame, color in ((frames[0], [194, 24, 52]), (frames[2], [239, 172, 36])):
+        colors = frame[frame[..., 3] == 255, :3]
+        assert np.any(np.all(colors == color, axis=-1))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_body_role_outlines_match_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path) if case.case_id == 'viewport')
+    line = base.track.lines[0]
+    chars = [replace(char, role_label='edge' if i % 2 == 0 else None) for i, char in enumerate(line.chars)]
+    track = replace(base.track, lines=[replace(line, chars=chars)], rubies=[])
+    palette = role_outline_palette()
+    role = SubtitleStyleScheme(font_size_px=97, stroke_width_px=5, stroke2_width_px=2,
+                               stroke2_enabled=True, karaoke_colors=palette)
+    style = replace(base.style, viewport_rotation_deg=0, viewport_scale_pct=100, viewport_offset_x=0,
+                    stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0,
+                    decoration_kind='none', karaoke_anim='none', custom_style_schemes={'edge': role})
+    case = replace(base, case_id='body_role_outlines', track=track, style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (299, 300, 1500, 1750, 2600, 4400, 5499, 5500))
 
 
 @pytest.fixture

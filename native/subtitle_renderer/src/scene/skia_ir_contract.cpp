@@ -1,5 +1,6 @@
 #include "skia_ir_contract.h"
 #include "../model/backend_caps.h"
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -83,6 +84,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_title_role_outlines",
         "p06_primary_solid_outline",
         "p06_secondary_solid_outline",
+        "p06_role_solid_outlines",
         "p06_multi_lane_outline",
         "p06_body_gradient",
         "p06_outline_gradient",
@@ -576,6 +578,18 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (layout.value("secondary_solid_outline_schema").toDouble(-1) != 1
             || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 二重实色描边布局版本无效");
+    if (features.contains("p06_role_solid_outlines")) {
+        static const QJsonArray allowed{
+            "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
+            "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
+            "p05_overlap_wipe", "p05_font_fallback", "p05_mixed_fonts",
+            "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines",
+            "p06_multi_lane_outline"
+        };
+        if (!features.contains("p06_primary_solid_outline")
+            || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
+            throw BackendError("Skia 正文角色描边当前支持正向横排实色和普通走字");
+    }
     if (style.contains("right_to_left")
         && !style.value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");

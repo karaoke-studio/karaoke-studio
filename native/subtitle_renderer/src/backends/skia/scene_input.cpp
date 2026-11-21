@@ -93,7 +93,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
             || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || (scene.lineBand.enabled && !caps.staticLineBand)
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
-    if (caps.outlineLayers > 0 && !caps.titleRoleOutlines && !scene.charStyles.empty())
+    if (caps.outlineLayers > 0 && !caps.roleOutlines && !scene.charStyles.empty())
         throw BackendError("Skia 实色描边暂不支持行内样式");
     for (const auto& style : scene.charStyles) supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
