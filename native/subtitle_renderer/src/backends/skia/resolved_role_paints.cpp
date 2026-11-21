@@ -94,12 +94,12 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
             if (glow.before.radius > 0 || glow.after.radius > 0) {
                 ::subtitle::skia::GlowGradients gradients;
                 if (gradientBounds && !gradientBounds->line.isEmpty()) {
-                    if (glow.before.radius > 0 && style.beforeDecorPaint.mode == "gradient_vertical")
-                        gradients[0] = ::subtitle::skia::lineGradient(style.beforeDecorPaint, gradientBounds->line,
-                                                                     gradientBounds->outlinePad);
-                    if (glow.after.radius > 0 && style.afterDecorPaint.mode == "gradient_vertical")
-                        gradients[1] = ::subtitle::skia::lineGradient(style.afterDecorPaint, gradientBounds->line,
-                                                                     gradientBounds->outlinePad);
+                    const auto shader = [&](const PaintStyle& paint) {
+                        const auto& ink = paint.mode == "gradient_horizontal" ? gradientBounds->forRole(role) : gradientBounds->line;
+                        return ::subtitle::skia::lineGradient(paint, ink, gradientBounds->outlinePad);
+                    };
+                    if (glow.before.radius > 0) gradients[0] = shader(style.beforeDecorPaint);
+                    if (glow.after.radius > 0) gradients[1] = shader(style.afterDecorPaint);
                 }
                 it->second = int(line.roleGlows.size());
                 line.roleGlows.push_back({glow, {}, std::move(gradients)});

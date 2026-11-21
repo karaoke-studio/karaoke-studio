@@ -56,24 +56,23 @@ def _has_textured_upper_ruby(layout, plan):
     return False
 
 
-def _vertical_gradient_in_glow(palette, before, after):
-    return ((before == 'glow' and palette.before.shadow.mode == 'gradient_vertical')
-            or (after == 'glow' and palette.after.shadow.mode == 'gradient_vertical'))
+def _glow_paints(palette, before, after):
+    return {state.shadow.mode for state, kind in ((palette.before, before), (palette.after, after))
+            if kind == 'glow'}
 
 
-def _has_vertical_gradient_glow(layout, plan):
+def _gradient_glow_paints(layout, plan):
+    modes = set()
     for item in plan.lines:
         base = item.layout_style
         labels = {cell.role_label for cell in item.render_line.chars if cell.role_label in base.custom_style_schemes}
         for look in (base, *(style_for_role_in_layout(base, label) for label in labels)):
             before = look.decoration_kind if look.decoration_before_sync else (
                 look.decoration_kind_before or look.decoration_kind)
-            if _vertical_gradient_in_glow(effective_karaoke_colors(look), before, look.decoration_kind):
-                return True
+            modes.update(_glow_paints(effective_karaoke_colors(look), before, look.decoration_kind))
     for look in _upper_reading_styles(layout, plan):
-        if _vertical_gradient_in_glow(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look)):
-            return True
-    return False
+        modes.update(_glow_paints(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look)))
+    return modes & _GRADIENTS
 
 
 def write_body_gradient_bounds(ir, plan):
@@ -87,8 +86,11 @@ def write_body_gradient_bounds(ir, plan):
     if _declare_role_body_paints(ir, plan):
         if _has_textured_upper_ruby(ir['skia_layout'], plan):
             ir['required_features'].append('p06_ruby_role_paints')
-        if _has_vertical_gradient_glow(ir['skia_layout'], plan):
-            ir['required_features'].append('p06_vertical_gradient_glow')
+        glow_paints = _gradient_glow_paints(ir['skia_layout'], plan)
+        if glow_paints:
+            feature = ('p06_vertical_gradient_glow' if glow_paints == {'gradient_vertical'}
+                       else 'p06_role_gradient_glow')
+            ir['required_features'].append(feature)
         return
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     ruby_image = False

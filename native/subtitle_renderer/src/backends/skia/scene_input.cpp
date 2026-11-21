@@ -46,9 +46,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
                 && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
         // Ganesh's pinned blur image filter clamps larger sigmas.
         const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;
-        const bool supportedPaint = paint.mode == "solid"
-            || (caps.gradientGlow && paint.mode == "gradient_vertical" && gradient(paint));
-        return caps.staticGlow && kind == "glow" && supportedPaint && std::isfinite(radius) && radius <= 532.f;
+        return caps.staticGlow && kind == "glow" && supportsSkiaGlowPaint(paint, caps.glowPaints)
+            && std::isfinite(radius) && radius <= 532.f;
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
         || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
@@ -91,6 +90,13 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
             "Skia P04: unsupported style (requires single centered horizontal line, solid fills, static supplied font, no effects)");
 }
 }
+bool supportsSkiaGlowPaint(const PaintStyle& paint, GlowPaintSupport support) {
+    if (paint.mode == "solid") return true;
+    if (paint.stops.empty() || support == GlowPaintSupport::Solid) return false;
+    return paint.mode == "gradient_vertical" || (support == GlowPaintSupport::LineGradients
+        && (paint.mode == "gradient_horizontal" || paint.mode == "split_vertical"));
+}
+
 void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabilities caps) {
     if ((!canonical && (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
             || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || (scene.lineBand.enabled && !caps.staticLineBand)
@@ -102,7 +108,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
             .bodyGradients = caps.roleBodyPaints, .imageFills = caps.roleBodyPaints,
             .staticGlow = caps.roleStaticGlow, .latinPrimaryOutline = caps.latinPrimaryOutline,
-            .gradientGlow = caps.gradientGlow});
+            .glowPaints = caps.glowPaints});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;

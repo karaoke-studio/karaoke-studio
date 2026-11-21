@@ -176,22 +176,33 @@ def role_static_glow_style(style, *, base=False):
     return glowing_role_scheme(result, '#90FA21DA', '#C01DAED2', (8, 9), 0) if base else result
 
 
-def vertical_gradient_glow_style(style, *, base=False):
+def gradient_glow_style(style, mode, *, base=False):
     style = role_static_glow_style(style, base=base)
-    gradient = PaintFill(mode='gradient_vertical', start_color='#B0F02440', end_color='#B0247CE0')
+    gradient = PaintFill(mode=mode, start_color='#B0F02440', end_color='#B0247CE0',
+                         split_stops=[(0, '#B0F02440'), (45, '#B0247CE0'), (100, '#B0247CE0')])
+
+    def apply_palette(palette):
+        if mode == 'split_vertical':
+            return replace(palette, after=replace(palette.after, shadow=gradient))
+        return replace(palette, before=replace(palette.before, shadow=gradient))
 
     def apply(appearance):
         palette = appearance.karaoke_colors
         ruby = appearance.ruby_karaoke_colors or palette
         return replace(appearance,
-                       karaoke_colors=replace(palette, before=replace(palette.before, shadow=gradient)),
+                       karaoke_colors=apply_palette(palette),
                        ruby_colors_follow_main=False,
-                       ruby_karaoke_colors=replace(ruby, before=replace(ruby.before, shadow=gradient)))
+                       ruby_karaoke_colors=apply_palette(ruby))
 
     style = replace(style, custom_style_schemes={
         name: apply(appearance) for name, appearance in style.custom_style_schemes.items()
     })
     return apply(style) if base else style
+
+
+GLOW_PAINT_FEATURES = {'gradient_vertical': 'p06_vertical_gradient_glow',
+                       'gradient_horizontal': 'p06_role_gradient_glow',
+                       'split_vertical': 'p06_role_gradient_glow'}
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -322,7 +333,7 @@ def test_latin_outline_with_role_paints_and_upper_glow_matches_actual_gpu(binary
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('glow', ['none', 'solid', 'gradient'])
+@pytest.mark.parametrize('glow', ['none', 'solid', *GLOW_PAINT_FEATURES])
 def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, tmp_path, target, glow):
     from test_subtitle_skia_line_fade import premultiplied
     from test_subtitle_skia_ruby_groups import configure
@@ -331,15 +342,16 @@ def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, 
     track = replace(track, rubies=[RubyAnnotation(kanji='A字', reading='AA', pos_start_ms=200, pos_end_ms=600)])
     if glow == 'solid':
         style = role_static_glow_style(style)
-    elif glow == 'gradient':
-        style = vertical_gradient_glow_style(style)
+    elif glow in GLOW_PAINT_FEATURES:
+        style = gradient_glow_style(style, glow)
     fade = replace(style, entry_anim='fade', entry_lead_ms=200, exit_anim='fade', exit_fade_ms=400)
     ir = ir_for(binary, (track, fade), dpr=1.5)
     opaque = ir_for(binary, (track, style), dpr=1.5)
     features = set(ir['required_features'])
     assert {'p06_role_body_paints', 'p06_ruby_role_paints', 'p07_role_line_fade'} <= features
     assert ('p06_ruby_role_glow' in features) == (glow != 'none')
-    assert ('p06_vertical_gradient_glow' in features) == (glow == 'gradient')
+    glow_feature = GLOW_PAINT_FEATURES.get(glow)
+    assert features.intersection(GLOW_PAINT_FEATURES.values()) == ({glow_feature} if glow_feature else set())
     line, = ir['track']['lines']
     entry, exit_ = line['entry_duration_ms'], line['exit_duration_ms']
     assert entry > 0 and exit_ > 0
@@ -352,11 +364,15 @@ def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, 
         frames, _ = collect(process, times)
         with pytest.raises(NativeRendererError, match='角色画笔整行淡化'):
             configure(process, bad)
-        if glow == 'gradient':
+        if glow_feature:
             bad = copy.deepcopy(ir)
-            bad['required_features'].remove('p06_vertical_gradient_glow')
+            bad['required_features'].remove(glow_feature)
             with pytest.raises(NativeRendererError):
                 configure(process, bad)
+            if glow_feature == 'p06_role_gradient_glow':
+                bad['required_features'].append('p06_vertical_gradient_glow')
+                with pytest.raises(NativeRendererError):
+                    configure(process, bad)
         replay, _ = collect(process, list(reversed(times)), generation=2)
         configure(process, opaque)
         full, _ = collect(process, times, generation=3)
@@ -370,24 +386,28 @@ def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, 
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('direction,glow,latin', [
-    ('gradient_horizontal', 'none', False), ('gradient_vertical', 'none', False),
-    ('gradient_horizontal', 'solid', False), ('gradient_vertical', 'solid', False),
-    ('gradient_horizontal', 'solid', True), ('gradient_vertical', 'gradient', False),
+@pytest.mark.parametrize('direction,glow,latin,shared', [
+    ('gradient_horizontal', 'none', False, True), ('gradient_vertical', 'none', False, True),
+    ('gradient_horizontal', 'solid', False, True), ('gradient_vertical', 'solid', False, True),
+    ('gradient_horizontal', 'solid', True, True), ('gradient_vertical', 'gradient_vertical', False, True),
+    ('gradient_horizontal', 'gradient_horizontal', False, False),
+    ('gradient_horizontal', 'gradient_horizontal', True, True),
+    ('gradient_vertical', 'gradient_vertical', True, True),
+    ('gradient_vertical', 'split_vertical', False, True),
 ])
-def test_role_line_fade_with_body_and_ruby_paints_matches_actual_gpu(binary, tmp_path, direction, glow, latin):
+def test_role_line_fade_with_body_and_ruby_paints_matches_actual_gpu(binary, tmp_path, direction, glow, latin, shared):
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
-    case = ruby_role_paints_case(tmp_path, direction, True)
+    case = ruby_role_paints_case(tmp_path, direction, shared)
     style = replace(case.style, entry_anim='fade', entry_lead_ms=600, exit_anim='fade', exit_fade_ms=600)
     if glow == 'solid':
         style = role_static_glow_style(style, base=latin)
-    elif glow == 'gradient':
-        style = vertical_gradient_glow_style(style, base=True)
+    elif glow in GLOW_PAINT_FEATURES:
+        style = gradient_glow_style(style, glow, base=True)
     if latin:
         style = independent_latin_outline(style)
         case = replace(case, track=latin_role_text(case.track))
-    case = replace(case, case_id=f'role_paint_line_fade_{direction}_{glow}_{latin}', style=style)
+    case = replace(case, case_id=f'role_paint_line_fade_{direction}_{glow}_{latin}_{shared}', style=style)
     assert_ruby_transition_gpu_parity(binary, case, (300, 420, 650, 900, 1950, 3900, 5100, 5450, 5500))
 
 

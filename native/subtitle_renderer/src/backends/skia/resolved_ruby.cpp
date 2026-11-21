@@ -2,6 +2,7 @@
 #include "image_fill_cache.h"
 #include "resolved_role_paints.h"
 #include "resolved_wipe.h"
+#include "scene_input.h"
 #include "vertical_text.h"
 #include "../render_backend.h"
 #include "../text_semantics.h"
@@ -132,7 +133,8 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
 // The vertical profile accepts only upright CJK/Hangul/full-size kana units.
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
-    const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
+        const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
+        GlowPaintSupport glowPaints,
         const RolePaintBounds* roleBounds, std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
@@ -148,7 +150,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.entryAnimation == "none" || line.entryAnimation == "fade")
         && (line.exitAnimation == "none" || line.exitAnimation == "fade");
     const bool staticLine = line.entryAnimation == "none" && line.exitAnimation == "none";
-    const bool gradientGlow = features.contains("p06_vertical_gradient_glow");
     const bool roleLineFade = features.contains("p07_role_line_fade")
         && (line.entryAnimation == "none" || line.entryAnimation == "fade")
         && (line.exitAnimation == "none" || line.exitAnimation == "fade");
@@ -252,9 +253,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             if (lower || paint.rubyDecorationKindForState(after) != "glow") return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
-            const bool supportedPaint = decor.mode == "solid"
-                || (gradientGlow && decor.mode == "gradient_vertical" && !decor.stops.empty());
-            if (!allowGlow || !supportedPaint || !std::isfinite(radius) || radius > 532.f)
+            if (!allowGlow || !supportsSkiaGlowPaint(decor, glowPaints) || !std::isfinite(radius) || radius > 532.f)
                 throw BackendError("Skia 上注音光晕缺少对应画笔或布局能力");
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
         };
@@ -448,10 +447,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             allowRoleFill ? &roleBounds->forRole(role) : nullptr)
             : std::array<sk_sp<SkShader>, 2>{};
         ::subtitle::skia::GlowGradients glowGradients;
-        if (hasGlow && gradientGlow) {
+        if (hasGlow && glowPaints != GlowPaintSupport::Solid) {
             glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeDecorPaint : nullptr,
                                            glow.after.radius > 0 ? &paint.rubyAfterDecorPaint : nullptr},
-                                          false, source, cells, outlinePad, glyphs.dpr, nullptr);
+                                          paint.rubyHorizontalGradientWithMain, source, cells, outlinePad, glyphs.dpr,
+                                          roleBounds ? &roleBounds->forRole(role) : nullptr);
         }
         std::array<::subtitle::skia::ImageFill, 2> images;
         if (imageFill) {

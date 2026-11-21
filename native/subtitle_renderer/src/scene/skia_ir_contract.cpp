@@ -103,6 +103,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_static_glow",
         "p06_role_static_glow",
         "p06_vertical_gradient_glow",
+        "p06_role_gradient_glow",
         "p06_ruby_glow",
         "p06_ruby_role_glow",
         "p06_lower_ruby_glow",
@@ -608,6 +609,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_resolved_ruby", "p05_upper_ruby", "p05_ruby_units", "p05_ruby_markers",
             "p06_outline_ruby", "p06_ruby_solid_outline", "p06_ruby_role_paints",
             "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
+            "p06_vertical_gradient_glow", "p06_role_gradient_glow",
             "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
         };
         if (!features.contains("p06_primary_solid_outline")
@@ -620,12 +622,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 二重实色描边布局版本无效");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
-    if (features.contains("p06_vertical_gradient_glow")
+    if ((features.contains("p06_vertical_gradient_glow") || features.contains("p06_role_gradient_glow"))
         && (!features.contains("p06_role_body_paints")
             || !(roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow")
                  || features.contains("p06_ruby_glow"))
             || features.contains("p07_singing_scale") || features.contains("p05_lower_ruby")))
-        throw BackendError("Skia 纵向渐变光晕需要正向横排角色画笔和普通走字");
+        throw BackendError("Skia 渐变光晕需要正向横排角色画笔和普通走字");
     const bool roleLayers = features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints")
         || roleStaticGlow || rubyRoleGlow;
     const bool roleLineFade = features.contains("p07_role_line_fade");
@@ -642,7 +644,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines", "p06_latin_primary_outline",
             "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines",
             "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
-            "p06_vertical_gradient_glow",
+            "p06_vertical_gradient_glow", "p06_role_gradient_glow",
             "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale",
             "p07_singing_glow", "p07_role_singing_glow",
             "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"

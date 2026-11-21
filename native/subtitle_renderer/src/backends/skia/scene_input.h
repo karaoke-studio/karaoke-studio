@@ -2,6 +2,8 @@
 #include "../../model/render_scene.h"
 #include "core/prepared_scene.h"
 namespace krok::subtitle::native {
+enum class GlowPaintSupport { Solid, VerticalGradient, LineGradients };
+
 struct SkiaPaintCapabilities {
     int outlineLayers = 0;
     bool bodyGradients = false;
@@ -19,8 +21,9 @@ struct SkiaPaintCapabilities {
     bool roleBodyPaints = false;
     bool roleStaticGlow = false;
     bool latinPrimaryOutline = false;
-    bool gradientGlow = false;
+    GlowPaintSupport glowPaints = GlowPaintSupport::Solid;
 };
+bool supportsSkiaGlowPaint(const PaintStyle&, GlowPaintSupport);
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
 SkMatrix skiaViewport(const RenderScene&);
 ::subtitle::skia::SubtitleInput skiaSceneInput(const RenderScene& scene);
