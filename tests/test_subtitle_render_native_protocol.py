@@ -674,10 +674,13 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
 
 def test_native_signal_state_is_backend_independent_contract():
     header_source = Path(
-        "native/subtitle_renderer/src/backends/signal_state.h"
+        "native/subtitle_renderer/src/effects/signal_state.h"
     ).read_text(encoding="utf-8")
     implementation_source = Path(
-        "native/subtitle_renderer/src/backends/signal_state.cpp"
+        "native/subtitle_renderer/src/effects/signal_state.cpp"
+    ).read_text(encoding="utf-8")
+    forwarding_header = Path(
+        "native/subtitle_renderer/src/backends/signal_state.h"
     ).read_text(encoding="utf-8")
     direct2d_source = Path(
         "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
@@ -702,8 +705,9 @@ def test_native_signal_state_is_backend_independent_contract():
         assert platform_detail not in header_source
         assert platform_detail not in implementation_source
     assert '#include "../signal_state.h"' in direct2d_source
-    assert "src/backends/signal_state.cpp" in cmake_source
-    assert "src/backends/signal_state.h" in cmake_source
+    assert '#include "../effects/signal_state.h"' in forwarding_header
+    assert "src/effects/signal_state.cpp" in cmake_source
+    assert "src/effects/signal_state.h" in cmake_source
 
 
 def test_native_text_semantics_is_backend_independent_contract():
@@ -1041,7 +1045,7 @@ def test_native_render_model_breaks_protocol_backend_dependency_cycle():
         "native/subtitle_renderer/src/protocol/render_config.h"
     ).read_text(encoding="utf-8")
     signal_source = Path(
-        "native/subtitle_renderer/src/backends/signal_state.h"
+        "native/subtitle_renderer/src/effects/signal_state.h"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"

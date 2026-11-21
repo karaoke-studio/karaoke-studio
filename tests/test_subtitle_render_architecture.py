@@ -1098,6 +1098,7 @@ def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
         "char_intervals",
         "metrics_identity",
         "respect_page_plan",
+        "retain_plan",
     }
     assert f"{PACKAGE}.engine.layout.line.qt_geometry" not in targets
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)

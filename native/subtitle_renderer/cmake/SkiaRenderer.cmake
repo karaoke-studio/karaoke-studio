@@ -33,7 +33,7 @@ add_library(subtitle_skia_core STATIC src/skia/core/validation_scene.cpp src/ski
             src/skia/core/prepared_scene.cpp src/skia/core/solid_outline.cpp src/skia/core/wipe_group.cpp
             src/skia/core/particle_ring.cpp
             src/skia/core/prepared_line.cpp
-            src/skia/core/noise_transition.cpp src/skia/core/shape_signal.cpp src/backends/signal_state.cpp
+            src/skia/core/noise_transition.cpp src/skia/core/shape_signal.cpp src/effects/signal_state.cpp
             src/skia/core/signal_paths.cpp thirdparty/clipper2/src/clipper.engine.cpp
             src/skia/core/volume_signal.cpp
             src/skia/core/subtitle_gradient.cpp

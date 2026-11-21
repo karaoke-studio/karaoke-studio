@@ -116,7 +116,8 @@ add_executable(krok_subtitle_renderer
     src/runtime/shared_frame_transport.cpp
     src/runtime/shared_frame_transport.h
     src/backends/render_backend.h
-    src/backends/signal_state.cpp
+    src/effects/signal_state.cpp
+    src/effects/signal_state.h
     src/backends/signal_state.h
     src/backends/text_semantics.cpp
     src/backends/text_semantics.h

@@ -3758,6 +3758,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p07_vertical_decoration_no_wipe_animation` 将相同三种整行动画接入整字变色。正文和注音保留各自完成时刻，复用原合成次序。Windows 相关 **100 通过**，WSL X11 与 Wayland 各 **90 通过、10 项 Windows 专用跳过**。日志前缀 `build/p07-vertical-nowipe-motion-*`。
 - `b117c9d1` 的 [Mac CI 44944149610](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44944149610) 五项全部成功。两架构各 **2275 通过、1563 跳过**；两份干净验证包各 **233 通过**；**98 份**规范样本哈希一致。包含单列竖排 Utopia 和横排实色光晕动画，物理 Metal 仍待真机验证。
 
+### 14.319 P11.8 倒计时共享计算与布局架构检查（2026-11-22）
+
+- 倒计时几何、时钟和状态的原有源码归入 `effects`。Skia 两种目标直接消费公开值类型；D2D 沿用原引入入口和编译参数。移动文件的源码 blob 哈希一致。布局架构测试同步登记已存在的 `retain_plan` 开关。
+- 架构与验收工具 **157 通过**，原生协议边界 **2 通过**。Windows Skia 指示灯和音量柱相关 **40 通过**，WSL 的 X11 与 Wayland 各 **22 通过、18 项 Windows 专用跳过**。三份 Skia 构建各 **3 项 CTest** 通过。
+- D2D 干净重建通过 **2 项 CTest**。同一硬件 GPU 重配采样的 **14 个原工程、44 帧**重建前后逐字节一致。日志和帧摘要前缀 `build/p11-signal-boundary-*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
