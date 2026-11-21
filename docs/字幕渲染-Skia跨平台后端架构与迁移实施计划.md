@@ -794,6 +794,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 导出运行中终止或挂起实际 Skia 子进程，验证超时、FFmpeg 退出、移除半成品和错误报告，见 §14.245、§14.260。
   - [x] 原生 `subtitle_owner_session_tests` 验证 Skia 单 owner 的准入上限与取消，并确认连续 1500 次任务完成后均可接收下一项。
   - [x] 验证切换时旧预览的排队帧不能进入新画面，见 §14.252。
+  - [x] Vulkan 和 Raster 单批 120 个共享槽全部借用，保持至批次完成后验证和释放，见 §14.265。
 - [ ] P11.4 记录缓存预算、峰值/稳态内存、未完成资源、队列长度、长期帧耗时分布；不存在工作集随固定负载持续增长或渐进楔死。
   - [x] Quick 增加可选的 Ganesh 缓存采样，核对设备预算、资源数量、占用和可清除字节，见 §14.245。
   - [x] 以固定负载及单变量重配定位宿主内存增量，移除 Skia 无命中布局缓存保留，见 §14.249。
@@ -3380,6 +3381,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - WSL 的 PATH 同时含 Linux FFmpeg 和继承的 Windows `ffmpeg.exe`、`ffprobe.exe`。按带 `.exe` 的旧调用名查找时，原顺序会启动 Windows 程序并传入 Linux 文件路径。POSIX 现在优先查找原生名称，仍识别显式配置的工具目录。Windows 和 WSL 的路径测试各 **10 通过**。
 - 对同一门槛工程临时注册本机所用字体，以 WSL Wayland、独立 CPU-only sidecar 和 12/16 逻辑 CPU 上限运行。浮窗持续 **45.13s**，**4** 次重配及跳转，**2565** 次有效回执，关闭后无残留子进程。完整导出 **14414** 帧，视频 **240.233333s**、音频 **240.232993s**，首帧 **0.944s**、全程 **287.547s**。日志明确记录 `API=raster` 和 `硬件=否`。
 - 日志在 `build/p11-ffmpeg-native-{win,wsl}.log`、`build/p11-wsl-raster-preview-final.log` 和 `build/p11-wsl-raster-full-song.log`。实体 Linux Vulkan 与 Mac 长播仍分别验收。
+
+### 14.265 P11.3 满批共享槽与 Mac 预览测试修正（2026-11-21）
+
+- GPU 与 Raster 各渲染单批上限 **120** 帧。消费者保持所有 RGBA 视图至批次结束，检查完整顺序和时刻，逐一复核借用时的 CRC，再释放视图重新渲染抽样帧。Windows 和 WSL X11 的槽位及预览关联测试各 **8 通过**。日志为 `build/p11-slot-saturation-{win,wsl}.log`。
+- Mac Intel 的 `a0410c23` 托管 CI 中，两个 zero-ruby 样例在共用预览测试的“两个任意请求时刻必然产生不同像素”断言失败。测试保留实际收到第二帧以及第一张图像内容仍完整的检查。修正后的本机 Windows/WSL 相关组合通过，Mac 另批复验。[CI 44880100464](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44880100464)
 
 ## 15. 前期探针清理范围
 

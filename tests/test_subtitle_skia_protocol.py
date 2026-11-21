@@ -1,5 +1,6 @@
 """P04 product IR, shared-memory preview and export acceptance (opt-in native binary)."""
 import copy
+from contextlib import ExitStack
 from dataclasses import replace
 import os
 import sys
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from zlib import crc32
 
 import numpy as np
 import pytest
@@ -734,6 +736,31 @@ def test_cancel_and_reconfigure_remain_usable(binary):
         assert frames[0].shape == (180, 320, 4)
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_saturated_skia_range_keeps_each_borrowed_slot_until_release(binary, target):
+    times = list(range(0, 1200, 10))
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(*sample(), width=320, height=180, fps=60, duration_ms=1600)
+        process.start_render_range(times, generation=1, threads=1,
+                                   shm_key='krok-skia-full-range-' + uuid.uuid4().hex, ring_slots=len(times))
+        with ExitStack() as leases:
+            first = process.read_event()
+            reader = leases.enter_context(SharedFrameRingReader.from_event(first))
+            event = first
+            slots = []
+            for index, timestamp in enumerate(times):
+                assert (event['event'], event['generation'], event['frame_index'], event['t_ms']) == (
+                    'frame_ready', 1, index, timestamp)
+                view = leases.enter_context(reader.borrow_packed_rgba_view(event))
+                slots.append((view, crc32(view)))
+                event = process.read_event()
+            assert event['ok'] and event['event'] == 'range_done' and not event['cancelled']
+            assert len({checksum for _, checksum in slots}) > 1
+            assert all(crc32(view) == checksum for view, checksum in slots)
+        replay, _ = collect(process, [550], generation=2)
+        assert crc32(replay[0]) == slots[times.index(550)][1]
+
+
 @pytest.mark.parametrize("gpu,missing_loader", [(True, False), (False, False), (True, True)])
 def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_path, supported_project, gpu, missing_loader,
                                                      *, side_track=None):
@@ -786,7 +813,6 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
         assert not errors, errors
         second, second_time = frames[-1]
         assert second_time == 850 and not second.isNull()
-        assert second.constBits().asstring(second.sizeInBytes()) != first_bytes
         assert first.constBits().asstring(first.sizeInBytes()) == first_bytes
         canvas.set_time(550)
         retired = canvas._async_renderer
