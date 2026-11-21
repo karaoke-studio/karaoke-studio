@@ -3485,6 +3485,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 关联回归 **175 通过**，独立 Windows Raster 构建 **4 通过**，WSL X11、Wayland 各 **10 通过、4 项 D2D 专用跳过**。三份构建各通过 **3 项 CTest**。
 - 仍保留有光晕的原样配置门槛。301ms 切到目标格式后，四种原样的 D2D/Vulkan 通过，该帧 Vulkan/Raster 的遮罩 IoU 为 **0.9439–0.9633**。音符、涟漪和两类雪花的无装饰变体也仍有未达预算的帧。保留现有绘制精度，逐帧日志为 `build/p07-annotated-particle-entry-*-win.log`，配置扫描原样集合仍为 **107/129**。
 
+### 14.281 P00 主线原样配置与画面复验（2026-11-21）
+
+- `d147d4ae` 在 Windows 真 GPU 上重新扫描 **129** 个原样场景，**107** 个通过配置。逐个用各场景现有时间点、原样追加轨道和原样画笔比较 1080p 离屏字幕，合计 **474 帧**。**107 个场景全部通过**实际 D2D GPU 对 Skia Vulkan、Skia Vulkan 对 Raster 的既有画面预算。D2D 对照使用同机硬件并关闭 realization。
+- 其余 **22** 个原样仍由配置门槛拒绝，集中在竖排与 RTL 注音、彩色/位图字形、带注音的逐字变换与粒子出入场，以及多个特效同时启用的走字线。四个无装饰粒子变体的结果见 §14.280。原始逐项记录为 `build/p00-skia-coverage/configure-current.json` 和 `build/p00-skia-coverage/current-original-pixels.json`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
