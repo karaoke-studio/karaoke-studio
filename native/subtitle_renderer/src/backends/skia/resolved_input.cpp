@@ -282,12 +282,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
-        const bool lineAnimation = singingScale && !line.zoomPulseEnabled
-            && features.contains("p07_utopia_line_animation")
-            && (line.entryAnimation == "none" || line.entryAnimation == "fade" || line.entryAnimation == "slide_in"
+        const bool ordinaryLineAnimation = (line.entryAnimation == "none" || line.entryAnimation == "fade" || line.entryAnimation == "slide_in"
                 || line.entryAnimation == "rise")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
+        const bool lineAnimation = singingScale && !line.zoomPulseEnabled
+            && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation;
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && line.entryAnimation == "none" && line.exitAnimation == "none"
@@ -632,10 +632,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
         const bool reverseHorizontalNoWipe = line.wipeReverse && prepared.noWipe
             && features.contains("p07_reverse_decoration_no_wipe");
+        const bool reverseHorizontalMotion = line.wipeReverse && ordinaryLineAnimation
+            && features.contains("p07_reverse_decoration_line_animation");
         const bool reverseHorizontalDecoration = features.contains("p06_reverse_decoration")
             && !style.vertical && !style.rightToLeft && !anyReadings
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
-            && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
         if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline) && !reverseHorizontalDecoration)
             throw BackendError("Skia 横排反向走字的描边缺少对应能力");
@@ -645,7 +647,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
                 || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
-                || (!(lineGlow || (verticalDecoration && verticalFade))
+                || (!(lineGlow || (verticalDecoration && verticalFade) || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
                 || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)

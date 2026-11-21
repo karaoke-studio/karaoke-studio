@@ -99,13 +99,13 @@ REVERSE_DECORATIONS = (
 )
 
 
-def decorated_reverse(project, before, after, effect):
+def decorated_reverse(project, before, after, effect, entry='none', leave='none'):
     from test_subtitle_skia_static_glow import glow_source
 
     track, style = glow_source(project, 'split')
     track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
     style = replace(style, decoration_kind_before=before, decoration_kind=after, reverse_karaoke_anim=effect,
-                    entry_anim='none', exit_anim='none')
+                    entry_anim=entry, exit_anim=leave, entry_lead_ms=600, exit_fade_ms=600)
     return track, style
 
 
@@ -133,16 +133,11 @@ def test_reverse_decoration_replays_with_translucent_outlines(binary, project, b
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('before,after', REVERSE_DECORATIONS)
-@pytest.mark.parametrize('effect', ['none', 'no_wipe'])
-def test_reverse_decoration_matches_actual_d2d_and_gpu_raster(binary, project, before, after, effect):
+def assert_reverse_decoration_parity(binary, track, style, times, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    track, style = decorated_reverse(project, before, after, effect)
     dpr = 1.5
-    times = [199, 200, 300, 399, 599, 600, 750, 899, 900, 1200, 1799, 1800, 2200]
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
@@ -154,7 +149,52 @@ def test_reverse_decoration_matches_actual_d2d_and_gpu_raster(binary, project, b
             configure(process, ir)
             frames, _ = collect(process, times)
         rendered.append(frames)
-    assert_glow_parity(times, reference, *rendered, (before, after, effect), check_p00_edges=True)
+    assert_glow_parity(times, reference, *rendered, case, check_p00_edges=True)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('before,after', REVERSE_DECORATIONS)
+@pytest.mark.parametrize('effect', ['none', 'no_wipe'])
+def test_reverse_decoration_matches_actual_d2d_and_gpu_raster(binary, project, before, after, effect):
+    track, style = decorated_reverse(project, before, after, effect)
+    times = [199, 200, 300, 399, 599, 600, 750, 899, 900, 1200, 1799, 1800, 2200]
+    assert_reverse_decoration_parity(binary, track, style, times, (before, after, effect))
+
+
+REVERSE_DECORATION_MOTION = (
+    ('shadow', 'shadow', 'none', 'fade', 'fade'),
+    ('glow', 'glow', 'no_wipe', 'slide_in', 'slide_out'),
+    ('shadow', 'glow', 'no_wipe', 'rise', 'rise'),
+)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('case', REVERSE_DECORATION_MOTION)
+def test_reverse_decoration_motion_replays(binary, project, case, target):
+    track, style = decorated_reverse(project, *case)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_reverse_decoration_line_animation'
+    assert feature in ir['required_features']
+    obsolete = copy.deepcopy(ir)
+    obsolete['required_features'].remove(feature)
+    times = [0, 1, 450, 900, 2400, 2700, 3000]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, obsolete)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert not frames[0].any() and not frames[-1].any()
+    assert all(frame.any() for frame in frames[2:-1])
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case', REVERSE_DECORATION_MOTION)
+def test_reverse_decoration_motion_matches_actual_d2d_and_gpu_raster(binary, project, case):
+    track, style = decorated_reverse(project, *case)
+    times = [0, 1, 100, 250, 450, 599, 600, 750, 1200, 1799, 2399, 2400, 2745, 2999, 3000]
+    assert_reverse_decoration_parity(binary, track, style, times, case)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

@@ -170,7 +170,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 if (!cell.path.isEmpty()) next = &cell;
             }
         }
-        if (line.isolateVerticalDecoration) includeShadowPaint(line.paintBounds, line.shadow);
+        if (line.isolateVerticalDecoration || line.animation.active()) includeShadowPaint(line.paintBounds, line.shadow);
         struct RubyGlowEntry { std::size_t index, nextCell; };
         std::map<std::pair<bool, int>, RubyGlowEntry> rubyGlowEntries;
         for (const auto& group : source.rubyGroups) {
@@ -202,8 +202,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 line.paintBounds.join(groupBounds);
             }
         }
-        if (line.characterFade.active() || line.isolateVerticalDecoration
-            || (line.animation.active() && (!line.roleGlows.empty() || !line.roleBodyPaints.empty()))) {
+        if (line.characterFade.active() || line.isolateVerticalDecoration || line.animation.active()) {
             for (const auto& layer : line.glow) line.paintBounds.join(layer.sourceBounds());
             for (const auto& group : line.roleGlows)
                 for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());

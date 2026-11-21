@@ -113,6 +113,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_static_glow",
         "p06_reverse_decoration",
         "p07_reverse_decoration_no_wipe",
+        "p07_reverse_decoration_line_animation",
         "p06_gradient_glow",
         "p06_role_static_glow",
         "p06_vertical_gradient_glow",
@@ -258,6 +259,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_reverse_decoration_no_wipe") && (!features.contains("p06_reverse_decoration")
         || !features.contains("p07_no_wipe")))
         throw BackendError("Skia 横排反向整字变色缺少装饰或变色能力");
+    if (features.contains("p07_reverse_decoration_line_animation") && (!features.contains("p06_reverse_decoration")
+        || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))
+        throw BackendError("Skia 横排反向实色装饰缺少整行出入场能力");
     if (features.contains("p07_ruby_petal_entry_flame_singing") && !features.contains("p07_ruby_particle_entry"))
         throw BackendError("Skia 花瓣入场与唱字火焰缺少粒子入场能力");
     if (features.contains("p07_ruby_petal_entry_scanline")

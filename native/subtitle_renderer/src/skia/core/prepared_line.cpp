@@ -14,7 +14,7 @@
 
 namespace subtitle::skia {
 namespace {
-sk_sp<SkColorFilter> roleFadeFilter(float opacity) {
+sk_sp<SkColorFilter> byteOpacityFilter(float opacity) {
     static const auto compiled = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
         uniform float opacityByte;
         float4 main(float4 color) {
@@ -22,7 +22,7 @@ sk_sp<SkColorFilter> roleFadeFilter(float opacity) {
             return floor(stored * (opacityByte / 255.0) + 0.5) / 255.0;
         }
     )"));
-    if (!compiled.effect) throw std::runtime_error("Skia 角色整行淡化滤镜无法编译");
+    if (!compiled.effect) throw std::runtime_error("Skia 整行淡化滤镜无法编译");
     SkRuntimeColorFilterBuilder builder(compiled.effect);
     builder.uniform("opacityByte") = std::round(opacity * 255.f);
     return builder.makeColorFilter();
@@ -35,7 +35,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     paint.setAntiAlias(true);
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
-    if (animation.opacity <= 0.f) return;
+    const bool reverseDecoration = !line.vertical && line.wipeRightToLeft && line.rubyGroups.empty()
+        && (!line.glow.empty() || line.shadow.visible());
+    // Match the reference's fixed-point layer opacity before 8-bit blending.
+    constexpr float opacitySteps = 4096.f;
+    const float lineOpacity = reverseDecoration ? std::floor(animation.opacity * opacitySteps) / opacitySteps
+                                               : animation.opacity;
+    if (lineOpacity <= 0.f) return;
     SkAutoCanvasRestore restore(&canvas, true);
     if (animation.dx != 0 || animation.dy != 0)
         canvas.translate(animation.dx, animation.dy);
@@ -59,25 +65,25 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.spins(); });
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
-    if ((animation.opacity < 1.f || line.isolateVerticalDecoration) && (movingCells || !line.paintBounds.isEmpty())) {
+    if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (movingCells || !line.paintBounds.isEmpty())) {
         const auto* bounds = movingCells ? nullptr : &line.paintBounds;
         // Keep the same bounded destination-format layer at every opacity
         // for vertical decoration. Raster edge coverage depends on the target
         // origin when translucent outlines are composited over the shadow.
-        if (!line.roleBodyPaints.empty() || !line.roleGlows.empty()) {
-            // The GPU reference composites the role paint stack into bytes,
+        if (!line.roleBodyPaints.empty() || !line.roleGlows.empty() || reverseDecoration) {
+            // The GPU reference composites the paint stack into bytes,
             // then applies the 8-bit group opacity to its premultiplied pixels.
             SkPaint fade;
-            fade.setColorFilter(roleFadeFilter(animation.opacity));
+            fade.setColorFilter(byteOpacityFilter(lineOpacity));
             canvas.saveLayer(bounds, &fade);
         } else if (!line.vertical && (!line.glow.empty() || line.hasRubyGlow())) {
             // Keep the halo coverage and the line opacity at float precision
             // until the composed line is written to the 8-bit output.
             SkPaint fade;
-            fade.setAlphaf(animation.opacity);
+            fade.setAlphaf(lineOpacity);
             canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, &fade, SkCanvas::kF16ColorType));
         } else {
-            canvas.saveLayerAlphaf(bounds, animation.opacity);
+            canvas.saveLayerAlphaf(bounds, lineOpacity);
         }
     }
     const auto rawProgress = [&](const Cell& cell) {
