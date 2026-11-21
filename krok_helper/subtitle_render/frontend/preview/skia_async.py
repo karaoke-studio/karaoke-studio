@@ -132,6 +132,8 @@ class SkiaAsyncSubtitleRenderer(QObject):
         configured_version = -1
         failed_version = -1
         generation = 0
+        # Stable Windows slot allocation. The Unix sidecar still owns fresh POSIX keys.
+        ring_key = "krok-skia-preview-" + uuid.uuid4().hex
         try:
             while True:
                 with self._condition:
@@ -166,7 +168,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         self.backendModeChanged.emit(self.current_backend_mode)
                     generation += 1
                     renderer.start_render_range([t_ms], generation=generation, threads=1,
-                                                shm_key="krok-skia-preview-" + uuid.uuid4().hex, ring_slots=1)
+                                                shm_key=ring_key, ring_slots=1)
                     image = None
                     while True:
                         event = renderer.read_event()
@@ -175,13 +177,17 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         if event.get("generation") != generation:
                             continue
                         if event.get("event") == "frame_ready":
+                            if image is not None or event.get("frame_index") != 0 or event.get("t_ms") != t_ms:
+                                raise NativeRendererError("Skia 预览共享帧的序号或时间与请求不一致")
                             with SharedFrameRingReader.from_event(event) as reader:
-                                slot = reader.read_frame(event)
-                                image = QImage(slot.payload, slot.width, slot.height, slot.stride, QImage.Format.Format_RGBA8888).copy()
-                                image.setDevicePixelRatio(target[2])
+                                with reader.borrow_packed_rgba_view(event) as payload:
+                                    # Preserve the GUI image when the next request overwrites the slot.
+                                    image = QImage(payload, event["width"], event["height"], event["stride"],
+                                                   QImage.Format.Format_RGBA8888).copy()
+                            image.setDevicePixelRatio(target[2])
                         elif event.get("event") == "range_done":
                             break
-                    if image is None:
+                    if image is None or image.isNull():
                         raise NativeRendererError("Skia 字幕帧缺失")
                     with self._condition:
                         valid = (not self._stopped and version == self._version

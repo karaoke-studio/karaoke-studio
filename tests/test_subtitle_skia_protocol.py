@@ -776,6 +776,19 @@ def test_actual_g5_preview_uses_skia_even_when_gpu_off(binary, monkeypatch, tmp_
             top, bottom = np.split(rows.reshape(image.height(), image.width(), 4)[..., 3], [image.height() // 2])
             assert top.max() > 200 and bottom.max() > 200
         assert "Skia" in canvas.render_backend_label()
+        first = frames[-1][0]
+        first_bytes = first.constBits().asstring(first.sizeInBytes())
+        canvas.set_time(850)
+        deadline = time.monotonic() + 5
+        while frames[-1][1] != 850 and not errors and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert not errors, errors
+        second, second_time = frames[-1]
+        assert second_time == 850 and not second.isNull()
+        assert second.constBits().asstring(second.sizeInBytes()) != first_bytes
+        assert first.constBits().asstring(first.sizeInBytes()) == first_bytes
+        canvas.set_time(550)
         retired = canvas._async_renderer
         assert retired.current_backend_mode == ("gpu" if gpu and not missing_loader else "cpu")
         stale = QImage(2, 2, QImage.Format.Format_RGBA8888)
