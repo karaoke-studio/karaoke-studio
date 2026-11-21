@@ -268,7 +268,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (opacity <= 0) return;
         // The outline can reach beyond the integer wipe padding, just as
         // the vertical glyph can reach beyond its fixed cell.
-        const bool animatedClip = (utopia || (line.transformedWipe && transform.transformed))
+        const bool animatedClip = !line.vertical && (utopia || (line.transformedWipe && transform.transformed))
             && phase == Phase::Wiping;
         const float clipEdge = animatedClip ? transformedEdge(index) : edge;
         const bool atFront = (line.vertical || drawOutline || animatedClip) && phase == Phase::Wiping;
@@ -451,7 +451,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const auto* posed = ink ? &*ink : nullptr;
             const float opacity = states[index].transform.opacity * titleOpacity;
             if (phase == Phase::Wiping) {
-                const float edge = utopia ? transformedEdge(index) : states[index].edge;
+                const float edge = utopia && !line.vertical ? transformedEdge(index) : states[index].edge;
                 layer.drawCell(glowCanvas, index, false, edge, posed, opacity, line.vertical, line.wipeRightToLeft);
                 layer.drawCell(glowCanvas, index, true, edge, posed, opacity, line.vertical, line.wipeRightToLeft);
             } else {

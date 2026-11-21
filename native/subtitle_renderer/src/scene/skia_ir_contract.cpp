@@ -132,6 +132,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_lower_ruby_unscaled_line_animation",
         "p07_lower_ruby_no_wipe_decoration",
         "p07_singing_scale",
+        "p07_vertical_singing_scale",
         "p07_role_singing_scale",
         "p07_role_singing_glow",
         "p07_singing_glow",
@@ -512,6 +513,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 横排注音与整行动画的能力声明不匹配");
     if (features.contains("p07_singing_scale") && layout.value("singing_scale_schema").toDouble(-1) != 1)
         throw BackendError("Skia 唱字放大布局版本无效");
+    if (features.contains("p07_vertical_singing_scale")
+        && (!features.contains("p05_vertical_solid") || !features.contains("p07_singing_scale")))
+        throw BackendError("Skia 竖排 Utopia 唱字缺少竖排或唱字放大能力");
     const bool roleSinging = features.contains("p07_role_singing_scale");
     if (roleSinging && (!features.contains("p07_singing_scale") || !features.contains("p05_inline_roles")))
         throw BackendError("Skia 角色唱字放大缺少对应能力声明");

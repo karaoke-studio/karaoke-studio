@@ -231,6 +231,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
+        const bool verticalSinging = style.vertical && singingScale && features.contains("p07_vertical_singing_scale")
+            && !style.rightToLeft && !style.dualLineLayout && !line.zoomPulseEnabled && !vectorGuides
+            && !hasInlineRoles && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool unscaledLineMotion = !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
@@ -325,7 +329,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-        if (utopia && (style.vertical || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
+        if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
@@ -341,7 +345,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (!projected.charStyles.empty() && !roleSinging)))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
-        if (singingScale && annotated) {
+        if (singingScale && annotated && !verticalSinging) {
             const auto origin = source.value("utopia_origin_x");
             if (!origin.isDouble() || !std::isfinite(origin.toDouble()) || std::abs(origin.toDouble()) > 1e6)
                 throw BackendError("Skia Utopia 注音缺少有效的行原点");
@@ -497,7 +501,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 glyph.pivot = {pivot("layout_left"), pivot("layout_right"), pivot("pivot_y"), glyph.left, glyph.right};
                 if (glyph.pivot.layoutRight < glyph.pivot.layoutLeft)
                     throw BackendError("Skia 逐字变换的版面单元轴心无效");
-                if (utopia) glyph.pivot.baseline = pivot("baseline_y");
+                if (utopia) glyph.pivot.baseline = verticalSinging ? glyph.pivot.centerY : pivot("baseline_y");
                 if ((transforms || utopia) && (glyph.outline || glyph.outerOutline)) {
                     const auto opaque = [](const ::subtitle::skia::SolidOutline& stroke) {
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
@@ -661,7 +665,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
-            && (line.karaokeAnimation == "none" || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
+            && (line.karaokeAnimation == "none" || (verticalSinging && !hasShadow)
+                || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
             && (verticalFade || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated

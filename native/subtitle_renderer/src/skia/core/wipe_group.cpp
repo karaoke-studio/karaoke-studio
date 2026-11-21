@@ -156,7 +156,7 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
                                       const SingingScale& scale, float originX, float opacity,
                                       const UtopiaTransition* exit, int followingDone) const {
     if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
-    if (scale.active || exit) {
+    if ((scale.active && !vertical_) || exit) {
         for (std::size_t index = 0; index < cells_.size(); ++index) {
             const auto& cell = cells_[index];
             const bool before = timeMs <= cell.startMs;
@@ -182,8 +182,12 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
     const bool complete = !before && lineWipeComplete(cells_, timeMs);
     if (after ? before : complete) return;
     const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, wipeStart()));
-    for (std::size_t i = 0; i < cells_.size(); ++i)
-        glow.drawCell(canvas, *glowOffset_ + i, after, edge, nullptr, opacity, vertical_, rightToLeft_);
+    for (std::size_t i = 0; i < cells_.size(); ++i) {
+        const auto& cell = cells_[i];
+        const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+        const auto posed = transform.transformed ? std::optional(cell.path.makeTransform(transform.matrix)) : std::nullopt;
+        glow.drawCell(canvas, *glowOffset_ + i, after, edge, posed ? &*posed : nullptr, opacity, vertical_, rightToLeft_);
+    }
 }
 
 void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
@@ -288,7 +292,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     const float startEdge = wipeStart();
     const float edge = frontAt(timeMs, startEdge);
     const bool revealed = rightToLeft_ ? edge < startEdge : edge > startEdge;
-    if (scale.active) {
+    if (scale.active && !vertical_) {
         drawSinging(canvas, timeMs, scale, originX, revealed, opacity, viewportHeight);
         return;
     }
@@ -297,8 +301,10 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     const auto draw = [&](bool after) {
         const auto shader = fillShader(canvas, after);
         for (const auto& cell : cells_) {
+            const auto singing = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
             if (pose.isIdentity()) {
-                paintRubyCell(canvas, paint, cell, after, opacity, shader);
+                const auto posed = posedUnit(cell, singing);
+                paintRubyCell(canvas, paint, posed ? *posed : cell, after, opacity, shader);
             } else {
                 auto unitPose = pose;
                 if (affine_) {

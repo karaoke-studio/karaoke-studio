@@ -159,13 +159,16 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool verticalMixedNoWipe = features.contains("p07_vertical_mixed_decoration_no_wipe");
     const bool verticalGlowNoWipe = verticalNoWipe && (features.contains("p07_vertical_glow_no_wipe") || verticalMixedNoWipe);
     const bool verticalShadowNoWipe = verticalNoWipe && (features.contains("p07_vertical_shadow_no_wipe") || verticalMixedNoWipe);
+    const bool verticalSinging = vertical && line.karaokeAnimation == "utopia"
+        && features.contains("p07_vertical_singing_scale");
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
-        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade)) || verticalGlowNoWipe || verticalShadowNoWipe)
+        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade))
+            || verticalSinging || verticalGlowNoWipe || verticalShadowNoWipe)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool rtlShadow = rtl && features.contains("p06_rtl_ruby_shadow")
         && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe");
     const bool allowShadow = features.contains("p06_ruby_shadow")
-        && (!rtl || rtlShadow) && (!vertical || allowVerticalDecoration)
+        && (!rtl || rtlShadow) && (!vertical || (allowVerticalDecoration && !verticalSinging))
         && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || decorationMotion.upper)
         && !line.zoomPulseEnabled
         && (staticLine || verticalFade || decorationMotion.upper);
@@ -383,7 +386,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             }
             if (cell.contains("utopia_layout_right") != zoom)
                 throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
-            if (line.karaokeAnimation == "utopia") {
+            if (line.karaokeAnimation == "utopia" && !vertical) {
                 const double left = pivotCoordinate(cell.value("utopia_layout_left"));
                 glyph.pivot.layoutLeft = float(left * glyphs.dpr);
                 glyph.pivot.baseline = float(cell.value("baseline_y").toDouble() * glyphs.dpr);
@@ -396,6 +399,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 }
             } else if (cell.contains("utopia_layout_left")) {
                 throw BackendError("Skia 注音单元轴心缺少 Utopia 能力声明");
+            }
+            if (cell.contains("vertical_singing_pivot") != verticalSinging)
+                throw BackendError("Skia 竖排注音轴心与唱字放大能力不匹配");
+            if (verticalSinging) {
+                const auto pivot = cell.value("vertical_singing_pivot").toArray();
+                if (pivot.size() != 2) throw BackendError("Skia 竖排注音唱字轴心无效");
+                glyph.pivot.layoutLeft = float(pivotCoordinate(pivot[0]) * glyphs.dpr);
+                glyph.pivot.baseline = float(pivotCoordinate(pivot[1]) * glyphs.dpr);
             }
             if (vertical) {
                 const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");

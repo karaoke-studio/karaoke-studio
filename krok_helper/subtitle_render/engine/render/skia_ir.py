@@ -126,7 +126,22 @@ def _composes_character_fade(source, item):
             and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars))
 
 
-def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tracks):
+def _vertical_singing_lines(ir, plan):
+    tracks = set()
+    for item in plan.lines:
+        look = item.layout_style
+        source = ir['track']['lines'][item.track_index]
+        if (look.vertical and not (look.right_to_left or look.dual_line_layout or item.line.wipe_reverse)
+                and source.get('karaoke_anim') == 'utopia'
+                and {source.get('entry_anim'), source.get('exit_anim')} == {'none'}
+                and not any(source.get(key) for key in ('zoom_pulse', 'scanline', 'stroke_flash', 'fx_bursts'))
+                and not _uses_decoration(look, 'shadow')
+                and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):
+            tracks.add(item.track_index)
+    return tracks
+
+
+def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tracks, vertical_singing):
     singing, transition, singing_ruby = False, False, False
     role_singing = False
     with_line_animation = False
@@ -138,6 +153,10 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
             continue
         style = item.layout_style
         annotated = bool(final.get('ruby_groups'))
+        if item.track_index in vertical_singing:
+            singing = True
+            singing_ruby |= annotated
+            continue
         line_animation = scales and animations != {'none'} and _ordinary_line_animation(source)
         with_character_transition = index in transition_lines
         with_noise = _noise_animation(source) and 'p07_noise_composition' in ir['required_features']
@@ -169,6 +188,8 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
     if singing:
         ir['required_features'].append('p07_singing_scale')
         ir['skia_layout']['singing_scale_schema'] = 1
+    if vertical_singing:
+        ir['required_features'].append('p07_vertical_singing_scale')
     if role_singing:
         ir['required_features'].append('p07_role_singing_scale')
     if transition:
@@ -390,10 +411,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
 
     ir = build_render_ir(track, style, layout_plan_builder=build_plan,
                          serialize_source_baselines=False, **kwargs)
+    vertical_singing = _vertical_singing_lines(ir, prepared[0].plan) if style.vertical else set()
     vertical_ruby = None
     if style.vertical and track.rubies:
         vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
-                                            dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure)
+                                            dpr=kwargs.get('dpr', 1), resolve_font=resolve_font, measure=measure,
+                                            singing_tracks=vertical_singing)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     spin_lines = set()
@@ -495,7 +518,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         for index, item in enumerate(plan.lines):
             if item.layout_style.vertical:
                 line = {'cells': vertical_cells(geometry.locals[item.track_index], measured.lines[item.track_index], item,
-                                               width=kwargs['width'], height=kwargs['height']),
+                                               width=kwargs['width'], height=kwargs['height'],
+                                               singing_scale=item.track_index in vertical_singing),
                         'text_flow': 'vertical'}
                 if item.layout_style.dual_line_layout:
                     line['vertical_lane'] = item.lane
@@ -592,9 +616,11 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             and any(line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines']))
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
         if ((columns or reverse_vertical) and vertical_ruby is not None
-                or any(line.get('karaoke_anim') not in modes or line.get('entry_anim') not in {'none', 'fade'}
+                or any((index not in vertical_singing and line.get('karaoke_anim') not in modes)
+                       or line.get('entry_anim') not in {'none', 'fade'}
                        or line.get('exit_anim') not in {'none', 'fade'} or line.get('scanline')
-                       or line.get('stroke_flash') or line.get('fx_bursts') for line in ir['track']['lines'])):
+                       or line.get('stroke_flash') or line.get('fx_bursts')
+                       for index, line in enumerate(ir['track']['lines']))):
             raise ValueError('Skia 竖排静态装饰超出已支持的走字组合')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)
         if vertical_no_wipe:
@@ -885,7 +911,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
     _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines,
-                        particle_band_tracks)
+                        particle_band_tracks, vertical_singing)
     role_glow = any(feature in ir['required_features'] for feature in ('p06_role_static_glow', 'p06_ruby_role_glow'))
     if 'p07_line_fade' in ir['required_features'] and (role_glow or any(
             feature in ir['required_features'] for feature in ('p06_role_solid_outlines', 'p06_role_body_paints'))):

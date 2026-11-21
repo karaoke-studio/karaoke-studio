@@ -2,6 +2,7 @@
 from dataclasses import replace
 import copy
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -270,6 +271,83 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
             raster, _ = collect(process, times)
         diff = abs(premultiplied(np.stack(frames)) - premultiplied(np.stack(raster)))
         assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_vertical_singing_scale_keeps_column_and_reading_wipe(binary, project, semantics, dpr):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, span=(1, 3))
+    body = colors('#00FF00', '#00FF00')
+    ruby = colors('#FF0000', '#0000FF')
+    ruby = replace(ruby, before=replace(ruby.before, shadow=PaintFill(color='#AAFF0000')),
+                   after=replace(ruby.after, shadow=PaintFill(color='#AA0000FF')))
+    style = replace(style, layout_semantics=semantics, karaoke_anim='utopia', karaoke_colors=body,
+                    ruby_karaoke_colors=ruby, ruby_decoration_kind='glow', ruby_decoration_kind_before='glow',
+                    ruby_glow_before_radius_px=6, ruby_glow_after_radius_px=6)
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    plain = ir_for(binary, (track, replace(style, karaoke_anim='none')), dpr=dpr)
+    feature = 'p07_vertical_singing_scale'
+    assert {feature, 'p06_vertical_ruby_decoration', 'p07_singing_glow'} <= set(ir['required_features'])
+    line, = ir['skia_layout']['lines']
+    unit, = line['ruby_groups'][0]['units']
+    assert 'vertical_singing_pivot' in unit
+    for cell in line['cells']:
+        assert cell['layout_left'] == cell['layout_right'] < unit['vertical_singing_pivot'][0]
+        assert cell['pivot_y'] == pytest.approx((cell['wipe_top'] + cell['wipe_bottom']) / 2)
+    assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
+    assert unit['interval_ms'] == plain['skia_layout']['lines'][0]['ruby_groups'][0]['units'][0]['interval_ms']
+    start, end = unit['interval_ms']
+    peak = start + min(100, (end - start) // 4)
+    times = [start - 1, peak, (start + end) // 2, end, 2200]
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, [*times, peak])
+            assert np.array_equal(frames[1], frames[-1])
+            bad = copy.deepcopy(ir)
+            bad['required_features'].remove(feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, [peak], generation=2)
+            assert np.array_equal(frames[1], replay[0])
+            configure(process, plain)
+            baseline, _ = collect(process, times, generation=3)
+        targets.append(np.stack(frames[:-1]))
+        pivot_x = round((unit['vertical_singing_pivot'][0] - 17) * dpr)
+        ruby_before, ruby_peak, ruby_wiping, ruby_end = [frame[:, pivot_x:] for frame in frames[:4]]
+        for index, frame in ((0, ruby_before), (3, ruby_end)):
+            baseline_ruby = baseline[index][:, pivot_x:]
+            # Peak-size glow surfaces can change low-alpha sample rounding.
+            assert abs(premultiplied(frame) - premultiplied(baseline_ruby)).max() <= 3
+            assert np.array_equal(frame[..., 3] > 200, baseline_ruby[..., 3] > 200)
+        assert np.count_nonzero(ruby_peak[..., 3] > 200) > np.count_nonzero(baseline[1][:, pivot_x:, 3] > 200)
+        red_rows = np.where((ruby_wiping[..., 0] > 180) & (ruby_wiping[..., 2] < 40))[0]
+        blue_rows = np.where((ruby_wiping[..., 2] > 180) & (ruby_wiping[..., 0] < 40))[0]
+        assert blue_rows.size and red_rows.size and np.median(blue_rows) < np.median(red_rows)
+
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Original corpus uses Windows Meiryo faces')
+def test_vertical_singing_scale_original_corpus_gpu_raster(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'vertical')
+    frames = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, case.style, width=1920, height=1080, fps=60)
+            batch, _ = collect(process, case.timestamps_ms)
+        frames.append(batch)
+    assert all(np.any(frame[..., 3] > 16) for frame in frames[0])
+    assert_glow_parity(case.timestamps_ms, frames[0], *frames, case.case_id, check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

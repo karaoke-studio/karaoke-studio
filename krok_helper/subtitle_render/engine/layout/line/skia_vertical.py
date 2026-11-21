@@ -95,7 +95,7 @@ def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
     return column, top, cell_height, ascent
 
 
-def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0):
+def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0, singing_scale=False):
     """Final cells of one vertical column in logical canvas pixels."""
     size = float(item.layout_style.font_size_px)
     column, top, cell_height, ascent = vertical_line_box(
@@ -115,5 +115,7 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0):
                       'wipe_end_position': 1.0}
         if vertical_glyph_rotates(text):
             positioned['rotation_pivot_x'] = column
+        if singing_scale:
+            positioned.update(layout_left=column, layout_right=column, pivot_y=cell_top + cell_height / 2)
         cells.append(positioned)
     return cells
