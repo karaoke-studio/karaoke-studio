@@ -1,6 +1,7 @@
 """Project the line-wide coordinates needed by Skia body and outline gradients and image paints."""
 
 from ..style.style_semantics import effective_karaoke_colors, effective_ruby_karaoke_colors, style_for_role_in_layout
+from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
 _GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
@@ -38,16 +39,40 @@ def _layer_modes(look):
     return modes, outlined
 
 
-def _has_textured_upper_ruby(layout, plan):
+def _upper_reading_styles(layout, plan):
     for final, item in zip(layout['lines'], plan.lines, strict=True):
         for group in final.get('ruby_groups', ()):
             if group.get('lower'):
                 continue
             role = item.render_line.chars[group['style_cell']].role_label
-            look = style_for_role_in_layout(item.layout_style, role)
-            palette = effective_ruby_karaoke_colors(look)
-            if {palette.before.text.mode, palette.after.text.mode} & _TEXTURED:
+            yield style_for_role_in_layout(item.layout_style, role)
+
+
+def _has_textured_upper_ruby(layout, plan):
+    for look in _upper_reading_styles(layout, plan):
+        palette = effective_ruby_karaoke_colors(look)
+        if {palette.before.text.mode, palette.after.text.mode} & _TEXTURED:
+            return True
+    return False
+
+
+def _vertical_gradient_in_glow(palette, before, after):
+    return ((before == 'glow' and palette.before.shadow.mode == 'gradient_vertical')
+            or (after == 'glow' and palette.after.shadow.mode == 'gradient_vertical'))
+
+
+def _has_vertical_gradient_glow(layout, plan):
+    for item in plan.lines:
+        base = item.layout_style
+        labels = {cell.role_label for cell in item.render_line.chars if cell.role_label in base.custom_style_schemes}
+        for look in (base, *(style_for_role_in_layout(base, label) for label in labels)):
+            before = look.decoration_kind if look.decoration_before_sync else (
+                look.decoration_kind_before or look.decoration_kind)
+            if _vertical_gradient_in_glow(effective_karaoke_colors(look), before, look.decoration_kind):
                 return True
+    for look in _upper_reading_styles(layout, plan):
+        if _vertical_gradient_in_glow(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look)):
+            return True
     return False
 
 
@@ -62,6 +87,8 @@ def write_body_gradient_bounds(ir, plan):
     if _declare_role_body_paints(ir, plan):
         if _has_textured_upper_ruby(ir['skia_layout'], plan):
             ir['required_features'].append('p06_ruby_role_paints')
+        if _has_vertical_gradient_glow(ir['skia_layout'], plan):
+            ir['required_features'].append('p06_vertical_gradient_glow')
         return
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     ruby_image = False

@@ -53,6 +53,7 @@ struct ResolvedRubyGroup {
     std::array<sk_sp<SkShader>, 2> fillGradients;
     std::array<ImageFill, 2> fillImages;
     int glowStyle = -1;
+    GlowGradients glowGradients;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
@@ -76,7 +77,7 @@ struct ResolvedLine {
     std::vector<BodyPaint> roleBodyPaints;
     StaticShadow shadow;
     StaticGlow glow;
-    struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; };
+    struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; GlowGradients gradients; };
     std::vector<RoleGlow> roleGlows;
     NoiseTransition noise;
     CharacterFade characterFade;

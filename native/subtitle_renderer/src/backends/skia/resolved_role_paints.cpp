@@ -43,7 +43,6 @@ RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, cons
                            std::span<const TextStyle> styles, SkiaImageFillCache& images, float scale) {
     const auto appearance = [&](int index) -> const TextStyle& { return index < 0 ? base : styles[index]; };
     RolePaintBounds bounds;
-    float visualPad = 0;
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
         if (line.cells[index].path.isEmpty()) continue;
         const int role = source.chars[index].styleIndex;
@@ -54,7 +53,8 @@ RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, cons
         const auto ink = line.cells[index].path.computeTightBounds();
         bounds.roles[role].ink.join(ink);
         bounds.line.join(ink);
-        visualPad = std::max(visualPad, ::subtitle::skia::outlineVisualPad(look.strokeWidth, look.stroke2Width, scale));
+        bounds.outlinePad = std::max(bounds.outlinePad,
+            ::subtitle::skia::outlineVisualPad(look.strokeWidth, look.stroke2Width, scale));
     }
     for (auto& [role, domain] : bounds.roles) {
         const auto& look = appearance(role);
@@ -70,7 +70,7 @@ RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, cons
                 // Horizontal gradients span the role's glyphs. Vertical
                 // gradients and discrete bands span the entire line and pen.
                 const auto& ink = paint.mode == "gradient_horizontal" ? domain.ink : bounds.line;
-                prepared.gradients[phase] = ::subtitle::skia::lineGradient(paint, ink, visualPad);
+                prepared.gradients[phase] = ::subtitle::skia::lineGradient(paint, ink, bounds.outlinePad);
             }
         }
         line.roleBodyPaints.push_back(std::move(prepared));
@@ -82,7 +82,7 @@ RolePaintBounds resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, cons
 }
 
 void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
-                      std::span<const TextStyle> styles) {
+                      std::span<const TextStyle> styles, const RolePaintBounds* gradientBounds) {
     std::map<int, int> groups;
     // The existing GPU composites phase layers in first-use role order.
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
@@ -92,8 +92,17 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
             const auto& style = role < 0 ? base : styles[role];
             const auto glow = skiaStaticGlow(style);
             if (glow.before.radius > 0 || glow.after.radius > 0) {
+                ::subtitle::skia::GlowGradients gradients;
+                if (gradientBounds && !gradientBounds->line.isEmpty()) {
+                    if (glow.before.radius > 0 && style.beforeDecorPaint.mode == "gradient_vertical")
+                        gradients[0] = ::subtitle::skia::lineGradient(style.beforeDecorPaint, gradientBounds->line,
+                                                                     gradientBounds->outlinePad);
+                    if (glow.after.radius > 0 && style.afterDecorPaint.mode == "gradient_vertical")
+                        gradients[1] = ::subtitle::skia::lineGradient(style.afterDecorPaint, gradientBounds->line,
+                                                                     gradientBounds->outlinePad);
+                }
                 it->second = int(line.roleGlows.size());
-                line.roleGlows.push_back({glow, {}});
+                line.roleGlows.push_back({glow, {}, std::move(gradients)});
             }
         }
         if (it->second >= 0 && !line.cells[index].path.isEmpty())

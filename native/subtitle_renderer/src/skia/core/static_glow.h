@@ -4,7 +4,9 @@
 #include "include/core/SkMatrix.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+#include "include/core/SkShader.h"
 #include "include/core/SkSurface.h"
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -26,6 +28,8 @@ struct StaticGlow {
     bool operator==(const StaticGlow&) const = default;
 };
 
+using GlowGradients = std::array<sk_sp<SkShader>, 2>;
+
 class PreparedGlow {
 public:
     struct Source {
@@ -34,7 +38,7 @@ public:
     };
 
     static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
-    void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I());
+    void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I(), const GlowGradients& gradients = {});
     bool visible(bool after) const;
     SkRect sourceBounds() const;
     Source createSource(SkCanvas&) const;
@@ -54,7 +58,9 @@ private:
     SkPaint::Join join_;
     std::optional<bool> phase_;
     std::vector<sk_sp<SkImageFilter>> filters_;
-    std::vector<SkPath> cells_;
+    struct Cell { SkPath path; GlowGradients gradients; };
+    std::vector<Cell> cells_;
+    std::array<bool, 2> hasGradient_{};
     SkRect ink_ = SkRect::MakeEmpty();
 };
 }

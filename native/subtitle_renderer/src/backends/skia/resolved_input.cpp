@@ -69,6 +69,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
+    const bool gradientGlow = features.contains("p06_vertical_gradient_glow");
     const bool latinPrimaryOutline = features.contains("p06_latin_primary_outline");
     const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
     const bool outlineGradients = features.contains("p06_outline_gradient");
@@ -84,7 +85,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
-        .roleStaticGlow = roleStaticGlow, .latinPrimaryOutline = latinPrimaryOutline});
+        .roleStaticGlow = roleStaticGlow, .latinPrimaryOutline = latinPrimaryOutline, .gradientGlow = gradientGlow});
     const bool staticGlow = features.contains("p06_static_glow");
     if (latinPrimaryOutline && (roleBodyPaints || roleStaticGlow || staticGlow))
         splitLatinOutlineStyles(projected);
@@ -515,8 +516,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
-        if ((roleStaticGlow || (latinPrimaryOutline && staticGlow)) && hasInlineRoles) {
-            resolveRoleGlows(prepared, line, style, projected.charStyles);
+        const bool lineGradientGlow = gradientGlow
+            && (style.beforeDecorPaint.mode == "gradient_vertical" || style.afterDecorPaint.mode == "gradient_vertical");
+        if (lineGradientGlow || ((roleStaticGlow || (latinPrimaryOutline && staticGlow)) && hasInlineRoles)) {
+            resolveRoleGlows(prepared, line, style, projected.charStyles,
+                             gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr);
             prepared.glow = {};
         }
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;

@@ -40,7 +40,7 @@ SkPaint PreparedGlow::strokePaint() const {
     return stroke;
 }
 
-void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak) {
+void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak, const GlowGradients& gradients) {
     if (path.isEmpty()) {
         cells_.emplace_back();
         return;
@@ -53,7 +53,9 @@ void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak) {
     // Singing scales monotonically between identity and its peak. A scaled
     // outline bounds the fixed-width stroke of the scaled glyph from outside.
     if (!peak.isIdentity()) ink_.join(peak.mapRect(bounds));
-    cells_.push_back(std::move(outline));
+    for (std::size_t phase = 0; phase < gradients.size(); ++phase)
+        hasGradient_[phase] |= bool(gradients[phase]);
+    cells_.push_back({std::move(outline), gradients});
 }
 
 SkRect PreparedGlow::sourceBounds() const {
@@ -85,12 +87,13 @@ PreparedGlow::Source PreparedGlow::makeSource(SkCanvas& canvas, const SkRect& re
 }
 
 bool PreparedGlow::visible(bool after) const {
-    return (!phase_ || *phase_ == after) && ((after ? after_ : before_) >> 24);
+    return (!phase_ || *phase_ == after) && (hasGradient_[after] || (after ? after_ : before_) >> 24);
 }
 
 void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std::optional<float> edge,
                             const SkPath* posed, float opacity, bool vertical, bool reverse) const {
-    const auto& path = posed ? *posed : cells_[index];
+    const auto& cell = cells_[index];
+    const auto& path = posed ? *posed : cell.path;
     if (!visible(after) || path.isEmpty() || opacity <= 0) return;
     SkAutoCanvasRestore restore(&canvas, edge.has_value());
     if (edge) {
@@ -102,7 +105,8 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     }
     auto paint = posed ? strokePaint() : SkPaint{};
     paint.setAntiAlias(true);
-    paint.setColor(after ? after_ : before_);
+    paint.setColor(cell.gradients[after] ? SK_ColorWHITE : after ? after_ : before_);
+    paint.setShader(cell.gradients[after]);
     if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
     canvas.drawPath(path, paint);
 }
@@ -119,7 +123,7 @@ void PreparedGlow::composite(SkCanvas& canvas, const Source& source) const {
 
 void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index, bool after,
                                             std::optional<float> edge, const SkMatrix& transform, float opacity) const {
-    const auto& path = cells_[index];
+    const auto& path = cells_[index].path;
     if (!visible(after) || opacity <= 0 || path.isEmpty()) return;
     const float margin = 3.f * radius_ + 2.f;
     const auto bounds = path.getBounds().makeOutset(margin, margin);

@@ -41,12 +41,14 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         const auto kind = s.decorationKindForState(after);
         const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
         if (kind == "none") return true;
-        if (paint.mode != "solid") return false;
         if (kind == "shadow")
-            return caps.staticShadow && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
+            return caps.staticShadow && paint.mode == "solid"
+                && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
         // Ganesh's pinned blur image filter clamps larger sigmas.
         const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;
-        return caps.staticGlow && kind == "glow" && std::isfinite(radius) && radius <= 532.f;
+        const bool supportedPaint = paint.mode == "solid"
+            || (caps.gradientGlow && paint.mode == "gradient_vertical" && gradient(paint));
+        return caps.staticGlow && kind == "glow" && supportedPaint && std::isfinite(radius) && radius <= 532.f;
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
         || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
@@ -99,7 +101,8 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
     for (const auto& style : scene.charStyles)
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
             .bodyGradients = caps.roleBodyPaints, .imageFills = caps.roleBodyPaints,
-            .staticGlow = caps.roleStaticGlow, .latinPrimaryOutline = caps.latinPrimaryOutline});
+            .staticGlow = caps.roleStaticGlow, .latinPrimaryOutline = caps.latinPrimaryOutline,
+            .gradientGlow = caps.gradientGlow});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
         const auto& style = index < scene.lineStyles.size() ? scene.lineStyles[index] : scene.style;
