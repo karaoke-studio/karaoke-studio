@@ -60,6 +60,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_columns_decoration_no_wipe",
         "p07_vertical_reverse_decoration_no_wipe",
         "p07_vertical_decoration_fade",
+        "p07_vertical_decoration_line_motion",
         "p06_vertical_reverse_outline",
         "p06_vertical_columns_outline",
         "p06_vertical_columns_decoration",
@@ -469,6 +470,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_decoration_fade")
         && (!features.contains("p07_line_fade") || !(verticalGlow || verticalShadow || verticalRubyDecoration)))
         throw BackendError("Skia 竖排静态装饰淡化缺少对应能力");
+    if (features.contains("p07_vertical_decoration_line_motion")
+        && (!features.contains("p07_line_motion") || !(verticalGlow || verticalShadow || verticalRubyDecoration)))
+        throw BackendError("Skia 竖排静态装饰位移缺少对应能力");
     if (features.contains("p06_vertical_reverse_outline")
         && (!features.contains("p06_vertical_outline") || !features.contains("p05_reverse_wipe")))
         throw BackendError("Skia 反向竖排描边缺少对应能力");

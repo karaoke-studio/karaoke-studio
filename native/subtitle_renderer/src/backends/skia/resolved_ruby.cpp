@@ -162,7 +162,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool verticalSinging = vertical && line.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_scale");
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
-        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade))
+        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade || decorationMotion.upper))
             || verticalSinging || verticalGlowNoWipe || verticalShadowNoWipe)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool rtlShadow = rtl && features.contains("p06_rtl_ruby_shadow")

@@ -634,6 +634,68 @@ def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, d
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('entry,exit_,two_lanes,decoration', [
+    ('slide_in', 'slide_out', False, 'glow'), ('rise', 'rise', True, 'shadow'),
+    ('fade', 'rise', True, 'glow'),
+])
+def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, exit_, two_lanes, decoration):
+    from test_subtitle_skia_outline_ruby import premultiplied
+
+    if two_lanes:
+        track, base = annotated_column_project(project, 'n3_1074', True)
+    else:
+        track, base = vertical_ruby_source(project, span=(0, 1), position='center')
+        line, = track.lines
+        track = replace(track, lines=[replace(line, display_start_override_ms=0,
+                                              display_end_override_ms=line.end_ms + 800)])
+    base = replace(base, decoration_kind=decoration, glow_before_radius_px=6, glow_after_radius_px=7,
+                   ruby_decoration_kind=decoration, ruby_decoration_kind_before=decoration,
+                   ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5, shadow_offset_x=-8,
+                   shadow_offset_y=6, ruby_shadow_offset_x=8, ruby_shadow_offset_y=4)
+    style = replace(base, entry_anim=entry, exit_anim=exit_, entry_lead_ms=500, exit_fade_ms=500)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    plain = ir_for(binary, (track, base), dpr=1.5)
+    feature = 'p07_vertical_decoration_line_motion'
+    assert {feature, 'p07_line_motion', 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    first = ir['track']['lines'][0]
+    start, end = first['display_start_ms'], first['display_end_ms']
+    assert first['entry_duration_ms'] > 0 and first['exit_duration_ms'] > 0
+    times = [start + first['entry_duration_ms'] // 3, start + 650,
+             end - first['exit_duration_ms'] // 2]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    targets = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, [times[0]], generation=2)
+            configure(process, plain)
+            reference, _ = collect(process, times, generation=3)
+        assert np.array_equal(replay[0], frames[0]) and np.array_equal(frames[1], reference[1])
+        targets.append(np.stack(frames))
+
+        def center(frame):
+            alpha = frame[..., 3]
+            return np.array((np.average(np.arange(alpha.shape[1]), weights=alpha.sum(axis=0)),
+                             np.average(np.arange(alpha.shape[0]), weights=alpha.sum(axis=1))))
+
+        head, tail = (center(frames[i]) - center(reference[i]) for i in (0, 2))
+        if entry == 'slide_in':
+            assert head[0] < -10 and tail[0] < -10, (head, tail)
+            assert abs(head[1]) < 2 and abs(tail[1]) < 2, (head, tail)
+        else:
+            assert tail[1] < -10 and abs(tail[0]) < 2, tail
+            expected_head = head[1] > 8 if entry == 'rise' else abs(head[1]) < 2
+            assert expected_head, head
+        assert all(frames[i][..., 3].sum() < reference[i][..., 3].sum() for i in (0, 2))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),
