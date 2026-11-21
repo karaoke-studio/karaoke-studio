@@ -161,8 +161,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
         && ((line.karaokeAnimation == "none" && (staticLine || verticalFade)) || verticalGlowNoWipe || verticalShadowNoWipe)
         && !line.wipeReverse && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+    const bool rtlShadow = rtl && features.contains("p06_rtl_ruby_shadow")
+        && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe");
     const bool allowShadow = features.contains("p06_ruby_shadow")
-        && !rtl && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe)
+        && (!rtl || rtlShadow) && (!vertical || allowVerticalDecoration)
+        && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow)
         && !line.zoomPulseEnabled
         && (staticLine || verticalFade);
     const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");

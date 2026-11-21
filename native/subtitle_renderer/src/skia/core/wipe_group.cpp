@@ -172,11 +172,11 @@ void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& 
 
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
     if (!shadow_.visible() || bounds_.isEmpty()) return;
-    const float edge = frontAt(timeMs, vertical_ ? bounds_.top() : bounds_.left());
+    const float edge = frontAt(timeMs, wipeStart());
     const bool complete = lineWipeComplete(cells_, timeMs);
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
     if (!scale.active) {
-        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_);
+        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_, rightToLeft_);
         return;
     }
     shadow_.drawAnimated(canvas, cells_, bounds_, edge, complete, pad, [&](std::size_t index) {

@@ -38,6 +38,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_zero_ruby_no_wipe",
         "p05_horizontal_rtl",
         "p05_horizontal_rtl_ruby",
+        "p06_rtl_ruby_shadow",
         "p07_rtl_ruby_singing_scale",
         "p07_rtl_ruby_no_wipe",
         "p05_horizontal_rtl_cells",
@@ -282,6 +283,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p05_horizontal_rtl")
         && layout.value("horizontal_rtl_schema").toDouble(-1) != 1)
         throw BackendError("Skia 右至左单元排列布局版本无效");
+    if (features.contains("p06_rtl_ruby_shadow") && (!features.contains("p05_horizontal_rtl_ruby")
+        || !(features.contains("p06_static_shadow") || features.contains("p06_ruby_shadow"))))
+        throw BackendError("Skia 右至左阴影缺少对应布局或装饰能力");
     if (features.contains("p05_horizontal_rtl_cells")
         && (layout.value("horizontal_rtl_cell_schema").toDouble(-1) != 1
             || !features.contains("p05_horizontal_rtl")))

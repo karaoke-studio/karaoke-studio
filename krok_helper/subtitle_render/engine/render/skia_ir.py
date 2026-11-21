@@ -578,17 +578,21 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
+        rtl_shadow = False
         if style.right_to_left:
             for item, reading in zip(plan.lines, geometry.ruby.lines, strict=True):
                 look = item.layout_style
                 source = ir['track']['lines'][item.track_index]
-                if (look.stroke_width_px <= 0 or item.line.wipe_reverse or _uses_decoration(look, 'shadow')
+                shadow = _uses_decoration(look, 'shadow') or any(
+                    'shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
+                if (look.stroke_width_px <= 0 or item.line.wipe_reverse
                         or source.get('karaoke_anim') not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
                         or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                         or _inline_role_labels(item)
-                        or any('shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)):
-                    raise ValueError('Skia 右至左上注音当前需要有描边的普通走字、整字变色或 Utopia 唱字，支持实色光晕')
+                        or (shadow and source.get('karaoke_anim') == 'utopia')):
+                    raise ValueError('Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种')
+                rtl_shadow |= shadow
         markers = any(is_utopia_group_marker(ruby) for ruby in track.rubies)
         sources, indices = lower_sources(prepared[0])
         zoom_lines = {
@@ -614,6 +618,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if style.right_to_left:
             ir['required_features'].append('p05_horizontal_rtl_ruby')
+            if rtl_shadow:
+                ir['required_features'].append('p06_rtl_ruby_shadow')
             if singing_lines:
                 ir['required_features'].append('p07_rtl_ruby_singing_scale')
         if zoom_lines:

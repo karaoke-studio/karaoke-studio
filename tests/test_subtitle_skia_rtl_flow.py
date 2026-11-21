@@ -258,6 +258,59 @@ def test_rtl_upper_reading_matches_actual_gpu(binary, application, tmp_path, sem
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('effect', ['none', 'no_wipe'])
+def test_rtl_ruby_shadow_keeps_the_same_front_after_seek(binary, reading, target, effect):
+    track, style = reading
+    palette = colors('#00000000', '#00000000')
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#FFFF0000')),
+                      after=replace(palette.after, shadow=PaintFill(color='#FF0000FF')))
+    style = replace(style, right_to_left=True, stroke_width_px=4, karaoke_anim=effect,
+                    decoration_before_sync=False, ruby_karaoke_colors=palette,
+                    ruby_decoration_kind='shadow', ruby_decoration_kind_before='shadow',
+                    ruby_shadow_offset_x=4, ruby_shadow_before_offset_x=4)
+    ir = ir_for(binary, (track, style))
+    feature = 'p06_rtl_ruby_shadow'
+    assert feature in ir['required_features']
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    start, end = group['units'][0]['interval_ms']
+    times = [start - 1, end if effect == 'no_wipe' else (start + end) // 2]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+    channels = [np.sum(frames[1][..., channel].astype(float) * frames[1][..., 3], axis=0) for channel in (0, 2)]
+    assert all(weights.sum() > 0 for weights in channels)
+    red, blue = [np.average(np.arange(weights.size), weights=weights) for weights in channels]
+    assert blue > red
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect,semantics,before,after', [
+    ('none', 'legacy', 'shadow', 'shadow'), ('none', 'n3_1074', 'shadow', 'shadow'),
+    ('no_wipe', 'legacy', 'shadow', 'shadow'), ('no_wipe', 'n3_1074', 'shadow', 'shadow'),
+    ('no_wipe', 'legacy', 'shadow', 'glow'), ('no_wipe', 'n3_1074', 'glow', 'shadow'),
+])
+def test_rtl_ruby_shadow_matches_actual_gpu(binary, application, tmp_path, effect, semantics, before, after):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
+    style = replace(case.style, layout_semantics=semantics, karaoke_anim=effect, decoration_before_sync=False,
+                    decoration_kind=after, decoration_kind_before=before,
+                    ruby_decoration_kind=after, ruby_decoration_kind_before=before,
+                    shadow_offset_x=9, shadow_offset_y=6, shadow_before_offset_x=9, shadow_before_offset_y=6,
+                    ruby_shadow_offset_x=4, ruby_shadow_offset_y=3,
+                    ruby_shadow_before_offset_x=4, ruby_shadow_before_offset_y=3)
+    times = (300, 600, 1500, 2600, 3400, 3450, 3500, 3650, 3900, 4120, 4400, 4499, 4500, 4501, 5000)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
 # horizontal_rtl_cell_schema=1: GPU-validated multi-codepoint authored cells
 # (Latin/Latin-1, combining diacritics, CJK ideographs, Hangul syllables).
 CELL_TEXTS={'cells':['fi','a\u0301','字字','AA'],'spaces':['A ','  ',' \u00e1','字 ']}

@@ -218,7 +218,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || line.entryAnimation != "none" || line.exitAnimation != "none" || line.zoomPulseEnabled
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || !projected.charStyles.empty()))
-            throw BackendError("Skia 右至左上注音当前需要有描边的普通走字、整字变色或 Utopia 唱字，支持实色光晕");
+            throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool transformedRuby = annotated
             && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
@@ -590,10 +590,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
+        const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
         if (hasDecoration
-            && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || hasShadow))
+            && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || (hasShadow && !rtlShadow)))
                 || (line.wipeReverse && !reverseVerticalDecoration)
-                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe))
+                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow))
                 || (!(lineGlow || (verticalDecoration && verticalFade))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !scanlineGlow)
