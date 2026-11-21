@@ -41,6 +41,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_rtl_ruby_shadow",
         "p07_rtl_ruby_singing_scale",
         "p07_rtl_ruby_no_wipe",
+        "p07_rtl_ruby_line_animation",
         "p05_horizontal_rtl_cells",
         "p05_vertical_solid",
         "p05_vertical_japanese_glyphs",
@@ -290,6 +291,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_rtl_ruby_no_wipe")
         && (!features.contains("p05_horizontal_rtl_ruby") || !features.contains("p07_no_wipe")))
         throw BackendError("Skia 右至左上注音整字变色缺少对应布局能力");
+    if (features.contains("p07_rtl_ruby_line_animation")
+        && (!features.contains("p07_rtl_ruby_singing_scale") || !features.contains("p07_utopia_line_animation")))
+        throw BackendError("Skia 右至左上注音整行出入场缺少对应能力");
     if (features.contains("p07_zero_ruby_no_wipe")
         && (layout.value("zero_ruby_no_wipe_schema").toDouble(-1) != 1
             || !features.contains("p07_no_wipe")))

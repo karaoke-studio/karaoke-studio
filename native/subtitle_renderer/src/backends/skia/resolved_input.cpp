@@ -213,9 +213,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rtlRuby = style.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
         const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
         const bool rtlRubyNoWipe = rtlRuby && prepared.noWipe && features.contains("p07_rtl_ruby_no_wipe");
+        const bool rtlRubyMotion = rtlRubySinging && features.contains("p07_rtl_ruby_line_animation");
         if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse
             || (line.karaokeAnimation != "none" && !rtlRubySinging && !rtlRubyNoWipe)
-            || line.entryAnimation != "none" || line.exitAnimation != "none" || line.zoomPulseEnabled
+            || (!rtlRubyMotion && (line.entryAnimation != "none" || line.exitAnimation != "none")) || line.zoomPulseEnabled
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || !projected.charStyles.empty()))
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
@@ -270,6 +271,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || line.entryAnimation == "rise")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
+        if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();

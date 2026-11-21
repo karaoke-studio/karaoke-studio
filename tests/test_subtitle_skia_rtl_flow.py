@@ -290,6 +290,49 @@ def test_rtl_ruby_shadow_keeps_the_same_front_after_seek(binary, reading, target
     assert blue > red
 
 
+_RTL_RUBY_LINE_PHASES = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('entry,exit_', _RTL_RUBY_LINE_PHASES)
+def test_rtl_ruby_line_motion_keeps_clocks_and_replays(binary, reading, target, entry, exit_):
+    track, style = reading
+    body = colors('#FFFFFFFF', '#FFFFFFFF')
+    stroke = PaintFill(color='#FF000000')
+    palette = replace(body, before=replace(body.before, stroke=stroke), after=replace(body.after, stroke=stroke))
+    style = replace(style, right_to_left=True, stroke_width_px=4, stroke2_enabled=False, karaoke_colors=palette,
+                    karaoke_anim='utopia', entry_anim=entry, exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600)
+    ir = ir_for(binary, (track, style))
+    feature = 'p07_rtl_ruby_line_animation'
+    assert feature in ir['required_features']
+    line, = ir['track']['lines']
+    assert (line['entry_anim'], line['exit_anim']) == (entry, exit_)
+    times = [line['display_start_ms'] + 150, line['display_start_ms'] + 650, line['display_end_ms'] - 150]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames)
+    assert all(not np.array_equal(frame, frames[1]) for frame in (frames[0], frames[2]))
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry,exit_', _RTL_RUBY_LINE_PHASES)
+def test_rtl_ruby_line_motion_matches_actual_gpu(binary, application, tmp_path, entry, exit_):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
+    style = replace(case.style, entry_anim=entry, exit_anim=exit_)
+    times = (299, 301, 375, 500, 750, 899, 900, 1500, 3950, 4500, 4900, 5100, 5350, 5499, 5500)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('effect,semantics,before,after', [
     ('none', 'legacy', 'shadow', 'shadow'), ('none', 'n3_1074', 'shadow', 'shadow'),
