@@ -3782,6 +3782,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 专项及横排柔化回归 **57 通过**，WSL X11、Wayland 各 **43 通过、14 项 Windows 专用跳过**。独立 Windows Raster 的 **4 帧**与 Vulkan sidecar 的 Raster 模式逐字节一致。日志前缀 `build/p07-vertical-scanline-*`。
 - `cc07a857` 的 Windows 竖排和架构全套 **287 通过**。原始样本中已纳入严格双对照的 **111 个场景、496 张 1080p 帧**复验通过。Windows D2D 走实际 GPU，Skia 对照走 Vulkan 和 Raster。日志 `build/p07-vertical-full-closeout.log`，逐帧证据 `build/p00-skia-coverage/original-warm-pixels-cc07a857.json`。
 - 横排 Utopia 的 DPR 1 测试保留原有时钟边界，再加 50ms 等间隔采样。暂停区间的所有采样都要求没有高亮带。原有墨迹、走字锋面、高亮边缘的 **1px** 预算与最低命中数继续适用。Windows 实际 D2D GPU 对 Vulkan **6 通过**，日志 `build/p07-scanline-dense-utopia-d2d.log`。
+- `cc07a857` 的 [Mac 双架构 CI 44951101351](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44951101351) 五项成功。arm64、x64 各 **2303 通过、1563 跳过**，两份干净包各 **261 通过**，**98 份**规范样本的跨架构哈希一致。Metal 真机门槛仍待验证。
 
 ### 14.322 P07.7 竖排扫字带叠加正文和注音装饰（2026-11-22）
 
