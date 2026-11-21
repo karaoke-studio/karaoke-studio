@@ -156,6 +156,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_band",
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
+        "p07_vertical_mixed_scanline",
         "p07_vertical_scanline_line_animation",
         "p07_vertical_scanline_singing",
         "p07_vertical_scanline_palette",
@@ -667,8 +668,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 竖排扫字线缺少对应布局能力");
     if (features.contains("p07_vertical_reverse_scanline")
         && (!features.contains("p07_vertical_scanline_band") || !reverseVertical
-            || features.contains("p05_resolved_ruby") || scanlineVersion < 4))
+            || (features.contains("p05_resolved_ruby") && !features.contains("p07_vertical_mixed_scanline"))
+            || scanlineVersion < 4))
         throw BackendError("Skia 竖排反向扫字线缺少对应布局能力");
+    if (features.contains("p07_vertical_mixed_scanline")
+        && (!features.contains("p07_vertical_reverse_scanline") || !reverseVerticalRuby))
+        throw BackendError("Skia 正反混合的竖排扫字线缺少对应注音轨道能力");
     if (features.contains("p07_vertical_scanline_line_animation")
         && (!features.contains("p07_vertical_scanline_band") || !features.contains("p07_scanline_unscaled_line_animation")))
         throw BackendError("Skia 竖排扫字线缺少对应行出入场能力");

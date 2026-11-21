@@ -406,7 +406,7 @@ def test_vertical_viewport_rotates_body_and_reading_wipes(binary, project, angle
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('karaoke', ['none', 'no_wipe'])
+@pytest.mark.parametrize('karaoke', ['none', 'no_wipe', 'scanline'])
 @pytest.mark.parametrize('decorated', [False, True])
 def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke, decorated):
     from test_subtitle_skia_outline_ruby import premultiplied
@@ -421,8 +421,13 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
     reverse_ruby = replace(authored, target_line_index=1, pos_start_ms=authored.pos_start_ms + 3000,
                            pos_end_ms=authored.pos_end_ms + 3000)
     track = replace(track, lines=[first, second], rubies=[authored, reverse_ruby])
-    style = replace(style, karaoke_anim=karaoke, reverse_karaoke_anim=karaoke,
+    ordinary = 'none' if karaoke == 'scanline' else karaoke
+    style = replace(style, karaoke_anim=ordinary, reverse_karaoke_anim=ordinary,
                     karaoke_colors=colors('#FF0000', '#0000FF'))
+    if karaoke == 'scanline':
+        style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_reverse_enabled=True,
+                        scanline_shape='band', scanline_mode='color', scanline_color='#00FFFF',
+                        scanline_width_px=42, scanline_glow_px=5)
     if decorated:
         style = replace(style, stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=2,
                         decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6)
@@ -430,13 +435,15 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
     bare = ir_for(binary, (replace(track, rubies=[]), style), dpr=1.5)
     feature = 'p05_vertical_reverse_ruby_track'
     assert {'p05_vertical_ruby', 'p05_reverse_wipe', feature} <= set(ir['required_features'])
+    if karaoke == 'scanline':
+        assert 'p07_vertical_mixed_scanline' in ir['required_features']
     assert len(ir['track']['rubies']) == 2
     forward, reverse = ir['skia_layout']['lines']
     assert len(forward['ruby_groups']) == 1 and reverse['ruby_groups'] == []
     assert reverse['cells'] == bare['skia_layout']['lines'][1]['cells']
     assert [cell['clock_index'] for cell in reverse['cells']] == list(range(len(second.chars) - 1, -1, -1))
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
+    bad['required_features'].remove('p07_vertical_mixed_scanline' if karaoke == 'scanline' else feature)
     bad_group = copy.deepcopy(ir)
     bad_group['skia_layout']['lines'][1]['ruby_groups'] = forward['ruby_groups']
     times = [400, 3300, 3800, 4300]
@@ -458,6 +465,10 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
         red = np.nonzero((r > 210) & (b < 16) & (g < 16) & (alpha > 128))[0]
         blue = np.nonzero((b > 210) & (r < 16) & (g < 16) & (alpha > 128))[0]
         assert red.size and blue.size and np.median(blue) > np.median(red)
+        if karaoke == 'scanline':
+            for frame in (frames[0], frames[1], frames[2]):
+                red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+                assert np.any((red < 40) & (green > 180) & (blue > 180) & (alpha > 64))
         captures.append(np.stack(frames))
     diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003

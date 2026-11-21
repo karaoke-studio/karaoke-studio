@@ -329,6 +329,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool verticalScanlineMotion = movingUnscaledScanline && movingScanline
             && features.contains("p07_vertical_scanline_line_animation");
+        const bool mixedVerticalScanline = cfg.vertical && features.contains("p07_vertical_mixed_scanline");
         const bool verticalPaletteBand = features.contains("p07_vertical_scanline_palette")
             && staticScanline && !source.wipeReverse && source.karaokeAnimation == "none"
             && (resolved.scanlineMode == "brighten" || resolved.scanlineMode == "follow_before"
@@ -351,7 +352,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
                 || (features.contains("p05_lower_ruby") && !lowerScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
-                || (rubyScanline && (source.wipeReverse || (resolved.scanlineMode == "role" && !roleLayers)
+                || (rubyScanline && ((source.wipeReverse && !mixedVerticalScanline)
+                    || (resolved.scanlineMode == "role" && !roleLayers)
                     || !(staticScanline || movingScanline || particleScanline)
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前的布局或高亮组合不受支持");

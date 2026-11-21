@@ -227,8 +227,6 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
                     or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                     or line.get('zoom_pulse') or line.get('stroke_flash') or bursts):
                 raise ValueError('Skia 竖排扫字线当前仅支持普通走字或正向 Utopia 的实色高亮带')
-            if source.wipe_reverse and track.rubies:
-                raise ValueError('Skia 竖排反向扫字线当前仅支持正文轨道')
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse
             moving_vertical_band |= motion
@@ -279,6 +277,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks, vertical_
         features.append('p07_vertical_scanline_band')
     if reverse_vertical_band:
         features.append('p07_vertical_reverse_scanline')
+        if track.rubies:
+            features.append('p07_vertical_mixed_scanline')
     if moving_vertical_band:
         features.append('p07_vertical_scanline_line_animation')
     if vertical_singing_band:
