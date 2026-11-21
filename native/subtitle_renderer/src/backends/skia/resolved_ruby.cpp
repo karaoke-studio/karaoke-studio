@@ -191,8 +191,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
         && (staticLine || decorationMotion.lower) && features.contains("p07_lower_ruby_no_wipe_decoration"));
-    const bool lowerScanline = line.scanlineEnabled && staticLine && line.karaokeAnimation != "no_wipe"
-        && features.contains("p07_lower_ruby_scanline");
+    const bool lowerScanline = line.scanlineEnabled && line.karaokeAnimation != "no_wipe"
+        && features.contains("p07_lower_ruby_scanline")
+        && (staticLine || (decorationMotion.lower && features.contains("p07_lower_ruby_scanline_line_animation")));
     const bool allowLowerDecoration = !vertical && (staticLine || decorationMotion.lower)
         && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
         && (!line.scanlineEnabled || lowerScanline) && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();

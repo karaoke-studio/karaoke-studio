@@ -314,14 +314,17 @@ def test_lower_decoration_no_wipe_matches_actual_gpu(binary, application, tmp_pa
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('karaoke', ['none', 'utopia'])
-def test_lower_scanline_follows_the_romanized_reading_clock(binary, glowing_lower, target, karaoke):
+@pytest.mark.parametrize('animated', [False, True])
+def test_lower_scanline_follows_the_romanized_reading_clock(binary, glowing_lower, target, karaoke, animated):
     track, style, resolve = glowing_lower
     style = replace(style, karaoke_anim=karaoke)
+    if animated:
+        style = replace(style, entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600)
     base = ir_for(binary, (track, style, resolve))
     started = replace(style, scanline_enabled=True, scanline_forward_enabled=True,
                       scanline_mode='color', scanline_color='#FFFFFF', scanline_width_px=18, scanline_glow_px=6)
     ir = ir_for(binary, (track, started, resolve))
-    feature = 'p07_lower_ruby_scanline'
+    feature = 'p07_lower_ruby_scanline_line_animation' if animated else 'p07_lower_ruby_scanline'
     assert feature in ir['required_features'] and feature not in base['required_features']
     assert ir['skia_layout']['lines'] == base['skia_layout']['lines']
     groups = ir['skia_layout']['lines'][0]['ruby_groups']
@@ -355,6 +358,37 @@ def test_lower_scanline_matches_actual_gpu(binary, application, tmp_path, karaok
                     scanline_mode='color', scanline_color='#FFFFAA', scanline_width_px=22, scanline_glow_px=6)
     case = replace(base, case_id=f'lower_scanline_{karaoke}', style=style)
     assert_ruby_transition_gpu_parity(binary, case, (600, 1450, 1750, 2050, 2600, 3175, 3575, 4125, 4400, 4550))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('karaoke,entry,exit_,mode,shadow,dpr', [
+    (karaoke, entry, exit_, mode, shadow, 1)
+    for karaoke in ('none', 'utopia')
+    for entry, exit_, mode, shadow in (
+        ('fade', 'fade', 'color', None),
+        ('slide_in', 'slide_out', 'follow_before', 'before'),
+        ('rise', 'rise', 'brighten', 'after'),
+    )
+] + [
+    ('none', 'fade', 'fade', 'color', None, 1.5),
+    ('utopia', 'rise', 'rise', 'brighten', 'after', 1.5),
+])
+def test_lower_scanline_line_motion_matches_actual_gpu(binary, application, tmp_path, karaoke, entry, exit_, mode,
+                                                       shadow, dpr):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
+    style = lower_shadow_style(base.style, shadow) if shadow else base.style
+    style = replace(style, karaoke_anim=karaoke, scanline_enabled=True, scanline_forward_enabled=True,
+                    scanline_mode=mode, scanline_color='#FFFFAA', scanline_width_px=22, scanline_glow_px=6,
+                    entry_anim=entry, exit_anim=exit_)
+    case = replace(base, case_id=f'lower_scanline_motion_{karaoke}_{mode}', track=replace(base.track, lines=[line]),
+                   style=style)
+    times = (950, 951, 957, 967, 986, 1120, 1260, 1380, 1550, 2600,
+             4110, 4280, 4450, 4530, 4610, 4614, 4633, 4643, 4649, 4650)
+    assert_ruby_transition_gpu_parity(binary, case, times, dpr=dpr)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

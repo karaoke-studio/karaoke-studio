@@ -317,7 +317,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.wipeReverse && (staticScanline || movingScanline || particleScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = solidShape && (staticScanline || movingScanline);
-        const bool lowerScanline = features.contains("p07_lower_ruby_scanline") && staticScanline
+        const bool lowerScanline = features.contains("p07_lower_ruby_scanline")
+            && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
             && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         // Horizontal band with a separately negotiated upper-annotation pass.

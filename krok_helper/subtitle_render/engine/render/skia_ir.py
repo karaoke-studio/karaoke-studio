@@ -186,7 +186,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
     composed = role_layers = line_motion = False
     unscaled_line_motion = False
     shapes = set()
-    moving_shapes = shaped_singing = lower_readings = False
+    moving_shapes = shaped_singing = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -208,7 +208,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
                   and (ordinary or motion or particle_entry))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
-        lower_band = (look.lower_ruby_enabled and ordinary and look.scanline_shape == 'band'
+        lower_band = (look.lower_ruby_enabled and (ordinary or motion) and look.scanline_shape == 'band'
                       and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash or bursts))
         role_composition = look.scanline_mode == 'role' and (bool(track.rubies) or _uses_decoration(look, 'glow'))
         if ((look.scanline_shape != 'band' and not shape) or look.vertical or look.right_to_left
@@ -226,6 +226,7 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         line_motion |= motion and utopia
         unscaled_line_motion |= motion and not utopia
         lower_readings = lower_readings or lower_band
+        moving_lower_readings |= lower_band and motion
         if shape:
             shapes.add(look.scanline_shape)
             moving_shapes = moving_shapes or motion
@@ -241,6 +242,8 @@ def _validate_scanline_band(track, style, lines, particle_band_tracks):
         features.append('p07_scanline_line_animation')
     if unscaled_line_motion:
         features.append('p07_scanline_unscaled_line_animation')
+    if moving_lower_readings:
+        features.append('p07_lower_ruby_scanline_line_animation')
     if particle_band_tracks:
         features.append('p07_ruby_petal_entry_scanline')
     if moving_shapes:

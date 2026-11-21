@@ -157,6 +157,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_role_scanline_layers",
         "p07_ruby_scanline",
         "p07_lower_ruby_scanline",
+        "p07_lower_ruby_scanline_line_animation",
         "p07_ruby_scanline_particles",
         "p07_character_transform",
         "p07_sing_twinkle",
@@ -616,6 +617,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_lower_ruby_scanline")
         && (!features.contains("p07_ruby_scanline") || !features.contains("p05_lower_ruby") || scanlineVersion < 3))
         throw BackendError("Skia 下方注音扫字线缺少布局或高亮带能力声明");
+    if (features.contains("p07_lower_ruby_scanline_line_animation")
+        && (!features.contains("p07_lower_ruby_scanline")
+            || !(features.contains("p07_scanline_line_animation")
+                || features.contains("p07_scanline_unscaled_line_animation"))))
+        throw BackendError("Skia 下方注音扫字线缺少整行出入场能力");
     const auto transformVersion = layout.value("character_transform_schema").toDouble(-1);
     if (features.contains("p07_character_transform")
         && (transformVersion < 1 || transformVersion > kCharacterTransformSchema || std::floor(transformVersion) != transformVersion))

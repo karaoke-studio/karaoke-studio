@@ -234,14 +234,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool unscaledLineMotion = !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
-            && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && !vectorGuides && !hasInlineRoles;
         const bool horizontalShadowMotion = unscaledLineMotion
-            && features.contains("p07_horizontal_shadow_line_animation") && !features.contains("p05_lower_ruby")
+            && !line.scanlineEnabled && features.contains("p07_horizontal_shadow_line_animation")
+            && !features.contains("p05_lower_ruby")
             && (style.decorationKindForState(false) == "shadow" || style.decorationKindForState(true) == "shadow"
                 || (annotated && (style.rubyDecorationKindForState(false) == "shadow"
                                   || style.rubyDecorationKindForState(true) == "shadow")));
         const bool lowerUnscaledMotion = unscaledLineMotion && features.contains("p07_lower_ruby_unscaled_line_animation")
+            && (!line.scanlineEnabled || features.contains("p07_lower_ruby_scanline_line_animation"))
             && std::ranges::any_of(source.value("ruby_groups").toArray(), [](const auto& value) {
                 const auto group = value.toObject();
                 return group.value("lower").toBool() && (group.contains("lower_glow") || group.contains("lower_shadow"));
