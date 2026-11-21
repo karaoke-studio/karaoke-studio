@@ -9,19 +9,23 @@ public:
     explicit PreparedWipeGroup(const ResolvedRubyGroup&, bool noWipe = false, bool vertical = false,
                                std::optional<std::size_t> glowOffset = std::nullopt);
     std::optional<std::size_t> fadeOwner() const { return fadeOwner_; }
+    std::optional<std::size_t> utopiaExitOwner() const { return utopiaExitOwner_; }
     bool spins() const { return spinPivot_.has_value(); }
     bool lower() const { return lower_; }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
               const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {}) const;
     void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
+    void drawUtopiaExit(SkCanvas&, int timeMs, int followingDone, const UtopiaTransition&,
+                        float originX, float viewportHeight) const;
     void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
                         const SingingScale&, float originX, float opacity) const;
     void compositeSpinGlow(SkCanvas&, const PreparedGlow&, int timeMs, bool after, float opacity, const SkMatrix&) const;
     void drawScanline(SkCanvas&, const ScanlineBand&, int timeMs, const SingingScale&, float originX) const;
 private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible,
-                     float opacity, float viewportHeight) const;
+                     float opacity, float viewportHeight, const UtopiaTransition* exit = nullptr,
+                     int followingDone = 0) const;
     float wipeStart() const;
     float frontAt(int timeMs, float startEdge) const;
     sk_sp<SkShader> fillShader(const SkCanvas&, bool after) const;
@@ -29,6 +33,7 @@ private:
     StaticShadow shadow_;
     std::optional<std::size_t> glowOffset_;
     std::optional<std::size_t> fadeOwner_;
+    std::optional<std::size_t> utopiaExitOwner_;
     SkRect bounds_;
     bool antialiasClip_ = false;
     bool noWipe_ = false;

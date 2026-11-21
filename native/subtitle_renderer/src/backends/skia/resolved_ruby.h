@@ -3,7 +3,7 @@
 #include "../../model/render_scene.h"
 
 namespace krok::subtitle::native {
-enum class RubyTransition { None, Fade, Spin, Translation, Affine };
+enum class RubyTransition { None, Fade, Spin, Translation, Affine, UtopiaExit };
 enum class GlowPaintSupport;
 class SkiaImageFillCache;
 struct RolePaintBounds;

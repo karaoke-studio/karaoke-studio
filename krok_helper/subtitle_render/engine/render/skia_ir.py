@@ -587,8 +587,22 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if vertical_japanese_glyphs(track):
             ir['required_features'].append('p05_vertical_japanese_glyphs')
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
+    utopia_exit_lines = set()
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
+        if not lower_enabled:
+            for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True)):
+                source = ir['track']['lines'][item.track_index]
+                look = item.layout_style
+                if (reading.rubies and source.get('entry_anim') == 'none' and source.get('exit_anim') == 'utopia'
+                        and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
+                        and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
+                        and not (look.right_to_left or item.line.wipe_reverse or _inline_role_labels(item))
+                        and not any(_uses_decoration(look, kind) for kind in ('glow', 'shadow'))
+                        and all(kind == 'none' for group in reading.rubies
+                                for kind in ruby_decoration_kinds(group.target.style))
+                        and all(cell.vector_glyph is None for cell in item.render_line.chars)):
+                    utopia_exit_lines.add(index)
         rtl_shadow = False
         rtl_motion = False
         if style.right_to_left:
@@ -619,17 +633,20 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
             and (_ordinary_line_animation(line) or index in fade_lines or index in spin_lines
+                 or index in utopia_exit_lines
                  or index in composed_geometry_lines or _noise_animation(line))
         }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
             fade_lines=fade_lines | composed_geometry_lines, spin_lines=spin_lines,
-            affine_lines=affine_geometry_lines)
+            affine_lines=affine_geometry_lines | utopia_exit_lines, utopia_exit_lines=utopia_exit_lines)
         if 'p05_vector_guides' in ir['required_features']:
             ir['skia_layout']['vector_guide_schema'] = 1
         ir['track']['rubies'].extend(sources)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
+        if utopia_exit_lines:
+            ir['required_features'].append('p07_ruby_utopia_exit')
         if style.right_to_left:
             ir['required_features'].append('p05_horizontal_rtl_ruby')
             if rtl_shadow:
@@ -786,7 +803,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_lower_ruby_decoration_line_animation')
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
-    _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines)
+    _write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines)
     role_glow = any(feature in ir['required_features'] for feature in ('p06_role_static_glow', 'p06_ruby_role_glow'))
     if 'p07_line_fade' in ir['required_features'] and (role_glow or any(
             feature in ir['required_features'] for feature in ('p06_role_solid_outlines', 'p06_role_body_paints'))):

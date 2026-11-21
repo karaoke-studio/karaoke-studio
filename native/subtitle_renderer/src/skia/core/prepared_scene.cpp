@@ -191,6 +191,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     for (const auto& cell : group.cells)
                         layer.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot), group.glowGradients);
             }
+            if (group.utopiaExitOwner && (!line.utopiaTransition.leave || *group.utopiaExitOwner >= line.followingDone.size()))
+                throw std::runtime_error("Skia 上注音 Utopia 退场归属无效");
             line.rubyGroups.emplace_back(group, source.noWipe, source.vertical, glowOffset);
             if (needsPaintBounds) {
                 SkRect groupBounds = SkRect::MakeEmpty();

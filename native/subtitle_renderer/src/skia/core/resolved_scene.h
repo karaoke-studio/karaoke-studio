@@ -55,6 +55,7 @@ struct ResolvedRubyGroup {
     int glowStyle = -1;
     GlowGradients glowGradients;
     bool rightToLeft = false;
+    std::optional<std::size_t> utopiaExitOwner;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

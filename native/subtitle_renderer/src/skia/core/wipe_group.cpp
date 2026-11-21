@@ -65,6 +65,7 @@ float singingFront(const ResolvedCell& cell, int timeMs, float originX, const Sk
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
                                      std::optional<std::size_t> glowOffset)
     : cells_(group.cells), shadow_(group.shadow), glowOffset_(glowOffset), fadeOwner_(group.fadeOwner),
+      utopiaExitOwner_(group.utopiaExitOwner),
       noWipe_(noWipe), vertical_(vertical), rightToLeft_(group.rightToLeft),
       spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
       fillGradients_(group.fillGradients), fillImages_(group.fillImages) {
@@ -103,14 +104,27 @@ sk_sp<SkShader> PreparedWipeGroup::fillShader(const SkCanvas& canvas, bool after
 }
 
 void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
-                                   float originX, bool afterVisible, float opacity, float viewportHeight) const {
+                                   float originX, bool afterVisible, float opacity, float viewportHeight,
+                                   const UtopiaTransition* exit, int followingDone) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     std::vector<std::optional<ResolvedCell>> animated(cells_.size());
+    float exitOpacity = 1.f;
     for (std::size_t index = 0; index < cells_.size(); ++index) {
         const auto& cell = cells_[index];
         if (cell.path.isEmpty()) continue;
-        animated[index] = posedUnit(cell, scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot));
+        CharacterTransformState transform;
+        if (exit) {
+            auto pivot = cell.pivot;
+            // The final reading layout retains its visual center separately from its left edge.
+            pivot.layoutRight = 2 * pivot.layoutRight - pivot.layoutLeft;
+            transform = exit->at(timeMs, 0, 0, 0, followingDone, pivot, scale, cell.startMs, cell.endMs);
+            exitOpacity = transform.opacity;
+            if (exitOpacity <= 0.f) return;
+        } else {
+            transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+        }
+        animated[index] = posedUnit(cell, transform);
     }
     for (bool after : {false, true}) {
         if (after && !afterVisible) break;
@@ -123,12 +137,14 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
             if (after ? before : complete) continue;
             SkAutoCanvasRestore restore(&canvas, !before && !complete);
             if (!before && !complete) {
-                const float edge = singingFront(cell, timeMs, originX, cell.path.computeTightBounds(), rightToLeft_);
+                const auto ink = cell.path.computeTightBounds();
+                const float edge = exit ? transformedWipeEdge(originX, ink.left(), ink.right(), 1.f, cell.pivot.wipePad)
+                                        : singingFront(cell, timeMs, originX, ink, rightToLeft_);
                 const auto clip = after != rightToLeft_ ? SkRect::MakeLTRB(-1e6f, -1e6f, edge, 1e6f)
                                                        : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
                 clipViewportWipe(canvas, clip, viewportHeight, true);
             }
-            paintRubyCell(canvas, paint, cell, after, opacity, shader);
+            paintRubyCell(canvas, paint, cell, after, opacity * exitOpacity, shader);
         }
     }
 }
@@ -193,6 +209,11 @@ void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingSc
 float PreparedWipeGroup::wipeStart() const {
     if (vertical_) return bounds_.top();
     return rightToLeft_ ? bounds_.right() : bounds_.left();
+}
+
+void PreparedWipeGroup::drawUtopiaExit(SkCanvas& canvas, int timeMs, int followingDone,
+                                       const UtopiaTransition& transition, float originX, float viewportHeight) const {
+    drawSinging(canvas, timeMs, {}, originX, true, 1.f, viewportHeight, &transition, followingDone);
 }
 
 float PreparedWipeGroup::frontAt(int timeMs, float startEdge) const {

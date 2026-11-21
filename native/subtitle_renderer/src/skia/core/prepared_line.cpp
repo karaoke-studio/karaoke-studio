@@ -517,6 +517,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawStrokeFlash(canvas, ink ? *ink : cell.path, tMs - cell.startMs, cell.strokeFlashWidth);
         }
     for (const auto& group : line.rubyGroups) {
+        if (const auto owner = group.utopiaExitOwner(); owner && tMs > line.followingDone[*owner]) {
+            group.drawUtopiaExit(canvas, tMs, line.followingDone[*owner], line.utopiaTransition,
+                                 line.rubySingingOrigin, wipeViewportHeight);
+            continue;
+        }
         SkPoint ownerPivot{};
         if (rubyGeometryPhase && group.fadeOwner()) {
             const auto& pivot = line.cells[*group.fadeOwner()].pivot;

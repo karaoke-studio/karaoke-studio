@@ -134,6 +134,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_zoom_pulse_decoration",
         "p07_utopia_line_animation",
         "p07_utopia_transition",
+        "p07_ruby_utopia_exit",
         "p07_character_fade",
         "p07_character_entry_fade_composition",
         "p07_scanline_band",
@@ -489,6 +490,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 注音整字放大缺少正向上注音能力声明");
     if (features.contains("p07_utopia_transition") && layout.value("utopia_transition_schema").toDouble(-1) != 1)
         throw BackendError("Skia Utopia 出入场布局版本无效");
+    if (features.contains("p07_ruby_utopia_exit")
+        && (!features.contains("p07_utopia_transition") || !features.contains("p07_ruby_singing_scale")))
+        throw BackendError("Skia 上注音 Utopia 退场缺少对应能力");
     if (features.contains("p07_character_fade")
         && layout.value("character_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 逐字淡化布局版本无效");

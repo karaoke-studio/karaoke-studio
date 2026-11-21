@@ -13,7 +13,7 @@ from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts
 
 
 def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None,
-                         singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=(), affine_lines=()):
+                         singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=(), affine_lines=(), utopia_exit_lines=()):
     geometry, measured = prepared.geometry, prepared.measured
     ruby = geometry.ruby
     if ruby is None:
@@ -89,6 +89,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             serialized = {'style_cell': style_cell, 'units': units}
             if line_index in fade_lines or line_index in spin_lines:
                 serialized['fade_owner'] = indices[0]
+            if line_index in utopia_exit_lines:
+                serialized['utopia_exit_owner'] = indices[-1]
             if line_index in spin_lines:
                 if group.zoom_center_offset is None:
                     raise ValueError('Skia 注音翻转缺少规范字体轴心')

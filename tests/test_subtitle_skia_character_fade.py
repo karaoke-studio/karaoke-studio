@@ -385,6 +385,44 @@ def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entr
     assert_ruby_transition_gpu_parity(binary, case, times)
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_undecorated_ruby_utopia_exit_uses_last_base_unit(binary, reading, target):
+    track, style = reading
+    style = replace(style, entry_anim='none', exit_anim='utopia', karaoke_anim='utopia', line_tail_ms=0,
+                    decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_utopia_exit'
+    assert feature in ir['required_features']
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert group['utopia_exit_owner'] == 1
+    assert 'fade_owner' not in group
+    done = ir['track']['lines'][0]['resolved_intervals'][1][1]
+    times = [done, done + 200, done + 750]
+    without_owner = copy.deepcopy(ir)
+    without_owner['skia_layout']['lines'][0]['ruby_groups'][0]['utopia_exit_owner'] = 2
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, without_owner)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert frames[0].any() and frames[1].any() and not frames[2].any()
+    assert not np.array_equal(frames[0], frames[1])
+    assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_undecorated_ruby_utopia_exit_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_utopia')
+    style = replace(case.style, decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    times = (299, 301, 1500, 3400, 3600, 3900, 4000, 4500, 4501, 4700, 4900, 5100, 5249, 5250, 5499, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('effect', ['none', 'utopia'])
 def test_ruby_assembly_pair_matches_actual_gpu(binary, application, tmp_path, effect):

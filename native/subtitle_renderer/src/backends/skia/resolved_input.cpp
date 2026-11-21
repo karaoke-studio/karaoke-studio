@@ -226,6 +226,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.scanlineEnabled && !line.strokeFlashEnabled
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
+        const bool rubyUtopiaExit = transformedRuby && utopiaExit && singingScale && line.entryAnimation == "none"
+            && line.bursts.empty() && features.contains("p07_ruby_utopia_exit")
+            && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
+            && style.rubyDecorationKindForState(false) == "none" && style.rubyDecorationKindForState(true) == "none";
         const bool spinComposition = transformedRuby && features.contains("p07_ruby_character_exit_spin")
             && line.bursts.empty() && line.entryAnimation == "none" && line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
@@ -287,7 +291,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
-                || utopiaEntry || utopiaExit))
+                || utopiaEntry || (utopiaExit && !rubyUtopiaExit)))
             || (!projected.charStyles.empty() && !roleSinging)))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
@@ -477,6 +481,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (translationComposition) rubyTransition = RubyTransition::Translation;
         if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))
             rubyTransition = RubyTransition::Affine;
+        if (rubyUtopiaExit) rubyTransition = RubyTransition::UtopiaExit;
         std::optional<RolePaintBounds> rolePaintBounds;
         if (roleBodyPaints || gradientGlowWithoutTexturedRoles)
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,

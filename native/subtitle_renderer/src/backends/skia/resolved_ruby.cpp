@@ -218,14 +218,19 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
         if (rtl && lower) throw BackendError("Skia 右至左单元排列暂不支持下方注音组合");
-        const bool animatedOwner = transition != RubyTransition::None;
+        const bool utopiaExit = transition == RubyTransition::UtopiaExit;
+        const bool animatedOwner = transition != RubyTransition::None && !utopiaExit;
         const bool spinComposition = transition == RubyTransition::Spin;
-        const bool affineComposition = transition == RubyTransition::Affine;
+        const bool affineComposition = transition == RubyTransition::Affine || utopiaExit;
         if ((animatedOwner && lower) || object.contains("fade_owner") != animatedOwner)
             throw BackendError("Skia 注音缺少有效的逐字淡化归属");
         std::optional<std::size_t> fadeOwner;
         if (animatedOwner)
             fadeOwner = integer(object.value("fade_owner"), 0, int(line.chars.size()) - 1);
+        if ((utopiaExit && lower) || object.contains("utopia_exit_owner") != utopiaExit)
+            throw BackendError("Skia 注音 Utopia 退场缺少有效归属");
+        std::optional<std::size_t> utopiaExitOwner;
+        if (utopiaExit) utopiaExitOwner = integer(object.value("utopia_exit_owner"), 0, int(line.chars.size()) - 1);
         std::optional<SkPoint> spinPivot;
         if (object.contains("spin_pivot") != spinComposition)
             throw BackendError("Skia 注音翻转缺少最终轴心");
@@ -471,7 +476,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
-                          roleGlow && !lower ? role : -1, std::move(glowGradients), rtl});
+                          roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner});
     }
     return groups;
 }
