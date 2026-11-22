@@ -766,6 +766,8 @@ effect_styles = {
                           karaoke_anim='utopia', ruby_decoration_kind='none', stroke_width_px=4),
     'petal-sparkle': dict(entry_anim='petal', exit_anim='sparkle', entry_lead_ms=500, exit_fade_ms=600,
                           karaoke_anim='utopia', ruby_decoration_kind='none', stroke_width_px=4),
+    'petal-ripple': dict(entry_anim='petal', exit_anim='ripple', entry_lead_ms=500, exit_fade_ms=600,
+                         karaoke_anim='utopia', ruby_decoration_kind='none', stroke_width_px=4),
     'particle-image-band': dict(entry_anim='petal', exit_anim='note', entry_lead_ms=600, exit_fade_ms=600,
                                 karaoke_anim='utopia', sing_fx='flame', scanline_enabled=True,
                                 scanline_shape='image', scanline_mode='color', decoration_kind='glow',
@@ -904,6 +906,7 @@ if '--compare-export' in sys.argv:
         'shadow-motion': {24: 400, 48: 800, 90: 1500},
         'particle-pair': {18: 300, 57: 950, 108: 1800},
         'petal-sparkle': {18: 300, 57: 950, 108: 1800},
+        'petal-ripple': {18: 300, 57: 950, 108: 1800},
         'particle-image-band': {18: 300, 33: 550, 48: 800, 93: 1550, 105: 1750},
         'band-motion': {24: 400, 48: 800, 90: 1500, 93: 1550},
         'vertical-petals': {12: 200, 60: 1000, 81: 1350},
@@ -951,7 +954,7 @@ if '--compare-export' in sys.argv:
         process = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
         process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000, extra_tracks=extra_tracks)
         preview_reference = process
-        if vertical_effect or effect in {'band-motion', 'particle-image-band', 'petal-sparkle'}:
+        if vertical_effect or effect in {'band-motion', 'particle-image-band', 'petal-sparkle', 'petal-ripple'}:
             # Compare device-pixel strokes and feathering at the preview's actual
             # rendering scale and keep the export reference at 1x.
             preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
@@ -1074,7 +1077,7 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
                                      'vertical-motion-sweep-particles', 'vertical-outlined-particles',
                                      'vertical-multi-sweep', 'vertical-decorated-particles', 'vertical-no-wipe-particles',
-                                     'particle-image-band', 'petal-sparkle'],
+                                     'particle-image-band', 'petal-sparkle', 'petal-ripple'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
@@ -1083,7 +1086,7 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                               'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
                               'vertical-motion-sweep-particles', 'vertical-outlined-particles',
                               'vertical-multi-sweep', 'vertical-decorated-particles', 'vertical-no-wipe-particles',
-                              'particle-image-band', 'petal-sparkle'])
+                              'particle-image-band', 'petal-sparkle', 'petal-ripple'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

@@ -348,7 +348,7 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
 _UNDECORATED_RUBY_PARTICLE_ENTRIES = ['sparkle', 'heart', 'petal', 'feather', 'snow', 'snow_solid']
 _UNDECORATED_RUBY_PARTICLE_PAIRS = [
     (entry, exit_) for entry in ('heart', 'petal', 'feather') for exit_ in ('heart', 'petal', 'feather')
-] + [('petal', 'sparkle')]
+] + [('petal', 'sparkle'), ('petal', 'ripple')]
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -796,7 +796,7 @@ def test_entry_fade_or_rise_and_ruby_spin_exit_match_gpu(binary, application, tm
 ] + [
     ('petal', 'heart', 200, 1.5), ('feather', 'petal', 50, 1.5), ('heart', 'feather', 100, 1.5),
 ] + [
-    ('petal', 'sparkle', speed, 1.5) for speed in (50, 100, 200)
+    ('petal', exit_, speed, 1.5) for exit_ in ('sparkle', 'ripple') for speed in (50, 100, 200)
 ])
 def test_undecorated_ruby_particle_pair_matches_actual_gpu(binary, application, tmp_path, entry, exit_, speed, dpr):
     from scripts.subtitle_gpu_baseline.cases import build_cases
@@ -809,7 +809,7 @@ def test_undecorated_ruby_particle_pair_matches_actual_gpu(binary, application, 
              5450, 5475, 5480, 5493, 5499, 5500, 5900)
     if dpr != 1:
         times = (301, 650, 899, 1500, 4900, 5300, 5450, 5475, 5480, 5493, 5499, 5500)
-    if exit_ == 'sparkle':
+    if exit_ in {'sparkle', 'ripple'}:
         times = tuple(sorted({*times, 300, 302, 303, 5479, 5481, 5498}))
     assert_ruby_transition_gpu_parity(
         binary, replace(case, case_id=f'{entry}_in_{exit_}_out_{speed}', style=style), times, dpr=dpr)

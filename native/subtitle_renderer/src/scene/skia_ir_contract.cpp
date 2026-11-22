@@ -272,7 +272,7 @@ bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
     if (entry == "assemble" && exit == "dissolve")
         return features.contains("p07_ruby_particle_assembly_pair");
     const auto canPair = [](const QString& kind) { return kind == "petal" || kind == "feather" || kind == "heart"; };
-    if ((canPair(entry) && canPair(exit)) || (entry == "petal" && exit == "sparkle"))
+    if ((canPair(entry) && canPair(exit)) || (entry == "petal" && (exit == "sparkle" || exit == "ripple")))
         return features.contains(entry == exit ? "p07_ruby_particle_entry_exit" : "p07_ruby_mixed_particle_entry_exit");
     if (entry.isEmpty() == exit.isEmpty())
         return features.contains("p07_ruby_energy_pair")
