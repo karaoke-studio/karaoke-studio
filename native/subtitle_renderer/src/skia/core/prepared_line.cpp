@@ -491,14 +491,19 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             });
     }
     if (utopia && line.shadow.visible()) {
-        const float edge = lineWipeFront(line.cells, tMs, line.decorationInk.left(),
-                                        line.shadow.secondaryWidth / 2 + .5f, false);
+        const bool reverse = line.vertical && line.wipeRightToLeft;
+        const float origin = line.vertical
+            ? (reverse ? line.decorationInk.bottom() : line.decorationInk.top())
+            : line.decorationInk.left();
+        const float edge = lineWipeFront(line.cells, tMs, origin, line.shadow.secondaryWidth / 2 + .5f,
+                                        reverse, line.vertical);
         line.shadow.drawAnimated(canvas, line.cells, line.decorationInk, edge, lineWipeComplete(line.cells, tMs),
             line.shadow.outlineWidth + line.shadow.secondaryWidth + 4.f, [&](std::size_t index) {
                 const auto& state = states[index];
                 return StaticShadow::WipePose{state.transform, state.phase == Phase::Before,
-                    state.phase == Phase::Wiping ? std::optional<float>(transformedEdge(index)) : std::nullopt};
-            });
+                    state.phase == Phase::Wiping
+                        ? std::optional<float>(line.vertical ? state.edge : transformedEdge(index)) : std::nullopt};
+            }, line.vertical, reverse);
     } else {
         line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft,
                          titleOpacity, line.noWipe);

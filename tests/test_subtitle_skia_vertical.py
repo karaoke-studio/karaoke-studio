@@ -625,6 +625,63 @@ def test_reverse_vertical_scaling_keeps_bottom_to_top_wipe(binary, project, kara
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('reverse,karaoke', [(False, 'utopia'), (False, 'zoom_pulse'),
+                                           (True, 'utopia'), (True, 'zoom_pulse')])
+def test_vertical_singing_shadow_scales_around_the_fixed_wipe_axis(binary, project, reverse, karaoke):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_source(project, texts=['字'], position='top', reverse=reverse)
+    line, = track.lines
+    track = replace(track, lines=[replace(line, end_ms=700, display_end_override_ms=1400)])
+    palette = colors('#00000000', '#00000000')
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#FF0000')),
+                      after=replace(palette.after, shadow=PaintFill(color='#0000FF')))
+    baseline = replace(style, karaoke_colors=palette, decoration_kind='shadow', decoration_before_sync=False,
+                       decoration_kind_before='shadow', shadow_before_offset_x=-12, shadow_offset_x=-12,
+                       shadow_before_offset_y=2, shadow_offset_y=2, stroke_width_px=0)
+    animated = replace(baseline, karaoke_anim=karaoke, reverse_karaoke_anim=karaoke,
+                       zoom_pulse_peak_pct=200, zoom_pulse_curve_level=2)
+    ir = ir_for(binary, (track, animated), dpr=1.5)
+    before_only = ir_for(binary, (track, replace(animated, decoration_kind='none')), dpr=1.5)
+    static = ir_for(binary, (track, baseline), dpr=1.5)
+    feature = 'p07_vertical_singing_shadow'
+    assert {feature, 'p06_vertical_shadow', 'p07_vertical_singing_scale'} <= set(ir['required_features'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    (start, end), = ir['track']['lines'][0]['resolved_intervals']
+    times = [start - 1, (start + end) // 2, end + 300]
+    captures = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, static)
+            steady, _ = collect(process, times, generation=3)
+            configure(process, before_only)
+            unsung, _ = collect(process, times[1:], generation=4)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        red, _, blue, alpha = np.moveaxis(frames[1], -1, 0)
+        before = np.nonzero((red > 210) & (blue < 20) & (alpha > 160))[0]
+        after = np.nonzero((blue > 210) & (red < 20) & (alpha > 160))[0]
+        assert before.size and after.size
+        assert bool(np.median(after) > np.median(before)) == reverse
+        remaining = np.nonzero((unsung[0][..., 0] > 210) & (unsung[0][..., 3] > 160))[0]
+        assert remaining.size and not unsung[1].any()
+        compare_extent = np.min if reverse else np.max
+        assert compare_extent(remaining) == compare_extent(before)
+        assert np.count_nonzero(alpha > 160) > np.count_nonzero(steady[1][..., 3] > 160)
+        for i in (0, 2):
+            assert abs(premultiplied(frames[i]) - premultiplied(steady[i])).max() <= 1
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',
                                       'rotated_text', 'horizontal_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

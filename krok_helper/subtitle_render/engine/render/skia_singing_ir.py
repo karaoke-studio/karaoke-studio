@@ -17,7 +17,6 @@ def vertical_singing_lines(ir, plan):
                 and ({source.get('entry_anim'), source.get('exit_anim')} == {'none'}
                      or not item.line.wipe_reverse)
                 and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
-                and not uses_authored_decoration(look, 'shadow')
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):
             tracks.add(item.track_index)
     return tracks
@@ -28,6 +27,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
     singing, transition, singing_ruby = False, False, False
     vertical_ruby_zoom = False
     vertical_line_animation = False
+    vertical_shadow = False
     role_singing = False
     with_line_animation = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
@@ -43,6 +43,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
             singing_ruby |= annotated
             vertical_ruby_zoom |= annotated and bool(source.get('zoom_pulse'))
             vertical_line_animation |= animations != {'none'}
+            vertical_shadow |= uses_authored_decoration(style, 'shadow')
             continue
         line_animation = scales and animations != {'none'} and ordinary_line_animation(source)
         with_character_transition = index in transition_lines
@@ -94,5 +95,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         ir['required_features'].append('p07_ruby_zoom_pulse')
     if vertical_line_animation:
         ir['required_features'].append('p07_vertical_singing_line_animation')
+    if vertical_shadow:
+        ir['required_features'].append('p07_vertical_singing_shadow')
     if with_line_animation or vertical_line_animation:
         ir['required_features'].append('p07_utopia_line_animation')

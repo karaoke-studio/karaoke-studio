@@ -87,18 +87,28 @@ struct StaticShadow {
 
     template <class Cell, class PoseAt>
     void drawAnimated(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
-                      float edge, bool complete, float beforePad, PoseAt&& poseAt) const {
+                      float edge, bool complete, float beforePad, PoseAt&& poseAt,
+                      bool vertical = false, bool reverse = false) const {
         if (!visible() || ink.isEmpty()) return;
         const float width = outlineWidth + secondaryWidth;
         const float pad = std::max(width, 2.f) + 4.f;
+        const float low = vertical ? ink.top() : ink.left(), high = vertical ? ink.bottom() : ink.right();
+        const auto band = [vertical](float start, float end) {
+            return vertical ? SkRect::MakeLTRB(-1e6f, start, 1e6f, end)
+                            : SkRect::MakeLTRB(start, -1e6f, end, 1e6f);
+        };
         for (bool sung : {false, true}) {
             const auto& state = sung ? after : before;
-            if (!state.visible() || (sung && edge <= ink.left())) continue;
+            if (!state.visible() || (sung && (reverse ? edge >= high : edge <= low))) continue;
             const bool beforeOnly = !sung && !after.enabled;
             if (beforeOnly && complete) continue;
             SkAutoCanvasRestore side(&canvas, beforeOnly);
-            if (beforeOnly)
-                canvas.clipRect(SkRect::MakeLTRB(edge, -1e6f, ink.right() + beforePad, 1e6f), SkClipOp::kIntersect, true);
+            if (beforeOnly) {
+                // A vertical pose can grow beyond the unposed ink box.
+                const float lower = vertical ? -1e6f : low - beforePad;
+                const float upper = vertical ? 1e6f : high + beforePad;
+                canvas.clipRect(reverse ? band(lower, edge) : band(edge, upper), SkClipOp::kIntersect, true);
+            }
             for (std::size_t index = 0; index < cells.size(); ++index) {
                 const auto& cell = cells[index];
                 if (cell.path.isEmpty()) continue;
@@ -109,8 +119,9 @@ struct StaticShadow {
                 SkAutoCanvasRestore restore(&canvas, true);
                 if (sung && pose.edge) {
                     const auto box = path.computeTightBounds();
-                    canvas.clipRect(SkRect::MakeLTRB(box.left() - pad, -1e6f, *pose.edge, 1e6f),
-                                    SkClipOp::kIntersect, true);
+                    const auto clip = reverse ? band(*pose.edge, (vertical ? box.bottom() : box.right()) + pad)
+                                              : band((vertical ? box.top() : box.left()) - pad, *pose.edge);
+                    canvas.clipRect(clip, SkClipOp::kIntersect, true);
                 }
                 canvas.translate(offset.x(), offset.y());
                 SkPaint paint;
