@@ -53,6 +53,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p08_viewport",
         "p07_scanline_band", "p07_ruby_scanline", "p07_lower_ruby_scanline",
         "p07_scanline_image", "p07_scanline_shape", "p07_scanline_line_animation", "p07_faded_scanline_singing_particles",
+        "p07_faded_scanline_particle_paint",
         "p07_scanline_unscaled_line_animation",
         "p07_lower_ruby_scanline_line_animation",
         "p07_scanline_shape_line_animation", "p07_ruby_scanline_particles",

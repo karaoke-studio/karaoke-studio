@@ -102,6 +102,12 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");
     line.bursts.reserve(source.fxBursts.size());
     for (const auto& fx : source.fxBursts) {
+        const bool painted = fadedBand && features.contains("p07_faded_scanline_particle_paint") && fx.hasPaint
+            && (fx.fill.mode == "solid" || fx.fill.mode == "gradient_vertical")
+            && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0
+            && (!fx.hasDecor || (fx.decorKind == "glow" && fx.decor.mode == "solid"
+                && std::isfinite(fx.decorRadius) && fx.decorRadius >= 0 && fx.decorRadius <= 532
+                && fx.decorConcentration >= 0 && fx.decorConcentration <= 2));
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");
         const bool ripple = version >= 4 && fx.kind == "ripple";
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic")
@@ -162,7 +168,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             || (scanline && shapedSinging)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
-            || fx.hasPaint || fx.hasDecor || !fx.charColors.empty() || !allowedSprite
+            || ((fx.hasPaint || fx.hasDecor) && !painted) || !fx.charColors.empty() || !allowedSprite
             || (version == 1 && (fx.timeScale != 1.0 || !oldWindow))
             || !std::isfinite(fx.timeScale) || fx.timeScale < .1 || fx.timeScale > 10
             || !emitWindowValid || !std::isfinite(fx.emitX) || std::abs(fx.emitX) > (flame ? .5 : 0.)
@@ -202,6 +208,16 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         burst.front = fx.front;
         burst.reverse = fx.reverse;
         burst.color = projectColor(fx.color, QStringLiteral("#FFFFFF"));
+        if (painted) {
+            burst.hasPaint = true;
+            burst.fill = projectPaint(fx.fill, fx.color);
+            burst.hasDecor = fx.hasDecor;
+            if (burst.hasDecor) {
+                burst.decor = projectPaint(fx.decor, fx.color);
+                burst.decorRadius = float(fx.decorRadius * cfg.dpr);
+                burst.decorConcentration = fx.decorConcentration;
+            }
+        }
         line.bursts.push_back(std::move(burst));
     }
 }

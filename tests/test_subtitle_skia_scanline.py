@@ -584,31 +584,38 @@ def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading,
     assert feature in ir['required_features']
     static = upper_ir(binary, (track, replace(style, entry_anim='none', exit_anim='none')), 1)
     assert ir['track']['lines'][0]['fx_bursts'] == static['track']['lines'][0]['fx_bursts']
+    required = [feature]
     if gradient:
         colors = style.karaoke_colors
         paint = PaintFill(mode='gradient_vertical', start_color='#FFEBAA55', end_color='#FF4080F0')
         style = replace(style, karaoke_colors=replace(colors, before=replace(colors.before, text=paint)),
-                        ruby_colors_follow_main=True)
+                        ruby_colors_follow_main=True, fx_particle_color_mode='follow_before',
+                        fx_particle_color_layers='decor')
         painted = upper_ir(binary, (track, style), 1)
-        assert painted['track']['lines'][0]['fx_bursts'] == ir['track']['lines'][0]['fx_bursts']
+        def without_paint(bursts):
+            return [{key: value for key, value in burst.items() if key not in {'color_id', 'paint_id'}}
+                    for burst in bursts]
+
+        assert without_paint(painted['track']['lines'][0]['fx_bursts']) == without_paint(ir['track']['lines'][0]['fx_bursts'])
         ir = painted
-        feature = 'p06_faded_scanline_gradient_fill'
-        assert feature in ir['required_features']
+        required.extend(('p06_faded_scanline_gradient_fill', 'p07_faded_scanline_particle_paint'))
+        assert set(required) <= set(ir['required_features'])
     times = [340, 550, 1550, 2050]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
+        for feature in required:
+            invalid = copy.deepcopy(ir)
+            invalid['required_features'].remove(feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
         replay, _ = collect(process, times[::-1], generation=2)
     assert frames[1].any() and not np.array_equal(frames[1], frames[2])
     assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'vertical-gradient'])
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'painted-particles'])
 def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path, gradient):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
@@ -621,7 +628,10 @@ def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, applic
         colors = style.karaoke_colors
         paint = PaintFill(mode='gradient_vertical', start_color='#FFEBAA55', end_color='#FF4080F0')
         style = replace(style, karaoke_colors=replace(colors, before=replace(colors.before, text=paint)),
-                        ruby_colors_follow_main=True)
+                        ruby_colors_follow_main=True, fx_particle_color_mode='follow_before',
+                        fx_particle_color_layers='decor', fx_particle_count=24)
+        ir = upper_ir(binary, (case.track, style), 1)
+        assert 'p07_faded_scanline_particle_paint' in ir['required_features']
     case = replace(case, case_id='scanline_faded_singing_particles', track=replace(case.track, lines=[line]), style=style)
     assert_ruby_transition_gpu_parity(binary, case, (951, 1120, 1260, 1380, 1550, 2600, 4110, 4450, 4530, 4610, 4649))
 

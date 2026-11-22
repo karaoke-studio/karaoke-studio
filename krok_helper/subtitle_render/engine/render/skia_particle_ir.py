@@ -81,6 +81,13 @@ def faded_band_singing_particles(line, style):
             and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart'} for burst in bursts))
 
 
+def _supports_singing_particle_paint(paint):
+    decor = paint.get('decor')
+    return (paint['fill']['mode'] in {'solid', 'gradient_vertical'}
+            and paint['stroke_width_px'] == paint['stroke2_width_px'] == 0
+            and (decor is None or (decor['kind'] == 'glow' and decor['fill']['mode'] == 'solid')))
+
+
 def vertical_singing_particle_modes(source):
     """Return supported particle kinds and sweeps for a fixed vertical cell anchor."""
     limited_motion = source.get('wipe_reverse') and (
@@ -99,7 +106,7 @@ def vertical_singing_particle_modes(source):
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
-    ruby_scanline = ruby_band_singing = False
+    ruby_scanline = ruby_band_singing = painted_singing = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -164,6 +171,12 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         for burst in bursts:
             kind = burst['kind']
+            has_paint = 'paint_id' in burst
+            if has_paint:
+                paint = ir['fx_paint_table'][burst['paint_id']]
+                if not faded_band or not _supports_singing_particle_paint(paint):
+                    raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
+                painted_singing = True
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not band)
                     or (annotated and band and kind != 'scanline'
@@ -171,7 +184,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                     or (singing_under_shape and kind == 'scanline')
                     or (band and item.line.wipe_reverse and kind != 'scanline' and not vertical_particles)
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
-                    or 'paint_id' in burst or 'char_color_ids' in burst):
+                    or 'char_color_ids' in burst):
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if animated:
                 sweep = burst['sweep']
@@ -227,4 +240,6 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_ruby_scanline_particles')
     if ruby_band_singing:
         ir['required_features'].append('p07_ruby_band_singing_particles')
+    if painted_singing:
+        ir['required_features'].append('p07_faded_scanline_particle_paint')
     return 13 if track.rubies else version

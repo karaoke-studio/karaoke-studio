@@ -4245,6 +4245,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 与 WSL 的独立 Raster 构建各通过 **3 项 CTest**。禁用 Vulkan 驱动后，该组合在两边的相同场景配对、拒绝和回跳复验各 **1 项通过**。
 - 星光作入场以及爱心、羽毛接星光退场的变体仍有未达预算的临界帧。直接保留音符原始曲线的试验在 300ms 增加了粒子边缘误差，原样音符仍待收口。证据见 `build/p07-sparkle-exit-pair-candidate.log` 与 `build/p07-symbol-curve-original.log`。
 - `1be4c419` 的 Apple Silicon 与 Intel 集中复验已发起，包含两项 Raster 翻转优化及花瓣与星光组合。[Mac CI 45010263630](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45010263630)
+- 同一轮 Mac CI 的 5 项均通过。两种架构的产品套件各 2459 通过、1605 跳过，干净环境包各 290 通过，98 份规范样例哈希一致。此轮仍使用托管虚拟 Metal。
 - 无装饰星光入场 302ms 的 **114** 个遮罩差异像素中，**109** 个位于单独字形边缘，**5** 个涉及粒子。2 倍覆盖采样、逐层量化的试验仍有 **93** 个差异像素，遮罩 IoU 为 **0.96862**，低于 **0.97**。固定 16 点采样与直接换用 8 位合成分别增加了字形边缘差异。记录为 `build/p07-symbol-entry-both-layers.log` 和 `build/p07-particle-entry-byte-trial-*.log`。
 
 ### 14.390 P07.4 / P09 / P10 花瓣入场接涟漪退场（2026-11-22）
@@ -4262,7 +4263,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 正向横排默认色或实色扫字带接入正文和上注音的纵向渐变。字形沿 Utopia 时钟变换，渐变坐标沿用原正文、注音的墨迹范围，扫字带用原本指定的高亮色重绘。整行淡化合成顺序与 §14.391 相同。
 - 原样 `Frail` 的 51 行、93 处注音在硬件 Vulkan 与 Raster 均成功配置，18 个 1080p 时刻通过两组原画质预算。原视频背景的实际 Vulkan 直画播放 20 秒，完成一次跳转与正常退出。Windows 相关用例 6 项通过，WSL X11 与 Wayland 各 4 项通过。Windows 与 WSL Vulkan 构建各通过 3 项 CTest。日志前缀 `build/skia-faded-gradient-*`。
-- 「ヒミツ」「紋白蝶」及 `Puppet` 还使用带纵向渐变和光晕的粒子画笔，仍需补该独立渲染能力。
+- 「ヒミツ」「紋白蝶」及 `Puppet` 还使用带纵向渐变和光晕的粒子画笔，见 §14.393。
+
+### 14.393 P07 / P09 / P10 扫字线组合中的唱字粒子画笔（2026-11-22）
+
+- `p07_faded_scanline_particle_paint` 接受唱字粒子的实色、纵向渐变以及实色光晕。填充与光晕在原粒子轮廓坐标中绘制，随粒子的旋转、大小和透明度变化，整行淡化继续作用于合成结果。画笔在 scene 准备阶段创建。能力声明缺失、粒子描边或阴影等未验收绘制仍由对应校验拒绝。
+- 「ヒミツ」和「紋白蝶」分别以原样 49 行、154 处注音和 63 行、120 处注音配置。硬件 Vulkan 和 Raster 出帧，分别抽取 18、21 个 1080p 时刻通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原画质门槛。「ヒミツ」保留原视频背景实际 Vulkan 直画播放 25 秒并完成两次跳转。Windows 专项 11 项通过，含实际浮窗、离屏 GPU 与导出前帧对照。日志前缀 `build/skia-painted-singing-*`。
+- WSL X11 与 Wayland 各 3 项通过，涵盖缺少画笔声明时保留原场景、回跳和浮窗对照。Windows 独立 Raster 禁用 Vulkan 驱动后 2 项通过。Windows 两套及 WSL Vulkan 原生构建各通过 3 项 CTest。
 
 ## 15. 前期探针清理范围
 

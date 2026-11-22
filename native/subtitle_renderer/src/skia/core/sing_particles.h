@@ -1,6 +1,7 @@
 #pragma once
 
 #include "particle_outline.h"
+#include "particle_paint.h"
 #include "particle_ring.h"
 #include "solid_outline.h"
 #include "../../effects/particles.h"
@@ -23,6 +24,7 @@ struct SingParticleBurst {
     std::uint32_t argb = 0xffffffff;
     float originX = 0, originY = 0, boxW = 1, boxH = 0; // Character pivot and anchor box.
     std::optional<RingStroke> ring;
+    std::optional<ParticlePaint> authoredPaint;
 };
 
 struct ParticleVisibility {
@@ -76,6 +78,10 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             transform.preRotate(particle.rotationDeg);
             transform.preScale(particle.sizePx * particle.stretchX / 1000.f,
                                particle.sizePx * particle.stretchY / 1000.f);
+            if (item.authoredPaint) {
+                item.authoredPaint->draw(canvas, item.sprite, transform, std::clamp(particle.alpha, 0.f, 1.f));
+                continue;
+            }
             // Solid fire paints a larger translucent silhouette before each
             // tongue. Keep its overlap order with the following particles.
             if (flameBody || flameCore) {

@@ -51,7 +51,8 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
             SkColorSetARGB(color.alpha, color.red, color.green, color.blue),
             x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
             burst.kind == "ripple" || burst.kind == "shockwave"
-                ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});
+                ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt,
+            burst.hasPaint ? std::optional<::subtitle::skia::ParticlePaint>(burst) : std::nullopt});
     }
 }
 }

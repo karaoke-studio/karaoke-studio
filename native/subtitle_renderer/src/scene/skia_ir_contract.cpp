@@ -175,6 +175,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_scanline_decoration",
         "p07_scanline_line_animation",
         "p07_faded_scanline_singing_particles",
+        "p07_faded_scanline_particle_paint",
         "p07_scanline_unscaled_line_animation",
         "p07_scanline_shape",
         "p07_scanline_shape_line_animation",
@@ -864,6 +865,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_ruby_band_singing_particles") || !features.contains("p07_scanline_line_animation")
             || !features.contains("p07_line_fade")))
         throw BackendError("Skia 扫字线与唱字粒子组合缺少整行淡化能力声明");
+    if (features.contains("p07_faded_scanline_particle_paint") && !features.contains("p07_faded_scanline_singing_particles"))
+        throw BackendError("Skia 唱字粒子画笔缺少淡化扫字线能力声明");
     if (features.contains("p06_outline_ruby")
         && (!features.contains("p06_primary_solid_outline") || !features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 描边正文与注音组合缺少描边或注音能力声明");
