@@ -229,6 +229,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
 def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
     prepared = []
     animated_title_guides = False
+    role_vector_guides = False
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
@@ -240,8 +241,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         validate_reverse_source(source)
         if source_style.vertical:
             validate_vertical_source(source)
-        validate_vector_guides(source, source_style)
-        nonlocal animated_title_guides
+        nonlocal animated_title_guides, role_vector_guides
+        role_vector_guides = validate_vector_guides(source, source_style)
         animated_title_guides = validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
         with layout_pass():
             section_edge_context(source, source_style)
@@ -802,6 +803,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].extend(f'p07_horizontal_{kind}_line_animation' for kind in sorted(motion_decorations))
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
+    if role_vector_guides:
+        ir['required_features'].append('p05_role_vector_guides')
     write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines,
                        particle_band_tracks, vertical_singing)
     if role_line_fade:

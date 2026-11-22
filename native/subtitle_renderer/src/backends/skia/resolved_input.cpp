@@ -405,7 +405,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && ((line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled)
-                || roleFadedScanline || (inlineAvatars && lineAnimation && !line.scanlineEnabled
+                || roleFadedScanline || ((inlineAvatars || features.contains("p05_role_vector_guides"))
+                    && lineAnimation && !line.scanlineEnabled
                     && (line.entryAnimation == "none" || line.entryAnimation == "fade")
                     && (line.exitAnimation == "none" || line.exitAnimation == "fade")))
             && !line.strokeFlashEnabled && line.bursts.empty();

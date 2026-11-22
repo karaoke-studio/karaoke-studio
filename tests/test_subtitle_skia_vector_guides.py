@@ -10,6 +10,7 @@ import pytest
 from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_source, assert_gpu_parity,
                                          collect, configure, ir_for, selection)
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
+from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import GuideSymbol, RubyAnnotation
 from krok_helper.subtitle_render.engine.guide.skia_vector import vector_guide_advance, vector_guide_ink
@@ -251,12 +252,13 @@ def test_p00_prefix_guide_with_utopia_ruby_outlines_and_glow_matches_actual_gpu(
 
 
 @GPU
-@pytest.mark.parametrize('latin_outline', [False, True], ids=['japanese', 'latin-outline'])
-def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tmp_path, latin_outline):
+@pytest.mark.parametrize('appearance', ['japanese', 'latin-outline', 'guide-role'])
+def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tmp_path, appearance):
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     case, track = p00_guide(tmp_path, count=3)
     line = track.lines[0]
+    latin_outline = appearance != 'japanese'
     if latin_outline:
         line = replace(line, chars=[*line.chars[:3], replace(line.chars[3], text='A'), *line.chars[4:]])
     guide = replace(line.guide_symbol, replacement_prefix=tuple(char.text for char in line.chars[:3]))
@@ -264,9 +266,19 @@ def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tm
     style = replace(case.style, karaoke_anim='utopia', entry_anim='fade', exit_anim='fade',
                     latin_stroke_width_px=2 if latin_outline else None,
                     latin_stroke2_enabled=None if latin_outline else False)
+    if appearance == 'guide-role':
+        palette = style.karaoke_colors
+        colors = replace(palette, before=replace(palette.before, text=PaintFill(color='#FFD890F0')))
+        role = SubtitleStyleScheme(font_size_px=style.font_size_px, stroke_width_px=style.stroke_width_px,
+                                   font_family=style.font_family, font_family_latin=style.font_family_latin,
+                                   karaoke_colors=colors)
+        line = replace(track.lines[0], guide_symbol=replace(guide, role_labels=('lead',) * 3))
+        track = replace(track, lines=[line])
+        style = replace(style, custom_style_schemes={'lead': role})
     ir = ir_for(binary, (track, style))
     assert 'p05_vector_guide_composition' in ir['required_features']
     assert sum('vector_glyph_id' in cell for cell in ir['track']['lines'][0]['chars']) == 3
+    assert ('p05_role_vector_guides' in ir['required_features']) == (appearance == 'guide-role')
     times = (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500)
     assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 

@@ -95,7 +95,8 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
             && (sourceFeatures.contains("p06_animated_singing_gradient_fill")
                 || (sourceFeatures.contains("p06_latin_primary_outline") && sourceFeatures.contains("p07_utopia_line_animation")))));
     static const QJsonArray prefixGuideFeatures{
-        "p05_vector_guides", "p05_vector_guide_composition", "p07_faded_scanline_prefix_guides", "p06_latin_primary_outline"
+        "p05_vector_guides", "p05_vector_guide_composition", "p07_faded_scanline_prefix_guides",
+        "p05_role_vector_guides", "p06_latin_primary_outline"
     };
     for (const auto& feature : sourceFeatures)
         if (!allowed.contains(feature)

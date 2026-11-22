@@ -82,18 +82,25 @@ def validate_vector_guides(track, style):
     """Validate the geometry shared by the horizontal vector-guide profiles."""
     from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
     from ..layout.line.style import style_for_line
+    role_guides = False
     for line in track.lines:
         # Bitmap guides follow the separate bitmap_guide_schema subset.
-        cells = [c for c in render_line_with_guide_symbols(line).chars
+        chars = render_line_with_guide_symbols(line).chars
+        cells = [c for c in chars
                  if c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)]
         if not cells:
             continue
         appearance = style_for_line(style, line)
         if any(guide_symbol_is_bitmap(c.vector_glyph) or not c.vector_glyph.path_commands for c in cells):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
-        if (appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled
-                or any(c.role_label is not None for c in cells)):
+        if appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled:
             raise ValueError('Skia 导唱符仅支持已验证的横排实色正文子集')
+        labels = {c.role_label for c in cells if c.role_label is not None}
+        if labels:
+            if line.wipe_reverse or not vector_guides_form_prefix(chars) or not labels <= appearance.custom_style_schemes.keys():
+                raise ValueError('Skia 角色导唱符需要正向前置替换符和匹配的角色样式')
+            role_guides = True
+    return role_guides
 
 
 # Verified with a line-level prefix guide: Utopia singing, upper ruby, solid
@@ -121,6 +128,9 @@ VECTOR_GUIDE_FADED_SCANLINE_FEATURES = frozenset({
 VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES = frozenset({
     'p07_faded_scanline_singing_particles', 'p07_faded_scanline_particle_paint',
     'p07_sing_twinkle', 'p07_ruby_band_singing_particles'})
+ROLE_VECTOR_GUIDE_FEATURES = frozenset({
+    'p05_role_vector_guides', 'p06_role_solid_outlines', 'p06_role_static_glow', 'p06_ruby_role_glow',
+    'p07_role_singing_scale', 'p07_role_singing_glow', 'p07_role_line_fade'})
 
 
 def vector_guides_form_prefix(chars):
@@ -155,6 +165,8 @@ def compose_vector_guides(track, features):
         allowed |= VECTOR_GUIDE_FADED_SCANLINE_FEATURES
         if 'p07_faded_scanline_singing_particles' in features:
             allowed |= VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES
+    if 'p05_role_vector_guides' in features:
+        allowed |= ROLE_VECTOR_GUIDE_FEATURES
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')

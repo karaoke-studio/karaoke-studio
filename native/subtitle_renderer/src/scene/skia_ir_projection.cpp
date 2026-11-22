@@ -447,6 +447,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         const bool composedGuide = features.contains("p05_vector_guide_composition");
+        const bool roleVectorGuides = composedGuide && features.contains("p05_role_vector_guides")
+            && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
+            && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
+            && (source.entryAnimation == "none" || source.entryAnimation == "fade")
+            && (source.exitAnimation == "none" || source.exitAnimation == "fade");
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool prefixGuideParticles = prefixFadedScanline
@@ -499,7 +504,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             // vector_guide_schema=1: solid horizontal LTR main text without roles. Ruby and
             // outlines need the verified composition profile.
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
-                || &cellStyle != &resolved
+                || (&cellStyle != &resolved && !roleVectorGuides)
                 || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");

@@ -75,6 +75,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
         "p05_vector_guides",
+        "p05_role_vector_guides",
         "p05_vector_guide_composition",
         "p08_bitmap_guides",
         "p08_inline_bitmap_guides",
@@ -584,6 +585,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p05_vector_guides")
         && layout.value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");
+    const bool roleVectorGuides = features.contains("p05_role_vector_guides");
+    if (roleVectorGuides && (!features.contains("p05_vector_guide_composition")
+        || !features.contains("p07_role_singing_scale") || !features.contains("p07_role_line_fade")))
+        throw BackendError("Skia 角色前置导唱符缺少角色唱字或整行淡化能力声明");
     if (features.contains("p05_vector_guide_composition")) {
         // The vector guides are a prefix of the final cells, including lyrics replacements.
         static const QJsonArray allowed{
@@ -609,6 +614,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray fadedScanlineParticles{
             "p07_faded_scanline_singing_particles", "p07_faded_scanline_particle_paint",
             "p07_sing_twinkle", "p07_ruby_band_singing_particles"};
+        static const QJsonArray roleGuides{
+            "p05_role_vector_guides", "p06_role_solid_outlines", "p06_role_static_glow", "p06_ruby_role_glow",
+            "p07_role_singing_scale", "p07_role_singing_glow", "p07_role_line_fade"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
         const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
@@ -619,7 +627,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature))
                 && !(useLineMotion && lineMotion.contains(feature))
                 && !(useFadedScanline && fadedScanline.contains(feature))
-                && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature)))
+                && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature))
+                && !(roleVectorGuides && roleGuides.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
     if (features.contains("p07_faded_scanline_prefix_guides")
@@ -1038,7 +1047,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         };
         static const QJsonArray animatedGuides{
             "p05_vector_guides", "p05_vector_guide_composition", "p07_singing_scale",
-            "p07_ruby_singing_scale", "p07_utopia_line_animation", "p07_singing_glow"
+            "p07_ruby_singing_scale", "p07_utopia_line_animation", "p07_singing_glow",
+            "p05_role_vector_guides", "p07_role_singing_scale", "p07_role_singing_glow"
         };
         const bool animatedGuide = features.contains("p05_vector_guide_composition")
             && features.contains("p07_utopia_line_animation");
@@ -1071,7 +1081,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool roleLineFade = features.contains("p07_role_line_fade");
     if (roleLineFade != (roleLayers && features.contains("p07_line_fade"))
         || (roleLineFade && (features.contains("p05_lower_ruby")
-            || (features.contains("p07_singing_scale") && !(roleFadedScanline || inlineBitmapGuides)))))
+            || (features.contains("p07_singing_scale") && !(roleFadedScanline || inlineBitmapGuides || roleVectorGuides)))))
         throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字和受支持的上注音画笔");
     if (roleLayers) {
         static const QJsonArray allowed{
@@ -1096,12 +1106,16 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p08_bitmap_guides", "p08_inline_bitmap_guides", "p06_role_outline_gradient", "p06_ruby_outline_gradient",
             "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
         };
+        static const QJsonArray roleGuideFeatures{
+            "p05_vector_guides", "p05_vector_guide_composition", "p05_role_vector_guides", "p07_utopia_line_animation"
+        };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
             || ((roleBodyPaints || roleStaticGlow) && !features.contains("p05_inline_roles"))
             || std::any_of(features.begin(), features.end(), [&](const auto& v) {
                 return !allowed.contains(v) && !(roleFadedScanline && fadedScanline.contains(v))
                     && !(inlineBitmapGuides && avatarFeatures.contains(v))
+                    && !(roleVectorGuides && roleGuideFeatures.contains(v))
                     && !(reverseBitmapGuides && (v == QJsonValue("p05_reverse_wipe") || v == QJsonValue("p05_reverse_overlap")
                                                  || v == QJsonValue("p08_reverse_bitmap_guides") || v == QJsonValue("p06_static_shadow")));
             }))
