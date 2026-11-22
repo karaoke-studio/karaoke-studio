@@ -48,7 +48,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool verticalScale = source.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_with_particles");
     const bool verticalScanline = features.contains("p07_vertical_scanline_particles");
-    const bool verticalBand = cfg.vertical && source.scanlineEnabled && !source.wipeReverse
+    const bool verticalBand = cfg.vertical && source.scanlineEnabled
+        && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_particles"))
         && version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"
         && (verticalScanline || features.contains("p07_vertical_scanline_singing_particles"));
     const bool verticalMotion = features.contains("p07_vertical_singing_particle_line_animation")

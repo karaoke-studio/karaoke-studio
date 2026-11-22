@@ -347,7 +347,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (source.karaokeAnimation == "none"
                 || (utopiaScanline && features.contains("p07_vertical_scanline_singing")))
             && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline"))
-            && !source.strokeFlashEnabled && (source.fxBursts.empty() || (staticScanline && !source.wipeReverse
+            && !source.strokeFlashEnabled && (source.fxBursts.empty() || (staticScanline
+                && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_particles"))
                 && (features.contains("p07_vertical_scanline_singing_particles")
                     || features.contains("p07_vertical_scanline_particles"))));
         if (source.scanlineEnabled

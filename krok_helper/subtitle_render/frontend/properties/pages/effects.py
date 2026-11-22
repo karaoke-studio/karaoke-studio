@@ -760,8 +760,8 @@ class EffectsPropertyPageBuilder:
             host._scanline_section, SCANLINE_EFFECT_OPTIONS, "scanline_effect"
         )
         host._scanline_effect_combo.setToolTip(
-            "沿扫字线锋面发射装饰粒子（只在唱字/反向唱字选择扫字线档位时"
-            "显示，Skia 的正向竖排高亮带也可用）：樱花/羽毛/雪花/星光/音符"
+            "沿扫字线锋面发射装饰粒子。唱字或反向唱字选择扫字线档位时可用，"
+            "Skia 的竖排高亮带也可用。樱花、羽毛、雪花、星光和音符"
             "从锋面向后飘出，越晚出生的粒子越靠近当前走字位置，换字后继续"
             "拖尾。颜色/尺寸/数量在下方「粒子设置对象」切到「扫字线特效」"
             "编辑，与入退场、唱字装饰粒子彻底解耦"

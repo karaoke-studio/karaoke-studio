@@ -667,14 +667,16 @@ def test_vertical_singing_particles_keep_independent_band_and_bursts(binary, pro
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('sprite,with_reading', [('star', False), ('note', True)])
-def test_vertical_scanline_particles_emit_along_the_cell_y_axis(binary, project, sprite, with_reading):
+@pytest.mark.parametrize('sprite,with_reading,reverse', [
+    ('star', False, False), ('note', True, False), ('star', False, True), ('note', False, True),
+])
+def test_vertical_scanline_particles_emit_along_the_cell_y_axis(binary, project, sprite, with_reading, reverse):
     from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
 
     if with_reading:
         track, style = vertical_ruby_source(project, position='center')
     else:
-        track, style = vertical_source(project, texts=['字', '字'], position='center')
+        track, style = vertical_source(project, texts=['字', '字'], position='center', reverse=reverse)
     line, = track.lines
     chars = [replace(line.chars[0], pause_release_ms=1000), replace(line.chars[1], start_ms=2200)]
     track = replace(track, lines=[replace(line, chars=chars, end_ms=3000, display_end_override_ms=3400)])
@@ -684,24 +686,27 @@ def test_vertical_scanline_particles_emit_along_the_cell_y_axis(binary, project,
                     scanline_color='#00000000', scanline_glow_px=0, scanline_effect=sprite,
                     scanline_effect_color_mode='color', scanline_effect_color='#0000FF',
                     scanline_effect_color2='#0000FF', scanline_effect_count=16, scanline_effect_size_pct=50,
-                    karaoke_anim='zoom_pulse_scanline' if with_reading else 'scanline')
+                    karaoke_anim='zoom_pulse_scanline' if with_reading else 'scanline',
+                    reverse_karaoke_anim='zoom_pulse_scanline')
     ir = ir_for(binary, (track, style), dpr=1.5)
     feature = 'p07_vertical_scanline_particles'
     assert {feature, 'p07_vertical_scanline_band'} <= set(ir['required_features'])
+    reverse_feature = 'p07_vertical_reverse_scanline_particles'
+    assert (reverse_feature in ir['required_features']) == reverse
     if not with_reading:
         from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
 
         legacy = build_render_ir(track, style, width=640, height=360, fps=60, dpr=1.5)
         assert not legacy['track']['lines'][0].get('fx_bursts')
     malformed = copy.deepcopy(ir)
-    malformed['required_features'].remove(feature)
+    malformed['required_features'].remove(reverse_feature if reverse else feature)
     layer, = ir['track']['lines']
     bursts = layer['fx_bursts']
     assert {burst['char_index'] for burst in bursts} == {0, 1}
     for burst in bursts:
         start, end = layer['resolved_intervals'][burst['char_index']]
         assert (burst['start_ms'], burst['emit_ms']) == (start, end - start)
-        assert burst['kind'] == 'scanline' and burst['front'] and not burst['reverse']
+        assert burst['kind'] == 'scanline' and burst['front'] and burst['reverse'] is reverse
         assert burst['end_ms'] > end
         # Isolate the position of each birth from the ensuing drift.
         burst['travel_px'] = 0
@@ -722,9 +727,10 @@ def test_vertical_scanline_particles_emit_along_the_cell_y_axis(binary, project,
             replay, _ = collect(process, times[::-1], generation=2)
         assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
         assert not frames[0].any() and not frames[-1].any()
-        assert center_y(frames[2]) - center_y(frames[1]) > 10
+        direction = -1 if reverse else 1
+        assert direction * (center_y(frames[2]) - center_y(frames[1])) > 10
         assert frames[3][..., 3].max() > 20
-        assert center_y(frames[4]) - center_y(frames[1]) > 40
+        assert direction * (center_y(frames[4]) - center_y(frames[1])) > 40
         rendered.append(premultiplied(np.stack(frames)))
     assert abs(rendered[0] - rendered[1]).mean() < .15
 
