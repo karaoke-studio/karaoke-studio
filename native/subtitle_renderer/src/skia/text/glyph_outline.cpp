@@ -35,6 +35,14 @@ struct Builder {
         static_cast<Builder*>(ctx)->path.cubicTo(point(a), point(b), point(to)); return 0;
     }
 };
+
+SkPath outlinePath(FT_Outline& outline) {
+    Builder builder;
+    const FT_Outline_Funcs callbacks{Builder::move, Builder::line, Builder::conic, Builder::cubic, 0, 0};
+    check(FT_Outline_Decompose(&outline, &callbacks, &builder));
+    if (builder.contour) builder.path.close();
+    return builder.path.detach();
+}
 }
 struct GlyphOutlineSource::Impl {
     std::shared_ptr<const FontResource> resource;
@@ -98,12 +106,17 @@ std::optional<GlyphGeometry> GlyphOutlineSource::load(SkGlyphID glyph) const {
     out.leftBearing = float(m.horiBearingX) / 64;
     out.rightBearing = float(m.horiAdvance - m.horiBearingX - m.width) / 64;
     const auto boldUnits = in.bold && slot->outline.n_points > 0 ? syntheticBoldDesignUnits(in.face->units_per_EM) : 0;
+    SkRect boldBounds = SkRect::MakeEmpty();
     if (boldUnits > 0) {
         if (out.advance > 0) out.advance += boldUnits;
         else out.rightBearing -= boldUnits;
         // TrueType synthetic outlines grow one fewer vertical unit than the
         // design metric box. The CFF outline grows by the full strength.
         const auto verticalUnits = boldUnits - int(in.trueTypeOutlines);
+        const auto normal = outlinePath(slot->outline).computeTightBounds();
+        if (!normal.isEmpty())
+            boldBounds = SkRect::MakeLTRB(normal.left(), normal.top() - verticalUnits,
+                                          normal.right() + boldUnits, normal.bottom());
         check(FT_Outline_EmboldenXY(&slot->outline, FT_Pos(boldUnits) * 64, FT_Pos(verticalUnits) * 64));
     }
     if (in.italic) {
@@ -113,11 +126,14 @@ std::optional<GlyphGeometry> GlyphOutlineSource::load(SkGlyphID glyph) const {
         out.leftBearing += std::floor(float(m.horiBearingY - m.height) * slope);
         out.rightBearing -= std::floor(float(m.horiBearingY + boldUnits * 64) * slope);
     }
-    Builder builder;
-    const FT_Outline_Funcs callbacks{Builder::move, Builder::line, Builder::conic, Builder::cubic, 0, 0};
-    check(FT_Outline_Decompose(&slot->outline, &callbacks, &builder));
-    if (builder.contour) builder.path.close();
-    auto path = builder.path.detach();
+    auto path = outlinePath(slot->outline);
+    if (!boldBounds.isEmpty()) {
+        // Keep the reference's outward bounds when FreeType's corner joins
+        // change a side bearing or overshoot its expansion.
+        const auto boldInk = path.computeTightBounds();
+        if (!boldInk.isEmpty())
+            path = path.makeTransform(SkMatrix::RectToRectOrIdentity(boldInk, boldBounds));
+    }
     const auto scale = in.size / in.face->units_per_EM;
     if (in.italic) path = path.makeTransform(SkMatrix::Skew(kSyntheticItalicSkewX, 0));
     out.path = path.makeTransform(SkMatrix::Scale(scale, scale));

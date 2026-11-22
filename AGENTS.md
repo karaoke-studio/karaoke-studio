@@ -332,7 +332,7 @@ git submodule status
    `src/skia/text/glyph_outline.*` 使用锁定 FreeType 的公开接口，在 em 尺度读取精细轮廓；
    不要改回 `SkFont::getPath` 的默认 64px 归一化再放大，它会使接近整数边界的单元宽度
    被截断多丢 1px。常规字体使用 `skia-m150-hb-ft-v7`（§14.107 校准合成斜体轮廓与侧边距），
-   合成粗体使用 `skia-m150-hb-ft-v8`（§14.269 校准轮廓与字形推进）；行框 ascent/descent 与 GPU 相同，
+   合成粗体使用 `skia-m150-hb-ft-v9`（§14.269 校准字形推进，§14.404 校准轮廓墨迹范围）；行框 ascent/descent 与 GPU 相同，
    USE_TYPO_METRICS 时取 OS/2 typo、否则取 OS/2 win（不用 hhea），`vertical_metrics_schema=1` 协商；COLR 字形即使有非空
    单色基底也仍属未支持的彩色绘制，不能把基底当成完整结果。
    P05.5 行内角色子集见 §14.14：`style_for_role_in_layout` 已原样移到纯

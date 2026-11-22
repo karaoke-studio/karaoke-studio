@@ -96,7 +96,7 @@ def test_synthetic_bold_expands_vector_geometry_and_keeps_empty_glyph_advances(b
         bold = run(process, path, texts, size=50, synthetic_bold=True)
 
     a, pair, space = bold[:3]
-    assert a['font_identity'].startswith('skia-m150-hb-ft-v8:')
+    assert a['font_identity'].startswith('skia-m150-hb-ft-v9:')
     assert a['design_advance'] == 620 and a['advance'] == 31
     assert a['design_left_bearing'] == a['design_right_bearing'] == 50
     assert a['ink'] == pytest.approx([2.5, -35.95 if is_ttf else -36, 28.5, 0], abs=.001)
@@ -108,6 +108,27 @@ def test_synthetic_bold_expands_vector_geometry_and_keeps_empty_glyph_advances(b
         mark = bold[3]
         assert mark['design_advance'] == mark['advance'] == 0
         assert mark['design_right_bearing'] == upright[3]['design_right_bearing'] - 20
+
+
+def test_synthetic_bold_preserves_ink_origin_for_slanted_corners(binary, tmp_path):
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    from fontTools.ttLib import TTFont
+    from skia_text_fixture import make_font
+
+    path = make_font(tmp_path / 'pointed.ttf')
+    font = TTFont(path, recalcTimestamp=False)
+    pen = TTGlyphPen(None)
+    for index, point in enumerate([(50, 200), (360, 700), (550, 160), (440, 0)]):
+        (pen.moveTo if index == 0 else pen.lineTo)(point)
+    pen.closePath()
+    font['glyf']['A'] = pen.glyph()
+    font.save(path)
+    with SkiaTextMetricsProcess(binary) as process:
+        normal, = run(process, path, ['A'], size=90)
+        bold, = run(process, path, ['A'], size=90, synthetic_bold=True)
+    left, top, right, bottom = normal['ink']
+    assert bold['ink'] == pytest.approx([left, top - 1.71, right + 1.8, bottom], abs=.002)
+    assert bold['design_advance'] == normal['design_advance'] + 20
 
 
 def test_synthetic_italic_shears_ink_and_design_bearings(binary, tmp_path):
