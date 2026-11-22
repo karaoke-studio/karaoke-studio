@@ -305,7 +305,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
-                || (fadedScanlineGradient && scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")
+                || ((fadedScanlineGradient || decorationMotion.singingGradient) && scene.charStyles.empty()
+                    && features.contains("p06_ruby_fill_gradient")
                     && fill.mode == "gradient_vertical")
                 || (allowImageFill && fill.mode == "image");
         };

@@ -10,6 +10,7 @@ import pytest
 from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_source, assert_gpu_parity,
                                          collect, configure, ir_for, selection)
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import GuideSymbol, RubyAnnotation
 from krok_helper.subtitle_render.engine.guide.skia_vector import vector_guide_advance, vector_guide_ink
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -167,6 +168,39 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
                 configure(process, bad)
         after, _ = collect(process, [950], generation=2)
     assert before[0].any() and np.array_equal(before[0], after[0])
+
+
+def test_faded_gradient_with_leading_replacement_guide(binary, project):
+    from test_subtitle_skia_outline_ruby import outlined
+
+    track, style = guide_source(project, effect='utopia')
+    line = track.lines[0]
+    line = replace(line, chars=[replace(char, text='字') for char in line.chars],
+                   guide_symbol=None, inline_guide_symbols={0: SQUARE},
+                   display_start_override_ms=0, display_end_override_ms=2400)
+    track = replace(track, lines=[line], rubies=[RubyAnnotation('字', 'A', target_char_start=2, target_char_end=3)])
+    style = outlined(style, 2)
+    palette = style.karaoke_colors
+    ramp = PaintFill(mode='gradient_vertical', start_color='#FF0066FF', end_color='#FFECA4F0')
+    style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, stroke=ramp)),
+                    ruby_colors_follow_main=True, entry_anim='fade', exit_anim='fade',
+                    entry_lead_ms=500, exit_fade_ms=400)
+    ir = ir_for(binary, (track, style))
+    feature = 'p06_animated_singing_gradient_fill'
+    assert {feature, 'p05_vector_guide_composition', 'p06_ruby_outline_gradient'} <= set(ir['required_features'])
+    assert ir['track']['lines'][0]['chars'][0].get('vector_glyph_id')
+    assert ir['skia_layout']['lines'][0]['ruby_groups'][0]['style_cell'] == 2
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [180, 650, 950, 2300, 180])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+    assert frames[0][..., 3].any() and not np.array_equal(frames[1], frames[2])
+    assert np.array_equal(frames[0], frames[-1])
+    with pytest.raises(ValueError, match='前置导唱符'):
+        ir_for(binary, (replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})]), style))
 
 
 @GPU

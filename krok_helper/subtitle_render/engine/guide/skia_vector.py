@@ -107,6 +107,12 @@ VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
     'p06_outline_ruby', 'p06_primary_solid_outline', 'p06_ruby_glow', 'p06_ruby_solid_outline',
     'p06_secondary_solid_outline', 'p06_static_glow', 'p07_ruby_singing_scale', 'p07_singing_glow',
     'p07_singing_scale'})
+VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
+    'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
+    'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
+    'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient', 'p06_multi_lane_outline',
+    'p06_animated_singing_gradient_fill',
+    'p07_line_fade', 'p07_line_motion', 'p07_utopia_line_animation', 'p07_ruby_line_animation'})
 
 
 def compose_vector_guides(track, features):
@@ -114,14 +120,21 @@ def compose_vector_guides(track, features):
     from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
     if 'p05_vector_guides' not in features or not VECTOR_GUIDE_COMPOSITION_TRIGGERS.intersection(features):
         return
+    animated_gradient = 'p06_animated_singing_gradient_fill' in features
     for line in track.lines:
-        if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
-                   for c in render_line_with_guide_symbols(line).chars):
+        guides = [c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
+                  for c in render_line_with_guide_symbols(line).chars]
+        if not any(guides):
+            continue
+        if animated_gradient and all(guides[:sum(guides)]):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
-    if not set(features) <= VECTOR_GUIDE_COMPOSITION_FEATURES - {'p05_vector_guide_composition'}:
-        raise ValueError('Skia 导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')
+    allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
+    if animated_gradient:
+        allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES
+    if not set(features) <= allowed - {'p05_vector_guide_composition'}:
+        raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')
 
 

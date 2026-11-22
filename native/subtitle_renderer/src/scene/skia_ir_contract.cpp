@@ -116,6 +116,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
         "p06_ruby_outline_gradient",
+        "p06_animated_singing_gradient_fill",
         "p06_static_shadow",
         "p06_ruby_shadow",
         "p06_static_glow",
@@ -580,7 +581,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && layout.value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");
     if (features.contains("p05_vector_guide_composition")) {
-        // Verified prefix guides with Utopia, upper ruby, solid outlines and glow only.
+        // The vector guides are a prefix of the final cells, including lyrics replacements.
         static const QJsonArray allowed{
             "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
             "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
@@ -589,10 +590,17 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
             "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};
+        static const QJsonArray animatedGradient{
+            "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
+            "p06_body_gradient", "p06_outline_gradient", "p06_ruby_main_paint",
+            "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient", "p06_multi_lane_outline",
+            "p06_animated_singing_gradient_fill", "p07_line_fade", "p07_line_motion",
+            "p07_utopia_line_animation", "p07_ruby_line_animation"};
+        const bool useAnimatedGradients = features.contains("p06_animated_singing_gradient_fill");
         if (!features.contains("p05_vector_guides"))
             throw BackendError("Skia 导唱符组合缺少导唱符能力");
         for (const auto& feature : features)
-            if (!allowed.contains(feature))
+            if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
     if (features.contains("p08_bitmap_guides")) {
@@ -943,6 +951,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_body_gradient") || !features.contains("p07_singing_scale")
             || !features.contains("p07_faded_scanline_singing_particles")))
         throw BackendError("Skia 淡化扫字线渐变缺少正文画笔或唱字粒子能力声明");
+    if (features.contains("p06_animated_singing_gradient_fill")
+        && (!features.contains("p06_body_gradient") || !features.contains("p06_utopia_main_paint")
+            || !features.contains("p05_upper_ruby") || !features.contains("p07_utopia_line_animation")))
+        throw BackendError("Skia Utopia 出入场渐变缺少正文画笔、上注音或唱字动画能力声明");
     if (features.contains("p06_ruby_fill_image")
         && (!features.contains("p06_ruby_main_paint") || !features.contains("p06_image_fill")))
         throw BackendError("Skia 上注音图片缺少正文画笔或注音能力声明");

@@ -1,6 +1,8 @@
 """Project the line-wide coordinates needed by Skia body and outline gradients and image paints."""
 
 from ..style.style_semantics import effective_karaoke_colors, effective_ruby_karaoke_colors, style_for_role_in_layout
+from ..guide.semantics import guide_symbol_is_bitmap
+from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 
@@ -98,7 +100,8 @@ def write_body_gradient_bounds(ir, plan):
     if glow_paints:
         ir['required_features'].append('p06_gradient_glow')
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
-    ruby_image = faded_scanline_gradient = False
+    ruby_image = faded_scanline_gradient = animated_singing_gradient = False
+    upper_ruby = 'p05_upper_ruby' in ir['required_features']
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
@@ -109,23 +112,30 @@ def write_body_gradient_bounds(ir, plan):
         faded_band = ('p07_faded_scanline_singing_particles' in ir['required_features']
                       and faded_band_singing_particles(source, look) and look.scanline_mode in {'default', 'color'}
                       and modes <= {'solid', 'gradient_vertical'})
-        singing = source.get('karaoke_anim') == 'utopia' and (annotated or faded_band) and not source.get('zoom_pulse')
+        moving = (upper_ruby and not source.get('scanline') and not source.get('fx_bursts')
+                  and {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                  and ordinary_line_animation(source) and modes <= {'solid', 'gradient_vertical'}
+                  and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
+        singing = (source.get('karaoke_anim') == 'utopia' and (annotated or faded_band or moving)
+                   and not source.get('zoom_pulse'))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or look.vertical or look.right_to_left or item.line.wipe_reverse
-                or (not faded_band and (source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
-                                       or source.get('scanline') or source.get('fx_bursts')))
+                or (not (faded_band or moving) and (source.get('entry_anim') != 'none' or source.get('exit_anim') != 'none'
+                                                  or source.get('scanline') or source.get('fx_bursts')))
                 or source.get('stroke_flash')
                 or (source.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
-                or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
+                or any(c.role_label is not None or (c.vector_glyph is not None
+                       and (not moving or guide_symbol_is_bitmap(c.vector_glyph))) for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
-        ruby_paint = ruby_paint or annotated
-        singing_paint = singing_paint or (singing and annotated)
+        ruby_paint |= annotated or moving
+        singing_paint |= singing and (annotated or moving)
         faded_scanline_gradient |= faded_band
+        animated_singing_gradient |= moving
         if annotated:
             colors = effective_ruby_karaoke_colors(look)
             ruby_modes = {colors.before.text.mode, colors.after.text.mode}
-            if faded_band and not ruby_modes <= {'solid', 'gradient_vertical'}:
-                raise ValueError('Skia 淡化扫字线的上注音填充当前仅支持实色和纵向渐变')
+            if (faded_band or moving) and not ruby_modes <= {'solid', 'gradient_vertical'}:
+                raise ValueError('Skia 整行出入场的上注音填充当前支持实色和纵向渐变')
             ruby_gradient = ruby_gradient or bool(modes & _GRADIENTS and ruby_modes & _GRADIENTS)
             ruby_image = ruby_image or ('image' in modes and 'image' in ruby_modes)
         images = images or 'image' in modes
@@ -149,6 +159,7 @@ def write_body_gradient_bounds(ir, plan):
         (ruby_gradient, 'p06_ruby_fill_gradient'),
         (ruby_image, 'p06_ruby_fill_image'),
         (faded_scanline_gradient, 'p06_faded_scanline_gradient_fill'),
+        (animated_singing_gradient, 'p06_animated_singing_gradient_fill'),
     ):
         if enabled_feature:
             ir['required_features'].append(feature)

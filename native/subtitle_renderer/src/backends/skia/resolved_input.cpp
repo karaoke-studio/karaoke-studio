@@ -370,6 +370,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.scanlineMode == "default" || style.scanlineMode == "color");
         const bool lineAnimation = verticalSingingAnimation || (singingScale && !line.zoomPulseEnabled
             && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation);
+        const bool movingSingingGradientFill = lineAnimation && singingScale && !style.vertical
+            && (line.entryAnimation != "none" || line.exitAnimation != "none")
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && features.contains("p06_animated_singing_gradient_fill");
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && line.entryAnimation == "none" && line.exitAnimation == "none"
@@ -595,7 +599,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
             {rtlRubyUnscaledMotion || horizontalShadowMotion || horizontalGlowMotion || verticalMotion,
-             lowerUnscaledMotion || lowerUtopiaMotion},
+             lowerUnscaledMotion || lowerUtopiaMotion, movingSingingGradientFill},
             totalCells, totalGroups);
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
@@ -628,7 +632,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         };
         const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
-        const bool fadedScanlineGradient = fadedScanlineGradientFill
+        const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill)
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
@@ -681,9 +685,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_no_wipe_decoration");
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
-        const bool singingMainPaint = fadedScanlineGradient || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
+        const bool singingMainPaint = movingGradient || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
             && features.contains("p06_utopia_main_paint"));
-        const bool paintedGlow = (rubyMainPaint || fadedScanlineGradient) && !hasShadow;
+        const bool paintedGlow = (rubyMainPaint || movingGradient) && !hasShadow;
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");
@@ -741,7 +745,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
-                || (!fadedScanlineGradient && (line.entryAnimation != "none" || line.exitAnimation != "none"
+                || (!movingGradient && (line.entryAnimation != "none" || line.exitAnimation != "none"
                     || line.scanlineEnabled || !line.bursts.empty()))
                 || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint) || !projected.charStyles.empty())

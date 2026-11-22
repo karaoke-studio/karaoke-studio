@@ -4,7 +4,7 @@
 
 namespace krok::subtitle::native {
 enum class RubyTransition { None, Fade, Spin, Translation, Affine, UtopiaExit };
-struct RubyDecorationMotion { bool upper, lower; };
+struct RubyDecorationMotion { bool upper, lower, singingGradient; };
 enum class GlowPaintSupport;
 class SkiaImageFillCache;
 struct RolePaintBounds;
