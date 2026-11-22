@@ -307,7 +307,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                               else leave if entry == 'none' and source['exit_duration_ms'] > 0 else None)
                     if effect in {'assemble_in', 'dissolve_out'}:
                         assembly_lines.add(index)
-                    paired = both_phases and entry in RUBY_PAIRED_PARTICLES and leave in RUBY_PAIRED_PARTICLES
+                    paired = both_phases and ((entry in RUBY_PAIRED_PARTICLES and leave in RUBY_PAIRED_PARTICLES)
+                                              or (entry, leave) == ('petal', 'sparkle'))
                     note_exit = petal_scanline_with_note_exit(source, look)
                     if paired or note_exit or (leave == 'none' and effect in RUBY_PARTICLE_ENTRIES):
                         readings = geometry.ruby.lines[index].rubies

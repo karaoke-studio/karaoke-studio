@@ -60,8 +60,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool particleEntryGlow = line.byteParticleEntryGlow && line.characterGeometry.inEntryWindow(tMs, line.startMs);
     const std::string_view exitKind = line.characterGeometry.exit;
     const std::string_view entryKind = line.characterGeometry.entry;
-    auto sampledKind = exitKind == "note" || exitKind == "snow" ? exitKind : std::string_view{};
-    auto quantizedKind = exitKind == "ripple" ? exitKind : std::string_view{};
+    const bool pairedSparkle = entryKind == "petal" && exitKind == "sparkle";
+    auto sampledKind = exitKind == "note" || exitKind == "snow" || pairedSparkle ? exitKind : std::string_view{};
+    auto quantizedKind = exitKind == "ripple" || pairedSparkle ? exitKind : std::string_view{};
     const bool snowEntry = line.rubyGeometryComposition && exitKind.empty()
         && (entryKind == "snow" || entryKind == "snow_solid");
     if (snowEntry) {
