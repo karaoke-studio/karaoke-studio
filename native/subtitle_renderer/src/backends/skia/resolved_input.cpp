@@ -3,6 +3,7 @@
 #include "resolved_glyph.h"
 #include "resolved_bitmap_guide.h"
 #include "resolved_line_band.h"
+#include "resolved_particles.h"
 #include "resolved_ruby.h"
 #include "resolved_role_paints.h"
 #include "resolved_signal.h"
@@ -19,7 +20,6 @@
 #include <QtCore/QJsonArray>
 #include <cmath>
 #include <algorithm>
-#include <map>
 #include <string_view>
 
 namespace krok::subtitle::native {
@@ -132,9 +132,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         glyphs.languages.push_back(run.value("language").toString("und").toStdString());
     }
     glyphs.dpr = ir.value("screen").toObject().value("dpr").toDouble(1);
-    std::map<std::string, SkPath> particleSprites;
-    for (const auto& [name, shape] : projected.fxSprites)
-        particleSprites.emplace(name, vectorGlyphPath(shape, 1000.0));
+    const auto particleSprites = resolveSkiaParticleSprites(projected);
     ::subtitle::skia::ResolvedSubtitleInput out{projected.width, projected.height, {}};
     out.viewport = skiaViewport(projected);
     if (projected.lineBand.enabled)
@@ -582,46 +580,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
-        // Anchor particles on the final vertical glyph's ink center and cell height.
-        // Horizontal bursts keep their original pivot and measured line box.
-        if (!line.bursts.empty()) {
-            const auto box = source.value("particle_box_height");
-            const bool validBox = style.vertical ? box.isUndefined()
-                : box.isDouble() && std::isfinite(box.toDouble()) && box.toDouble() >= 0 && box.toDouble() <= 1e5;
-            if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
-                || (style.vertical && !features.contains("p07_vertical_sing_twinkle")
-                    && !features.contains("p07_vertical_sing_shapes")
-                    && !features.contains("p07_vertical_sing_falling")
-                    && !features.contains("p07_vertical_sing_lightning")
-                    && !features.contains("p07_vertical_sing_flame")
-                    && !features.contains("p07_vertical_scanline_particles")) || style.rightToLeft)
-                throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
-            for (const auto& burst : line.bursts) {
-                const auto sprite = particleSprites.find(burst.sprite);
-                if (sprite == particleSprites.end() || sprite->second.isEmpty()
-                    || burst.charIndex < 0 || burst.charIndex >= int(prepared.cells.size()))
-                    throw BackendError("Skia 字幕粒子缺少有效的轮廓或锚点");
-                const auto index = std::size_t(burst.charIndex);
-                const auto& anchor = prepared.cells[line.wipeReverse ? prepared.cells.size() - 1 - index : index];
-                const float x = style.vertical ? (anchor.left + anchor.right) * .5f
-                                               : (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f;
-                const float y = style.vertical ? (anchor.top + anchor.bottom) * .5f : anchor.pivot.centerY;
-                const float height = style.vertical ? anchor.bottom - anchor.top : float(box.toDouble() * glyphs.dpr);
-                // Singing flame moves its successive emitters along the wipe axis.
-                // Its local plume still rises vertically in screen space.
-                auto localBurst = burst;
-                const float verticalEmit = style.vertical
-                    ? localBurst.emitX * height * (line.wipeReverse ? -1.f : 1.f) : 0.f;
-                if (style.vertical) localBurst.emitX = 0.f;
-                prepared.particles.push_back({std::move(localBurst), sprite->second, argb(burst.color),
-                    x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
-                    // Ripple and shockwave both fill the same ring sprite in the existing GPU.
-                    burst.kind == "ripple" || burst.kind == "shockwave"
-                        ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});
-            }
-        } else if (source.contains("particle_box_height")) {
-            throw BackendError("Skia 粒子行盒高度缺少能力声明");
-        }
+        resolveSkiaParticleAnchors(source.value("particle_box_height"), features, line, style,
+                                   rubyParticles, particleSprites, glyphs.dpr, prepared);
         if (transforms) {
             // Transformed cells are never wiping: entry finishes before each cell starts,
             // exit begins after every cell ends. Overlap uses a per-glyph front (unverified).

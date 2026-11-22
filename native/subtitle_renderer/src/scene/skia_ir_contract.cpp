@@ -299,6 +299,13 @@ bool isSkiaTransitionLayer(const QString& transition, const QString& kind, bool 
     return kind == transition;
 }
 
+bool hasSkiaVerticalParticleProfile(const QJsonArray& features) {
+    return features.contains("p07_vertical_sing_twinkle")
+        || features.contains("p07_vertical_sing_shapes") || features.contains("p07_vertical_sing_falling")
+        || features.contains("p07_vertical_sing_lightning") || features.contains("p07_vertical_sing_flame")
+        || features.contains("p07_vertical_scanline_particles");
+}
+
 void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (integer(ir, "schema", 3, 3) != 3) throw BackendError("Skia requires IR schema 3");
     const auto features = ir.value("required_features").toArray();
@@ -792,10 +799,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (transformVersion < 1 || transformVersion > kCharacterTransformSchema || std::floor(transformVersion) != transformVersion))
         throw BackendError("Skia 逐字变换布局版本无效");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
-    const bool verticalParticles = features.contains("p07_vertical_sing_twinkle")
-        || features.contains("p07_vertical_sing_shapes") || features.contains("p07_vertical_sing_falling")
-        || features.contains("p07_vertical_sing_lightning") || features.contains("p07_vertical_sing_flame")
-        || features.contains("p07_vertical_scanline_particles");
+    const bool verticalParticles = hasSkiaVerticalParticleProfile(features);
     if (verticalParticles
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排唱字粒子缺少对应布局或粒子能力");

@@ -9,6 +9,7 @@ inline constexpr int kCharacterTransformSchema = 8;
 inline constexpr int kSingingParticleSchema = 13;
 
 const QJsonArray& skiaIrProfiles();
+bool hasSkiaVerticalParticleProfile(const QJsonArray& features);
 bool isSkiaFallingParticle(const QString& kind);
 QString skiaParticleKindForTransition(const QString& animation, bool entry);
 bool allowsSkiaRubyParticleTransition(const QString& entryKind, const QString& exitKind,
