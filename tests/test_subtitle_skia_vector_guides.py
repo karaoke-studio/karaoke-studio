@@ -251,15 +251,22 @@ def test_p00_prefix_guide_with_utopia_ruby_outlines_and_glow_matches_actual_gpu(
 
 
 @GPU
-def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('latin_outline', [False, True], ids=['japanese', 'latin-outline'])
+def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tmp_path, latin_outline):
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
-    case, track = p00_guide(tmp_path)
+    case, track = p00_guide(tmp_path, count=3)
     line = track.lines[0]
+    if latin_outline:
+        line = replace(line, chars=[*line.chars[:3], replace(line.chars[3], text='A'), *line.chars[4:]])
     guide = replace(line.guide_symbol, replacement_prefix=tuple(char.text for char in line.chars[:3]))
     track = replace(track, lines=[replace(line, guide_symbol=guide)])
     style = replace(case.style, karaoke_anim='utopia', entry_anim='fade', exit_anim='fade',
-                    latin_stroke2_enabled=False)
+                    latin_stroke_width_px=2 if latin_outline else None,
+                    latin_stroke2_enabled=None if latin_outline else False)
+    ir = ir_for(binary, (track, style))
+    assert 'p05_vector_guide_composition' in ir['required_features']
+    assert sum('vector_glyph_id' in cell for cell in ir['track']['lines'][0]['chars']) == 3
     times = (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500)
     assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 

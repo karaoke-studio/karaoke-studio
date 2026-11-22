@@ -210,11 +210,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.karaokeAnimation == "none" || (allowSingingGlow && features.contains("p07_role_singing_glow")))
         && !line.wipeReverse && !line.zoomPulseEnabled
         && (!line.scanlineEnabled || roleFadedScanline) && !line.strokeFlashEnabled && line.bursts.empty();
+    const bool latinGuideGlow = lineGlow && features.contains("p06_latin_primary_outline")
+        && features.contains("p05_vector_guide_composition") && !features.contains("p06_role_solid_outlines");
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
             || decorationMotion.upper || decorationMotion.lower || unscaledScanlineGlow || roleLineFade || gradientLineFade)
-        && (scene.charStyles.empty() || roleGlow);
+        && (scene.charStyles.empty() || roleGlow || latinGuideGlow);
     const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
         && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
         && (staticLine || decorationMotion.lower) && features.contains("p07_lower_ruby_no_wipe_decoration"));

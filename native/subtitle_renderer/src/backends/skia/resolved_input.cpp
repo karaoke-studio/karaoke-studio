@@ -94,7 +94,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
         .roleStaticGlow = roleStaticGlow, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
-    const bool secondaryScriptStylesOnly = latinSecondaryOutline && projected.charStyles.empty();
+    const bool scriptStylesOnly = projected.charStyles.empty()
+        && (latinSecondaryOutline || (latinPrimaryOutline && features.contains("p05_vector_guide_composition")
+            && features.contains("p07_utopia_line_animation")));
     if ((latinPrimaryOutline || latinSecondaryOutline) && (roleBodyPaints || roleStaticGlow || staticGlow))
         splitLatinOutlineStyles(projected, latinPrimaryOutline, latinSecondaryOutline);
     const auto layout = ir.value("skia_layout").toObject();
@@ -426,7 +428,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
                 || utopiaEntry || (utopiaExit && !rubyUtopiaExit)))
-            || (!projected.charStyles.empty() && !(roleSinging || secondaryScriptStylesOnly))))
+            || (!projected.charStyles.empty() && !(roleSinging || scriptStylesOnly))))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
         if (singingScale && annotated && !verticalSinging) {
@@ -808,7 +810,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     || line.scanlineEnabled || !line.bursts.empty()))
                 || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint)
-                || (!projected.charStyles.empty() && !secondaryScriptStylesOnly))
+                || (!projected.charStyles.empty() && !scriptStylesOnly))
                 throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");
             // Image paints need no line domain: the existing GPU tiles them on the canvas.
             for (int i = 0; i < 6 && image; ++i)

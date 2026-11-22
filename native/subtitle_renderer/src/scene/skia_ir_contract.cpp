@@ -600,7 +600,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient",
             "p06_static_shadow", "p06_ruby_shadow", "p06_gradient_glow", "p06_animated_singing_gradient_fill"};
         static const QJsonArray lineMotion{
-            "p06_multi_lane_outline", "p06_latin_secondary_outline", "p07_line_fade", "p07_line_motion",
+            "p06_multi_lane_outline", "p06_latin_primary_outline", "p06_latin_secondary_outline",
+            "p07_line_fade", "p07_line_motion",
             "p07_utopia_line_animation", "p07_ruby_line_animation"};
         static const QJsonArray fadedScanline{
             "p06_faded_scanline_gradient_fill", "p07_faded_scanline_prefix_guides",
@@ -1035,9 +1036,17 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
             "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
         };
+        static const QJsonArray animatedGuides{
+            "p05_vector_guides", "p05_vector_guide_composition", "p07_singing_scale",
+            "p07_ruby_singing_scale", "p07_utopia_line_animation", "p07_singing_glow"
+        };
+        const bool animatedGuide = features.contains("p05_vector_guide_composition")
+            && features.contains("p07_utopia_line_animation");
         if (!features.contains("p06_primary_solid_outline")
-            || (features.contains("p07_line_fade") && !features.contains("p07_role_line_fade"))
-            || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
+            || (features.contains("p07_line_fade") && !features.contains("p07_role_line_fade") && !animatedGuide)
+            || std::any_of(features.begin(), features.end(), [&](const auto& v) {
+                return !allowed.contains(v) && !(animatedGuide && animatedGuides.contains(v));
+            }))
             throw BackendError("Skia 英数独立首层描边需要正向横排、普通走字和受支持的画笔组合");
     }
     if (features.contains("p06_secondary_solid_outline")
