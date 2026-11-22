@@ -298,11 +298,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.bursts.empty() && features.contains("p07_ruby_utopia_exit")
             && bodyDecor(false) && bodyDecor(true)
             && readingDecor(false) && readingDecor(true);
-        const bool spinComposition = transformedRuby && line.bursts.empty()
-            && ((features.contains("p07_ruby_character_exit_spin") && line.entryAnimation == "none"
-                    && line.exitAnimation == "spin_flip" && line.exitDurationMs > 0)
-                || (features.contains("p07_ruby_character_entry_spin") && line.entryAnimation == "spin_flip"
-                    && line.exitAnimation == "none" && line.entryDurationMs > 0));
+        const bool spinEntry = line.entryAnimation == "spin_flip" && line.entryDurationMs > 0;
+        const bool spinExit = line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
+        const bool spinComposition = transformedRuby && line.bursts.empty() && (spinEntry || spinExit)
+            && (line.entryAnimation == "none" || line.entryAnimation == "spin_flip")
+            && (line.exitAnimation == "none" || line.exitAnimation == "spin_flip")
+            && (!spinEntry || features.contains("p07_ruby_character_entry_spin"))
+            && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
             && line.bursts.empty() && line.exitAnimation == "none" && line.entryDurationMs > 0;

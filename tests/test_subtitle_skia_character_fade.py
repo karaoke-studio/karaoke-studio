@@ -200,6 +200,33 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_spin_pair_requires_both_phase_capabilities(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'inherited')
+    style = replace(style, entry_anim='spin_flip', exit_anim='spin_flip',
+                    entry_lead_ms=600, exit_fade_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    features = ('p07_ruby_character_entry_spin', 'p07_ruby_character_exit_spin')
+    assert set(features) <= set(ir['required_features'])
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert group['fade_owner'] == 0
+    line, = ir['track']['lines']
+    times = [line['display_start_ms'] + 6, line['display_end_ms'] - 170]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        for feature in features:
+            missing = copy.deepcopy(ir)
+            missing['required_features'].remove(feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, missing)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
+    assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
     from test_subtitle_skia_static_glow import glowing_ruby
 
@@ -670,6 +697,18 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
     elif case_id in {'exit_snow', 'exit_ripple'}:
         times = tuple(sorted({*times, 4901, 5300, 5498, 5500, 5510}))
     assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_ruby_can_spin_in_and_out_on_the_same_line(binary, application, tmp_path, dpr):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'entry_spin_flip')
+    style = replace(case.style, exit_anim='spin_flip')
+    times = (299, 300, 301, 302, 306, 325, 450, 650, 1000, 1500,
+             4500, 4899, 4900, 5100, 5300, 5450, 5499, 5500, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times, dpr=dpr)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
