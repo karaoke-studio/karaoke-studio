@@ -91,6 +91,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const int fadeSide = line.characterFade.side(tMs, line.startMs, line.endMs);
     const bool utopia = !rubyGeometryPhase && (line.singingScale.active || line.utopiaTransition.active())
         && fadeSide == 0;
+    const bool rubyUtopiaEntry = utopia && !line.rubyGroups.empty()
+        && line.utopiaTransition.inEntryWindow(tMs, line.startMs);
     const bool fadeActive = fadeSide != 0;
     const bool rubyExitFade = fadeSide > 0 && line.characterFade.exitKind == CharacterFade::Kind::Fade
         && !line.rubyGroups.empty();
@@ -348,9 +350,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             }
             // Near the start of a spin, a one-byte change in edge coverage
             // can remove the only visible part of a letter from one target.
-            if (entrySpin && drawOutline && animatedInk && !shader && transform.opacity < .125f) {
-                const auto outline = prepareOutlinePath(*animatedInk, stroke->width);
-                drawSamplePatternPath(canvas, outline, paint, true);
+            if (animatedInk && !shader && transform.opacity < .125f
+                && (rubyUtopiaEntry || (entrySpin && drawOutline))) {
+                const auto posed = posedStroke ? *posedStroke
+                    : drawOutline ? prepareOutlinePath(*animatedInk, stroke->width) : *animatedInk;
+                drawSamplePatternPath(canvas, posed, paint, true);
                 return;
             }
             if (animatedInk) {
@@ -641,12 +645,17 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             continue;
         }
         SkPoint ownerPivot{};
-        if (rubyGeometryPhase && group.fadeOwner()) {
-            const auto& pivot = line.cells[*group.fadeOwner()].pivot;
-            ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};
+        std::optional<float> entryScale;
+        if (const auto owner = group.fadeOwner()) {
+            if (rubyGeometryPhase) {
+                const auto& pivot = line.cells[*owner].pivot;
+                ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};
+            }
+            if (rubyUtopiaEntry)
+                entryScale = states[*owner].transform.matrix.getScaleX();
         }
         group.draw(canvas, tMs, rubyScale, line.rubySingingOrigin, rubyOpacity(group), wipeViewportHeight,
-                   rubyPose(group), ownerPivot);
+                   rubyPose(group), ownerPivot, entryScale);
     }
     // The GPU's front particle layer covers the main text and readings.
     if (!line.particles.empty()) {

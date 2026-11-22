@@ -329,6 +329,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.bursts.empty() && features.contains("p07_ruby_utopia_exit")
             && bodyDecor(false) && bodyDecor(true)
             && readingDecor(false) && readingDecor(true);
+        const bool rubyUtopiaEntry = transformedRuby && utopiaEntry && singingScale && line.exitAnimation == "none"
+            && line.bursts.empty() && features.contains("p07_ruby_utopia_entry")
+            && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
+            && style.rubyDecorationKindForState(false) == "none" && style.rubyDecorationKindForState(true) == "none";
         const bool spinEntry = line.entryAnimation == "spin_flip" && line.entryDurationMs > 0;
         const bool spinExit = line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
         const bool fadeEntry = features.contains("p07_character_entry_fade_composition")
@@ -430,7 +434,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
-                || utopiaEntry || (utopiaExit && !rubyUtopiaExit)))
+                || (utopiaEntry && !rubyUtopiaEntry) || (utopiaExit && !rubyUtopiaExit)))
             || (!projected.charStyles.empty() && !(roleSinging || scriptStylesOnly))))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
@@ -633,7 +637,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         auto rubyTransition = RubyTransition::None;
-        if (fadeComposition || particleComposition) rubyTransition = RubyTransition::Fade;
+        if (fadeComposition || particleComposition || rubyUtopiaEntry) rubyTransition = RubyTransition::Fade;
         if (spinComposition) rubyTransition = RubyTransition::Spin;
         if (translationComposition) rubyTransition = RubyTransition::Translation;
         if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))

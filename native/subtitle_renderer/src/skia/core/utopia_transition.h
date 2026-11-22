@@ -9,6 +9,7 @@ struct UtopiaTransition {
     float amplitude = 0;
 
     bool active() const { return enter || leave; }
+    bool inEntryWindow(int time, int displayStart) const { return enter && time <= displayStart + 700; }
 
     CharacterTransformState at(int time, int displayStart, int index, int count, int followingDone,
                                const CharacterPivot& pivot, const SingingScale& scale,
@@ -17,7 +18,7 @@ struct UtopiaTransition {
         const auto singing = scale.at(time, wipeStart, wipeEnd, pivot);
         float scaleX = 1.f, scaleY = 1.f, rotation = 0.f, dx = 0.f, dy = 0.f;
         CharacterTransformState state;
-        if (enter && time <= displayStart + 700) {
+        if (inEntryWindow(time, displayStart)) {
             const int delay = count > 1 ? (200 / (count - 1)) * index : 0;
             const int elapsed = std::max(time - displayStart - delay, 0);
             state.opacity = std::min(float(elapsed) / 400.f, 1.f);

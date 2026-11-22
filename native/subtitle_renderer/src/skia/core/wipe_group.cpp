@@ -113,7 +113,7 @@ sk_sp<SkShader> PreparedWipeGroup::fillShader(const SkCanvas& canvas, bool after
 
 void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
                                    float originX, bool afterVisible, float opacity, float viewportHeight,
-                                   const UtopiaTransition* exit, int followingDone) const {
+                                   const UtopiaTransition* exit, int followingDone, std::optional<float> entryScale) const {
     SkPaint paint;
     paint.setAntiAlias(true);
     std::vector<std::optional<ResolvedCell>> animated(cells_.size());
@@ -126,6 +126,9 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
             transform = readingExit(*exit, cell, timeMs, followingDone);
             exitOpacity = transform.opacity;
             if (exitOpacity <= 0.f) return;
+        } else if (entryScale) {
+            transform.transformed = *entryScale != 1.f;
+            transform.matrix.setScale(*entryScale, *entryScale, cell.pivot.layoutLeft, cell.pivot.baseline);
         } else {
             transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
         }
@@ -293,13 +296,14 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
 }
 
 void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX,
-                             float opacity, float viewportHeight, const SkMatrix& pose, SkPoint ownerPivot) const {
+                             float opacity, float viewportHeight, const SkMatrix& pose, SkPoint ownerPivot,
+                             std::optional<float> entryScale) const {
     if (bounds_.isEmpty() || opacity <= 0) return;
     const float startEdge = wipeStart();
     const float edge = frontAt(timeMs, startEdge);
     const bool revealed = rightToLeft_ ? edge < startEdge : edge > startEdge;
     if (scale.active && !vertical_) {
-        drawSinging(canvas, timeMs, scale, originX, revealed, opacity, viewportHeight);
+        drawSinging(canvas, timeMs, scale, originX, revealed, opacity, viewportHeight, nullptr, 0, entryScale);
         return;
     }
     SkPaint paint;

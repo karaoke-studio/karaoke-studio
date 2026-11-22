@@ -576,6 +576,52 @@ def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_undecorated_ruby_utopia_entry_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'entry_utopia')
+    style = replace(case.style, decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    faint = (301, 302, 303, 305, 310, 315)
+    normal = (299, 350, 419, 420, 450, 650, 701, 740, 901, 1001, 1500, 3500, 3900)
+    times = (*faint, *normal)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=case.track,
+                                   width=1920, height=1080, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    ir = prepare_skia_scene_ir(case.track, style, executable=binary, width=1920, height=1080, fps=60)
+    assert 'p07_ruby_utopia_entry' in ir['required_features']
+    invalid = copy.deepcopy(ir)
+    reader = invalid['skia_layout']['lines'][0]['ruby_groups'][0]
+    del reader['fade_owner']
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, [650, 315], generation=2)
+        assert np.array_equal(replay[0], frames[times.index(650)])
+        assert np.array_equal(replay[1], frames[times.index(315)])
+        rendered.append(frames)
+    gpu, raster = rendered
+    # A one-byte edge step can dominate relative coverage during the first
+    # milliseconds. Check every premultiplied channel and require visible output.
+    for t, expected, hardware, software in zip(faint, reference[:len(faint)], gpu[:len(faint)],
+                                                raster[:len(faint)], strict=True):
+        assert expected[..., 3].any() and hardware[..., 3].any() and software[..., 3].any(), t
+        for a, b in ((expected, hardware), (hardware, software)):
+            involved = (a[..., 3] > 0) | (b[..., 3] > 0)
+            assert np.max(abs(premultiplied(a[involved]) - premultiplied(b[involved]))) <= 2, t
+    assert_glow_parity(normal, reference[len(faint):], gpu[len(faint):], raster[len(faint):], case.case_id,
+                       check_p00_edges=True)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('entry,exit_', _ENERGY_PAIRS)
 def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entry, exit_):
     from scripts.subtitle_gpu_baseline.cases import build_cases

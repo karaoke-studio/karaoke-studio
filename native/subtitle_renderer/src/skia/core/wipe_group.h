@@ -15,7 +15,8 @@ public:
     bool lower() const { return lower_; }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
-              const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {}) const;
+              const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {},
+              std::optional<float> entryScale = {}) const;
     void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
     void drawUtopiaExit(SkCanvas&, int timeMs, int followingDone, const UtopiaTransition&,
                         float originX, float viewportHeight) const;
@@ -27,7 +28,7 @@ public:
 private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible,
                      float opacity, float viewportHeight, const UtopiaTransition* exit = nullptr,
-                     int followingDone = 0) const;
+                     int followingDone = 0, std::optional<float> entryScale = {}) const;
     float wipeStart() const;
     float frontAt(int timeMs, float startEdge) const;
     sk_sp<SkShader> fillShader(const SkCanvas&, bool after) const;
