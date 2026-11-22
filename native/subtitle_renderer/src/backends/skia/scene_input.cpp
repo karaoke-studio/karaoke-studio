@@ -64,7 +64,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
             || !supportedOutline(s.beforeStrokePaint) || !supportedOutline(s.afterStrokePaint)))
         || (outlineLayers < 2 && (s.stroke2Width != 0 || s.latinStroke2Width != 0))
         || (outlineLayers == 2 && (s.stroke2Width < 0 || !std::isfinite(s.stroke2Width)
-            || s.stroke2Width != s.latinStroke2Width
+            || !std::isfinite(s.latinStroke2Width) || s.latinStroke2Width < 0
+            || (!canonical && s.stroke2Width != s.latinStroke2Width)
             || !supportedOutline(s.beforeStroke2Paint) || !supportedOutline(s.afterStroke2Paint)))
         || !supportedDecoration(false) || !supportedDecoration(true)
         || !supportedBodyFill(s.beforeFillPaint) || !supportedBodyFill(s.afterFillPaint)

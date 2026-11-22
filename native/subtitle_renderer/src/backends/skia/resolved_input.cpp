@@ -511,6 +511,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || interval[1].toDouble() < interval[0].toDouble())
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
+            // A script-slot override has no effect on non-Latin cells or guides.
+            if (paint.stroke2Width != paint.latinStroke2Width && isLatinText(line.chars[j].text))
+                throw BackendError("Skia 暂不支持英数与正文使用不同的第二道描边");
             if (roleFadedScanline) {
                 const auto supported = [](const PaintStyle& fill) {
                     return fill.mode == "solid" || fill.mode == "gradient_vertical";

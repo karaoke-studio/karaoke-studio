@@ -147,7 +147,8 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
     # survive insertion even when the old slot still matches the reading text.
     ruby = RubyAnnotation('字', 'A', target_char_start=2, target_char_end=3)
     track = replace(track, lines=[line], rubies=[ruby])
-    ir = ir_for(binary, (track, outlined(style, 2)))
+    look = replace(outlined(style, 2), latin_stroke2_enabled=False)
+    ir = ir_for(binary, (track, look))
     assert 'p05_vector_guide_composition' in ir['required_features']
     assert ir['skia_layout']['vector_guide_schema'] == 1
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
@@ -236,7 +237,8 @@ def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tm
     line = track.lines[0]
     guide = replace(line.guide_symbol, replacement_prefix=tuple(char.text for char in line.chars[:3]))
     track = replace(track, lines=[replace(line, guide_symbol=guide)])
-    style = replace(case.style, karaoke_anim='utopia', entry_anim='fade', exit_anim='fade')
+    style = replace(case.style, karaoke_anim='utopia', entry_anim='fade', exit_anim='fade',
+                    latin_stroke2_enabled=False)
     times = (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500)
     assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 
