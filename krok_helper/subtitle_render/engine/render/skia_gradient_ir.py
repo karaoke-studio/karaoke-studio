@@ -123,7 +123,7 @@ def write_body_gradient_bounds(ir, plan):
                         and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
                         and not source.get('fx_bursts') and 'fade' in animations and animations <= {'none', 'fade'}
                         and modes <= {'solid', 'gradient_vertical'})
-        moving = (upper_ruby and not source.get('scanline') and not source.get('fx_bursts')
+        moving = (not source.get('scanline') and not source.get('fx_bursts')
                   and animations != {'none'}
                   and ordinary_line_animation(source) and modes <= {'solid', 'gradient_vertical'}
                   and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
@@ -139,7 +139,7 @@ def write_body_gradient_bounds(ir, plan):
                        and (not (moving or prefix_band) or guide_symbol_is_bitmap(c.vector_glyph)))
                        for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
-        ruby_paint |= annotated or moving
+        ruby_paint |= annotated or (moving and upper_ruby)
         singing_paint |= singing and (annotated or moving)
         faded_scanline_gradient |= faded_band
         palette_scanline_gradient |= palette_band

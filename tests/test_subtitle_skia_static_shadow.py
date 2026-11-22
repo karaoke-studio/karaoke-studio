@@ -351,6 +351,21 @@ def test_faded_gradient_preserves_body_and_annotation_shadows(binary, reading):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_faded_utopia_gradient_without_readings_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'paint_gradient_vertical')
+    track = replace(case.track, rubies=[])
+    style = replace(case.style, entry_anim='fade', exit_anim='fade', karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    assert 'p06_animated_singing_gradient_fill' in ir['required_features']
+    assert 'p06_ruby_main_paint' not in ir['required_features']
+    assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style),
+                                     (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('utopia,separate,dpr', [(False, False, 1), (False, True, 1.5), (True, False, 1), (True, True, 1.5)])
 def test_ruby_shadow_matches_actual_d2d_and_gpu_raster(binary, reading, utopia, separate, dpr):
     from test_subtitle_render_gpu_backend import _render_g1_frames

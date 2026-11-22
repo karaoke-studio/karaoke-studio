@@ -989,8 +989,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_outline_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 描边渐变缺少正文渐变或描边能力声明");
+    const bool animatedSingingGradient = features.contains("p06_animated_singing_gradient_fill");
+    const bool rubySingingPaint = features.contains("p06_ruby_main_paint") && features.contains("p07_ruby_singing_scale");
     if (features.contains("p06_utopia_main_paint")
-        && (!features.contains("p06_ruby_main_paint") || !features.contains("p07_ruby_singing_scale")
+        && ((!rubySingingPaint && !animatedSingingGradient)
             || !(features.contains("p06_body_gradient") || features.contains("p06_image_fill"))))
         throw BackendError("Skia Utopia 正文画笔缺少注音唱字或画笔能力声明");
     if (features.contains("p06_ruby_fill_gradient")
@@ -1001,10 +1003,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !(features.contains("p07_faded_scanline_singing_particles")
                  || features.contains("p07_faded_scanline_prefix_guides"))))
         throw BackendError("Skia 淡化扫字线渐变缺少正文画笔或组合能力声明");
-    if (features.contains("p06_animated_singing_gradient_fill")
+    if (animatedSingingGradient
         && (!features.contains("p06_body_gradient") || !features.contains("p06_utopia_main_paint")
-            || !features.contains("p05_upper_ruby") || !features.contains("p07_utopia_line_animation")))
-        throw BackendError("Skia Utopia 出入场渐变缺少正文画笔、上注音或唱字动画能力声明");
+            || (features.contains("p05_upper_ruby") && !rubySingingPaint)
+            || !features.contains("p07_utopia_line_animation")))
+        throw BackendError("Skia Utopia 出入场渐变缺少正文画笔或唱字动画能力声明");
     if (features.contains("p06_faded_scanline_palette_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p07_singing_scale")
             || !features.contains("p07_scanline_line_animation") || !features.contains("p07_line_fade")))
