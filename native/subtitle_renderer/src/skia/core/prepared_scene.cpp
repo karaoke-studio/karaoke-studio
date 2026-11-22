@@ -157,8 +157,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 }
             }
             if (cell.bitmap && (!cell.path.isEmpty() || cell.outline || cell.outerOutline || source.vertical
-                                || source.wipeRightToLeft || source.noWipe || cell.strokeFlashWidth > 0))
-                throw std::runtime_error("Skia 图片导唱符仅支持正向横排走字单元");
+                                || source.noWipe || cell.strokeFlashWidth > 0))
+                throw std::runtime_error("Skia 图片导唱符仅支持横排走字单元");
             if (cell.bodyPaintIndex < -1 || cell.bodyPaintIndex >= int(line.roleBodyPaints.size()))
                 throw std::runtime_error("Skia 正文角色画笔索引无效");
             if (cell.outline) line.hasOutline = true;

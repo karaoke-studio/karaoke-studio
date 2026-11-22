@@ -244,6 +244,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
+        const bool reverseBitmapLine = line.wipeReverse && features.contains("p08_reverse_bitmap_guides")
+            && !line.chars.empty()
+            && std::ranges::all_of(line.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
         const bool verticalSingingAnimation = style.vertical && singingScale && ordinaryLineAnimation
             && !line.wipeReverse && features.contains("p07_vertical_singing_line_animation")
             && (!line.scanlineEnabled || features.contains("p07_vertical_singing_scanline_line_animation"));
@@ -657,6 +660,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
+        if (reverseBitmapLine) {
+            prepared.shadow = {};
+            prepared.glow = {};
+        }
         if (rubyUtopiaExit && (prepared.glow.before.radius > 0 || prepared.glow.after.radius > 0)) {
             // The animated halo uses a fixed line rectangle, including the
             // pen extent and the vertical paint pad used by the fill range.
@@ -745,7 +752,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
-        if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline) && !reverseHorizontalDecoration)
+        if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline)
+            && !(reverseHorizontalDecoration || reverseBitmapLine))
             throw BackendError("Skia 横排反向走字的描边缺少对应能力");
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
         if (hasDecoration

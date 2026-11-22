@@ -273,8 +273,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const float pad = guide.clipPad();
         for (const bool sung : {false, true}) {
             SkAutoCanvasRestore keep(&canvas, true);
-            clipViewportWipe(canvas, sung ? SkRect::MakeLTRB(box.left() - pad, -1e6f, edge, 1e6f)
-                                          : SkRect::MakeLTRB(edge, -1e6f, box.right() + pad, 1e6f), wipeViewportHeight);
+            const auto clip = sung != line.wipeRightToLeft
+                ? SkRect::MakeLTRB(box.left() - pad, -1e6f, edge, 1e6f)
+                : SkRect::MakeLTRB(edge, -1e6f, box.right() + pad, 1e6f);
+            clipViewportWipe(canvas, clip, wipeViewportHeight);
             guide.draw(canvas, sung, titleOpacity);
         }
     };

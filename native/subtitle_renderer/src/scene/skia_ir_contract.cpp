@@ -78,6 +78,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vector_guide_composition",
         "p08_bitmap_guides",
         "p08_inline_bitmap_guides",
+        "p08_reverse_bitmap_guides",
         "p08_animated_title_guides",
         "p08_static_line_band",
         "p08_line_band_fit",
@@ -618,6 +619,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p07_line_fade")))
         throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
     const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides");
+    const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
+    if (reverseBitmapGuides && (!inlineBitmapGuides || !features.contains("p05_reverse_overlap")))
+        throw BackendError("Skia 反向头像缺少图片或走字布局能力声明");
     if (inlineBitmapGuides && !features.contains("p08_bitmap_guides"))
         throw BackendError("Skia 行内头像缺少图片导唱符能力声明");
     if (features.contains("p08_bitmap_guides")) {
@@ -637,10 +641,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_ruby_role_paints", "p06_role_static_glow", "p06_ruby_role_glow",
             "p07_role_singing_scale", "p07_role_singing_glow"
         };
+        static const QJsonArray reverseAllowed{
+            "p08_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_static_shadow"
+        };
         if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
             throw BackendError("Skia 图片导唱符布局版本无效");
         for (const auto& feature : features)
-            if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature)))
+            if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature))
+                && !(reverseBitmapGuides && reverseAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
     }
     if (features.contains("p07_line_fade")
@@ -1061,7 +1069,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || ((roleBodyPaints || roleStaticGlow) && !features.contains("p05_inline_roles"))
             || std::any_of(features.begin(), features.end(), [&](const auto& v) {
                 return !allowed.contains(v) && !(roleFadedScanline && fadedScanline.contains(v))
-                    && !(inlineBitmapGuides && (v == QJsonValue("p08_bitmap_guides") || v == QJsonValue("p08_inline_bitmap_guides")));
+                    && !(inlineBitmapGuides && (v == QJsonValue("p08_bitmap_guides") || v == QJsonValue("p08_inline_bitmap_guides")))
+                    && !(reverseBitmapGuides && (v == QJsonValue("p05_reverse_wipe") || v == QJsonValue("p05_reverse_overlap")
+                                                 || v == QJsonValue("p08_reverse_bitmap_guides") || v == QJsonValue("p06_static_shadow")));
             }))
             throw BackendError("Skia 正文角色画笔当前支持正向横排和普通走字");
     }

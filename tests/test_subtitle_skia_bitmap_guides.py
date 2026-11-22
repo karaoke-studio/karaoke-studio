@@ -183,6 +183,40 @@ def test_role_tagged_inline_avatars_preserve_cells_and_clocks(binary, project, t
     assert np.array_equal(frames[1], replay[0]) and not np.array_equal(frames[1], frames[0])
 
 
+def test_reverse_inline_avatars_wipe_from_right_to_left(binary, project, tmp_path):
+    track, style = inline_avatar_case(tmp_path, family=project[1].font_family)
+    line = track.lines[0]
+    before = image(tmp_path / 'visible.png', 32, 32, '#41ECFD')
+    after = image(tmp_path / 'transparent.png', 32, 32, '#0041ECFD')
+    # Use explicit flat images to make the alpha change and its direction observable.
+    transparent = QImage(32, 32, QImage.Format.Format_ARGB32)
+    transparent.fill(QColor('#0041ECFD'))
+    assert transparent.save(after)
+    symbol = replace(line.inline_guide_symbols[2], bitmap_before_path=before, bitmap_after_path=after)
+    line = replace(line, chars=line.chars[:3], guide_symbol=None, wipe_reverse=True,
+                   inline_guide_symbols={index: symbol for index in range(3)})
+    track = replace(track, lines=[line], rubies=[])
+    ir = ir_for(binary, (track, style))
+    feature = 'p08_reverse_bitmap_guides'
+    assert feature in ir['required_features']
+    source, = ir['track']['lines']
+    final, = ir['skia_layout']['lines']
+    assert [c['clock_index'] for c in final['cells']] == [2, 1, 0]
+    start, end = source['resolved_intervals'][0]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [start, (start + end) // 2, start])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+    assert np.array_equal(frames[0], frames[2])
+    removed = np.where((frames[0][..., 3] > 200) & (frames[1][..., 3] < 10))[1]
+    remaining = np.where(frames[1][..., 3] > 200)[1]
+    assert removed.size > 100 and remaining.size > 100
+    assert removed.min() >= remaining.max()
+
+
 @GPU
 def test_role_tagged_inline_avatars_match_d2d_gpu(binary, application, tmp_path):
     from test_subtitle_render_gpu_backend import _render_g1_frames

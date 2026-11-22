@@ -21,7 +21,9 @@ from .skia_ruby_ir import prepared_ruby_layout
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
-from krok_helper.subtitle_render.engine.guide.skia_bitmap import declare_bitmap_guides, validate_bitmap_guides
+from krok_helper.subtitle_render.engine.guide.skia_bitmap import (
+    declare_bitmap_guides, is_undecorated_bitmap_line, validate_bitmap_guides,
+)
 from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from .skia_lower_ir import lower_sources
 from .skia_line_band_ir import write_line_band
@@ -260,6 +262,18 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             dpr=kwargs.get('dpr', 1), singing_tracks=vertical_singing)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
+    reverse_bitmap_lines = set()
+    for item in plan.lines:
+        if not (item.line.wipe_reverse and is_undecorated_bitmap_line(item.render_line)):
+            continue
+        source = ir['track']['lines'][item.track_index]
+        if ({source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                or source.get('karaoke_anim') not in {'none', 'utopia'}
+                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
+            raise ValueError('Skia 反向头像行当前仅支持图片走字')
+        # Direct2D poses no bitmap glyphs. Retain the resolved clock and skip glyph transforms.
+        source['karaoke_anim'] = 'none'
+        reverse_bitmap_lines.add(item.track_index)
     spin_lines = set()
     translation_lines = set()
     affine_lines = set()
@@ -455,6 +469,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
     if decorations and not (style.vertical or style.right_to_left or track.rubies):
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse
+                             and item.track_index not in reverse_bitmap_lines
                              and any(uses_authored_decoration(item.layout_style, kind) for kind in decorations)]
         for item in decorated_reverse:
             source = ir['track']['lines'][item.track_index]
@@ -799,6 +814,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_zoom_pulse_decoration')
     project_reverse_wipe(ir)
+    if reverse_bitmap_lines:
+        ir['required_features'].append('p08_reverse_bitmap_guides')
     if any(item.layout_style.lit_enabled and item.layout_style.lit_style != 'volume' for item in plan.lines):
         ir['required_features'].append('p08_custom_shape_signal')
         if any(item.layout_style.lit_enabled and item.layout_style.lit_style == 'image' for item in plan.lines):

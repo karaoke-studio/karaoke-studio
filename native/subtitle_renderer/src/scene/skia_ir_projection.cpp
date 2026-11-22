@@ -86,10 +86,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const bool reverseVerticalOutline = cfg.vertical && features.contains("p06_vertical_reverse_outline");
     const bool reverseHorizontalOutline = !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
         && features.contains("p06_reverse_decoration");
+    const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
             || (cfg.rightToLeft && !rtlRuby) || (cfg.dualLineLayout && !multiLaneOutline)
-            || (features.contains("p05_reverse_wipe") && !(reverseVerticalOutline || reverseHorizontalOutline))
+            || (features.contains("p05_reverse_wipe")
+                && !(reverseVerticalOutline || reverseHorizontalOutline || reverseBitmapGuides))
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应布局能力");
     const auto& band = cfg.lineBand;
@@ -448,6 +450,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
+        const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
+            && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
+            && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
+            && std::ranges::all_of(source.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
         bool sawLyrics = false;
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
@@ -496,7 +503,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (cell.bitmapGuide) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
-                    || cfg.rightToLeft || source.wipeReverse
+                    || cfg.rightToLeft || (source.wipeReverse && !reverseBitmapLine)
                     || (needsInline && (!inlineBitmapGuides || !cell.bitmapGuide->noDecor)))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }
