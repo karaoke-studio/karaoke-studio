@@ -744,6 +744,44 @@ def test_vertical_scanline_particles_emit_along_the_cell_y_axis(binary, project,
     assert abs(rendered[0] - rendered[1]).mean() < .15
 
 
+@pytest.mark.parametrize('layers,reverse', [(1, False), (2, False), (2, True)])
+def test_vertical_singing_particles_over_outlined_bare_lyrics(binary, project, layers, reverse):
+    from test_subtitle_skia_outline_ruby import outlined
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, texts=['字', '字'], position='center', reverse=reverse, effect='zoom_pulse')
+    style = replace(outlined(style, layers), karaoke_anim='zoom_pulse', sing_fx='note',
+                    fx_particle_color='#FFFFFF', fx_particle_color2='#FFFFFF')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_vertical_outlined_singing_particles'
+    assert {feature, 'p06_vertical_outline', 'p07_vertical_sing_shapes'} <= set(ir['required_features'])
+    assert ('p06_secondary_solid_outline' in ir['required_features']) == (layers == 2)
+    assert 'p05_resolved_ruby' not in ir['required_features']
+    bare = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
+    assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    times = [150, 400, 800, 1300, 1799]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, bare)
+            baseline, _ = collect(process, times, generation=3)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert np.array_equal(frames[0], baseline[0])
+        assert all(not np.array_equal(frame, ref) for frame, ref in zip(frames[1:3], baseline[1:3], strict=True))
+        for clip in (frames, baseline):
+            assert any(np.any(np.all(frame == [0, 0, 255, 255], axis=-1)) for frame in clip)
+            assert any(np.any(np.all(frame == [255, 255, 0, 255], axis=-1)) for frame in clip)
+        results.append(premultiplied(np.stack(frames)))
+    assert abs(results[0] - results[1]).mean() < .15
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])

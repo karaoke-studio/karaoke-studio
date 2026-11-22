@@ -812,6 +812,8 @@ effect_styles['vertical-reverse-sweep-particles'] = dict(
 effect_styles['vertical-motion-sweep-particles'] = dict(
     effect_styles['vertical-sweep-particles'], entry_anim='slide_in', entry_lead_ms=650,
     exit_anim='rise', exit_fade_ms=500)
+effect_styles['vertical-outlined-particles'] = dict(
+    effect_styles['vertical-zoom-notes'], stroke_width_px=5, stroke2_enabled=True, stroke2_width_px=4)
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
@@ -822,7 +824,7 @@ vertical_motion = effect in {'vertical-zoom-motion', 'vertical-zoom-band-motion'
 vertical_particles = effect in {
     'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals', 'vertical-lightning',
     'vertical-reverse-notes', 'vertical-motion-notes', 'vertical-band-notes', 'vertical-sweep-particles',
-    'vertical-reverse-sweep-particles', 'vertical-motion-sweep-particles',
+    'vertical-reverse-sweep-particles', 'vertical-motion-sweep-particles', 'vertical-outlined-particles',
 }
 vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
@@ -848,8 +850,9 @@ if effect:
         reading = RubyAnnotation('字', '字', pos_start_ms=400, pos_end_ms=700,
                                  target_line_index=0, target_char_start=0, target_char_end=1)
         reverse = effect in {'vertical-reverse-notes', 'vertical-reverse-sweep-particles'}
+        with_reading = not reverse and effect != 'vertical-outlined-particles'
         track = replace(track, lines=[replace(line, chars=chars, wipe_reverse=reverse)],
-                        rubies=[] if reverse else [reading])
+                        rubies=[reading] if with_reading else [])
     else:
         track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
 panel.set_style(style)
@@ -896,6 +899,7 @@ if '--compare-export' in sys.argv:
         indices = {14: 233, 33: 550, 48: 800, 100: 1667}
     captures = {}
     for index, time_ms in indices.items():
+        transport.pause()
         transport.set_time(time_ms)
         wait_for(lambda: frames[-1] == time_ms)
         grab = quick._canvas.renderer.grabToImage(QSize(640, 360))
@@ -1051,14 +1055,14 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
                                      'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
                                      'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
-                                     'vertical-motion-sweep-particles', 'particle-image-band'],
+                                     'vertical-motion-sweep-particles', 'vertical-outlined-particles', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                               'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
                               'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
                               'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
-                              'vertical-motion-sweep-particles', 'particle-image-band'])
+                              'vertical-motion-sweep-particles', 'vertical-outlined-particles', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

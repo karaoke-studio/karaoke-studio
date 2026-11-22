@@ -65,6 +65,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (!source.scanlineEnabled || verticalBand) && !source.strokeFlashEnabled
         && (source.karaokeAnimation == "none" || verticalScale)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
+    const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft
@@ -77,7 +78,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
-        || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
+        || (!rubyParticles && !outlinedVertical && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");

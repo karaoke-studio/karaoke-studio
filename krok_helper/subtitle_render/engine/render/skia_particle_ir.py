@@ -93,6 +93,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     band_vertical_particles = False
     reverse_vertical_band_particles = False
     moving_vertical_band_particles = False
+    outlined_vertical_particles = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -107,6 +108,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         supported_band = not band or (look.scanline_shape == 'band' and look.scanline_mode != 'role')
         vertical_modes = vertical_singing_particle_modes(source) if look.vertical and supported_band else set()
         vertical_particles = bool(vertical_modes)
+        outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
         if vertical_particles:
             vertical_modes_used.update(vertical_modes)
             vertical_scaled_particles |= source.get('karaoke_anim') == 'utopia'
@@ -115,6 +117,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             band_vertical_particles |= band and bool(vertical_modes - _VERTICAL_SCANLINE)
             reverse_vertical_band_particles |= band and item.line.wipe_reverse
             moving_vertical_band_particles |= band and (entry, exit_) != ('none', 'none')
+            outlined_vertical_particles |= outlined and not annotated
         petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
@@ -137,8 +140,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not petal_with_flame)))
                 or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
-                or (not annotated and (look.stroke_width_px > 0
-                    or (look.stroke2_enabled and look.stroke2_width_px > 0)))
+                or (not (annotated or vertical_particles) and outlined)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         for burst in bursts:
@@ -198,6 +200,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_vertical_reverse_scanline_particles')
     if moving_vertical_band_particles:
         ir['required_features'].append('p07_vertical_scanline_particle_line_animation')
+    if outlined_vertical_particles:
+        ir['required_features'].append('p07_vertical_outlined_singing_particles')
     if ruby_scanline:
         ir['required_features'].append('p07_ruby_scanline_particles')
     if ruby_band_singing:
