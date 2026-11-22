@@ -4,13 +4,33 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPathUtils.h"
+#include "include/core/SkPixmap.h"
+#include "include/core/SkRecorder.h"
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkRuntimeEffect.h"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <stdexcept>
 
 namespace subtitle::skia {
+namespace {
+SkIRect alphaBounds(const SkPixmap& mask) {
+    auto ink = SkIRect::MakeEmpty();
+    // Both N32 channel orders store alpha in the most significant byte.
+    const auto hasAlpha = [](std::uint32_t pixel) { return SkColorGetA(pixel) != 0; };
+    for (int row = 0; row < mask.height(); ++row) {
+        const auto* begin = mask.addr32(0, row);
+        const auto* end = begin + mask.width();
+        const auto* first = std::find_if(begin, end, hasAlpha);
+        if (first == end) continue;
+        const auto last = std::find_if(std::make_reverse_iterator(end), std::make_reverse_iterator(first), hasAlpha);
+        ink.join(SkIRect::MakeLTRB(int(first - begin), row, int(last.base() - begin), row + 1));
+    }
+    return ink;
+}
+}
+
 PreparedGlow::PreparedGlow(const StaticGlow& spec, const GlowState& state, std::optional<bool> phase)
     : before_(spec.before.color), after_(spec.after.color), radius_(state.radius),
       strokeWidth_(spec.outlineWidth + state.radius), join_(spec.join), phase_(phase) {
@@ -153,8 +173,20 @@ void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePa
 
 void PreparedGlow::compositeCanonical(SkCanvas& canvas, const Source& mask) const {
     const float x = float(mask.origin.x()), y = float(mask.origin.y());
-    const auto info = mask.surface->imageInfo();
-    const auto bounds = SkRect::MakeXYWH(x, y, float(info.width()), float(info.height()));
+    auto local = SkIRect::MakeWH(mask.surface->width(), mask.surface->height());
+    if (const auto* recorder = canvas.baseRecorder(); !recorder || recorder->type() == SkRecorder::Type::kCPU) {
+        // Keep software blur confined to the few remaining visible glyphs.
+        // The input image retains the original origin and blur samples.
+        SkPixmap maskPixels;
+        if (!mask.surface->peekPixels(&maskPixels)) throw std::runtime_error("Skia 字幕光晕临时表面无法取样");
+        auto ink = alphaBounds(maskPixels);
+        if (ink.isEmpty()) return;
+        const int support = 3 * radius_ + 2;
+        ink.outset(support, support);
+        if (!local.intersect(ink)) return;
+    }
+    local.offset(mask.origin.x(), mask.origin.y());
+    const auto bounds = SkRect::Make(local);
     auto blurred = makeSource(canvas, bounds, kRGBA_F16_SkColorType);
     SkAutoCanvasRestore clip(&canvas, mask.outputClip.has_value());
     if (mask.outputClip) canvas.clipRect(*mask.outputClip);
@@ -170,7 +202,7 @@ void PreparedGlow::compositeCanonical(SkCanvas& canvas, const Source& mask) cons
         target->drawImage(input, x, y, SkSamplingOptions(), &paint);
         auto pixels = blurred.surface->makeImageSnapshot();
         if (!pixels) throw std::runtime_error("Skia 字幕光晕临时表面无法取样");
-        canvas.drawImage(pixels, x, y, SkSamplingOptions());
+        canvas.drawImage(pixels, bounds.left(), bounds.top(), SkSamplingOptions());
     }
 }
 

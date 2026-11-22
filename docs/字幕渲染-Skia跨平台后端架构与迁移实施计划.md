@@ -4171,6 +4171,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - WSL Vulkan 与独立 Raster 干净构建各通过 **3 项 CTest**。X11 与 Wayland 的逐字淡化和静态光晕套件各 **173 通过、147 跳过**。Windows 原样工程 **23 帧**在 Vulkan 和 Raster 各自按顺序、倒序、乱序、同进程重配后独立定位、新进程乱序对比，哈希一致。
 - Windows 正式浮窗在 **6 个时刻**通过离屏 Vulkan 对照，离屏帧与编码前帧逐字节一致。1800、1950、1983ms 浮窗总 alpha 相差均小于 **0.1%**。证据前缀为 `build/p07-exit-fade-*`，时间点哈希为 `build/p00-skia-coverage/exit_char_fade-seek.json`。
 - 暗尾仍使用确定的 8 位光晕源，各次模糊改在目标后端的 F16 表面执行。Windows 1080p 原样工程 5495–5499ms 各复测 6 次，Vulkan sidecar 的 `render_ms` 中位数从 **135.013ms** 降至 **0.705ms**，P95 为 **1.556ms**。DPR 1 与 1.5 的画质预算、20 项 Windows 回归和正式浮窗复验均通过。同期 Raster 暗尾中位数为 **138.884ms**，继续核对局部覆盖成本。证据前缀 `build/p07-fade-perf-final-win-*`。
+- Skia Raster 保留原光晕输入与坐标，仅把模糊输出裁到非透明区域和滤镜余量。相同 30 次采样的 Raster 中位数降至 **30.899ms**，P95 为 **33.522ms**，Vulkan 中位数为 **0.734ms**。Windows DPR 1、1.5 的单独和组合淡出均通过原画质预算，相关 **8 项通过**。指定不存在的 Vulkan 驱动时，独立 Raster 构建通过淡出配置与回放 **2 项**。证据前缀 `build/p07-fade-crop-final-*`。
 
 ### 14.381 P07.1 同一行逐字淡入和淡出（2026-11-22）
 
