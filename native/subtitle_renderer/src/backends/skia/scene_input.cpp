@@ -97,12 +97,12 @@ bool supportsSkiaGlowPaint(const PaintStyle& paint, GlowPaintSupport support) {
         && (paint.mode == "gradient_horizontal" || paint.mode == "split_vertical"));
 }
 
-bool usesFadedScanlineWithSingingParticles(const TextLine& line, const TextStyle& style) {
+bool usesFadedUtopiaScanline(const TextLine& line, const TextStyle& style) {
     const auto fadeOrNone = [](const std::string& animation) { return animation == "fade" || animation == "none"; };
     return !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.zoomPulseEnabled
         && line.scanlineEnabled && style.scanlineShape == "band"
         && style.scanlineMode != "role"
-        && line.karaokeAnimation == "utopia" && !line.strokeFlashEnabled && !line.bursts.empty()
+        && line.karaokeAnimation == "utopia" && !line.strokeFlashEnabled
         && fadeOrNone(line.entryAnimation) && fadeOrNone(line.exitAnimation)
         && (line.entryAnimation == "fade" || line.exitAnimation == "fade");
 }

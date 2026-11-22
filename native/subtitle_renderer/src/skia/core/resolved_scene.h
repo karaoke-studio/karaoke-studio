@@ -57,6 +57,7 @@ struct ResolvedRubyGroup {
     bool rightToLeft = false;
     std::optional<std::size_t> utopiaExitOwner;
     std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
+    ScanlineGradients scanlineGradients;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;

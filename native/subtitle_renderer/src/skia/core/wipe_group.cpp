@@ -76,7 +76,8 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
       noWipe_(noWipe), vertical_(vertical), rightToLeft_(group.rightToLeft),
       spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
       fillGradients_(group.fillGradients), fillImages_(group.fillImages),
-      outlineGradients_(group.outlineGradients), outerOutlineGradients_(group.outerOutlineGradients) {
+      outlineGradients_(group.outlineGradients), outerOutlineGradients_(group.outerOutlineGradients),
+      scanlineGradients_(group.scanlineGradients) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -274,7 +275,7 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
             band.drawSlices(canvas, edge, [&](int layer, bool after, float opacity) {
                 paintRubyLayer(canvas, brush, cell, layer,
                     [&](auto before, auto sung) { return band.paint.shade(before, sung, after); },
-                    opacity * bandAlpha);
+                    opacity * bandAlpha, scanlineGradients_[layer][after]);
             });
         }
         return;
@@ -286,7 +287,7 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
         band.drawSlices(canvas, front, [&](int layer, bool after, float opacity) {
             paintRubyLayer(canvas, brush, cell, layer,
                 [&](auto before, auto sung) { return band.paint.shade(before, sung, after); },
-                opacity * bandAlpha);
+                opacity * bandAlpha, scanlineGradients_[layer][after]);
         });
     }
 }

@@ -155,12 +155,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool roleLineFade = features.contains("p07_role_line_fade") && fadeOnly;
     const auto& scanlineStyle = scene.lineStyles[lineIndex];
     const bool fixedScanlinePaint = scanlineStyle.scanlineMode == "default" || scanlineStyle.scanlineMode == "color";
-    const bool fadedScanlineGradient = features.contains("p06_faded_scanline_gradient_fill")
-        && fixedScanlinePaint
-        && usesFadedScanlineWithSingingParticles(line, scanlineStyle);
+    const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, scanlineStyle);
+    const bool fadedScanlineGradient = fadedUtopiaScanline && fixedScanlinePaint && !line.bursts.empty()
+        && features.contains("p06_faded_scanline_gradient_fill");
+    const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
+        && scanlineStyle.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
     const bool allowOutlineGradient = features.contains("p06_ruby_outline_gradient")
         && !vertical && !rtl && !line.wipeReverse && !line.zoomPulseEnabled && !line.strokeFlashEnabled
-        && (!line.scanlineEnabled || fixedScanlinePaint) && scene.charStyles.empty()
+        && (!line.scanlineEnabled || fixedScanlinePaint || brightenedScanlineGradient) && scene.charStyles.empty()
         && transition == RubyTransition::None;
     const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
         && features.contains("p07_ruby_line_animation");
@@ -305,7 +307,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
-                || ((fadedScanlineGradient || decorationMotion.singingGradient) && scene.charStyles.empty()
+                || ((fadedScanlineGradient || brightenedScanlineGradient || decorationMotion.singingGradient)
+                    && scene.charStyles.empty()
                     && features.contains("p06_ruby_fill_gradient")
                     && fill.mode == "gradient_vertical")
                 || (allowImageFill && fill.mode == "image");
@@ -521,10 +524,25 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             images[0] = imageCache.fill(paint.rubyBeforeFillPaint, scene.layoutReferenceScale);
             images[1] = imageCache.fill(paint.rubyAfterFillPaint, scene.layoutReferenceScale);
         }
+        ::subtitle::skia::ScanlineGradients scanlineGradients;
+        if (!lower && brightenedScanlineGradient && (gradientFill || gradientOutlines)) {
+            const ::subtitle::skia::ScanlinePaint highlight{
+                ::subtitle::skia::ScanlineColorMode::Brighten, 0, scanlineStyle.scanlineBrightness};
+            const PaintStyle* layers[]{
+                secondary.width ? &paint.rubyBeforeStroke2Paint : nullptr,
+                secondary.width ? &paint.rubyAfterStroke2Paint : nullptr,
+                primary.width ? &paint.rubyBeforeStrokePaint : nullptr,
+                primary.width ? &paint.rubyAfterStrokePaint : nullptr,
+                &paint.rubyBeforeFillPaint, &paint.rubyAfterFillPaint,
+            };
+            for (int i = 0; i < 6; ++i)
+                if (layers[i])
+                    scanlineGradients[i / 2][i % 2] = ::subtitle::skia::scanlineGradient(*layers[i], ink, outlinePad, highlight);
+        }
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
                           roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner,
-                          std::move(outlineGradients), std::move(outerOutlineGradients)});
+                          std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients)});
     }
     return groups;
 }

@@ -1,5 +1,7 @@
 #include "subtitle_gradient.h"
+#include "scanline_paint.h"
 
+#include "include/core/SkColor.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkRect.h"
 #include "include/effects/SkGradient.h"
@@ -56,6 +58,21 @@ sk_sp<SkShader> lineGradient(const krok::subtitle::native::PaintStyle& paint, co
     if (paint.mode == "gradient_horizontal")
         return subtitleGradient(paint, SkRect::MakeLTRB(ink.left(), ink.top(), std::max(ink.right(), ink.left() + 1.f), ink.bottom()));
     return subtitleGradient(paint, SkRect::MakeLTRB(ink.left(), ink.top() - visualPad, ink.right(), ink.bottom() + visualPad));
+}
+
+sk_sp<SkShader> scanlineGradient(const krok::subtitle::native::PaintStyle& paint, const SkRect& ink,
+                                float visualPad, const ScanlinePaint& highlight) {
+    if (paint.mode != "gradient_vertical" || highlight.mode != ScanlineColorMode::Brighten || ink.isEmpty())
+        return nullptr;
+    auto gradient = paint;
+    for (auto& stop : gradient.stops) {
+        auto& color = stop.color;
+        const auto argb = SkColorSetARGB(color.alpha, color.red, color.green, color.blue);
+        const auto bright = highlight.shade(argb, argb, false);
+        color = {std::uint8_t(SkColorGetR(bright)), std::uint8_t(SkColorGetG(bright)),
+                 std::uint8_t(SkColorGetB(bright)), color.alpha};
+    }
+    return lineGradient(gradient, ink, visualPad);
 }
 
 float outlineVisualPad(float strokeWidth, float stroke2Width, float layoutScale) {

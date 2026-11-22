@@ -1,11 +1,16 @@
 #pragma once
 
+#include "include/core/SkShader.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
 namespace subtitle::skia {
 enum class ScanlineColorMode { Color, FollowBefore, FollowAfter, Brighten };
+
+// Outer outline, primary outline, and body, each indexed by wipe phase.
+using ScanlineGradients = std::array<std::array<sk_sp<SkShader>, 2>, 3>;
 
 struct ScanlinePaint {
     ScanlineColorMode mode = ScanlineColorMode::Color;

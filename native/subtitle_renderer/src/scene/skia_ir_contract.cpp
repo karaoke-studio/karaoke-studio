@@ -117,6 +117,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_solid_outline",
         "p06_ruby_outline_gradient",
         "p06_animated_singing_gradient_fill",
+        "p06_faded_scanline_palette_gradient",
         "p06_static_shadow",
         "p06_ruby_shadow",
         "p06_static_glow",
@@ -956,6 +957,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_body_gradient") || !features.contains("p06_utopia_main_paint")
             || !features.contains("p05_upper_ruby") || !features.contains("p07_utopia_line_animation")))
         throw BackendError("Skia Utopia 出入场渐变缺少正文画笔、上注音或唱字动画能力声明");
+    if (features.contains("p06_faded_scanline_palette_gradient")
+        && (!features.contains("p06_body_gradient") || !features.contains("p07_singing_scale")
+            || !features.contains("p07_scanline_line_animation") || !features.contains("p07_line_fade")))
+        throw BackendError("Skia 提亮扫字线渐变缺少正文画笔或整行淡化能力声明");
     if (features.contains("p06_ruby_fill_image")
         && (!features.contains("p06_ruby_main_paint") || !features.contains("p06_image_fill")))
         throw BackendError("Skia 上注音图片缺少正文画笔或注音能力声明");

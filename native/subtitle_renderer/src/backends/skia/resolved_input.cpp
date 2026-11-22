@@ -150,7 +150,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto source = lines[index].toObject();
         const auto& line = projected.lines[index];
         const auto& style = projected.lineStyles[index];
-        if (gradientGlowWithoutTexturedRoles && (style.vertical || style.rightToLeft || line.wipeReverse
+        const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, style);
+        const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
+            && style.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
+        if (gradientGlowWithoutTexturedRoles && !brightenedScanlineGradient
+            && (style.vertical || style.rightToLeft || line.wipeReverse
             || line.karaokeAnimation != "none" || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || (line.entryAnimation != "none" && line.entryAnimation != "fade")
             || (line.exitAnimation != "none" && line.exitAnimation != "fade")))
@@ -364,7 +368,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
         const bool fadedScanlineParticles = features.contains("p07_faded_scanline_singing_particles")
-            && usesFadedScanlineWithSingingParticles(line, style);
+            && !line.bursts.empty() && fadedUtopiaScanline;
         const bool fadedScanlineGradientFill = fadedScanlineParticles
             && features.contains("p06_faded_scanline_gradient_fill")
             && (style.scanlineMode == "default" || style.scanlineMode == "color");
@@ -632,7 +636,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         };
         const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
-        const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill)
+        const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill || brightenedScanlineGradient)
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
@@ -780,6 +784,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     prepared.beforeOuterGradient = lineGradient(style.beforeStroke2Paint, ink, pad);
                     prepared.afterOuterGradient = lineGradient(style.afterStroke2Paint, ink, pad);
                 }
+                if (brightenedScanlineGradient)
+                    for (int i = 0; i < 6; ++i)
+                        if (layers[i])
+                            prepared.scanline.gradients[2 - i / 2][i % 2] =
+                                ::subtitle::skia::scanlineGradient(*layers[i], ink, pad, prepared.scanline.paint);
             }
         }
         if (!roleBodyPaints && !gradient && source.contains("body_gradient_bounds"))

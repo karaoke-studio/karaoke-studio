@@ -4297,6 +4297,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 「光のない街」原工程 41 行、111 处注音，26 个 1080p 时刻覆盖行首替换导唱符、出入场以及走字。D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 各通过全部采样。Windows 专项 18 项通过。日志前缀 `build/skia-moving-shadow-*`。
 - WSL X11 和 Wayland 各 6 项通过。Windows 和 WSL 的 Vulkan 构建各通过 3 项 CTest。
 
+### 14.398 P06 / P07 纵向渐变与底色提亮扫字线（2026-11-22）
+
+- `p06_faded_scanline_palette_gradient` 接通横排 Utopia 高亮带按底色提亮、纵向渐变和整行淡化。每个渐变色阶在准备期按现有实色提亮规则处理，沿用正文与上注音各自的画笔范围、走字前后相位和羽化顺序。普通渐变光晕继续使用原色阶。
+- 「クスシキ」原工程 48 行、139 处上注音。D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 的 34 个 1080p 时刻全部通过，含整行淡入、淡出、渐变光晕与扫字。日志前缀 `build/skia-brightened-gradient-*`。
+- 原视频 Vulkan 浮窗直画 20 秒并完成两次跳转。Windows 扫字线和渐变相关专项 27 项通过，导出页 Skia 选项另有 1 项回归通过。以项目内显式 Skia 选项从「カレンデュラ レクイエム」导出 4.5 秒透明 QTRLE，硬件 Vulkan 写出 270 个 1080p60 帧。解码 2.65 秒的字幕帧，透明度及可见像素 RGB 与离屏 Vulkan 一致。
+- WSL X11 和 Wayland 各 3 项通过。Windows 独立 Raster 禁用 Vulkan 驱动后 4 项通过。Windows 两种构建和 WSL Vulkan 构建各通过 3 项 CTest。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

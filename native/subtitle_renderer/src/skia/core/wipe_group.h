@@ -46,5 +46,6 @@ private:
     std::array<sk_sp<SkShader>, 2> fillGradients_;
     std::array<ImageFill, 2> fillImages_;
     std::array<sk_sp<SkShader>, 2> outlineGradients_, outerOutlineGradients_;
+    ScanlineGradients scanlineGradients_;
 };
 }

@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace subtitle::skia {
-// The horizontal solid-color band follows the existing GPU's
+// The horizontal highlight band follows the existing GPU's
 // single line-level wipe front;
 // only cells whose closed wipe window contains the sample repaint inside it,
 // so timing gaps and pauses carry no band. Clocks are the cells' own resolved
@@ -32,6 +32,7 @@ struct ScanlineBand {
     bool vertical = false;
     ScanlineShape shape;
     std::shared_ptr<const ScanlineImage> image;
+    ScanlineGradients gradients;
 
     bool repaintsGlyphs() const { return !image || image->showBand; }
 

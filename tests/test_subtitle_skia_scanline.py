@@ -651,6 +651,33 @@ def test_faded_scanline_with_gradient_volume_on_a_track_without_ruby(binary, rea
     assert 15 < fill[:, 3].max() < 200
 
 
+def test_faded_scanline_brightens_gradient_outline_and_keeps_its_clock(binary, reading):
+    track, style = glow_band_source(reading, 'inherited', utopia=True)
+    palette = style.karaoke_colors
+    ruby = style.ruby_karaoke_colors
+    ramp = PaintFill(mode='gradient_vertical', start_color='#FF0C8A34', end_color='#FFB08024')
+    style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, stroke=ramp)),
+                    ruby_karaoke_colors=replace(ruby, before=replace(ruby.before, stroke=ramp)),
+                    scanline_mode='brighten', scanline_brightness_pct=85,
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600)
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p06_faded_scanline_palette_gradient'
+    assert {feature, 'p06_ruby_outline_gradient', 'p07_ruby_scanline'} <= set(ir['required_features'])
+    disabled = upper_ir(binary, (track, replace(style, scanline_brightness_pct=0)), 1)
+    assert ir['skia_layout']['lines'] == disabled['skia_layout']['lines']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        active, _ = collect(process, [550, 1000, 550])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        configure(process, disabled)
+        plain, _ = collect(process, [550, 1000], generation=2)
+    assert np.array_equal(active[0], active[-1])
+    assert all(np.count_nonzero(a != b) > 100 for a, b in zip(active[:2], plain, strict=True))
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'painted-particles'])
 def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path, gradient):

@@ -24,7 +24,7 @@ struct SkiaPaintCapabilities {
     GlowPaintSupport glowPaints = GlowPaintSupport::Solid;
 };
 bool supportsSkiaGlowPaint(const PaintStyle&, GlowPaintSupport);
-bool usesFadedScanlineWithSingingParticles(const TextLine&, const TextStyle&);
+bool usesFadedUtopiaScanline(const TextLine&, const TextStyle&);
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
 SkMatrix skiaViewport(const RenderScene&);
 ::subtitle::skia::SubtitleInput skiaSceneInput(const RenderScene& scene);

@@ -579,9 +579,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                     canvas.clipPath(cell.path, SkClipOp::kDifference, true);
                     if (layer == 0 && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
                 }
-                paint.setShader(nullptr);
-                paint.setColor(layer < 2 ? line.scanline.paint.shade(stroke->before, stroke->after, after)
-                                         : line.scanline.paint.shade(cell.before, cell.after, after));
+                const auto& shader = line.scanline.gradients[layer][after];
+                paint.setShader(shader);
+                paint.setColor(shader ? SK_ColorWHITE
+                    : layer < 2 ? line.scanline.paint.shade(stroke->before, stroke->after, after)
+                                : line.scanline.paint.shade(cell.before, cell.after, after));
                 paint.setAlphaf(paint.getAlphaf() * opacity);
                 // The same posed outline as the body pass: fixed width around the posed glyph.
                 if (state.animatedInk) {
