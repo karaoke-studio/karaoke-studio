@@ -791,11 +791,12 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('overlap,mode', [
-    (False, None), (True, None), (False, 'color'), (True, 'color'),
-    (False, 'brighten'), (True, 'follow_after'),
+@pytest.mark.parametrize('overlap,mode,karaoke', [
+    (False, None, 'none'), (True, None, 'none'), (False, 'color', 'none'), (True, 'color', 'none'),
+    (False, 'brighten', 'none'), (True, 'follow_after', 'none'),
+    (False, 'color', 'utopia'), (False, 'brighten', 'zoom_pulse'), (True, 'follow_after', 'zoom_pulse'),
 ])
-def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap, mode):
+def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap, mode, karaoke):
     from krok_helper.subtitle_render.domain.models import LyricsLayout
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
@@ -807,7 +808,7 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
     extra = replace(main, lines=[replace(main.lines[0], layout_index=0 if overlap else 1)],
                     meta=replace(main.meta, offset_ms=900))
     style = replace(style, layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=24)],
-                    viewport_offset_x=-38, viewport_scale_pct=86,
+                    viewport_offset_x=-38, viewport_scale_pct=86, karaoke_anim=karaoke, zoom_pulse_peak_pct=130,
                     karaoke_colors=colors('#70FF0000', '#AD00FF00'))
     if not overlap:
         style = replace(style, decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6,
@@ -831,8 +832,11 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
         assert ('p07_vertical_scanline_band' in actual['required_features']) == bool(mode)
         assert ('p08_vertical_scanline_viewport' in actual['required_features']) == bool(mode)
         assert ('p08_vertical_scanline_palette_viewport' in actual['required_features']) == (mode not in {None, 'color'})
+        assert ('p08_vertical_singing_scanline_viewport' in actual['required_features']) == (karaoke != 'none')
     invalid = copy.deepcopy(ir)
-    if mode:
+    if karaoke != 'none':
+        invalid['skia_extra_sources'][0]['required_features'].remove('p08_vertical_singing_scanline_viewport')
+    elif mode:
         viewport_feature = 'p08_vertical_scanline_viewport' if mode == 'color' else 'p08_vertical_scanline_palette_viewport'
         invalid['skia_extra_sources'][0]['required_features'].remove(viewport_feature)
     else:

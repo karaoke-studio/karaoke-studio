@@ -144,7 +144,9 @@ def write_scanline_schema(ir, track, style):
 def declare_vertical_scanline_viewport(ir):
     features = set(ir['required_features'])
     if 'p07_vertical_scanline_band' in features and not features.intersection({
-            'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation', 'p07_vertical_scanline_singing'}):
+            'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation'}):
         ir['required_features'].append('p08_vertical_scanline_viewport')
         if 'p07_vertical_scanline_palette' in features:
             ir['required_features'].append('p08_vertical_scanline_palette_viewport')
+        if 'p07_vertical_scanline_singing' in features:
+            ir['required_features'].append('p08_vertical_singing_scanline_viewport')

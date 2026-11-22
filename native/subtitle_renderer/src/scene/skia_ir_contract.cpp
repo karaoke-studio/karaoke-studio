@@ -210,6 +210,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_vertical_viewport",
         "p08_vertical_scanline_viewport",
         "p08_vertical_scanline_palette_viewport",
+        "p08_vertical_singing_scanline_viewport",
         "p08_custom_shape_signal",
         "p08_custom_image_signal",
         "p08_decorated_shape_signal",
@@ -338,11 +339,13 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool verticalScanlinePalette = features.contains("p07_vertical_scanline_palette");
     if (verticalScanlineViewport
         && (!features.contains("p08_vertical_viewport") || !features.contains("p07_vertical_scanline_band")
-            || features.contains("p07_vertical_reverse_scanline") || features.contains("p07_vertical_scanline_line_animation")
-            || features.contains("p07_vertical_scanline_singing")))
-        throw BackendError("Skia 竖排扫字线视口当前仅支持正向普通走字");
+            || features.contains("p07_vertical_reverse_scanline") || features.contains("p07_vertical_scanline_line_animation")))
+        throw BackendError("Skia 竖排扫字线视口当前仅支持无整行出入场的正向走字");
     if (features.contains("p08_vertical_scanline_palette_viewport") != (verticalScanlinePalette && verticalScanlineViewport))
         throw BackendError("Skia 竖排扫字线取色缺少对应视口能力");
+    if (features.contains("p08_vertical_singing_scanline_viewport")
+        != (verticalScanlineViewport && features.contains("p07_vertical_scanline_singing")))
+        throw BackendError("Skia 竖排唱字扫字线缺少对应视口能力");
     if (features.contains("p08_viewport")) {
         integer(style, "viewport_scale_pct", 1, 400);
         integer(style, "viewport_rotation_deg", -180, 180);
