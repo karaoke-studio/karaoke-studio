@@ -445,17 +445,22 @@ def test_vertical_reverse_outline_uses_bottom_cells_first(binary, project, targe
     assert sung_rows(finished).min() < cells[1]['wipe_top']
 
 
-@pytest.mark.parametrize('dpr,softness,decoration,mode', [
-    (1, 0, 'none', 'color'), (1.5, 8, 'glow', 'color'), (1.5, 8, 'shadow', 'color'),
-    (1.5, 5, 'glow', 'brighten'), (1, 0, 'none', 'follow_before'), (1.5, 5, 'shadow', 'follow_after'),
+@pytest.mark.parametrize('dpr,softness,decoration,mode,karaoke', [
+    (1, 0, 'none', 'color', 'none'), (1.5, 8, 'glow', 'color', 'none'), (1.5, 8, 'shadow', 'color', 'none'),
+    (1.5, 5, 'glow', 'brighten', 'none'), (1, 0, 'none', 'follow_before', 'none'),
+    (1.5, 5, 'shadow', 'follow_after', 'none'),
+    (1, 0, 'none', 'color', 'utopia'), (1.5, 5, 'glow', 'brighten', 'zoom_pulse'),
+    (1.5, 5, 'glow', 'follow_before', 'utopia'), (1.5, 5, 'glow', 'follow_after', 'zoom_pulse'),
 ])
-def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, project, dpr, softness, decoration, mode):
+def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(
+        binary, project, dpr, softness, decoration, mode, karaoke):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
     track, base = vertical_source(project, texts=['字', '字'], position='top', reverse=True)
     palette = colors('#FF0000', '#00FF00') if mode == 'color' else colors('#700000', '#007000')
     base = replace(base, karaoke_colors=palette, decoration_kind=decoration,
+                   reverse_karaoke_anim=karaoke, zoom_pulse_peak_pct=130,
                    glow_before_radius_px=6, glow_after_radius_px=6, shadow_before_offset_x=8, shadow_offset_x=8)
     style = replace(base, scanline_enabled=True, scanline_forward_enabled=False, scanline_reverse_enabled=True,
                     scanline_shape='band', scanline_mode=mode, scanline_color='#00FFFF',
@@ -467,6 +472,9 @@ def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, p
     if mode != 'color':
         feature = 'p07_vertical_reverse_scanline_palette'
         assert {feature, 'p07_vertical_scanline_palette'} <= set(ir['required_features'])
+    if karaoke != 'none':
+        feature = 'p07_vertical_reverse_scanline_singing'
+        assert {feature, 'p07_vertical_reverse_singing', 'p07_vertical_scanline_singing'} <= set(ir['required_features'])
     line, = ir['track']['lines']
     (start, end), (_, last_end) = line['resolved_intervals']
     top, bottom = ir['skia_layout']['lines'][0]['cells']
@@ -863,7 +871,7 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
 
 
 @pytest.mark.parametrize('change', ['combined_unit', 'middle_dot', 'latin', 'overlap_groups',
-                                    'reverse_utopia_scanline', 'lower', 'role'])
+                                    'reverse_utopia_flame', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     reading = {'combined_unit': 'か\u309a', 'middle_dot': '・', 'latin': 'A'}.get(change, '字')
     extra = None
@@ -873,9 +881,9 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
         other, _ = vertical_ruby_source(project, span=(1, 3))
         extra = other.rubies
     track, style = vertical_ruby_source(project, reading=reading, span=span, extra=extra)
-    if change == 'reverse_utopia_scanline':
+    if change == 'reverse_utopia_flame':
         track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
-        style = replace(style, reverse_karaoke_anim='utopia_scanline')
+        style = replace(style, reverse_karaoke_anim='utopia_scanline', scanline_shape='flame')
     elif change == 'lower':
         style = replace(style, lower_ruby_enabled=True)
     elif change == 'role':

@@ -57,13 +57,14 @@ struct ScanlineBand {
         const int count = std::clamp(int(std::lround(halfWidth * 2.f)), 1, 64);
         const float step = halfWidth * 2.f / count;
         for (const bool after : {false, true}) {
+            const bool negativeSide = after != rightToLeft;
             for (int layer = 0; layer < 3; ++layer) {
                 for (int i = 0; i < count; ++i) {
                     const float left = -halfWidth + i * step;
                     const float distance = std::abs(left + step * .5f);
                     const float opacity = softness > 0 ? std::clamp((halfWidth - distance) / softness, 0.f, 1.f) : 1.f;
-                    const float lo = front + (after ? left : std::max(left, 0.f));
-                    const float hi = front + (after ? std::min(left + step, 0.f) : left + step);
+                    const float lo = front + (negativeSide ? left : std::max(left, 0.f));
+                    const float hi = front + (negativeSide ? std::min(left + step, 0.f) : left + step);
                     if (lo >= hi || opacity <= 0) continue;
                     SkAutoCanvasRestore keep(&canvas, true);
                     clipScanlineSlice(canvas, lo, hi, vertical);

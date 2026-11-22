@@ -87,7 +87,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                              || !std::isfinite(band.paint.brightness) || band.paint.brightness < 0 || band.paint.brightness > 1
                              || band.vertical != source.vertical || band.rightToLeft != source.wipeRightToLeft
                              || (band.vertical && (band.shape || band.image || source.utopiaTransition.active()
-                                 || (band.rightToLeft && (!source.rubyGroups.empty() || source.singingScale.zoomPulse))))
+                                 || (band.rightToLeft && !source.rubyGroups.empty())))
                              || source.noWipe || (!band.rubyHighlight && !source.rubyGroups.empty())))
             throw std::runtime_error("Skia 扫字线的方向、画笔或布局组合无效");
         if (source.particles.size() > 4096) throw std::runtime_error("Skia 字幕粒子数量超限");

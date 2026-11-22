@@ -293,7 +293,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.wipeReverse && source.karaokeAnimation == "none"
             && source.entryAnimation == "none" && source.exitAnimation == "none"
             && !source.strokeFlashEnabled && source.fxBursts.empty();
-        // The band follows the posed unit during forward Utopia singing.
+        // The band repaints the posed unit during Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
         const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
@@ -321,7 +321,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.fxBursts.empty();
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
-            && !source.wipeReverse && (staticScanline || movingScanline || particleScanline);
+            && (!source.wipeReverse || (cfg.vertical && features.contains("p07_vertical_reverse_scanline_singing")))
+            && (staticScanline || movingScanline || particleScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = solidShape && (staticScanline || movingScanline || particleScanlineImage);
         const bool lowerScanline = features.contains("p07_lower_ruby_scanline")
@@ -350,7 +351,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
                 || (cfg.vertical && !verticalBand) || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
                 || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
-                    && (!composedScanline || source.wipeReverse || resolved.scanlineMode == "role"))
+                    && (!composedScanline || (source.wipeReverse && !cfg.vertical) || resolved.scanlineMode == "role"))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
                 || (features.contains("p05_lower_ruby") && !lowerScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
