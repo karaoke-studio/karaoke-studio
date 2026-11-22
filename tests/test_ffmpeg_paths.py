@@ -18,6 +18,8 @@ def test_find_tool_prefers_configured_directory(monkeypatch, tmp_path):
     path_tool = path_dir / f"ffmpeg{suffix}"
     configured_tool.write_text("", encoding="utf-8")
     path_tool.write_text("", encoding="utf-8")
+    configured_tool.chmod(0o755)
+    path_tool.chmod(0o755)
     monkeypatch.setenv("PATH", str(path_dir))
 
     assert find_tool("ffmpeg", configured_dir) == str(configured_tool)
@@ -29,8 +31,26 @@ def test_find_tool_accepts_windows_executable_name_in_posix_directory(monkeypatc
     tool = install_dir / "bin" / "ffmpeg"
     tool.parent.mkdir(parents=True)
     tool.write_text("", encoding="utf-8")
+    tool.chmod(0o755)
 
     assert find_tool("ffmpeg.exe", install_dir) == str(tool)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable permissions")
+def test_find_tool_skips_a_non_executable_configured_file(monkeypatch, tmp_path):
+    configured = tmp_path / "工具" / "bin"
+    configured.mkdir(parents=True)
+    blocked = configured / "ffmpeg"
+    blocked.write_text("", encoding="utf-8")
+    blocked.chmod(0o644)
+    path_dir = tmp_path / "実行"
+    path_dir.mkdir()
+    executable = path_dir / "ffmpeg"
+    executable.write_text("", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(path_dir))
+
+    assert find_tool("ffmpeg.exe", configured.parent) == str(executable)
 
 
 @pytest.mark.parametrize("inherited_windows_path", [False, True])

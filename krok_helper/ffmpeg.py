@@ -37,7 +37,7 @@ def _tool_name_candidates(tool_name: str) -> tuple[str, ...]:
 def _find_tool_in_dir(directory: Path, tool_name: str) -> str | None:
     for candidate_name in _tool_name_candidates(tool_name):
         for candidate in (directory / candidate_name, directory / "bin" / candidate_name):
-            if candidate.is_file():
+            if candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
                 return str(candidate)
     return None
 
