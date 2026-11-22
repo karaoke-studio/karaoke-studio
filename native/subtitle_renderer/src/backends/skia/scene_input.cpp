@@ -97,6 +97,16 @@ bool supportsSkiaGlowPaint(const PaintStyle& paint, GlowPaintSupport support) {
         && (paint.mode == "gradient_horizontal" || paint.mode == "split_vertical"));
 }
 
+bool usesFadedScanlineWithSingingParticles(const TextLine& line, const TextStyle& style) {
+    const auto fadeOrNone = [](const std::string& animation) { return animation == "fade" || animation == "none"; };
+    return !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.zoomPulseEnabled
+        && line.scanlineEnabled && style.scanlineShape == "band"
+        && (style.scanlineMode == "default" || style.scanlineMode == "color")
+        && line.karaokeAnimation == "utopia" && !line.strokeFlashEnabled && !line.bursts.empty()
+        && fadeOrNone(line.entryAnimation) && fadeOrNone(line.exitAnimation)
+        && (line.entryAnimation == "fade" || line.exitAnimation == "fade");
+}
+
 void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabilities caps) {
     if ((!canonical && (scene.viewportScale != 1 || scene.viewportRotation != 0 || scene.viewportOffsetX != 0
             || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || (scene.lineBand.enabled && !caps.staticLineBand)

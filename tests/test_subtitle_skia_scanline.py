@@ -574,7 +574,8 @@ def test_upper_ruby_band_singing_and_scanline_particles_match_actual_gpu(binary,
     assert_ruby_transition_gpu_parity(binary, case, times)
 
 
-def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading):
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'vertical-gradient'])
+def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading, gradient):
     track, style = glow_band_source(reading, 'inherited', utopia=True)
     style = replace(style, scanline_mode='default', sing_fx='twinkle', scanline_effect='none',
                     entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600)
@@ -583,6 +584,16 @@ def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading)
     assert feature in ir['required_features']
     static = upper_ir(binary, (track, replace(style, entry_anim='none', exit_anim='none')), 1)
     assert ir['track']['lines'][0]['fx_bursts'] == static['track']['lines'][0]['fx_bursts']
+    if gradient:
+        colors = style.karaoke_colors
+        paint = PaintFill(mode='gradient_vertical', start_color='#FFEBAA55', end_color='#FF4080F0')
+        style = replace(style, karaoke_colors=replace(colors, before=replace(colors.before, text=paint)),
+                        ruby_colors_follow_main=True)
+        painted = upper_ir(binary, (track, style), 1)
+        assert painted['track']['lines'][0]['fx_bursts'] == ir['track']['lines'][0]['fx_bursts']
+        ir = painted
+        feature = 'p06_faded_scanline_gradient_fill'
+        assert feature in ir['required_features']
     times = [340, 550, 1550, 2050]
     invalid = copy.deepcopy(ir)
     invalid['required_features'].remove(feature)
@@ -597,7 +608,8 @@ def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'vertical-gradient'])
+def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path, gradient):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
@@ -605,6 +617,11 @@ def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, applic
     line = replace(case.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
     style = replace(case.style, entry_anim='fade', exit_anim='fade', scanline_mode='default',
                     scanline_effect='none', sing_fx='twinkle')
+    if gradient:
+        colors = style.karaoke_colors
+        paint = PaintFill(mode='gradient_vertical', start_color='#FFEBAA55', end_color='#FF4080F0')
+        style = replace(style, karaoke_colors=replace(colors, before=replace(colors.before, text=paint)),
+                        ruby_colors_follow_main=True)
     case = replace(case, case_id='scanline_faded_singing_particles', track=replace(case.track, lines=[line]), style=style)
     assert_ruby_transition_gpu_parity(binary, case, (951, 1120, 1260, 1380, 1550, 2600, 4110, 4450, 4530, 4610, 4649))
 

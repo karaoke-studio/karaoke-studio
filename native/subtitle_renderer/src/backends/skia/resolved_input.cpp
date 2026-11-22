@@ -622,6 +622,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         };
         const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
+        const bool fadedScanlineGradient = features.contains("p06_faded_scanline_gradient_fill")
+            && usesFadedScanlineWithSingingParticles(line, style)
+            && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
         if (rubyUtopiaExit && (prepared.glow.before.radius > 0 || prepared.glow.after.radius > 0)) {
@@ -671,7 +674,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.scanlineMode != "role" || roleScanlineGlow);
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
-        const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
+        const bool rubyMainPaint = (!prepared.rubyGroups.empty() || fadedScanlineGradient) && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
         const bool singingMainPaint = rubyMainPaint && singingScale && !line.zoomPulseEnabled
             && features.contains("p06_utopia_main_paint");
@@ -733,8 +736,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
-                || line.entryAnimation != "none" || line.exitAnimation != "none" || line.karaokeAnimation == "no_wipe"
-                || line.scanlineEnabled || !line.bursts.empty() || line.strokeFlashEnabled
+                || (!fadedScanlineGradient && (line.entryAnimation != "none" || line.exitAnimation != "none"
+                    || line.scanlineEnabled || !line.bursts.empty()))
+                || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint) || !projected.charStyles.empty())
                 throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");
             // Image paints need no line domain: the existing GPU tiles them on the canvas.

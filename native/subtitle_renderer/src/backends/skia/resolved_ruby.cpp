@@ -153,6 +153,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool verticalFade = vertical && features.contains("p07_vertical_decoration_fade") && fadeOnly;
     const bool staticLine = line.entryAnimation == "none" && line.exitAnimation == "none";
     const bool roleLineFade = features.contains("p07_role_line_fade") && fadeOnly;
+    const bool fadedScanlineGradient = features.contains("p06_faded_scanline_gradient_fill")
+        && usesFadedScanlineWithSingingParticles(line, scene.lineStyles[lineIndex]);
     const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
         && features.contains("p07_ruby_line_animation");
     const bool verticalNoWipe = line.karaokeAnimation == "no_wipe"
@@ -296,6 +298,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
+                || (fadedScanlineGradient && scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")
+                    && fill.mode == "gradient_vertical")
                 || (allowImageFill && fill.mode == "image");
         };
         if (!lower && (!validFill(paint.rubyBeforeFillPaint) || !validFill(paint.rubyAfterFillPaint)))
