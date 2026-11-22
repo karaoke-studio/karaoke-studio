@@ -147,9 +147,10 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
     # survive insertion even when the old slot still matches the reading text.
     ruby = RubyAnnotation('字', 'A', target_char_start=2, target_char_end=3)
     track = replace(track, lines=[line], rubies=[ruby])
-    look = replace(outlined(style, 2), latin_stroke2_enabled=False)
+    look = replace(outlined(style, 2), latin_stroke_width_px=17, latin_stroke2_enabled=False)
     ir = ir_for(binary, (track, look))
     assert 'p05_vector_guide_composition' in ir['required_features']
+    assert 'p06_latin_primary_outline' not in ir['required_features']
     assert ir['skia_layout']['vector_guide_schema'] == 1
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     source, = ir['track']['lines']

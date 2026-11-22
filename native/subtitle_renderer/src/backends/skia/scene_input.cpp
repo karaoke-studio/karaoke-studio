@@ -57,10 +57,10 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         || (s.verticalPosition != "top" && s.verticalPosition != "center" && s.verticalPosition != "bottom")
         || (!canonical && (s.alignment != "center" || s.verticalPosition != "bottom" || s.smartHorizontal != "none"))
         || (s.allowBiting && !canonical)
-        || (outlineLayers == 0 && (s.strokeWidth != 0 || s.latinStrokeWidth != 0))
+        || (outlineLayers == 0 && (s.strokeWidth != 0 || (!canonical && s.latinStrokeWidth != 0)))
         || (outlineLayers > 0 && (s.strokeWidth < 0 || !std::isfinite(s.strokeWidth)
             || s.latinStrokeWidth < 0 || !std::isfinite(s.latinStrokeWidth)
-            || (s.strokeWidth != s.latinStrokeWidth && !caps.latinPrimaryOutline)
+            || (!canonical && s.strokeWidth != s.latinStrokeWidth)
             || !supportedOutline(s.beforeStrokePaint) || !supportedOutline(s.afterStrokePaint)))
         || (outlineLayers < 2 && (s.stroke2Width != 0 || s.latinStroke2Width != 0))
         || (outlineLayers == 2 && (s.stroke2Width < 0 || !std::isfinite(s.stroke2Width)
@@ -119,7 +119,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
             .bodyGradients = caps.roleBodyPaints, .outlineGradients = caps.outlineGradients && caps.roleBodyPaints,
             .imageFills = caps.roleBodyPaints,
-            .staticGlow = caps.roleStaticGlow, .latinPrimaryOutline = caps.latinPrimaryOutline,
+            .staticGlow = caps.roleStaticGlow,
             .glowPaints = caps.glowPaints});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];

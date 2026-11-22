@@ -91,7 +91,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
-        .roleStaticGlow = roleStaticGlow, .latinPrimaryOutline = latinPrimaryOutline, .glowPaints = glowPaints});
+        .roleStaticGlow = roleStaticGlow, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
     if (latinPrimaryOutline && (roleBodyPaints || roleStaticGlow || staticGlow))
         splitLatinOutlineStyles(projected);
@@ -512,8 +512,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
             // A script-slot override has no effect on non-Latin cells or guides.
-            if (paint.stroke2Width != paint.latinStroke2Width && isLatinText(line.chars[j].text))
-                throw BackendError("Skia 暂不支持英数与正文使用不同的第二道描边");
+            const bool latin = isLatinText(line.chars[j].text);
+            if (latin) {
+                if (paint.strokeWidth != paint.latinStrokeWidth && !latinPrimaryOutline)
+                    throw BackendError("Skia 英数首层描边缺少能力声明");
+                if (paint.stroke2Width != paint.latinStroke2Width)
+                    throw BackendError("Skia 暂不支持英数与正文使用不同的第二道描边");
+            }
             if (roleFadedScanline) {
                 const auto supported = [](const PaintStyle& fill) {
                     return fill.mode == "solid" || fill.mode == "gradient_vertical";
@@ -521,8 +526,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 if (!supported(paint.beforeFillPaint) || !supported(paint.afterFillPaint))
                     throw BackendError("Skia 行内角色扫字线支持实色和纵向渐变填充");
             }
-            const float strokeWidth = latinPrimaryOutline && isLatinText(line.chars[j].text)
-                ? paint.latinStrokeWidth : paint.strokeWidth;
+            const float strokeWidth = latin ? paint.latinStrokeWidth : paint.strokeWidth;
             const auto beforeColor = argb(paint.beforeFillPaint.color);
             const auto afterColor = argb(paint.afterFillPaint.color);
             const double wipePad = std::floor(std::round(strokeWidth / glyphs.dpr) / 2);
