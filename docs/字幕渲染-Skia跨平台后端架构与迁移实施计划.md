@@ -4212,6 +4212,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 同机 1080p 原样工程以每组 **30 帧**比较离屏 `render_ms`。Vulkan 窄幅翻转中位数 **23.563 → 0.861ms**，多字同时翻转 **71.258 → 2.354ms**，后一组 P95 **107.539 → 4.359ms**。Raster 多字组复测中位数 **238.255ms**，继续保留 CPU 侧性能问题。
 - Windows **26 项**画质与协议回归通过，实际浮窗、离屏与编码前画面对照通过。原样入场 **29 帧**在 Vulkan 和 Raster 各自的五种回放顺序中逐字节一致。WSL X11 和 Wayland 各 **10 通过**，两份 Vulkan 原生构建各 **3 项 CTest**。日志前缀 `build/p07-spin-glow-target-*`，原计时为 `build/p07-spin-glow-render-time-main.log`。
 - Raster 用静态画笔生成 8 位光晕源，模糊后在每次混合前施加动画透明度，保持 F16 合成和原轴心。同批计时的多字组中位数从 **238.255ms** 降至 **162.946ms**，P95 从 **316.466ms** 降至 **177.093ms**。Vulkan 同组中位数 **2.243ms**。Windows **26 项**画质与协议回归、两条路径 **29 帧**重复回跳、无 Vulkan 驱动的独立 Raster **2 项**以及 WSL X11 和 Wayland 各 **4 项**均通过。证据前缀为 `build/p07-spin-raster-normalized-*`。
+- `b037f3cd` 连续重配 **122 个原样场景、560 帧**，两组画面对照全部通过。开启 Khronos 同步验证后复验 Windows 正式浮窗逐字翻转、离屏与导出，验证层成功启用，未报告同步错误或新增警告。记录为 `build/p00-skia-coverage/original-warm-pixels-b037f3cd.json` 与 `build/p07-spin-glow-runtime-validation*.log`。
 
 ## 15. 前期探针清理范围
 
