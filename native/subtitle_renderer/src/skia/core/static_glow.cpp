@@ -15,6 +15,11 @@
 
 namespace subtitle::skia {
 namespace {
+bool usesSoftwareCanvas(const SkCanvas& canvas) {
+    const auto* recorder = canvas.baseRecorder();
+    return !recorder || recorder->type() == SkRecorder::Type::kCPU;
+}
+
 SkIRect alphaBounds(const SkPixmap& mask) {
     auto ink = SkIRect::MakeEmpty();
     // Both N32 channel orders store alpha in the most significant byte.
@@ -174,7 +179,7 @@ void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePa
 void PreparedGlow::compositeCanonical(SkCanvas& canvas, const Source& mask) const {
     const float x = float(mask.origin.x()), y = float(mask.origin.y());
     auto local = SkIRect::MakeWH(mask.surface->width(), mask.surface->height());
-    if (const auto* recorder = canvas.baseRecorder(); !recorder || recorder->type() == SkRecorder::Type::kCPU) {
+    if (usesSoftwareCanvas(canvas)) {
         // Keep software blur confined to the few remaining visible glyphs.
         // The input image retains the original origin and blur samples.
         SkPixmap maskPixels;
@@ -212,12 +217,31 @@ void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index,
     if (!visible(after) || opacity <= 0 || path.isEmpty()) return;
     const float margin = 3.f * radius_ + 2.f;
     const auto bounds = path.getBounds().makeOutset(margin, margin);
-    // Prepare the same floating-point glyph mask on every device, then
-    // blur in glyph space on the destination backend before transforming it.
-    auto mask = makeSource(canvas, bounds, kRGBA_F16_SkColorType, true);
-    drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, opacity);
+    const bool raster = usesSoftwareCanvas(canvas);
+    // Blur in glyph space before applying the animation transform.
+    auto mask = makeSource(canvas, bounds, raster ? kN32_SkColorType : kRGBA_F16_SkColorType, true);
+    drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, raster ? 1.f : opacity);
     auto blurred = makeSource(canvas, bounds, kRGBA_F16_SkColorType);
-    composite(*blurred.surface->getCanvas(), mask);
+    if (raster) {
+        // Blur is linear in alpha. Filter at full brush opacity in N32,
+        // then apply the animation alpha to each pass before F16 blending.
+        auto pass = makeSource(canvas, bounds, kN32_SkColorType);
+        const auto source = mask.surface->makeImageSnapshot();
+        if (!source) throw std::runtime_error("Skia 逐字光晕临时表面无法取样");
+        const float x = float(mask.origin.x()), y = float(mask.origin.y());
+        SkPaint filterPaint, fade;
+        fade.setAlphaf(opacity);
+        for (const auto& filter : filters_) {
+            pass.surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+            filterPaint.setImageFilter(filter);
+            pass.surface->getCanvas()->drawImage(source, x, y, SkSamplingOptions{}, &filterPaint);
+            auto filtered = pass.surface->makeImageSnapshot();
+            if (!filtered) throw std::runtime_error("Skia 逐字光晕临时表面无法取样");
+            blurred.surface->getCanvas()->drawImage(filtered, x, y, SkSamplingOptions{}, &fade);
+        }
+    } else {
+        composite(*blurred.surface->getCanvas(), mask);
+    }
     auto pixels = blurred.surface->makeImageSnapshot();
     if (!pixels) throw std::runtime_error("Skia 逐字光晕临时表面无法取样");
     const SkSamplingOptions linear(SkFilterMode::kLinear);
