@@ -954,7 +954,7 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
 
 
 @pytest.mark.parametrize('mode', ['brighten', 'follow_before', 'follow_after'])
-@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+@pytest.mark.parametrize('karaoke', ['none', 'utopia', 'zoom_pulse'])
 def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode, karaoke):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
@@ -967,11 +967,13 @@ def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode,
     ir = ir_for(binary, (track, style), dpr=1.5)
     feature = 'p07_vertical_scanline_palette'
     assert {feature, 'p07_vertical_scanline_band', 'p07_ruby_scanline'} <= set(ir['required_features'])
-    if karaoke == 'utopia':
+    if karaoke in {'utopia', 'zoom_pulse'}:
         feature = 'p07_vertical_singing_scanline_palette'
         assert {feature, 'p07_vertical_singing_scale'} <= set(ir['required_features'])
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
+    gates = [feature]
+    if karaoke == 'zoom_pulse':
+        assert {'p07_vertical_zoom_scanline', 'p07_vertical_zoom_pulse'} <= set(ir['required_features'])
+        gates.append('p07_vertical_zoom_scanline')
     line, = ir['skia_layout']['lines']
     reading, = line['ruby_groups'][0]['units']
     split = round((reading['wipe_left'] + line['cells'][0]['wipe_right']) * 1.5 / 2)
@@ -982,8 +984,11 @@ def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode,
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
+            for gate in gates:
+                invalid = copy.deepcopy(ir)
+                invalid['required_features'].remove(gate)
+                with pytest.raises(NativeRendererError):
+                    configure(process, invalid)
             replay, _ = collect(process, times[::-1], generation=2)
         assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
         assert not np.any(frames[0][..., :3].max(axis=-1) > 175)

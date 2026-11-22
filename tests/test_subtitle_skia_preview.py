@@ -778,8 +778,10 @@ effect_styles = {
 }
 effect_styles['vertical-palette'] = dict(effect_styles['vertical-scanline'],
                                         scanline_mode='brighten', scanline_brightness_pct=100)
+effect_styles['vertical-zoom'] = dict(effect_styles['vertical-scanline'], karaoke_anim='zoom_pulse_scanline',
+                                     zoom_pulse_peak_pct=140, zoom_pulse_curve_level=2)
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
-vertical_scanline = effect in {'vertical-scanline', 'vertical-palette'}
+vertical_scanline = effect in {'vertical-scanline', 'vertical-palette', 'vertical-zoom'}
 if effect:
     style = replace(style, **effect_styles[effect])
     if effect == 'particle-image-band':
@@ -980,11 +982,13 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
 
 
 @pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair',
-                                     'band-motion', 'vertical-scanline', 'vertical-palette', 'particle-image-band'],
+                                     'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
+                                     'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
-                              'band-motion', 'vertical-scanline', 'vertical-palette', 'particle-image-band'])
+                              'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
+                              'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
-    if effects in {'vertical-scanline', 'vertical-palette'}:
+    if effects in {'vertical-scanline', 'vertical-palette', 'vertical-zoom'}:
         from skia_text_fixture import make_font
 
         make_font(tmp_path / 'vertical.ttf')

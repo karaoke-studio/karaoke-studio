@@ -276,7 +276,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
             throw BackendError("Skia 噪声出入场当前仅支持正向横排实色正文");
         const bool composedFlash = features.contains("p07_composed_stroke_flash");
-        const bool composedScanline = features.contains("p07_composed_scanline");
+        const bool composedScanline = features.contains(
+            cfg.vertical ? "p07_vertical_zoom_scanline" : "p07_composed_scanline");
         if (source.strokeFlashEnabled
             && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || (!composedFlash && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")
@@ -340,7 +341,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineShape == "band" && (resolved.scanlineMode == "color" || verticalPaletteBand)
             && (source.karaokeAnimation == "none"
                 || (utopiaScanline && features.contains("p07_vertical_scanline_singing")))
-            && !source.zoomPulseEnabled
             && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline"))
             && !source.strokeFlashEnabled && source.fxBursts.empty();
         if (source.scanlineEnabled

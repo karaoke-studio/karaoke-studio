@@ -61,7 +61,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
 
 
 @pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'ruby', 'rtl',
-                                    'dual_ruby_zoom_scanline', 'dual_alt_grid', 'lower', 'offset'])
+                                    'dual_ruby_zoom_flame', 'dual_alt_grid', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
@@ -72,9 +72,10 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=600, target_line_index=0,
                                                       target_char_start=0, target_char_end=1)])
     elif change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'dual_ruby_zoom_scanline':
+    elif change == 'dual_ruby_zoom_flame':
         track, style = vertical_ruby_source(project)
-        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'], karaoke_anim='zoom_pulse_scanline')
+        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
+                        karaoke_anim='zoom_pulse_scanline', scanline_shape='flame')
     elif change == 'dual_alt_grid':
         track = replace(track, lines=[replace(line, layout_index=1)])
         style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
@@ -507,8 +508,8 @@ def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, p
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('dpr,columns', [(1, False), (1.5, True)])
-def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, project, dpr, columns):
+@pytest.mark.parametrize('dpr,columns,scanline', [(1, False, False), (1.5, True, False), (1.5, True, True)])
+def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, project, dpr, columns, scanline):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
@@ -525,11 +526,15 @@ def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, projec
                         decoration_kind='glow', glow_before_radius_px=4, glow_after_radius_px=5)
     style = replace(style, karaoke_colors=colors('#FF0000', '#00FF00'),
                     karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=155, zoom_pulse_curve_level=2)
+    if scanline:
+        style = replace(style, scanline_enabled=True, scanline_shape='band', scanline_mode='color',
+                        scanline_color='#00FFFF', scanline_width_px=24, scanline_glow_px=5)
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, replace(style, karaoke_anim='none')), dpr=dpr)
     feature = 'p07_vertical_zoom_pulse'
     assert {feature, 'p07_vertical_singing_scale'} <= set(ir['required_features'])
     assert ('p07_vertical_columns_singing_scale' in ir['required_features']) == columns
+    assert ('p07_vertical_zoom_scanline' in ir['required_features']) == scanline
     first = ir['skia_layout']['lines'][0]['cells'][0]
     _, end = ir['track']['lines'][0]['resolved_intervals'][0]
     x = first['layout_left']
@@ -540,8 +545,8 @@ def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, projec
     captures = []
 
     def green_ink(frame):
-        red, green, blue, alpha = np.moveaxis(frame[box], -1, 0)
-        return np.count_nonzero((green > 200) & (red < 30) & (blue < 30) & (alpha > 160))
+        red, green, _, alpha = np.moveaxis(frame[box], -1, 0)
+        return np.count_nonzero((green > 200) & (red < 30) & (alpha > 160))
 
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:

@@ -125,7 +125,6 @@ def _vertical_singing_lines(ir, plan):
         if (look.vertical and not (look.right_to_left or item.line.wipe_reverse)
                 and source.get('karaoke_anim') == 'utopia'
                 and {source.get('entry_anim'), source.get('exit_anim')} == {'none'}
-                and not (source.get('zoom_pulse') and source.get('scanline'))
                 and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
                 and not uses_authored_decoration(look, 'shadow')
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):

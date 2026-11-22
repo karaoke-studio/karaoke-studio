@@ -356,7 +356,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit
-                || (line.zoomPulseEnabled && !features.contains("p07_composed_scanline"))))
+                || (line.zoomPulseEnabled && !features.contains(style.vertical
+                    ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
             || (!lineAnimation && !fadeComposition && !noiseComposition && !spinComposition && !geometryComposition
                 && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
