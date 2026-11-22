@@ -574,6 +574,41 @@ def test_upper_ruby_band_singing_and_scanline_particles_match_actual_gpu(binary,
     assert_ruby_transition_gpu_parity(binary, case, times)
 
 
+def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading):
+    track, style = glow_band_source(reading, 'inherited', utopia=True)
+    style = replace(style, scanline_mode='default', sing_fx='twinkle', scanline_effect='none',
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600)
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_faded_scanline_singing_particles'
+    assert feature in ir['required_features']
+    static = upper_ir(binary, (track, replace(style, entry_anim='none', exit_anim='none')), 1)
+    assert ir['track']['lines'][0]['fx_bursts'] == static['track']['lines'][0]['fx_bursts']
+    times = [340, 550, 1550, 2050]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert frames[1].any() and not np.array_equal(frames[1], frames[2])
+    assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(c for c in build_cases(tmp_path) if c.case_id == 'scanline_band')
+    line = replace(case.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
+    style = replace(case.style, entry_anim='fade', exit_anim='fade', scanline_mode='default',
+                    scanline_effect='none', sing_fx='twinkle')
+    case = replace(case, case_id='scanline_faded_singing_particles', track=replace(case.track, lines=[line]), style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (951, 1120, 1260, 1380, 1550, 2600, 4110, 4450, 4530, 4610, 4649))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('utopia', [False, True])
 def test_upper_ruby_band_keeps_own_clock_and_seek(binary, reading, target, utopia, tmp_path):

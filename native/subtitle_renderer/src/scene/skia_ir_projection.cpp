@@ -314,13 +314,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.karaokeAnimation == "none" && !source.wipeReverse;
         const bool movingVerticalBandParticles = cfg.vertical && resolved.scanlineShape == "band"
             && features.contains("p07_vertical_scanline_particle_line_animation");
+        const bool fadedBandParticles = hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool movingScanline = (movingUtopiaScanline || movingUnscaledScanline || movingVerticalSingingScanline)
             && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
             && (!source.zoomPulseEnabled || (movingVerticalSingingScanline && composedScanline))
             && !source.wipeReverse && !source.strokeFlashEnabled
-            && (source.fxBursts.empty() || movingVerticalBandParticles);
+            && (source.fxBursts.empty() || movingVerticalBandParticles || fadedBandParticles);
         const bool particleScanline = features.contains("p07_ruby_petal_entry_scanline") && utopiaSinging
             && source.entryAnimation == "petal" && (source.exitAnimation == "none" || noteExit)
             && (resolved.scanlineShape == "band" || particleScanlineImage) && resolved.scanlineMode == "color"

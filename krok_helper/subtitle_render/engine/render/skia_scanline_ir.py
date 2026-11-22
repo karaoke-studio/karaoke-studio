@@ -4,13 +4,13 @@ from ..guide.semantics import render_line_with_guide_symbols
 from ..layout.line.style import style_for_line
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import ordinary_line_animation
-from .skia_particle_ir import vertical_singing_particle_modes
+from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 
 
 def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks):
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
-    unscaled_line_motion = False
+    unscaled_line_motion = faded_band_particles = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
     reverse_vertical_palette = False
     singing_vertical_palette = False
@@ -52,11 +52,13 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                               and all(burst['kind'] != 'scanline' for burst in bursts))
         solid_shape = (shape_style and not (source.wipe_reverse or line.get('zoom_pulse') or line.get('stroke_flash'))
                        and (not bursts or shape_with_singing))
+        faded_band = bool(track.rubies) and faded_band_singing_particles(line, look)
         motion = (not ordinary and ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and look.scanline_mode != 'role'
                   and line.get('karaoke_anim') in {'none', 'utopia'}
                   and not source.wipe_reverse
-                  and not (line.get('zoom_pulse') or line.get('stroke_flash') or line.get('fx_bursts')))
+                  and not (line.get('zoom_pulse') or line.get('stroke_flash'))
+                  and (not bursts or faded_band))
         shape = solid_shape and (ordinary or motion or image_during_transition)
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
                   and (ordinary or motion or particle_entry))
@@ -77,6 +79,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
         line_motion |= motion and utopia
+        faded_band_particles |= faded_band
         unscaled_line_motion |= motion and not utopia
         lower_readings = lower_readings or lower_band
         moving_lower_readings |= lower_band and motion
@@ -118,6 +121,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_composed_scanline')
     if line_motion:
         features.append('p07_scanline_line_animation')
+    if faded_band_particles:
+        features.append('p07_faded_scanline_singing_particles')
     if unscaled_line_motion or moving_vertical_band:
         features.append('p07_scanline_unscaled_line_animation')
     if moving_lower_readings:

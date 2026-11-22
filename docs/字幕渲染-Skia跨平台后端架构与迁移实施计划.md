@@ -4253,6 +4253,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 的 **132 帧**在 DPR 1、1.5 和三档速度下通过两组画质对照。回归包含粒子配对、非法能力拒绝后的回跳，合计 **8 项通过**。花瓣接涟漪及花瓣接星光的正式浮窗、离屏 Vulkan 与 PNG 编码前对照 **2 项通过**。WSL X11 与 Wayland 各 **3 项通过**，Windows 与 WSL Vulkan 构建各通过 **3 项 CTest**。日志前缀 `build/p07-petal-ripple-*`。
 - Windows 与 WSL 的独立 Raster 构建各通过 **3 项 CTest**，禁用 Vulkan 驱动的配对与回跳验证各 **1 项通过**。
 
+### 14.391 P07 / P09 / P10 横排扫字线、整行淡化与唱字粒子（2026-11-22）
+
+- `p07_faded_scanline_singing_particles` 接通正向横排高亮带、Utopia、上注音、整行淡入淡出与独立唱字粒子。星光、经典星光、音符、爱心沿用原时钟和字格锚点，整行透明度应用于原有图层顺序。缺少该能力声明时拒绝新配置，保留上一场景用于回跳。
+- 原样「アリバイ」工程的 54 行、157 处注音在硬件 Vulkan 和 Raster 上均成功配置。**18 个 1080p 时刻**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 画面对照。使用原视频背景的 Vulkan 直画实际播放 **25 秒**，执行两次定位且完成退出。Windows 定向 **9 通过**，WSL X11 与 Wayland 各通过画面与回跳专项及真实浮窗到导出前帧的对照。两份 Vulkan 构建各通过 **3 项 CTest**。日志前缀 `build/skia-faded-band-*`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -69,6 +69,18 @@ def petal_entry_with_scanline(line, style):
         petal_entry_with_flame(line, style) and style.scanline_shape == 'band' and _utopia_color_scanline(line, style))
 
 
+def faded_band_singing_particles(line, style):
+    """Forward horizontal Utopia bands whose singing particles share a whole-line fade."""
+    animations = {line.get('entry_anim'), line.get('exit_anim')}
+    bursts = line.get('fx_bursts', ())
+    return (bool(bursts) and 'fade' in animations and animations <= {'none', 'fade'}
+            and line.get('scanline') and line.get('karaoke_anim') == 'utopia'
+            and style.scanline_shape == 'band' and style.scanline_mode != 'role'
+            and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('wipe_reverse')
+                     or line.get('zoom_pulse') or line.get('stroke_flash'))
+            and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart'} for burst in bursts))
+
+
 def vertical_singing_particle_modes(source):
     """Return supported particle kinds and sweeps for a fixed vertical cell anchor."""
     limited_motion = source.get('wipe_reverse') and (
@@ -126,6 +138,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
+        faded_band = annotated and faded_band_singing_particles(source, look)
         singing_under_shape = (annotated and band and (not animated or petal_with_band) and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         singing_under_band = (not look.vertical and annotated and band
@@ -139,8 +152,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         if ((look.vertical and not vertical_particles) or look.right_to_left
                 or (item.line.wipe_reverse and not (band or vertical_particles))
                 or (source.get('karaoke_anim') != 'none' and not (scaled_singing or vertical_particles))
-                or (not vertical_particles and entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
-                or (not vertical_particles and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
+                or (not (vertical_particles or faded_band)
+                    and entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
+                or (not (vertical_particles or faded_band)
+                    and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not petal_with_flame)))
                 or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)

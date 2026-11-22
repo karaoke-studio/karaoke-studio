@@ -7,6 +7,21 @@
 #include <cstdint>
 
 namespace krok::subtitle::native::scene {
+bool hasFadedScanlineSingingParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
+                                     const protocol::ResolvedStyle& style, const QJsonArray& features) {
+    const auto fadeOrNone = [](const QString& animation) { return animation == "fade" || animation == "none"; };
+    return features.contains("p07_faded_scanline_singing_particles")
+        && !cfg.vertical && !cfg.rightToLeft && !cfg.rubies.empty()
+        && source.scanlineEnabled && source.karaokeAnimation == "utopia"
+        && style.scanlineShape == "band" && style.scanlineMode != "role"
+        && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled
+        && fadeOrNone(source.entryAnimation) && fadeOrNone(source.exitAnimation)
+        && (source.entryAnimation == "fade" || source.exitAnimation == "fade") && !source.fxBursts.empty()
+        && std::ranges::all_of(source.fxBursts, [](const auto& burst) {
+            return burst.kind == "twinkle" || burst.kind == "twinkle_classic" || burst.kind == "note" || burst.kind == "heart";
+        });
+}
+
 void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
                           const protocol::ResolvedStyle& style, int offset, int version, const QJsonArray& features,
                           RenderScene& scene, TextLine& line) {
@@ -19,6 +34,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto entry = animationKind(source.entryAnimation, true);
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
+    const bool fadedBand = hasFadedScanlineSingingParticles(cfg, source, style, features);
     const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
     const bool noteExit = exit == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
     const bool petalWithImage = noteExit && entry == "petal" && style.scanlineShape == "image"
@@ -74,7 +90,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles)
-        || (!verticalParticles && ((source.entryAnimation != "none" && entry.isEmpty())
+        || (!verticalParticles && !fadedBand && ((source.entryAnimation != "none" && entry.isEmpty())
             || (source.exitAnimation != "none" && exit.isEmpty())))
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)
