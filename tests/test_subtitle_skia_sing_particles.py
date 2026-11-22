@@ -883,6 +883,44 @@ def test_vertical_singing_particles_compose_with_body_and_reading_decoration(bin
     assert abs(results[0] - results[1]).mean() < .15
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_no_wipe_particles_emit_before_the_cell_changes_color(binary, project, reverse):
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, texts=['字', '字'], position='center', reverse=reverse)
+    style = replace(style, karaoke_anim='no_wipe', reverse_karaoke_anim='no_wipe',
+                    karaoke_colors=colors('#FF0000', '#00FF00'), stroke_width_px=0, stroke2_enabled=False,
+                    sing_fx='note', fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_vertical_no_wipe_singing_particles'
+    assert {feature, 'p07_no_wipe', 'p07_vertical_sing_shapes'} <= set(ir['required_features'])
+    source, = ir['track']['lines']
+    start, end = source['resolved_intervals'][0]
+    assert source['fx_bursts'][0]['start_ms'] == start
+    without_feature = copy.deepcopy(ir)
+    without_feature['required_features'].remove(feature)
+    times = [start - 1, start + (end - start) // 2, end, end + 1]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, without_feature)
+            replay, _ = collect(process, times[::-1], generation=2)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert not blue_coverage(frames[0]).any() and blue_coverage(frames[1]).max() > 50
+        assert not frames[1][..., 1].any()
+        rows = np.flatnonzero(np.any(frames[-1][..., 1] > 180, axis=1))
+        assert rows.size > 10
+        if reverse:
+            assert rows.mean() > frames[-1].shape[0] / 2
+        else:
+            assert rows.mean() < frames[-1].shape[0] / 2
+        results.append(premultiplied(np.stack(frames)))
+    assert abs(results[0] - results[1]).mean() < .15
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])

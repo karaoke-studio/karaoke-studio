@@ -819,6 +819,7 @@ effect_styles['vertical-multi-sweep'] = dict(
 effect_styles['vertical-decorated-particles'] = dict(
     effect_styles['vertical-zoom-notes'], decoration_kind='glow', glow_after_radius_px=6,
     ruby_decoration_kind='shadow', ruby_shadow_offset_x=8, ruby_shadow_offset_y=-5)
+effect_styles['vertical-no-wipe-particles'] = dict(effect_styles['vertical-notes'], karaoke_anim='no_wipe')
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
@@ -831,7 +832,7 @@ vertical_particles = effect in {
     'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals', 'vertical-lightning',
     'vertical-reverse-notes', 'vertical-motion-notes', 'vertical-band-notes', 'vertical-sweep-particles',
     'vertical-reverse-sweep-particles', 'vertical-motion-sweep-particles', 'vertical-outlined-particles',
-    'vertical-multi-sweep', 'vertical-decorated-particles',
+    'vertical-multi-sweep', 'vertical-decorated-particles', 'vertical-no-wipe-particles',
 }
 vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
@@ -1069,7 +1070,8 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
                                      'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
                                      'vertical-motion-sweep-particles', 'vertical-outlined-particles',
-                                     'vertical-multi-sweep', 'vertical-decorated-particles', 'particle-image-band'],
+                                     'vertical-multi-sweep', 'vertical-decorated-particles', 'vertical-no-wipe-particles',
+                                     'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
@@ -1077,7 +1079,8 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                               'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
                               'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
                               'vertical-motion-sweep-particles', 'vertical-outlined-particles',
-                              'vertical-multi-sweep', 'vertical-decorated-particles', 'particle-image-band'])
+                              'vertical-multi-sweep', 'vertical-decorated-particles', 'vertical-no-wipe-particles',
+                              'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

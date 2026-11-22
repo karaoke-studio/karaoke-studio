@@ -47,6 +47,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool verticalFlame = features.contains("p07_vertical_sing_flame");
     const bool verticalScale = source.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_with_particles");
+    const bool verticalNoWipe = source.karaokeAnimation == "no_wipe" && !source.scanlineEnabled
+        && features.contains("p07_vertical_no_wipe_singing_particles");
     const bool verticalScanline = features.contains("p07_vertical_scanline_particles");
     const bool verticalBand = cfg.vertical && source.scanlineEnabled
         && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_particles"))
@@ -63,7 +65,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (verticalStars || verticalShapes || verticalFalling || verticalLightning || verticalFlame || verticalScanline)
         && (!source.wipeReverse || features.contains("p07_vertical_reverse_singing_particles"))
         && (!source.scanlineEnabled || verticalBand) && !source.strokeFlashEnabled
-        && (source.karaokeAnimation == "none" || verticalScale)
+        && (source.karaokeAnimation == "none" || verticalScale || verticalNoWipe)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
     // Singing particles follow the existing burst clocks. The line

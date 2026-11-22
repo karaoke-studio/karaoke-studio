@@ -74,7 +74,9 @@ def vertical_singing_particle_modes(source):
     limited_motion = source.get('wipe_reverse') and (
         source.get('entry_anim'), source.get('exit_anim')) != ('none', 'none')
     if (source.get('stroke_flash') or limited_motion
-            or source.get('karaoke_anim') not in {'none', 'utopia'} or not ordinary_line_animation(source)):
+            or source.get('karaoke_anim') not in {'none', 'no_wipe', 'utopia'}
+            or (source.get('karaoke_anim') == 'no_wipe' and source.get('scanline'))
+            or not ordinary_line_animation(source)):
         return set()
     modes = {(burst['kind'], burst['sweep']) for burst in source.get('fx_bursts', ())}
     if not source.get('scanline') and modes & _VERTICAL_SCANLINE:
@@ -94,6 +96,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     reverse_vertical_band_particles = False
     moving_vertical_band_particles = False
     outlined_vertical_particles = False
+    no_wipe_vertical_particles = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -118,6 +121,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             reverse_vertical_band_particles |= band and item.line.wipe_reverse
             moving_vertical_band_particles |= band and (entry, exit_) != ('none', 'none')
             outlined_vertical_particles |= outlined and not annotated
+            no_wipe_vertical_particles |= source.get('karaoke_anim') == 'no_wipe'
         petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
@@ -202,6 +206,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_vertical_scanline_particle_line_animation')
     if outlined_vertical_particles:
         ir['required_features'].append('p07_vertical_outlined_singing_particles')
+    if no_wipe_vertical_particles:
+        ir['required_features'].append('p07_vertical_no_wipe_singing_particles')
     if ruby_scanline:
         ir['required_features'].append('p07_ruby_scanline_particles')
     if ruby_band_singing:
