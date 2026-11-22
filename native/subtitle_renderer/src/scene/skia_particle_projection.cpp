@@ -42,9 +42,10 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     const bool verticalStars = features.contains("p07_vertical_sing_twinkle");
     const bool verticalShapes = features.contains("p07_vertical_sing_shapes");
+    const bool verticalFalling = features.contains("p07_vertical_sing_falling");
     const bool verticalScale = source.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_with_particles");
-    const bool verticalParticles = cfg.vertical && (verticalStars || verticalShapes)
+    const bool verticalParticles = cfg.vertical && (verticalStars || verticalShapes || verticalFalling)
         && !source.wipeReverse && !source.scanlineEnabled && !source.strokeFlashEnabled
         && (source.karaokeAnimation == "none" || verticalScale)
         && source.entryAnimation == "none" && source.exitAnimation == "none";
@@ -114,7 +115,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (verticalParticles && !(verticalStars && star && fx.sweep == (fx.kind == "twinkle" ? 1 : 0))
-                && !(verticalShapes && (symbol || ripple) && fx.sweep == 0))
+                && !(verticalShapes && (symbol || ripple) && fx.sweep == 0)
+                && !(verticalFalling && falling && fx.sweep == 0))
             || (rubyParticles && version == 12 && !star && !ripple)
             || (scanline && shapedSinging)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())

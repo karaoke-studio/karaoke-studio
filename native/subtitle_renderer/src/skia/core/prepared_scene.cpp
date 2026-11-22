@@ -96,7 +96,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             const bool verticalStar = (burst.kind == "twinkle" && burst.sweep == 1)
                 || (burst.kind == "twinkle_classic" && burst.sweep == 0);
             const bool verticalShape = burst.sweep == 0
-                && (burst.kind == "note" || burst.kind == "heart" || burst.kind == "ripple");
+                && (burst.kind == "note" || burst.kind == "heart" || burst.kind == "ripple"
+                    || burst.kind == "petal" || burst.kind == "feather" || burst.kind == "snow"
+                    || burst.kind == "snow_solid");
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
                 || (source.vertical && !verticalStar && !verticalShape) || source.noWipe

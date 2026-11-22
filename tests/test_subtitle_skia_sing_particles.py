@@ -374,7 +374,10 @@ def test_singing_star_speed_preserves_birth_and_respects_display_window(binary, 
     ('twinkle', False, 1, 'none'), ('twinkle_classic', True, 1.5, 'none'),
     ('note', True, 1.5, 'none'), ('heart', False, 1, 'none'), ('ripple', True, 1.5, 'none'),
     ('twinkle', False, 1, 'utopia'), ('note', True, 1.5, 'zoom_pulse'),
-    ('ripple', True, 1.5, 'utopia'),
+    ('ripple', True, 1.5, 'utopia'), ('heart', False, 1, 'utopia'),
+    ('twinkle_classic', False, 1, 'zoom_pulse'),
+    ('petal', True, 1.5, 'zoom_pulse'), ('feather', False, 1, 'none'),
+    ('snow', True, 1, 'none'), ('snow_solid', True, 1.5, 'utopia'),
 ])
 def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr, karaoke):
     from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
@@ -393,7 +396,12 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
                     fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=dpr)
-    feature = 'p07_vertical_sing_twinkle' if variant.startswith('twinkle') else 'p07_vertical_sing_shapes'
+    if variant.startswith('twinkle'):
+        feature = 'p07_vertical_sing_twinkle'
+    elif variant in {'petal', 'feather', 'snow', 'snow_solid'}:
+        feature = 'p07_vertical_sing_falling'
+    else:
+        feature = 'p07_vertical_sing_shapes'
     assert {feature, 'p07_sing_twinkle'} <= set(ir['required_features'])
     composition = 'p07_vertical_singing_with_particles'
     if karaoke == 'none':

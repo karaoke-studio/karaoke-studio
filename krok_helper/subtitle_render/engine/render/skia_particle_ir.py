@@ -27,6 +27,12 @@ _ENERGY_PARTICLES = {'lightning', 'lightning_glow'} | _FLAME_SINGING_SWEEPS.keys
 _BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke', 'shockwave'}
 _VERTICAL_STARS = {('twinkle', 1), ('twinkle_classic', 0)}
 _VERTICAL_SHAPES = {(kind, 0) for kind in ('note', 'heart', 'ripple')}
+_VERTICAL_FALLING = {(kind, 0) for kind in FALLING_PARTICLES}
+_VERTICAL_PARTICLE_FEATURES = (
+    (_VERTICAL_STARS, 'p07_vertical_sing_twinkle'),
+    (_VERTICAL_SHAPES, 'p07_vertical_sing_shapes'),
+    (_VERTICAL_FALLING, 'p07_vertical_sing_falling'),
+)
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
 
@@ -62,15 +68,14 @@ def vertical_singing_particle_modes(source):
             or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}):
         return set()
     modes = {(burst['kind'], burst['sweep']) for burst in source.get('fx_bursts', ())}
-    return modes if modes <= (_VERTICAL_STARS | _VERTICAL_SHAPES) else set()
+    return modes if modes <= (_VERTICAL_STARS | _VERTICAL_SHAPES | _VERTICAL_FALLING) else set()
 
 
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = ruby_band_singing = False
-    vertical_stars = False
-    vertical_shapes = False
+    vertical_modes_used = set()
     vertical_scaled_particles = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
@@ -86,8 +91,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         vertical_modes = vertical_singing_particle_modes(source) if look.vertical else set()
         vertical_particles = bool(vertical_modes)
         if vertical_particles:
-            vertical_stars |= bool(vertical_modes & _VERTICAL_STARS)
-            vertical_shapes |= bool(vertical_modes & _VERTICAL_SHAPES)
+            vertical_modes_used.update(vertical_modes)
             vertical_scaled_particles |= source.get('karaoke_anim') == 'utopia'
         petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
@@ -155,10 +159,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 max(float(run['ascent']) for run in metrics.slot_metrics)
                 + max(float(run['descent']) for run in metrics.slot_metrics)
             )
-    if vertical_stars:
-        ir['required_features'].append('p07_vertical_sing_twinkle')
-    if vertical_shapes:
-        ir['required_features'].append('p07_vertical_sing_shapes')
+    ir['required_features'].extend(feature for modes, feature in _VERTICAL_PARTICLE_FEATURES
+                                   if modes & vertical_modes_used)
     if vertical_scaled_particles:
         ir['required_features'].append('p07_vertical_singing_with_particles')
     if ruby_scanline:
