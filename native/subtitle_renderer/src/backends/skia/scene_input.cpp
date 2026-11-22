@@ -101,7 +101,7 @@ bool usesFadedScanlineWithSingingParticles(const TextLine& line, const TextStyle
     const auto fadeOrNone = [](const std::string& animation) { return animation == "fade" || animation == "none"; };
     return !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.zoomPulseEnabled
         && line.scanlineEnabled && style.scanlineShape == "band"
-        && (style.scanlineMode == "default" || style.scanlineMode == "color")
+        && style.scanlineMode != "role"
         && line.karaokeAnimation == "utopia" && !line.strokeFlashEnabled && !line.bursts.empty()
         && fadeOrNone(line.entryAnimation) && fadeOrNone(line.exitAnimation)
         && (line.entryAnimation == "fade" || line.exitAnimation == "fade");

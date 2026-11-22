@@ -99,8 +99,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && line.characterFade.entryKind == CharacterFade::Kind::Fade;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
-    // Vertical singing particles can drift beyond the static glyph bounds.
-    const bool dynamicPaint = movingCells || (line.vertical && !line.particles.empty());
+    // Volume bars and vertical particles can extend outside the text paint bounds.
+    const bool dynamicPaint = movingCells || line.volumeSignal || (line.vertical && !line.particles.empty());
     if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (dynamicPaint || !line.paintBounds.isEmpty())) {
         const auto* bounds = dynamicPaint ? nullptr : &line.paintBounds;
         // Keep the same bounded destination-format layer at every opacity

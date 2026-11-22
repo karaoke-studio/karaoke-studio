@@ -3,7 +3,7 @@
 from ..layout.line.skia_geometry import write_horizontal_pivots
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import is_noise_animation, ordinary_line_animation
-from .skia_particle_ir import vertical_singing_particle_modes
+from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 
 
 def vertical_singing_lines(ir, plan):
@@ -66,7 +66,8 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                 or (source.get('scanline') and ((animations != {'none'} and not scanline_motion) or (source.get('zoom_pulse')
                     and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
-                or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12)
+                or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12
+                    and not faded_band_singing_particles(source, style))
                 or (inline_roles and not role_scale)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])

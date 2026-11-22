@@ -363,6 +363,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
+        const bool fadedScanlineParticles = features.contains("p07_faded_scanline_singing_particles")
+            && usesFadedScanlineWithSingingParticles(line, style);
+        const bool fadedScanlineGradientFill = fadedScanlineParticles
+            && features.contains("p06_faded_scanline_gradient_fill")
+            && (style.scanlineMode == "default" || style.scanlineMode == "color");
         const bool lineAnimation = verticalSingingAnimation || (singingScale && !line.zoomPulseEnabled
             && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation);
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
@@ -374,7 +379,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && !verticalScaledParticles
-                && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
+                && ((!rubyParticles && !fadedScanlineParticles) || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit
                 || (line.zoomPulseEnabled && !features.contains(style.vertical
                     ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
@@ -551,7 +556,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
                     };
                     const bool paintedSinging = singingScale && !transforms && !line.zoomPulseEnabled
-                        && (features.contains("p06_utopia_main_paint") || (roleSinging && roleBodyPaints));
+                        && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill
+                            || (roleSinging && roleBodyPaints));
                     if (!paintedSinging && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
                         || (glyph.outerOutline && !opaque(*glyph.outerOutline))))
                         throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");
@@ -622,8 +628,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         };
         const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
-        const bool fadedScanlineGradient = features.contains("p06_faded_scanline_gradient_fill")
-            && usesFadedScanlineWithSingingParticles(line, style)
+        const bool fadedScanlineGradient = fadedScanlineGradientFill
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
@@ -656,7 +661,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool hasDecoration = hasGlow || hasShadow;
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
-        const bool particleGlow = rubyParticles && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
+        const bool particleGlow = (rubyParticles || fadedScanlineParticles) && !hasShadow;
         const bool unscaledScanlineMotion = line.scanlineEnabled && line.karaokeAnimation == "none" && ordinaryLineAnimation
             && features.contains("p07_scanline_unscaled_line_animation");
         const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion || horizontalGlowMotion
@@ -674,11 +679,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (style.scanlineMode != "role" || roleScanlineGlow);
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
-        const bool rubyMainPaint = (!prepared.rubyGroups.empty() || fadedScanlineGradient) && features.contains("p06_ruby_main_paint")
+        const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && !features.contains("p05_lower_ruby");
-        const bool singingMainPaint = rubyMainPaint && singingScale && !line.zoomPulseEnabled
-            && features.contains("p06_utopia_main_paint");
-        const bool paintedGlow = rubyMainPaint && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
+        const bool singingMainPaint = fadedScanlineGradient || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
+            && features.contains("p06_utopia_main_paint"));
+        const bool paintedGlow = (rubyMainPaint || fadedScanlineGradient) && !hasShadow;
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");

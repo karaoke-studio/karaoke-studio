@@ -3,6 +3,7 @@
 #include "../../effects/signal_state.h"
 #include "static_glow.h"
 #include "include/core/SkRRect.h"
+#include "include/core/SkShader.h"
 #include <array>
 #include <vector>
 
@@ -23,6 +24,7 @@ struct VolumeSignal {
     float strokeWidth = 0, outerWidth = 0;
     bool decorated = false;
     std::array<Palette, 2> palette;
+    std::array<sk_sp<SkShader>, 2> fillGradients;
     std::vector<Bar> bars;
 
     void draw(SkCanvas&, int time) const;

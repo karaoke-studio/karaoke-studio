@@ -20,9 +20,10 @@ void VolumeSignal::draw(SkCanvas& canvas, int time) const {
     }
     SkPaint paint;
     paint.setAntiAlias(true);
-    const auto draw = [&](const SkRRect& rect, SkColor color, float width) {
-        if (!SkColorGetA(color)) return;
-        paint.setColor(color);
+    const auto draw = [&](const SkRRect& rect, SkColor color, float width, sk_sp<SkShader> shader = nullptr) {
+        if (!shader && !SkColorGetA(color)) return;
+        paint.setColor(shader ? SK_ColorWHITE : color);
+        paint.setShader(std::move(shader));
         paint.setAlphaf(paint.getAlphaf() * opacity);
         paint.setStyle(width > 0 ? SkPaint::kStroke_Style : SkPaint::kFill_Style);
         paint.setStrokeWidth(width);
@@ -42,7 +43,7 @@ void VolumeSignal::draw(SkCanvas& canvas, int time) const {
             draw(rect, color.fill, 0);
         }
         if (strokeWidth > 0) draw(rect, color.stroke, strokeWidth);
-        if (decorated) draw(rect, color.fill, 0);
+        if (decorated) draw(rect, color.fill, 0, fillGradients[filled]);
     };
     for (int index = state.activeIndex + 1; index < clock.count; ++index) column(index, false);
     for (int index = 0; index <= state.activeIndex; ++index) column(index, true);

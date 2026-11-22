@@ -145,7 +145,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
-        faded_band = annotated and faded_band_singing_particles(source, look)
+        faded_band = faded_band_singing_particles(source, look)
         singing_under_shape = (annotated and band and (not animated or petal_with_band) and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         singing_under_band = (not look.vertical and annotated and band
@@ -153,7 +153,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                               and look.scanline_mode != 'role' and not item.line.wipe_reverse
                               and any(burst['kind'] != 'scanline' for burst in bursts))
         ruby_band_singing = ruby_band_singing or singing_under_band
-        scaled_singing = annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
+        scaled_singing = faded_band or (annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
         if ((look.vertical and not vertical_particles) or look.right_to_left
@@ -166,7 +166,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not petal_with_flame)))
                 or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
-                or (not (annotated or vertical_particles) and outlined)
+                or (not (annotated or vertical_particles or faded_band) and outlined)
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         for burst in bursts:

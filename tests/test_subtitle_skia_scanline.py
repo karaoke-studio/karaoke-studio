@@ -614,6 +614,43 @@ def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading,
     assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
 
 
+def test_faded_scanline_with_gradient_volume_on_a_track_without_ruby(binary, reading):
+    track, style = glow_band_source(reading, 'inherited', utopia=True)
+    line = replace(track.lines[0], display_end_override_ms=2800)
+    track = replace(track, lines=[line])
+    side = replace(track, lines=[replace(line, layout_index=1)], rubies=[],
+                   meta=replace(track.meta, offset_ms=2200))
+    palette = style.karaoke_colors
+    ramp = PaintFill(mode='gradient_vertical', start_color='#FF0040FF', end_color='#FFFF00FF')
+    style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, text=ramp),
+                                                 after=replace(palette.after, text=ramp)),
+                    scanline_mode='default', sing_fx='heart', scanline_effect='none',
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600,
+                    line_y_position='bottom',
+                    layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=75)],
+                    volume_enabled=True, volume_appearance_mode='auto', volume_size=44,
+                    volume_duration_ms=1200, volume_flash_times=0)
+    ir = ir_for(binary, (track, style), extra_tracks=[side])
+    extra, = ir['skia_extra_sources']
+    required = {'p07_faded_scanline_singing_particles', 'p06_faded_scanline_gradient_fill', 'p08_volume_signal'}
+    assert required <= set(extra['required_features'])
+    assert 'p07_ruby_band_singing_particles' not in extra['required_features']
+    extra_line, = extra['skia_layout']['lines']
+    x, _ = extra_line['volume_signal_anchor']
+    times = [550, 2350, 2550, 2850, 2350]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+    assert frames[0][180:, :, 3].any() and not frames[0][:180, :, 3].any()
+    assert np.array_equal(frames[1], frames[-1])
+    assert not np.array_equal(frames[2][:180], frames[3][:180])
+    # Inspect the left-of-text bars on the secondary track during the line's fade-in.
+    bars = frames[1][:180, :int(x - 4)]
+    fill = bars[(bars[..., 2] > 250) & (bars[..., 3] > 15)]
+    assert len(np.unique(fill[:, 0])) >= 5
+    assert 15 < fill[:, 3].max() < 200
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'painted-particles'])
 def test_faded_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path, gradient):

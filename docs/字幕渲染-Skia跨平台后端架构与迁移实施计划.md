@@ -4271,6 +4271,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 「ヒミツ」和「紋白蝶」分别以原样 49 行、154 处注音和 63 行、120 处注音配置。硬件 Vulkan 和 Raster 出帧，分别抽取 18、21 个 1080p 时刻通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原画质门槛。「ヒミツ」保留原视频背景实际 Vulkan 直画播放 25 秒并完成两次跳转。Windows 专项 11 项通过，含实际浮窗、离屏 GPU 与导出前帧对照。日志前缀 `build/skia-painted-singing-*`。
 - WSL X11 与 Wayland 各 3 项通过，涵盖缺少画笔声明时保留原场景、回跳和浮窗对照。Windows 独立 Raster 禁用 Vulkan 驱动后 2 项通过。Windows 两套及 WSL Vulkan 原生构建各通过 3 项 CTest。
 
+### 14.394 P07 / P08 / P09 / P10 无注音副轨与渐变音量柱（2026-11-22）
+
+- 横排正向的 Utopia 扫字带、唱字粒子和整行淡化可用于无注音轨道。每条轨独立选择粒子布局版本并保留时钟。Windows 和 Linux 上的 Vulkan、macOS 上的 Metal 以及 Raster 共用这条绘图路径。
+- 多轨场景接受逐轨音量柱。自动或角色外观可继承实色或纵向渐变填充，并以柱组外接框映射渐变。填充、实色描边和装饰一起参与柱组闪烁及整行淡化。
+- 原样加载「Puppet」主轨 64 行、152 处上注音，另加载 5 行无注音合唱副轨。40 个 1080p 时刻覆盖合唱、扫字、音量柱和淡化，通过 D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 的原有画质门槛。实际浮窗 Vulkan 直画以原视频播放 25 秒并完成两次跳转，提交 1,468 张字幕纹理。日志前缀 `build/skia-puppet-*`。
+- Windows Vulkan 专项 19 项通过，独立 Raster 3 项通过。WSL X11 和 Wayland 各 6 项通过，含浮窗和导出管线帧对照。Windows 两种构建和 WSL Vulkan 构建各通过 3 项 CTest。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

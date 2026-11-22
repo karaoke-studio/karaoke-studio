@@ -52,7 +52,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                               and all(burst['kind'] != 'scanline' for burst in bursts))
         solid_shape = (shape_style and not (source.wipe_reverse or line.get('zoom_pulse') or line.get('stroke_flash'))
                        and (not bursts or shape_with_singing))
-        faded_band = bool(track.rubies) and faded_band_singing_particles(line, look)
+        faded_band = faded_band_singing_particles(line, look)
         motion = (not ordinary and ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and look.scanline_mode != 'role'
                   and line.get('karaoke_anim') in {'none', 'utopia'}

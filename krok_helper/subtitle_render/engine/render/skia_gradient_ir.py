@@ -119,7 +119,7 @@ def write_body_gradient_bounds(ir, plan):
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint = ruby_paint or annotated
-        singing_paint = singing_paint or singing
+        singing_paint = singing_paint or (singing and annotated)
         faded_scanline_gradient |= faded_band
         if annotated:
             colors = effective_ruby_karaoke_colors(look)

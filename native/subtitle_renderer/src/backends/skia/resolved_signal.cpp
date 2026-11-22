@@ -1,5 +1,6 @@
 #include "resolved_signal.h"
 #include "image_fill_cache.h"
+#include "../../skia/core/subtitle_gradient.h"
 #include "../render_backend.h"
 #include "../../model/text_line.h"
 #include <QtCore/QJsonArray>
@@ -105,7 +106,8 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             return value.isDouble() && std::isfinite(value.toDouble()) && std::abs(value.toDouble()) <= 1e6;
         }))
         throw BackendError("Skia 音量柱缺少有效的最终锚点");
-    if (line.entryAnimation != "none" || line.exitAnimation != "none")
+    const auto fadeOrNone = [](const std::string& animation) { return animation == "none" || animation == "fade"; };
+    if (!fadeOrNone(line.entryAnimation) || !fadeOrNone(line.exitAnimation))
         throw BackendError("Skia 音量柱暂不支持字幕出入场组合");
     const auto geometry = volumeSignalGeometry(style);
     if (!std::isfinite(geometry.groupWidth) || geometry.groupWidth > 8192
@@ -120,13 +122,13 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                        {argb(style.volumeOverlayFill), argb(style.volumeOverlayStroke)}}};
     const auto& mode = style.volumeAppearanceMode;
     signal.decorated = style.volumeEnabled && (mode == "auto" || mode == "role");
+    const auto& palette = mode == "role" && role ? *role : style;
     StaticGlow glow;
     if (signal.decorated) {
         if (line.zoomPulseEnabled || std::ranges::any_of(line.chars, [](const auto& cell) {
                 return cell.styleIndex >= 0 || bool(cell.vectorGlyph);
             }))
             throw BackendError("Skia 自动音量柱暂不支持角色字符、导唱符或整字放大");
-        const auto& palette = mode == "role" && role ? *role : style;
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
         signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maximum);
@@ -136,8 +138,9 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (fill.mode != "solid" || stroke.mode != "solid" || outer.mode != "solid" || decor.mode != "solid")
-                throw BackendError("Skia 自动音量柱当前仅支持实色装饰");
+            if ((fill.mode != "solid" && fill.mode != "gradient_vertical") || stroke.mode != "solid"
+                || outer.mode != "solid" || decor.mode != "solid")
+                throw BackendError("Skia 自动音量柱当前支持实色或纵向渐变填充、实色描边和装饰");
             auto& paint = signal.palette[after];
             paint = {argb(fill.color), argb(stroke.color), argb(outer.color)};
             const auto kind = palette.decorationKindForState(after);
@@ -164,6 +167,14 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         VolumeSignal::Bar bar{SkRRect::MakeRectXY(box, radius, radius), PreparedGlow::prepare(glow)};
         for (auto& layer : bar.glow) layer.appendCell(SkPath::RRect(bar.rect));
         signal.bars.push_back(std::move(bar));
+    }
+    if (signal.decorated) {
+        SkRect bounds = SkRect::MakeEmpty();
+        for (const auto& bar : signal.bars) bounds.join(bar.rect.rect());
+        if (palette.beforeFillPaint.mode == "gradient_vertical")
+            signal.fillGradients[0] = subtitleGradient(palette.beforeFillPaint, bounds);
+        if (palette.afterFillPaint.mode == "gradient_vertical")
+            signal.fillGradients[1] = subtitleGradient(palette.afterFillPaint, bounds);
     }
     return signal;
 }

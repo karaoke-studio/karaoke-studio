@@ -11,7 +11,7 @@ bool hasFadedScanlineSingingParticles(const protocol::RenderConfig& cfg, const p
                                      const protocol::ResolvedStyle& style, const QJsonArray& features) {
     const auto fadeOrNone = [](const QString& animation) { return animation == "fade" || animation == "none"; };
     return features.contains("p07_faded_scanline_singing_particles")
-        && !cfg.vertical && !cfg.rightToLeft && !cfg.rubies.empty()
+        && !cfg.vertical && !cfg.rightToLeft
         && source.scanlineEnabled && source.karaokeAnimation == "utopia"
         && style.scanlineShape == "band" && style.scanlineMode != "role"
         && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled
@@ -53,7 +53,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool scanlineWithSinging = shapedSinging || bandSinging;
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit, features);
-    const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
+    const bool scaledSinging = fadedBand || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     const bool verticalStars = features.contains("p07_vertical_sing_twinkle");
@@ -96,7 +96,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
-        || (!rubyParticles && !outlinedVertical && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
+        || (!rubyParticles && !outlinedVertical && !fadedBand && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");

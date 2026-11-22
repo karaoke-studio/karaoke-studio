@@ -862,7 +862,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (twinkleVersion < 13 || !features.contains("p07_ruby_scanline")))
         throw BackendError("Skia 高亮带同场缺少唱字粒子或上注音能力声明");
     if (features.contains("p07_faded_scanline_singing_particles")
-        && (!features.contains("p07_ruby_band_singing_particles") || !features.contains("p07_scanline_line_animation")
+        && (twinkleVersion < 8 || (twinkleVersion >= 12 && !features.contains("p07_ruby_band_singing_particles"))
+            || !features.contains("p07_sing_twinkle") || !features.contains("p07_scanline_line_animation")
             || !features.contains("p07_line_fade")))
         throw BackendError("Skia 扫字线与唱字粒子组合缺少整行淡化能力声明");
     if (features.contains("p07_faded_scanline_particle_paint") && !features.contains("p07_faded_scanline_singing_particles"))
@@ -934,7 +935,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_ruby_main_paint") || !features.contains("p06_body_gradient")))
         throw BackendError("Skia 上注音渐变缺少正文画笔或注音能力声明");
     if (features.contains("p06_faded_scanline_gradient_fill")
-        && (!features.contains("p06_body_gradient") || !features.contains("p06_utopia_main_paint")
+        && (!features.contains("p06_body_gradient") || !features.contains("p07_singing_scale")
             || !features.contains("p07_faded_scanline_singing_particles")))
         throw BackendError("Skia 淡化扫字线渐变缺少正文画笔或唱字粒子能力声明");
     if (features.contains("p06_ruby_fill_image")
