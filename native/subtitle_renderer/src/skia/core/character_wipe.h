@@ -8,15 +8,32 @@ namespace subtitle::skia {
 inline void clipViewportWipe(SkCanvas& canvas, SkRect clip, float viewportHeight) {
     // Partition the split at device pixels. Antialiased half-planes blend
     // the boundary pixel twice and can lose opacity even with identical paint.
+    const SkMatrix transform = canvas.getTotalMatrix();
     if (viewportHeight == 0.f) {
-        canvas.clipRect(clip);
+        if (!transform.rectStaysRect()) {
+            canvas.clipRect(clip);
+            return;
+        }
+        const auto device = transform.mapRect(clip);
+        // Match the reference's aliased clip: a pixel center on the boundary
+        // belongs to the side starting there. Ganesh and Raster round a
+        // fractional rect differently at such ties.
+        const auto edge = [](float value) { return float(std::ceil(double(value) - .5)); };
+        const auto pixels = SkRect::MakeLTRB(edge(device.left()), edge(device.top()),
+                                             edge(device.right()), edge(device.bottom()));
+        if (transform.isIdentity()) {
+            canvas.clipRect(pixels);
+            return;
+        }
+        canvas.resetMatrix();
+        canvas.clipRect(pixels);
+        canvas.setMatrix(transform);
         return;
     }
     // Direct2D clips each wipe side to the device-aligned bounds of its
     // transformed rectangle. Glow sources keep their own unrotated clips.
     clip.fTop = -2.f * viewportHeight;
     clip.fBottom = 2.f * viewportHeight;
-    const SkMatrix transform = canvas.getTotalMatrix();
     canvas.resetMatrix();
     canvas.clipRect(transform.mapRect(clip));
     canvas.setMatrix(transform);
