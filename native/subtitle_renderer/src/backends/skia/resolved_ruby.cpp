@@ -163,6 +163,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool verticalShadowNoWipe = verticalNoWipe && (features.contains("p07_vertical_shadow_no_wipe") || verticalMixedNoWipe);
     const bool verticalSinging = vertical && line.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_scale");
+    const bool verticalSingingShadow = verticalSinging && features.contains("p07_vertical_ruby_singing_shadow");
     const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
         && ((line.karaokeAnimation == "none" && (staticLine || verticalFade || decorationMotion.upper))
             || verticalSinging || verticalGlowNoWipe || verticalShadowNoWipe)
@@ -171,10 +172,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool rtlShadow = rtl && features.contains("p06_rtl_ruby_shadow")
         && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe");
     const bool allowShadow = features.contains("p06_ruby_shadow")
-        && (!rtl || rtlShadow) && (!vertical || (allowVerticalDecoration && !verticalSinging))
+        && (!rtl || rtlShadow) && (!vertical || (allowVerticalDecoration && (!verticalSinging || verticalSingingShadow)))
         && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || decorationMotion.upper)
-        && !line.zoomPulseEnabled
-        && (staticLine || verticalFade || decorationMotion.upper);
+        && (!line.zoomPulseEnabled || verticalSingingShadow)
+        && (staticLine || verticalFade || decorationMotion.upper
+            || (verticalSingingShadow && features.contains("p07_vertical_singing_line_animation")));
     const bool zoom = !vertical && line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"

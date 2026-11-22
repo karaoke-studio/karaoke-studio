@@ -252,8 +252,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     vertical_singing = vertical_singing_lines(ir, prepared[0].plan) if style.vertical else set()
     vertical_ruby = None
     if prepared[0].vertical_readings is not None:
-        vertical_ruby = vertical_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
-                                            dpr=kwargs.get('dpr', 1), singing_tracks=vertical_singing)
+        vertical_ruby, vertical_ruby_singing_shadow = vertical_ruby_layout(
+            prepared[0], width=kwargs['width'], height=kwargs['height'],
+            dpr=kwargs.get('dpr', 1), singing_tracks=vertical_singing)
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     spin_lines = set()
@@ -390,6 +391,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if vertical_ruby is not None:
         ir['skia_layout'].update(vertical_ruby)
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby', 'p05_vertical_ruby']
+        if vertical_ruby_singing_shadow:
+            ir['required_features'].append('p07_vertical_ruby_singing_shadow')
         if style.dual_line_layout:
             ir['required_features'].append('p05_vertical_columns_ruby')
         if any(len(line['ruby_groups']) > 1 for line in lines):

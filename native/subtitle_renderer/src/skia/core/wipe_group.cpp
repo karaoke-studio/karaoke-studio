@@ -216,9 +216,10 @@ void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingSc
         const bool before = timeMs <= cell.startMs;
         std::optional<float> clip;
         if (!before && timeMs < cell.endMs)
-            clip = singingFront(cell, timeMs, originX, transform.matrix.mapRect(cell.path.computeTightBounds()));
+            clip = vertical_ ? wipeCoordinate(cell, timeMs, rightToLeft_, true)
+                             : singingFront(cell, timeMs, originX, transform.matrix.mapRect(cell.path.computeTightBounds()));
         return StaticShadow::WipePose{transform, before, clip};
-    });
+    }, vertical_, vertical_ && rightToLeft_);
 }
 
 float PreparedWipeGroup::wipeStart() const {

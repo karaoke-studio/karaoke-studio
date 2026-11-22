@@ -220,7 +220,8 @@ def test_vertical_ruby_outlines_follow_ink_and_keep_independent_colors(binary, p
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_shadow', [False, True])
-def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, target, body_shadow):
+@pytest.mark.parametrize('karaoke', ['none', 'utopia', 'zoom_pulse'])
+def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, target, body_shadow, karaoke):
     from krok_helper.subtitle_render.domain.paint import PaintFill
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
@@ -236,11 +237,16 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
                     decoration_kind=body_kind, decoration_kind_before=body_kind,
                     shadow_offset_x=-18, shadow_before_offset_x=-18,
                     ruby_decoration_kind='glow', ruby_decoration_kind_before='shadow',
-                    ruby_shadow_before_offset_x=0, ruby_shadow_before_offset_y=4, ruby_glow_after_radius_px=6)
+                    ruby_shadow_before_offset_x=0, ruby_shadow_before_offset_y=4, ruby_glow_after_radius_px=6,
+                    karaoke_anim=karaoke, zoom_pulse_peak_pct=140)
     ir = ir_for(binary, (track, style))
     feature = 'p06_vertical_ruby_decoration'
     assert {feature, 'p06_ruby_shadow', 'p06_ruby_glow'} <= set(ir['required_features'])
     assert ('p06_vertical_shadow' in ir['required_features']) == body_shadow
+    singing = karaoke != 'none'
+    assert ('p07_vertical_ruby_singing_shadow' in ir['required_features']) == singing
+    if singing:
+        feature = 'p07_vertical_ruby_singing_shadow'
     unit, = ir['skia_layout']['lines'][0]['ruby_groups'][0]['units']
     start, end = unit['interval_ms']
     times = [start - 1, (start + end) // 2, end + 1]
@@ -252,6 +258,9 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
         with pytest.raises(NativeRendererError):
             configure(process, bad)
         replay, _ = collect(process, [times[1]], generation=2)
+        if singing:
+            configure(process, ir_for(binary, (track, replace(style, karaoke_anim='none'))))
+            static, _ = collect(process, [times[1]], generation=3)
     assert np.array_equal(frames[1], replay[0])
 
     def rows(frame, channel):
@@ -265,6 +274,13 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
     assert rows(frames[2], 2).any() and not rows(frames[2], 0).any()
     assert center(rows(frames[1], 2)) + 3 < center(rows(frames[1], 0))
     assert all(bool(rows(frame, 1).any()) == body_shadow for frame in frames)
+    if singing:
+        def shadow_width(frame):
+            red, _, blue, alpha = np.moveaxis(frame, -1, 0)
+            _, columns = np.nonzero((red > 200) & (blue < 50) & (alpha > 160))
+            return int(np.ptp(columns))
+
+        assert shadow_width(frames[1]) > shadow_width(static[0])
     if target == 'gpu':
         with SkiaRendererProcess(binary, selection=selection('raster')) as process:
             configure(process, ir)
@@ -734,6 +750,7 @@ def test_vertical_reading_and_body_zoom_use_separate_clocks(binary, project):
     ('slide_in', 'slide_out', False, 'glow', 'no_wipe'), ('rise', 'rise', True, 'shadow', 'no_wipe'),
     ('fade', 'fade', False, 'glow', 'utopia'), ('rise', 'rise', True, 'glow', 'utopia'),
     ('slide_in', 'slide_out', False, 'glow', 'zoom_pulse'), ('rise', 'rise', True, 'glow', 'zoom_pulse'),
+    ('slide_in', 'slide_out', False, 'shadow', 'utopia'), ('rise', 'rise', True, 'shadow', 'zoom_pulse'),
 ])
 def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, exit_, two_lanes, decoration, karaoke):
     from test_subtitle_skia_outline_ruby import premultiplied
@@ -1089,11 +1106,13 @@ def test_vertical_scanline_moves_and_fades_with_the_line(binary, project, entry,
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('karaoke,mode,entry,exit_', [
-    ('utopia', 'color', 'rise', 'slide_out'),
-    ('zoom_pulse', 'brighten', 'slide_in', 'rise'),
+@pytest.mark.parametrize('karaoke,mode,entry,exit_,decoration', [
+    ('utopia', 'color', 'rise', 'slide_out', 'glow'),
+    ('zoom_pulse', 'brighten', 'slide_in', 'rise', 'glow'),
+    ('zoom_pulse', 'brighten', 'slide_in', 'rise', 'shadow'),
 ])
-def test_vertical_singing_scanline_and_line_transition_share_the_scene(binary, project, karaoke, mode, entry, exit_):
+def test_vertical_singing_scanline_and_line_transition_share_the_scene(
+        binary, project, karaoke, mode, entry, exit_, decoration):
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
 
@@ -1106,8 +1125,9 @@ def test_vertical_singing_scanline_and_line_transition_share_the_scene(binary, p
                    ruby_karaoke_colors=colors('#000070', '#700070'),
                    scanline_enabled=True, scanline_mode=mode, scanline_shape='band', scanline_color='#00FFFF',
                    scanline_width_px=32, scanline_glow_px=5, scanline_brightness_pct=100,
-                   decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6,
-                   ruby_decoration_kind='glow', ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5)
+                   decoration_kind=decoration, glow_before_radius_px=5, glow_after_radius_px=6,
+                   ruby_decoration_kind=decoration, ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5,
+                   shadow_offset_x=-9, shadow_offset_y=6, ruby_shadow_offset_x=5, ruby_shadow_offset_y=3)
     animated = replace(base, entry_anim=entry, exit_anim=exit_, entry_lead_ms=800, exit_fade_ms=650)
     dpr = 1.5
     ir = ir_for(binary, (track, animated), dpr=dpr)

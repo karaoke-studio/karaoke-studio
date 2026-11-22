@@ -46,6 +46,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
     readings = prepared.vertical_readings
     ruby = readings.measured
     outlined = False
+    singing_shadow = False
     decorations = set()
     fonts = dict(measured.fonts)
     for key, font in ruby.fonts.items():
@@ -74,8 +75,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
             outlines = solid_ruby_outlines(target.style)
             decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow'}
-            if singing_scale and 'shadow' in decoration:
-                raise ValueError('Skia 竖排 Utopia 唱字暂不支持注音阴影')
+            singing_shadow |= singing_scale and 'shadow' in decoration
             decorations.update(decoration)
             wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
             units = _reading_units(ruby.readings[reading_index], clock, ruby_column, top + first * height_per_cell,
@@ -106,4 +106,4 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
     if outlined:
         result['ruby_solid_outline_schema'] = 1
     result.update({f'ruby_{kind}_schema': 1 for kind in decorations})
-    return result
+    return result, singing_shadow

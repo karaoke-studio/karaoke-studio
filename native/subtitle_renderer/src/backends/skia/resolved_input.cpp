@@ -694,14 +694,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool verticalScanlineDecoration = style.vertical && line.scanlineEnabled
             && features.contains("p07_vertical_scanline_decoration");
         const bool verticalSingingShadow = verticalSinging && features.contains("p07_vertical_singing_shadow");
+        const bool verticalDecorationAnimation = verticalFade || verticalMotion || verticalSingingAnimation;
         const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
             && (!hasShadow || features.contains("p06_vertical_shadow"))
             && (line.karaokeAnimation == "none" || (verticalSinging && (!hasShadow || verticalSingingShadow))
                 || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
-            && (verticalFade || verticalMotion || verticalSingingAnimation
-                || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+            && (verticalDecorationAnimation || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && (!line.scanlineEnabled || verticalScanlineDecoration) && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
@@ -725,7 +725,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     || horizontalShadowMotion || horizontalGlowMotion
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
                 || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion
-                      || (verticalDecoration && (verticalFade || verticalMotion))
+                      || (verticalDecoration && verticalDecorationAnimation)
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !(scanlineGlow || verticalScanlineDecoration))
