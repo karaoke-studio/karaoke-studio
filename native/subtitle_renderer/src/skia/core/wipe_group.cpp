@@ -32,10 +32,10 @@ void paintRubyLayer(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, 
 }
 
 void paintRubyCell(SkCanvas& canvas, SkPaint& brush, const ResolvedCell& cell, bool after, float opacity,
-                   const sk_sp<SkShader>& fillGradient) {
+                   const std::array<sk_sp<SkShader>, 3>& shaders) {
     for (int layer = 0; layer < 3; ++layer)
         paintRubyLayer(canvas, brush, cell, layer, [=](auto before, auto sung) { return after ? sung : before; },
-                       opacity, layer == 2 ? fillGradient : nullptr);
+                       opacity, shaders[layer]);
 }
 
 // Protected ruby rings scale with the glyph. Opaque outlines keep their width.
@@ -75,7 +75,8 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
       utopiaExitOwner_(group.utopiaExitOwner),
       noWipe_(noWipe), vertical_(vertical), rightToLeft_(group.rightToLeft),
       spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
-      fillGradients_(group.fillGradients), fillImages_(group.fillImages) {
+      fillGradients_(group.fillGradients), fillImages_(group.fillImages),
+      outlineGradients_(group.outlineGradients), outerOutlineGradients_(group.outerOutlineGradients) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -131,7 +132,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
     }
     for (bool after : {false, true}) {
         if (after && !afterVisible) break;
-        const auto shader = fillShader(canvas, after);
+        const std::array shaders{outerOutlineGradients_[after], outlineGradients_[after], fillShader(canvas, after)};
         for (std::size_t index = 0; index < cells_.size(); ++index) {
             const auto& cell = animated[index] ? *animated[index] : cells_[index];
             if (cell.path.isEmpty()) continue;
@@ -147,7 +148,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
                                                        : SkRect::MakeLTRB(edge, -1e6f, 1e6f, 1e6f);
                 clipViewportWipe(canvas, clip, viewportHeight);
             }
-            paintRubyCell(canvas, paint, cell, after, opacity * exitOpacity, shader);
+            paintRubyCell(canvas, paint, cell, after, opacity * exitOpacity, shaders);
         }
     }
 }
@@ -303,12 +304,12 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto draw = [&](bool after) {
-        const auto shader = fillShader(canvas, after);
+        const std::array shaders{outerOutlineGradients_[after], outlineGradients_[after], fillShader(canvas, after)};
         for (const auto& cell : cells_) {
             const auto singing = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
             if (pose.isIdentity()) {
                 const auto posed = posedUnit(cell, singing);
-                paintRubyCell(canvas, paint, posed ? *posed : cell, after, opacity, shader);
+                paintRubyCell(canvas, paint, posed ? *posed : cell, after, opacity, shaders);
             } else {
                 auto unitPose = pose;
                 if (affine_) {
@@ -321,7 +322,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
                     unitPose.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
                 }
                 const auto posed = posedUnit(cell, {opacity, unitPose, true});
-                paintRubyCell(canvas, paint, *posed, after, opacity, shader);
+                paintRubyCell(canvas, paint, *posed, after, opacity, shaders);
             }
         }
     };

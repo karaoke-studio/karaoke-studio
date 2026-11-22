@@ -1,4 +1,4 @@
-"""Project solid annotation outlines from the effective reading style."""
+"""Project annotation outline widths and fallback colors from the reading style."""
 
 from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.domain.models import materialize_ruby_decoration_changes
@@ -6,17 +6,20 @@ from krok_helper.subtitle_render.engine.ruby.style_semantics import ruby_stroke_
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 
 
-def solid_ruby_outlines(style):
+def ruby_outlines(style, *, allow_vertical_gradient=False):
     colors = effective_ruby_karaoke_colors(style)
     outlines = {}
+    gradient = False
+    modes = {'solid', 'gradient_vertical'} if allow_vertical_gradient else {'solid'}
     for layer, width in (('stroke', ruby_stroke_width(style)), ('stroke2', ruby_stroke2_width(style))):
         if not width:
             continue
         before, after = getattr(colors.before, layer), getattr(colors.after, layer)
-        if before.mode != 'solid' or after.mode != 'solid':
-            raise ValueError('Skia 注音描边当前仅支持实色')
+        if before.mode not in modes or after.mode not in modes:
+            raise ValueError('Skia 注音描边的画笔或布局组合暂不支持')
+        gradient |= before.mode == 'gradient_vertical' or after.mode == 'gradient_vertical'
         outlines[layer] = {'width': width, 'before': list(rgba(before.color)), 'after': list(rgba(after.color))}
-    return outlines
+    return outlines, gradient
 
 
 def ruby_decoration_kinds(style):

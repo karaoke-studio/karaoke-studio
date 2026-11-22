@@ -255,6 +255,35 @@ def test_non_solid_annotation_outlines_remain_explicitly_gated(binary, reading):
         upper_ir(binary, (track, replace(style, ruby_karaoke_colors=replace(colors_, before=before))), 1)
 
 
+def test_vertical_gradient_on_both_annotation_outline_layers(binary, reading):
+    track, style = upper_source(reading, 2)
+    style = annotated_paint(style, 2)
+    palette = style.ruby_karaoke_colors
+    before = replace(palette.before, stroke=PaintFill(mode='gradient_vertical',
+                     start_color='#FF0000FF', end_color='#FFFF00FF'), stroke2=PaintFill(color='#FF000000'))
+    after = replace(palette.after, stroke2=PaintFill(mode='gradient_vertical',
+                    start_color='#FFFF00FF', end_color='#FFFF0000'))
+    style = replace(style, ruby_karaoke_colors=replace(palette, before=before, after=after))
+    ir = upper_ir(binary, (track, style), 1)
+    assert ir['skia_layout']['ruby_outline_gradient_schema'] == 1
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p06_ruby_outline_gradient')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [250, 1000, 2300])
+        with pytest.raises(NativeRendererError, match='注音描边'):
+            configure(process, invalid)
+        replay, _ = collect(process, [1000], generation=2)
+    assert np.array_equal(frames[1], replay[0])
+    # The before primary ring varies red and the after outer ring varies blue.
+    opaque = frames[0][..., 3] == 255
+    primary = opaque & (frames[0][..., 1] == 0) & (frames[0][..., 2] == 255)
+    assert len(np.unique(frames[0][primary, 0])) > 5
+    opaque = frames[2][..., 3] == 255
+    outer = opaque & (frames[2][..., 0] == 255) & (frames[2][..., 1] == 0)
+    assert len(np.unique(frames[2][outer, 2])) > 5
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_annotated_solid_outlines_preserve_final_wipe_and_replay(binary, reading, target, tmp_path):
     track, style = upper_source(reading, 2)

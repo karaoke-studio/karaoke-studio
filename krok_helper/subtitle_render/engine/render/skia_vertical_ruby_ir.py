@@ -6,7 +6,7 @@ from ..layout.line.skia_vertical import (
     vertical_cells, vertical_glyph_rotates, vertical_glyph_shift, vertical_line_box,
 )
 from ..ruby.skia_timing import wipe_points_to_ir
-from .skia_ruby_paint_ir import ruby_decoration_kinds, solid_ruby_outlines
+from .skia_ruby_paint_ir import ruby_decoration_kinds, ruby_outlines
 
 
 def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_offset, font_size, wipe_pad,
@@ -73,7 +73,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
         for target, clock, reading_index in groups:
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
-            outlines = solid_ruby_outlines(target.style)
+            outlines, _ = ruby_outlines(target.style)
             decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow'}
             singing_shadow |= singing_scale and 'shadow' in decoration
             decorations.update(decoration)

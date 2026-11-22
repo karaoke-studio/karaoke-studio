@@ -115,6 +115,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_fill_image",
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
+        "p06_ruby_outline_gradient",
         "p06_static_shadow",
         "p06_ruby_shadow",
         "p06_static_glow",
@@ -876,6 +877,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_ruby_solid_outline")
         && (!features.contains("p05_resolved_ruby") || layout.value("ruby_solid_outline_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音描边缺少版本化布局或注音能力声明");
+    if (features.contains("p06_ruby_outline_gradient")
+        && (!features.contains("p06_ruby_solid_outline") || !features.contains("p05_upper_ruby")
+            || layout.value("ruby_outline_gradient_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 注音渐变描边缺少版本化布局或注音能力声明");
     if (features.contains("p06_ruby_shadow")
         && (!features.contains("p05_resolved_ruby") || layout.value("ruby_shadow_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音阴影缺少版本化布局或注音能力声明");

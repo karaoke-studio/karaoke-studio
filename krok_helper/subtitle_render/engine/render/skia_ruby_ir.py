@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.engine.ruby.skia_timing import prepare_ruby_wip
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import prepare_overlap_wipes
 from .skia_lower_ir import lower_solid_appearance
-from .skia_ruby_paint_ir import ruby_decoration_kinds, solid_ruby_outlines
+from .skia_ruby_paint_ir import ruby_decoration_kinds, ruby_outlines
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
@@ -36,6 +36,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     run_offset = len(measured.runs)
     lines = []
     has_outlines, has_shadow, has_glow = False, False, False
+    has_gradient_outline = False
     has_lower_glow = False
     has_lower_shadow = False
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
@@ -64,7 +65,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 continue
             indices = group.target.indices
             style_cell = next((i for i in indices if item.render_line.chars[i].role_label), indices[0])
-            outlines = solid_ruby_outlines(group.target.style)
+            outlines, gradient_outline = ruby_outlines(group.target.style,
+                allow_vertical_gradient=not (rtl or group.target.lower))
+            has_gradient_outline |= gradient_outline
             # The existing GPU floors a half-width in reference pixels, then
             # uses that integer directly in the physical annotation clip.
             wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
@@ -129,6 +132,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             'overlap_schema': 1,
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
+            **({'ruby_outline_gradient_schema': 1} if has_gradient_outline else {}),
             **({'ruby_shadow_schema': 1} if has_shadow else {}),
             **({'ruby_glow_schema': 1} if has_glow else {}),
             **({'lower_ruby_glow_schema': 1} if has_lower_glow else {}),

@@ -626,6 +626,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p05_lower_ruby')
         if 'ruby_solid_outline_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_solid_outline')
+        if 'ruby_outline_gradient_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_ruby_outline_gradient')
         if 'ruby_shadow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_shadow')
         if 'ruby_glow_schema' in ir['skia_layout']:

@@ -45,5 +45,6 @@ private:
     bool lower_ = false;
     std::array<sk_sp<SkShader>, 2> fillGradients_;
     std::array<ImageFill, 2> fillImages_;
+    std::array<sk_sp<SkShader>, 2> outlineGradients_, outerOutlineGradients_;
 };
 }

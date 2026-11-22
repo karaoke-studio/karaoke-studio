@@ -56,6 +56,7 @@ struct ResolvedRubyGroup {
     GlowGradients glowGradients;
     bool rightToLeft = false;
     std::optional<std::size_t> utopiaExitOwner;
+    std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
 };
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
