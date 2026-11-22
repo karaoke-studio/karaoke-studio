@@ -9,6 +9,7 @@ import pytest
 from PyQt6.QtGui import QColor, QImage
 
 from test_subtitle_skia_rtl_flow import application, binary, collect, configure, ir_for, project, selection
+from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import bitmap_guide_box
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -141,6 +142,77 @@ def test_bitmap_guide_out_of_order_seek_is_deterministic(binary, project, tmp_pa
     by_time = dict(zip(sorted(order), ordered))
     assert all(np.array_equal(by_time[t], f) for t, f in zip(order, shuffled))
     assert not np.array_equal(by_time[250], by_time[2600])
+
+
+def inline_avatar_case(tmp_path, *, family=None):
+    case, track = p00_guide(tmp_path, family=family)
+    first = replace(track.lines[0].guide_symbol, bitmap_no_decor=True,
+                    bitmap_before_path=image(tmp_path / 'offset-avatar.png', 48, 32, '#41ECFD'),
+                    bitmap_after_path=None, bitmap_zoom_percent=80,
+                    bitmap_margin_right_px=-999, bitmap_margin_bottom_px=-80)
+    second = replace(first, bitmap_margin_right_px=4, bitmap_margin_bottom_px=0,
+                     bitmap_before_path=image(tmp_path / 'inline-avatar.png', 28, 42, '#22FA7B'),
+                     bitmap_after_path=image(tmp_path / 'clear-avatar.png', 32, 30, '#006faa20'),
+                     bitmap_zoom_percent=100)
+    line = track.lines[0]
+    chars = [replace(c, role_label='avatar') if i in {0, 2} else c for i, c in enumerate(line.chars)]
+    track = replace(track, lines=[replace(line, chars=chars, guide_symbol=None, inline_guide_symbols={0: first, 2: second})])
+    style = replace(case.style, custom_style_schemes={'avatar': SubtitleStyleScheme(font_size_px=64, stroke_width_px=4)})
+    return track, style
+
+
+def test_role_tagged_inline_avatars_preserve_cells_and_clocks(binary, project, tmp_path):
+    track, style = inline_avatar_case(tmp_path, family=project[1].font_family)
+    ir = ir_for(binary, (track, style))
+    feature = 'p08_inline_bitmap_guides'
+    assert feature in ir['required_features']
+    source, = ir['track']['lines']
+    final, = ir['skia_layout']['lines']
+    assert [i for i, c in enumerate(source['chars']) if 'bitmap_guide' in c] == [0, 2]
+    assert final['cells'][0]['metrics']['advance'] == 0
+    assert final['cells'][2]['metrics']['ink'][3] - final['cells'][2]['metrics']['ink'][1] == 64
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [1250, 2600, 1250])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, [2600], generation=2)
+    assert frames[0][..., 3].any() and np.array_equal(frames[0], frames[-1])
+    assert np.array_equal(frames[1], replay[0]) and not np.array_equal(frames[1], frames[0])
+
+
+@GPU
+def test_role_tagged_inline_avatars_match_d2d_gpu(binary, application, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = inline_avatar_case(tmp_path)
+    times = (1201, 1500, 1900, 2150, 2400, 2750, 3400, 4050)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=1920, height=1080, dpr=1, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(1080, 1920, 4) for p in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, times)
+            rendered.append(frames)
+    assert_glow_parity(times, refs, *rendered, 'inline-avatar', check_p00_edges=True)
+    for color in ((65, 236, 253), (34, 250, 123)):
+        def avatar(frame):
+            return (frame[..., 3] > 230) & (np.abs(frame[..., :3].astype(np.int16) - color).max(axis=-1) < 8)
+
+        seen = False
+        for time_ms, ref, gpu in zip(times, refs, rendered[0], strict=True):
+            expected = avatar(ref)
+            if expected.sum() > 100:
+                seen = True
+                actual = avatar(gpu)
+                assert (expected & actual).sum() / (expected | actual).sum() >= .95, (time_ms, color)
+        assert seen, color
 
 
 def test_bitmap_guide_large_native_halo_keeps_previous_scene(binary, project, tmp_path):

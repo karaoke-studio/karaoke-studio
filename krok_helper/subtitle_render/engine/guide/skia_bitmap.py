@@ -70,25 +70,25 @@ def has_bitmap_guides(lines):
     return any(guide_symbol_is_bitmap(c.vector_glyph) for line in lines for c in line.chars)
 
 
-def validate_bitmap_guides(track, style, *, static_title=False):
-    """bitmap_guide_schema=1: one static line-prefix image guide per line.
+def _needs_inline_bitmap_profile(line, cells):
+    symbol = line.guide_symbol
+    return (bool(line.inline_guide_symbols) or symbol is None or not guide_symbol_is_bitmap(symbol)
+            or bool(symbol.replacement_prefix)
+            or any(c.vector_glyph is not symbol or c.role_label is not None for c in cells))
 
-    Verified subset: horizontal LTR forward lines with a pre-roll/anchored
-    prefix (never replacement or inline), static images, no roles, and only
-    solid glow decoration. Shadows, animated images and other effects stay
-    rejected in lyrics. Static title layout may carry animated bitmaps.
-    """
+
+def validate_bitmap_guides(track, style, *, static_title=False):
+    """Validate line-prefix guides and undecorated static inline avatars."""
     from ..layout.line.style import style_for_line
     animated = False
     for line in track.lines:
         cells = [c for c in render_line_with_guide_symbols(line).chars if guide_symbol_is_bitmap(c.vector_glyph)]
         if not cells:
             continue
-        symbol = line.guide_symbol
-        if not static_title and (line.inline_guide_symbols or symbol is None or not guide_symbol_is_bitmap(symbol)
-                                 or symbol.replacement_prefix or any(c.vector_glyph is not symbol for c in cells)):
-            raise ValueError('Skia 图片导唱符仅支持整行前置导唱符')
-        images = [cells[0].vector_glyph] if not static_title else [cell.vector_glyph for cell in cells]
+        inline = not static_title and _needs_inline_bitmap_profile(line, cells)
+        if inline and any(not cell.vector_glyph.bitmap_no_decor for cell in cells):
+            raise ValueError('Skia 行内头像暂不支持独立图片装饰')
+        images = [cell.vector_glyph for cell in cells]
         paths = {path for image in images for path in (image.bitmap_before_path, image.bitmap_after_path) if path}
         for path in sorted(paths):
             if QImageReader(path).imageCount() > 1:
@@ -99,10 +99,10 @@ def validate_bitmap_guides(track, style, *, static_title=False):
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
         if (appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled or line.wipe_reverse
-                or any(c.role_label is not None for c in cells)):
+                or (not inline and any(c.role_label is not None for c in cells))):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
-        if appearance.decoration_kind == 'shadow' or (
-                not appearance.decoration_before_sync and appearance.decoration_kind_before == 'shadow'):
+        if not inline and (appearance.decoration_kind == 'shadow' or (
+                not appearance.decoration_before_sync and appearance.decoration_kind_before == 'shadow')):
             raise ValueError('Skia 图片导唱符暂不支持阴影装饰')
     return animated
 
@@ -116,6 +116,12 @@ BITMAP_GUIDE_FEATURES = frozenset({
     'p06_outline_ruby', 'p06_primary_solid_outline', 'p06_ruby_glow', 'p06_ruby_solid_outline',
     'p06_secondary_solid_outline', 'p06_static_glow', 'p07_ruby_singing_scale', 'p07_singing_glow',
     'p07_singing_scale'})
+INLINE_BITMAP_GUIDE_FEATURES = frozenset({
+    'p08_inline_bitmap_guides', 'p05_font_fallback', 'p05_mixed_fonts',
+    'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
+    'p06_role_solid_outlines', 'p06_multi_lane_outline', 'p06_role_body_paints',
+    'p06_ruby_role_paints', 'p06_role_static_glow', 'p06_ruby_role_glow',
+    'p07_role_singing_scale', 'p07_role_singing_glow'})
 
 
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
@@ -126,5 +132,12 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     features.append('p08_bitmap_guides')
     ir['skia_layout']['bitmap_guide_schema'] = 1
     allowed = BITMAP_GUIDE_FEATURES | {'p05_vector_guides'} if static_title else BITMAP_GUIDE_FEATURES
+    if not static_title:
+        for item in plan_lines:
+            cells = [c for c in item.render_line.chars if guide_symbol_is_bitmap(c.vector_glyph)]
+            if cells and _needs_inline_bitmap_profile(item.line, cells):
+                features.append('p08_inline_bitmap_guides')
+                allowed |= INLINE_BITMAP_GUIDE_FEATURES
+                break
     if not set(features) <= allowed:
         raise ValueError('Skia 图片导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')

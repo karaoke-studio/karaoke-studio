@@ -447,6 +447,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool composedGuide = features.contains("p05_vector_guide_composition");
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
+        const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         bool sawLyrics = false;
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
@@ -492,11 +493,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
-            // bitmap_guide_schema=1: line-prefix image guides on horizontal forward main text.
-            if (cell.bitmapGuide && (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
-                || cfg.rightToLeft || source.wipeReverse || &cellStyle != &resolved
-                || (sawBitmapText && !staticTitle)))
-                throw BackendError("Skia 图片导唱符仅支持已验证的横排整行前置子集");
+            if (cell.bitmapGuide) {
+                const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
+                if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
+                    || cfg.rightToLeft || source.wipeReverse
+                    || (needsInline && (!inlineBitmapGuides || !cell.bitmapGuide->noDecor)))
+                    throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
+            }
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;
             if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
                 || !cell.resolvedEndMs)

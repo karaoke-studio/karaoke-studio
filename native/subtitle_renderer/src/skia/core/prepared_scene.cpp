@@ -17,6 +17,7 @@ namespace subtitle::skia {
 namespace {
 void includeCellPaint(SkRect& bounds, const ResolvedCell& cell) {
     bounds.join(cell.path.getBounds());
+    if (cell.bitmap) bounds.join(cell.bitmap->box);
     if (cell.outline) bounds.join(cell.outline->path.getBounds());
     if (cell.outerOutline) bounds.join(cell.outerOutline->path.getBounds());
 }
