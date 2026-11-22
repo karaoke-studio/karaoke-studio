@@ -462,10 +462,14 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-def test_vertical_flame_moves_emitters_along_the_cell_y_axis(binary, project):
-    from test_subtitle_skia_vertical import vertical_ruby_source
+@pytest.mark.parametrize('reverse', [False, True])
+def test_vertical_flame_moves_emitters_along_the_cell_y_axis(binary, project, reverse):
+    from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
 
-    track, style = vertical_ruby_source(project, position='center')
+    if reverse:
+        track, style = vertical_source(project, texts=['字'], position='center', reverse=True, effect='zoom_pulse')
+    else:
+        track, style = vertical_ruby_source(project, position='center')
     line, = track.lines
     track = replace(track, lines=[replace(line, chars=line.chars[:1], end_ms=1450,
                                           display_start_override_ms=0, display_end_override_ms=2200)])
@@ -509,9 +513,55 @@ def test_vertical_flame_moves_emitters_along_the_cell_y_axis(binary, project):
             (top,), _ = collect(process, [time], generation=2)
             configure(process, high)
             (bottom,), _ = collect(process, [time], generation=3)
-            assert centroid(bottom) - centroid(top) == pytest.approx([0, .8 * height], abs=.2)
+            direction = -1 if reverse else 1
+            assert centroid(bottom) - centroid(top) == pytest.approx([0, direction * .8 * height], abs=.2)
         rendered.append(premultiplied(full))
     assert abs(rendered[0] - rendered[1]).mean() < .15
+
+
+@pytest.mark.parametrize('variant,karaoke', [
+    ('twinkle_classic', 'none'), ('note', 'utopia'), ('feather', 'zoom_pulse'),
+])
+def test_vertical_reverse_singing_particles_keep_clock_order(binary, project, variant, karaoke):
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, texts=['字', '字'], reverse=True, effect=karaoke, position='center')
+    line, = track.lines
+    cells = [line.chars[0], replace(line.chars[1], start_ms=2400)]
+    track = replace(track, lines=[replace(line, chars=cells, end_ms=3000, display_end_override_ms=3400)])
+    blank = colors('#00000000', '#00000000')
+    style = replace(style, karaoke_colors=blank, stroke_width_px=0, stroke2_enabled=False, sing_fx=variant,
+                    fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    reverse = 'p07_vertical_reverse_singing_particles'
+    assert {reverse, 'p05_reverse_wipe', 'p07_sing_twinkle'} <= set(ir['required_features'])
+    source, = ir['track']['lines']
+    final, = ir['skia_layout']['lines']
+    assert [cell['clock_index'] for cell in final['cells']] == [1, 0]
+    for burst in source['fx_bursts']:
+        assert burst['start_ms'] == source['resolved_intervals'][burst['char_index']][0]
+    malformed = copy.deepcopy(ir)
+    malformed['required_features'].remove(reverse)
+
+    def center(frames):
+        rows = np.sum([blue_coverage(frame).sum(axis=1) for frame in frames], axis=0)
+        assert rows.sum() > 100
+        return np.average(np.arange(rows.size), weights=rows)
+
+    captures = []
+    times = [50, 350, 500, 2550, 2700, 3401]
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, malformed)
+            reprise, _ = collect(process, [times[2], times[3]], generation=2)
+        assert np.array_equal(frames[2], reprise[0]) and np.array_equal(frames[3], reprise[1])
+        assert not frames[0].any() and not frames[-1].any()
+        assert center(frames[1:3]) - center(frames[3:5]) > 30
+        captures.append(premultiplied(np.stack(frames)))
+    assert abs(captures[0] - captures[1]).mean() < .15
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

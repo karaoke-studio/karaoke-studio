@@ -49,12 +49,14 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && features.contains("p07_vertical_singing_with_particles");
     const bool verticalParticles = cfg.vertical
         && (verticalStars || verticalShapes || verticalFalling || verticalLightning || verticalFlame)
-        && !source.wipeReverse && !source.scanlineEnabled && !source.strokeFlashEnabled
+        && (!source.wipeReverse || features.contains("p07_vertical_reverse_singing_particles"))
+        && !source.scanlineEnabled && !source.strokeFlashEnabled
         && (source.karaokeAnimation == "none" || verticalScale)
         && source.entryAnimation == "none" && source.exitAnimation == "none";
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
-    if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
+    if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft
+        || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())

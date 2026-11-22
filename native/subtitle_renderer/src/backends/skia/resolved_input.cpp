@@ -609,7 +609,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 // Singing flame moves its successive emitters along the wipe axis.
                 // Its local plume still rises vertically in screen space.
                 auto localBurst = burst;
-                const float verticalEmit = style.vertical ? localBurst.emitX * height : 0.f;
+                const float verticalEmit = style.vertical
+                    ? localBurst.emitX * height * (line.wipeReverse ? -1.f : 1.f) : 0.f;
                 if (style.vertical) localBurst.emitX = 0.f;
                 prepared.particles.push_back({std::move(localBurst), sprite->second, argb(burst.color),
                     x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
