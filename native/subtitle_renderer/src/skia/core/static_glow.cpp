@@ -7,6 +7,7 @@
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkRuntimeEffect.h"
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace subtitle::skia {
@@ -163,9 +164,38 @@ void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index,
     composite(*blurred.surface->getCanvas(), mask);
     auto pixels = blurred.surface->makeImageSnapshot();
     if (!pixels) throw std::runtime_error("Skia 逐字光晕临时表面无法取样");
+    const SkSamplingOptions linear(SkFilterMode::kLinear);
+    // At steep spin angles a destination pixel spans many columns of the
+    // upright image. Integrate the blurred light across the physical pixel.
+    if (std::abs(transform.getScaleX()) < .125f) {
+        const auto origin = SkMatrix::Translate(float(blurred.origin.x()), float(blurred.origin.y()));
+        const auto imageToDevice = canvas.getTotalMatrix() * transform * origin;
+        auto bounds = imageToDevice.mapRect(SkRect::MakeWH(float(pixels->width()), float(pixels->height()))).roundOut();
+        if (!bounds.intersect(canvas.getDeviceClipBounds())) return;
+        static const auto effect = SkRuntimeEffect::MakeForShader(SkString(R"(
+            uniform shader glow;
+            half4 main(float2 point) {
+                float4 sum = float4(0);
+                for (int y = 0; y < 4; ++y)
+                    for (int x = 0; x < 4; ++x)
+                        sum += glow.eval(point + (float2(x, y) - 1.5) * .25);
+                return half4(sum * (1.0 / 16.0));
+            }
+        )"));
+        if (!effect.effect) throw std::runtime_error(effect.errorText.c_str());
+        SkRuntimeShaderBuilder builder(effect.effect);
+        builder.child("glow") = pixels->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, linear, &imageToDevice);
+        auto coverage = builder.makeShader();
+        if (!coverage) throw std::runtime_error("Skia 逐字光晕覆盖着色器初始化失败");
+        SkPaint paint;
+        paint.setShader(std::move(coverage));
+        SkAutoCanvasRestore restore(&canvas, true);
+        canvas.resetMatrix();
+        canvas.drawIRect(bounds, paint);
+        return;
+    }
     SkAutoCanvasRestore restore(&canvas, true);
     canvas.concat(transform);
-    canvas.drawImage(pixels, float(blurred.origin.x()), float(blurred.origin.y()),
-                     SkSamplingOptions(SkFilterMode::kLinear));
+    canvas.drawImage(pixels, float(blurred.origin.x()), float(blurred.origin.y()), linear);
 }
 }

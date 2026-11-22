@@ -329,8 +329,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         if effect == 'flame':
                             particle_affine_lines.add(index)
                 continue
-            if (source.get('entry_anim') == 'none' and source.get('exit_anim') == 'spin_flip'
-                    and source.get('exit_duration_ms', 0) > 0):
+            if ((entry == 'none' and leave == 'spin_flip' and source['exit_duration_ms'] > 0)
+                    or (entry == 'spin_flip' and leave == 'none' and source['entry_duration_ms'] > 0)):
                 spin_lines.add(index)
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
@@ -614,8 +614,10 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p06_lower_ruby_glow')
         if 'lower_ruby_shadow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow')
-        if spin_lines:
-            ir['required_features'].append('p07_ruby_character_exit_spin')
+        for phase in ('entry', 'exit'):
+            if any(ir['track']['lines'][plan.lines[index].track_index].get(f'{phase}_anim') == 'spin_flip'
+                   for index in spin_lines):
+                ir['required_features'].append(f'p07_ruby_character_{phase}_spin')
         if translation_lines:
             ir['required_features'].append('p07_ruby_character_translation')
         if affine_lines:

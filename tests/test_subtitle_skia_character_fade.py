@@ -133,7 +133,7 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('animation', [
-    'spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out', 'petal', 'note', 'ripple', 'snow',
+    'spin_flip', 'entry_spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out', 'petal', 'note', 'ripple', 'snow',
     'scatter_out', 'converge_out',
     'stretch_out', 'stretch_in', 'glow_in', 'glow_out', 'lightning', 'flame', 'entry_flame', 'entry_lightning',
 ])
@@ -141,10 +141,10 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
     from test_subtitle_skia_static_glow import glowing_ruby
 
     track, style = glowing_ruby(reading, 'inherited')
-    spinning = animation == 'spin_flip'
+    spinning = animation in {'spin_flip', 'entry_spin_flip'}
     affine = animation in {'scatter_out', 'converge_out', 'stretch_out', 'stretch_in',
                            'glow_in', 'glow_out', 'flame', 'entry_flame'}
-    exiting = spinning or animation.endswith('_out') or animation in {'petal', 'note', 'ripple', 'snow', 'lightning', 'flame'}
+    exiting = animation.endswith('_out') or animation in {'spin_flip', 'petal', 'note', 'ripple', 'snow', 'lightning', 'flame'}
     effect = animation.removeprefix('entry_')
     style = replace(style, entry_anim='none' if exiting else effect,
                     exit_anim=effect if exiting else 'none', entry_lead_ms=600, exit_fade_ms=600,
@@ -152,6 +152,7 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
     ir = upper_ir(binary, (track, style), 1)
     expected = {
         'spin_flip': 'p07_ruby_character_exit_spin',
+        'entry_spin_flip': 'p07_ruby_character_entry_spin',
         'tracking_in': 'p07_ruby_character_translation', 'wave_in': 'p07_ruby_character_translation',
         'assemble_in': 'p07_ruby_particle_assembly', 'dissolve_out': 'p07_ruby_particle_assembly',
         'petal': 'p07_ruby_particle_fade', 'note': 'p07_ruby_particle_fade',
@@ -178,14 +179,24 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
     if animation == 'entry_flame':
         moving = line['display_start_ms'] + line['entry_duration_ms'] * 7 // 8
     steady = line['display_end_ms']-600 if exiting else line['display_start_ms']+600
+    times = [moving, steady, moving]
+    if animation == 'entry_spin_flip':
+        times.append(line['display_start_ms'] + 6)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
-        frames, _ = collect(process, [moving, steady, moving])
+        frames, _ = collect(process, times)
         with pytest.raises(NativeRendererError):
             configure(process, bad)
-        replay, _ = collect(process, [moving])
+        if spinning:
+            missing_feature = copy.deepcopy(ir)
+            missing_feature['required_features'].remove(expected)
+            with pytest.raises(NativeRendererError):
+                configure(process, missing_feature)
+        replay, _ = collect(process, times[2:])
     assert frames[0].any() and not np.array_equal(frames[0], frames[1])
     assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[0])
+    if animation == 'entry_spin_flip':
+        assert frames[3].any() and np.array_equal(frames[3], replay[1])
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -638,7 +649,7 @@ def test_ruby_assembly_pair_matches_actual_gpu(binary, application, tmp_path, ef
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
-    'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
+    'entry_spin_flip', 'exit_spin_flip', 'entry_tracking_in', 'entry_wave_in', 'entry_assemble_in', 'exit_dissolve_out',
     'exit_petal', 'exit_feather', 'exit_snow_solid', 'exit_note', 'exit_heart', 'exit_sparkle', 'exit_lightning',
     'exit_snow', 'exit_ripple',
     'exit_flame', 'entry_flame', 'entry_lightning',
@@ -650,7 +661,9 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == case_id)
     times = case.timestamps_ms
-    if case_id == 'exit_flame':
+    if case_id == 'entry_spin_flip':
+        times = tuple(sorted({*times, 300, 301, 302, 303, 306, 309, 310, 325, 336, 348}))
+    elif case_id == 'exit_flame':
         times = tuple(sorted({*times, 5240, 5305, 5370, 5440}))
     elif case_id == 'entry_flame':
         times = tuple(sorted({*times, 735, 780, 840}))

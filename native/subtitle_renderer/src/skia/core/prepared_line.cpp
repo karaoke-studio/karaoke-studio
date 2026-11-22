@@ -84,11 +84,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Sheared characters leave the static paint bounds, so they fade in an unbounded layer.
     const bool geometry = line.characterGeometry.active();
     // The opacity-only character transition owns the entry window.
+    const int fadeSide = line.characterFade.side(tMs, line.startMs, line.endMs);
     const bool utopia = !rubyGeometryPhase && (line.singingScale.active || line.utopiaTransition.active())
-        && line.characterFade.side(tMs, line.startMs, line.endMs) == 0;
-    const bool fadeActive = line.characterFade.side(tMs, line.startMs, line.endMs) != 0;
+        && fadeSide == 0;
+    const bool fadeActive = fadeSide != 0;
     const bool compositingSpin = fadeActive
         && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.spins(); });
+    const bool entrySpin = compositingSpin && fadeSide < 0;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     // Vertical singing particles can drift beyond the static glyph bounds.
@@ -321,6 +323,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return;
             }
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+            // Near the start of a spin, a one-byte change in edge coverage
+            // can remove the only visible part of a letter from one target.
+            if (entrySpin && drawOutline && animatedInk && !shader && transform.opacity < .125f) {
+                const auto outline = prepareOutlinePath(*animatedInk, stroke->width);
+                drawSamplePatternPath(canvas, outline, paint, true);
+                return;
+            }
             if (animatedInk) {
                 if (posedStroke) canvas.drawPath(*posedStroke, paint);
                 else if (drawOutline) drawFixedOutline(canvas, *animatedInk, paint, stroke->width);
