@@ -23,9 +23,12 @@ def _declare_role_body_paints(ir, plan):
         palettes = [effective_karaoke_colors(appearance) for appearance in appearances]
         if not any(state.text.mode in _TEXTURED for colors in palettes for state in (colors.before, colors.after)):
             continue
-        if any(state.stroke.mode != 'solid' or state.stroke2.mode != 'solid'
-               for colors in palettes for state in (colors.before, colors.after)):
-            raise ValueError('Skia 正文渐变暂不支持角色的复杂描边')
+        outlines = {getattr(state, layer).mode for colors in palettes for state in (colors.before, colors.after)
+                    for layer in ('stroke', 'stroke2')}
+        if outlines - {'solid'}:
+            if 'p08_inline_bitmap_guides' not in ir['required_features'] or not outlines <= {'solid', 'gradient_vertical', 'split_vertical'}:
+                raise ValueError('Skia 正文渐变暂不支持角色的复杂描边')
+            ir['required_features'].append('p06_role_outline_gradient')
         ir['required_features'].append('p06_role_body_paints')
         return True
     return False

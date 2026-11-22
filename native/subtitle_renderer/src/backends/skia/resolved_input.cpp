@@ -76,7 +76,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool gradientGlow = glowPaints != GlowPaintSupport::Solid;
     const bool latinPrimaryOutline = features.contains("p06_latin_primary_outline");
     const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
-    const bool outlineGradients = features.contains("p06_outline_gradient");
+    const bool roleOutlineGradients = features.contains("p06_role_outline_gradient");
+    const bool outlineGradients = features.contains("p06_outline_gradient") || roleOutlineGradients;
+    const bool inlineAvatars = features.contains("p08_inline_bitmap_guides");
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
     validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
         .outlineGradients = outlineGradients, .imageFills = imageFills,
@@ -389,7 +391,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && ((line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled)
-                || roleFadedScanline)
+                || roleFadedScanline || (inlineAvatars && lineAnimation && !line.scanlineEnabled
+                    && (line.entryAnimation == "none" || line.entryAnimation == "fade")
+                    && (line.exitAnimation == "none" || line.exitAnimation == "fade")))
             && !line.strokeFlashEnabled && line.bursts.empty();
         if (line.scanlineEnabled && hasInlineRoles && !roleFadedScanline)
             throw BackendError("Skia 行内角色扫字线需要正向横排和整行淡化");
@@ -618,7 +622,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (source.contains("body_gradient_bounds"))
                 throw BackendError("Skia 角色画笔不能携带整行画笔范围");
             resolveRoleBodyPaints(prepared, line, style, projected.charStyles, *rolePaintBounds, imageCache,
-                                  projected.layoutReferenceScale);
+                                  projected.layoutReferenceScale, roleOutlineGradients);
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
@@ -660,7 +664,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
         prepared.glow = skiaStaticGlow(style);
-        if (reverseBitmapLine) {
+        const bool baseOwnsText = std::ranges::any_of(line.chars, [](const auto& cell) {
+            return cell.styleIndex < 0 && !cell.bitmapGuide;
+        });
+        if (reverseBitmapLine || (inlineAvatars && !baseOwnsText)) {
             prepared.shadow = {};
             prepared.glow = {};
         }

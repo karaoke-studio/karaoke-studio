@@ -6,18 +6,20 @@ from krok_helper.subtitle_render.engine.ruby.style_semantics import ruby_stroke_
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 
 
-def ruby_outlines(style, *, allow_vertical_gradient=False):
+def ruby_outlines(style, *, allow_vertical_gradient=False, allow_split=False):
     colors = effective_ruby_karaoke_colors(style)
     outlines = {}
     gradient = False
     modes = {'solid', 'gradient_vertical'} if allow_vertical_gradient else {'solid'}
+    if allow_vertical_gradient and allow_split:
+        modes.add('split_vertical')
     for layer, width in (('stroke', ruby_stroke_width(style)), ('stroke2', ruby_stroke2_width(style))):
         if not width:
             continue
         before, after = getattr(colors.before, layer), getattr(colors.after, layer)
         if before.mode not in modes or after.mode not in modes:
             raise ValueError('Skia 注音描边的画笔或布局组合暂不支持')
-        gradient |= before.mode == 'gradient_vertical' or after.mode == 'gradient_vertical'
+        gradient |= before.mode != 'solid' or after.mode != 'solid'
         outlines[layer] = {'width': width, 'before': list(rgba(before.color)), 'after': list(rgba(after.color))}
     return outlines, gradient
 

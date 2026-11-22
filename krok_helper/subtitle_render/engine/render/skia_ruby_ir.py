@@ -9,6 +9,7 @@ from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marke
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import prepare_overlap_wipes
 from .skia_lower_ir import lower_solid_appearance
 from .skia_ruby_paint_ir import ruby_decoration_kinds, ruby_outlines
+from ..guide.skia_bitmap import uses_inline_bitmap_guides
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
@@ -39,6 +40,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     has_gradient_outline = False
     has_lower_glow = False
     has_lower_shadow = False
+    inline_bitmaps = uses_inline_bitmap_guides(prepared.plan.lines)
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
         singing = line_index in singing_lines
@@ -66,7 +68,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             indices = group.target.indices
             style_cell = next((i for i in indices if item.render_line.chars[i].role_label), indices[0])
             outlines, gradient_outline = ruby_outlines(group.target.style,
-                allow_vertical_gradient=not (rtl or group.target.lower))
+                allow_vertical_gradient=not (rtl or group.target.lower), allow_split=inline_bitmaps)
             has_gradient_outline |= gradient_outline
             # The existing GPU floors a half-width in reference pixels, then
             # uses that integer directly in the physical annotation clip.

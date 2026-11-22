@@ -59,7 +59,10 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
             source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
         faded_role_scale = ('p07_inline_role_faded_scanline' in ir['required_features']
                             and fixed_faded_utopia_band(source, style))
-        role_scale = inline_roles and scales and (static_role_scale or faded_role_scale)
+        avatar_role_scale = ('p08_inline_bitmap_guides' in ir['required_features'] and 'fade' in animations
+                             and animations <= {'none', 'fade'} and not any(
+                                 source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts')))
+        role_scale = inline_roles and scales and (static_role_scale or faded_role_scale or avatar_role_scale)
         rtl_singing = scales and annotated and 'p07_rtl_ruby_singing_scale' in ir['required_features']
         if (style.vertical or (style.right_to_left and not rtl_singing) or item.line.wipe_reverse
                 or (annotated and ((source.get('zoom_pulse') and not ruby_zoom)

@@ -48,10 +48,11 @@ OutlinePaint outlinePaint(const QJsonObject& outlines, const char* key) {
             rgbaPaint(layer.value("before")), rgbaPaint(layer.value("after"))};
 }
 bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const PaintStyle& after,
-                    float width, double dpr, bool allowGradient) {
+                    float width, double dpr, bool allowGradient, bool allowSplit) {
     if (std::abs(outline.width * dpr - width) > 1e-4) return false;
-    const auto supported = [allowGradient](const PaintStyle& paint) {
-        return paint.mode == "solid" || (allowGradient && paint.mode == "gradient_vertical");
+    const auto supported = [allowGradient, allowSplit](const PaintStyle& paint) {
+        return paint.mode == "solid" || (allowGradient
+            && (paint.mode == "gradient_vertical" || (allowSplit && paint.mode == "split_vertical")));
     };
     return !outline.width || (supported(before) && supported(after)
         && outline.before == argb(before.color) && outline.after == argb(after.color));
@@ -164,9 +165,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                                 : features.contains("p07_faded_scanline_singing_particles"));
     const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
         && scanlineStyle.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
+    const bool avatarOutline = features.contains("p08_inline_bitmap_guides") && fadeOnly && !line.scanlineEnabled
+        && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowOutlineGradient = features.contains("p06_ruby_outline_gradient")
         && !vertical && !rtl && !line.wipeReverse && !line.zoomPulseEnabled && !line.strokeFlashEnabled
-        && (!line.scanlineEnabled || fixedScanlinePaint || brightenedScanlineGradient) && scene.charStyles.empty()
+        && (!line.scanlineEnabled || fixedScanlinePaint || brightenedScanlineGradient) && (scene.charStyles.empty() || avatarOutline)
         && transition == RubyTransition::None;
     const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
         && features.contains("p07_ruby_line_animation");
@@ -341,9 +344,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const float width = latin ? paint.rubyLatinStrokeWidth : paint.rubyStrokeWidth;
             const float width2 = latin ? paint.rubyLatinStroke2Width : paint.rubyStroke2Width;
             if (!matchesOutline(primary, paint.rubyBeforeStrokePaint, paint.rubyAfterStrokePaint,
-                                width, glyphs.dpr, allowOutlineGradient)
+                                width, glyphs.dpr, allowOutlineGradient, avatarOutline)
                 || !matchesOutline(secondary, paint.rubyBeforeStroke2Paint, paint.rubyAfterStroke2Paint,
-                                   width2, glyphs.dpr, allowOutlineGradient))
+                                   width2, glyphs.dpr, allowOutlineGradient, avatarOutline))
                 throw BackendError("Skia 上注音描边与样式或画笔能力不一致");
         }
         using ::subtitle::skia::paintNeedsBodyProtection;

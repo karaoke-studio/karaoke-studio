@@ -56,13 +56,19 @@ RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine& lin
 }
 
 void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
-                         std::span<const TextStyle> styles, RolePaintBounds& bounds, SkiaImageFillCache& images, float scale) {
+                         std::span<const TextStyle> styles, RolePaintBounds& bounds, SkiaImageFillCache& images, float scale,
+                         bool outlineGradients) {
     for (auto& [role, domain] : bounds.roles) {
         const auto& look = role < 0 ? base : styles[role];
+        bool paintedOutline = false;
         for (const auto* paint : {&look.beforeStrokePaint, &look.afterStrokePaint,
-                                  &look.beforeStroke2Paint, &look.afterStroke2Paint})
-            if (paint->mode != "solid") throw BackendError("Skia 角色正文画笔暂不支持复杂描边");
-        if (look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid") continue;
+                                  &look.beforeStroke2Paint, &look.afterStroke2Paint}) {
+            if (paint->mode == "solid") continue;
+            if (!outlineGradients || (paint->mode != "gradient_vertical" && paint->mode != "split_vertical"))
+                throw BackendError("Skia 角色正文画笔暂不支持此描边");
+            paintedOutline = true;
+        }
+        if (look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid" && !paintedOutline) continue;
         domain.paintIndex = int(line.roleBodyPaints.size());
         ::subtitle::skia::BodyPaint prepared;
         const PaintStyle* states[]{&look.beforeFillPaint, &look.afterFillPaint};
@@ -76,6 +82,13 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine&
                 const auto& ink = paint.mode == "gradient_horizontal" ? domain.ink : bounds.line;
                 prepared.gradients[phase] = ::subtitle::skia::lineGradient(paint, ink, bounds.outlinePad);
             }
+        }
+        if (paintedOutline) {
+            const auto gradient = [&](const PaintStyle& paint) {
+                return ::subtitle::skia::lineGradient(paint, bounds.line, bounds.outlinePad);
+            };
+            prepared.outlineGradients = {gradient(look.beforeStrokePaint), gradient(look.afterStrokePaint)};
+            prepared.outerGradients = {gradient(look.beforeStroke2Paint), gradient(look.afterStroke2Paint)};
         }
         line.roleBodyPaints.push_back(std::move(prepared));
     }

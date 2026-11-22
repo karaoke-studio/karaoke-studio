@@ -118,6 +118,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
         "p06_ruby_outline_gradient",
+        "p06_role_outline_gradient",
         "p06_animated_singing_gradient_fill",
         "p06_faded_scanline_palette_gradient",
         "p06_static_shadow",
@@ -639,7 +640,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_role_solid_outlines", "p06_multi_lane_outline", "p06_role_body_paints",
             "p06_ruby_role_paints", "p06_role_static_glow", "p06_ruby_role_glow",
-            "p07_role_singing_scale", "p07_role_singing_glow"
+            "p06_role_outline_gradient", "p06_ruby_outline_gradient", "p06_static_shadow", "p06_ruby_shadow",
+            "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
+            "p07_role_singing_scale", "p07_role_singing_glow", "p07_line_fade", "p07_role_line_fade",
+            "p07_ruby_line_animation", "p07_utopia_line_animation"
         };
         static const QJsonArray reverseAllowed{
             "p08_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_static_shadow"
@@ -925,6 +929,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_ruby_solid_outline") || !features.contains("p05_upper_ruby")
             || layout.value("ruby_outline_gradient_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音渐变描边缺少版本化布局或注音能力声明");
+    if (features.contains("p06_role_outline_gradient")
+        && (!inlineBitmapGuides || !features.contains("p06_role_body_paints")
+            || !features.contains("p06_primary_solid_outline")))
+        throw BackendError("Skia 角色渐变描边缺少图片或正文画笔能力声明");
     if (features.contains("p06_ruby_shadow")
         && (!features.contains("p05_resolved_ruby") || layout.value("ruby_shadow_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音阴影缺少版本化布局或注音能力声明");
@@ -1036,14 +1044,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_role_body_paints")
             || !(roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow")
                  || features.contains("p06_ruby_glow"))
-            || features.contains("p07_singing_scale") || features.contains("p05_lower_ruby")))
+            || (features.contains("p07_singing_scale") && !inlineBitmapGuides) || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 渐变光晕需要正向横排角色画笔和普通走字");
     const bool roleLayers = features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints")
         || roleStaticGlow || rubyRoleGlow;
     const bool roleLineFade = features.contains("p07_role_line_fade");
     if (roleLineFade != (roleLayers && features.contains("p07_line_fade"))
         || (roleLineFade && (features.contains("p05_lower_ruby")
-            || (features.contains("p07_singing_scale") && !roleFadedScanline))))
+            || (features.contains("p07_singing_scale") && !(roleFadedScanline || inlineBitmapGuides)))))
         throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字和受支持的上注音画笔");
     if (roleLayers) {
         static const QJsonArray allowed{
@@ -1064,12 +1072,16 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation",
             "p07_utopia_line_animation", "p07_inline_role_faded_scanline"
         };
+        static const QJsonArray avatarFeatures{
+            "p08_bitmap_guides", "p08_inline_bitmap_guides", "p06_role_outline_gradient", "p06_ruby_outline_gradient",
+            "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
+        };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
             || ((roleBodyPaints || roleStaticGlow) && !features.contains("p05_inline_roles"))
             || std::any_of(features.begin(), features.end(), [&](const auto& v) {
                 return !allowed.contains(v) && !(roleFadedScanline && fadedScanline.contains(v))
-                    && !(inlineBitmapGuides && (v == QJsonValue("p08_bitmap_guides") || v == QJsonValue("p08_inline_bitmap_guides")))
+                    && !(inlineBitmapGuides && avatarFeatures.contains(v))
                     && !(reverseBitmapGuides && (v == QJsonValue("p05_reverse_wipe") || v == QJsonValue("p05_reverse_overlap")
                                                  || v == QJsonValue("p08_reverse_bitmap_guides") || v == QJsonValue("p06_static_shadow")));
             }))

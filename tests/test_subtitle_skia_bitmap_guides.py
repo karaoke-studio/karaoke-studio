@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QImage
 
 from test_subtitle_skia_rtl_flow import application, binary, collect, configure, ir_for, project, selection
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import bitmap_guide_box
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -218,11 +219,29 @@ def test_reverse_inline_avatars_wipe_from_right_to_left(binary, project, tmp_pat
 
 
 @GPU
-def test_role_tagged_inline_avatars_match_d2d_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('painted', [False, True], ids=['solid', 'gradient'])
+def test_role_tagged_inline_avatars_match_d2d_gpu(binary, application, tmp_path, painted):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = inline_avatar_case(tmp_path)
+    if painted:
+        from test_subtitle_skia_roles import role_outline_palette
+
+        palette = role_outline_palette()
+        gradient = PaintFill(mode='gradient_vertical', start_color='#FF6010', end_color='#30CFD0')
+        split = PaintFill(mode='split_vertical', split_top_color='#3070A0', split_bottom_color='#AB1080')
+        colors = replace(palette, after=replace(palette.after, text=gradient, stroke=gradient, stroke2=split))
+        style = replace(style, custom_style_schemes={'avatar': replace(style.custom_style_schemes['avatar'],
+                        karaoke_colors=colors, ruby_karaoke_colors=colors, ruby_colors_follow_main=False,
+                        stroke2_enabled=True, stroke2_width_px=4, ruby_stroke_width_px=4,
+                        ruby_stroke2_enabled=True, ruby_stroke2_width_px=3)},
+                        entry_anim='fade', entry_lead_ms=500)
+        line = track.lines[0]
+        chars = [replace(c, role_label='avatar') if index >= 3 else c for index, c in enumerate(line.chars)]
+        track = replace(track, lines=[replace(line, chars=chars)])
+        ir = ir_for(binary, (track, style))
+        assert {'p06_role_outline_gradient', 'p06_ruby_outline_gradient'} <= set(ir['required_features'])
     times = (1201, 1500, 1900, 2150, 2400, 2750, 3400, 4050)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,

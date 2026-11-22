@@ -22,7 +22,7 @@ from .skia_ruby_paint_ir import ruby_decoration_kinds
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import (
-    declare_bitmap_guides, is_undecorated_bitmap_line, validate_bitmap_guides,
+    declare_bitmap_guides, is_undecorated_bitmap_line, uses_inline_bitmap_guides, validate_bitmap_guides,
 )
 from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from .skia_lower_ir import lower_sources
@@ -711,6 +711,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
             track, ir, plan, measured, spin_lines, composed_geometry_lines, particle_band_tracks)
         ir['required_features'].append('p07_character_transform')
+    if adjust_position is None and uses_inline_bitmap_guides(plan.lines):
+        ir['required_features'].append('p08_inline_bitmap_guides')
     write_body_gradient_bounds(ir, plan)
     write_scanline_schema(ir, track, style)
     if any(line.get('fx_bursts') for line in ir['track']['lines']):

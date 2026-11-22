@@ -82,6 +82,14 @@ def is_undecorated_bitmap_line(line):
                                     for c in line.chars)
 
 
+def uses_inline_bitmap_guides(plan_lines):
+    for item in plan_lines:
+        cells = [c for c in item.render_line.chars if guide_symbol_is_bitmap(c.vector_glyph)]
+        if cells and _needs_inline_bitmap_profile(item.line, cells):
+            return True
+    return False
+
+
 def validate_bitmap_guides(track, style, *, static_title=False):
     """Validate line-prefix guides and undecorated static inline avatars."""
     from ..layout.line.style import style_for_line
@@ -128,7 +136,11 @@ INLINE_BITMAP_GUIDE_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_role_solid_outlines', 'p06_multi_lane_outline', 'p06_role_body_paints',
     'p06_ruby_role_paints', 'p06_role_static_glow', 'p06_ruby_role_glow',
-    'p07_role_singing_scale', 'p07_role_singing_glow'})
+    'p06_role_outline_gradient', 'p06_ruby_outline_gradient',
+    'p06_static_shadow', 'p06_ruby_shadow', 'p06_gradient_glow',
+    'p06_vertical_gradient_glow', 'p06_role_gradient_glow',
+    'p07_role_singing_scale', 'p07_role_singing_glow', 'p07_line_fade',
+    'p07_role_line_fade', 'p07_ruby_line_animation', 'p07_utopia_line_animation'})
 REVERSE_BITMAP_GUIDE_FEATURES = frozenset({
     'p08_reverse_bitmap_guides', 'p05_reverse_wipe', 'p05_reverse_overlap', 'p06_static_shadow'})
 
@@ -141,13 +153,8 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     features.append('p08_bitmap_guides')
     ir['skia_layout']['bitmap_guide_schema'] = 1
     allowed = BITMAP_GUIDE_FEATURES | {'p05_vector_guides'} if static_title else BITMAP_GUIDE_FEATURES
-    if not static_title:
-        for item in plan_lines:
-            cells = [c for c in item.render_line.chars if guide_symbol_is_bitmap(c.vector_glyph)]
-            if cells and _needs_inline_bitmap_profile(item.line, cells):
-                features.append('p08_inline_bitmap_guides')
-                allowed |= INLINE_BITMAP_GUIDE_FEATURES
-                break
+    if 'p08_inline_bitmap_guides' in features:
+        allowed |= INLINE_BITMAP_GUIDE_FEATURES
     if 'p08_reverse_bitmap_guides' in features:
         allowed |= REVERSE_BITMAP_GUIDE_FEATURES
     if not set(features) <= allowed:
