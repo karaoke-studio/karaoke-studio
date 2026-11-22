@@ -239,6 +239,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool verticalSinging = style.vertical && singingScale && features.contains("p07_vertical_singing_scale")
             && (!style.dualLineLayout || features.contains("p07_vertical_columns_singing_scale"))
             && (!line.zoomPulseEnabled || features.contains("p07_vertical_zoom_pulse"))
+            && (!line.wipeReverse || (features.contains("p07_vertical_reverse_singing")
+                && !line.scanlineEnabled && !annotated))
             && !style.rightToLeft && !vectorGuides
             && !hasInlineRoles && line.entryAnimation == "none" && line.exitAnimation == "none"
             && (!line.scanlineEnabled || features.contains("p07_vertical_scanline_singing"))
@@ -352,7 +354,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
-            || line.wipeReverse || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
+            || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit

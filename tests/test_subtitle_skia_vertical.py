@@ -566,6 +566,57 @@ def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, projec
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('karaoke,glow', [('utopia', False), ('zoom_pulse', True)])
+def test_reverse_vertical_scaling_keeps_bottom_to_top_wipe(binary, project, karaoke, glow):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, position='top')
+    line, = track.lines
+    line = replace(line, chars=line.chars[:1], end_ms=700, wipe_reverse=True)
+    track = replace(track, lines=[line])
+    plain = replace(style, reverse_karaoke_anim='none', karaoke_colors=colors('#FF0000', '#00FF00'))
+    if glow:
+        plain = replace(plain, decoration_kind='glow', glow_before_radius_px=3, glow_after_radius_px=4)
+    animated = replace(plain, reverse_karaoke_anim=karaoke, zoom_pulse_peak_pct=145)
+    ir = ir_for(binary, (track, animated), dpr=1.5)
+    baseline = ir_for(binary, (track, plain), dpr=1.5)
+    bare = ir_for(binary, (replace(track, rubies=[]), animated), dpr=1.5)
+    feature = 'p07_vertical_reverse_singing'
+    assert {feature, 'p07_vertical_singing_scale', 'p05_reverse_wipe'} <= set(ir['required_features'])
+    resolved, = ir['skia_layout']['lines']
+    assert resolved == {**bare['skia_layout']['lines'][0], 'ruby_groups': []}
+    (start, end), = ir['track']['lines'][0]['resolved_intervals']
+    times = [(start + end) // 2, end + 300]
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    captures = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, baseline)
+            steady, _ = collect(process, times, generation=3)
+            configure(process, bare)
+            without_reading, _ = collect(process, times, generation=4)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert all(np.array_equal(a, b) for a, b in zip(frames, without_reading, strict=True))
+        # Peak bounds can change the blur's last coverage bit, even at unit scale.
+        settled = abs(premultiplied(frames[-1]) - premultiplied(steady[-1]))
+        assert settled.max() <= int(glow)
+        assert np.count_nonzero(frames[0][..., 3] > 160) > np.count_nonzero(steady[0][..., 3] > 160)
+        red, green, _, alpha = np.moveaxis(frames[0], -1, 0)
+        sung = np.nonzero((green > 190) & (red < 30) & (alpha > 160))[0]
+        unsung = np.nonzero((red > 190) & (green < 30) & (alpha > 160))[0]
+        assert sung.size and unsung.size and np.median(sung) > np.median(unsung)
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',
                                       'rotated_text', 'horizontal_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -812,7 +863,7 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
 
 
 @pytest.mark.parametrize('change', ['combined_unit', 'middle_dot', 'latin', 'overlap_groups',
-                                    'reverse_utopia', 'lower', 'role'])
+                                    'reverse_utopia_scanline', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     reading = {'combined_unit': 'か\u309a', 'middle_dot': '・', 'latin': 'A'}.get(change, '字')
     extra = None
@@ -822,9 +873,9 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
         other, _ = vertical_ruby_source(project, span=(1, 3))
         extra = other.rubies
     track, style = vertical_ruby_source(project, reading=reading, span=span, extra=extra)
-    if change == 'reverse_utopia':
+    if change == 'reverse_utopia_scanline':
         track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
-        style = replace(style, reverse_karaoke_anim='utopia')
+        style = replace(style, reverse_karaoke_anim='utopia_scanline')
     elif change == 'lower':
         style = replace(style, lower_ruby_enabled=True)
     elif change == 'role':

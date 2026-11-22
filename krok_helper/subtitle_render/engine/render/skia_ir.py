@@ -122,9 +122,10 @@ def _vertical_singing_lines(ir, plan):
     for item in plan.lines:
         look = item.layout_style
         source = ir['track']['lines'][item.track_index]
-        if (look.vertical and not (look.right_to_left or item.line.wipe_reverse)
+        if (look.vertical and not look.right_to_left
                 and source.get('karaoke_anim') == 'utopia'
                 and {source.get('entry_anim'), source.get('exit_anim')} == {'none'}
+                and not (item.line.wipe_reverse and source.get('scanline'))
                 and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
                 and not uses_authored_decoration(look, 'shadow')
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):
@@ -183,6 +184,8 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
         ir['skia_layout']['singing_scale_schema'] = 1
     if vertical_singing:
         ir['required_features'].append('p07_vertical_singing_scale')
+        if any(ir['track']['lines'][index].get('wipe_reverse') for index in vertical_singing):
+            ir['required_features'].append('p07_vertical_reverse_singing')
         if any(ir['track']['lines'][index].get('zoom_pulse') for index in vertical_singing):
             ir['required_features'].append('p07_vertical_zoom_pulse')
         if 'p05_vertical_columns' in ir['required_features']:
