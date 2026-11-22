@@ -42,13 +42,17 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     const bool verticalStars = features.contains("p07_vertical_sing_twinkle");
     const bool verticalShapes = features.contains("p07_vertical_sing_shapes");
+    const bool verticalScale = source.karaokeAnimation == "utopia"
+        && features.contains("p07_vertical_singing_with_particles");
     const bool verticalParticles = cfg.vertical && (verticalStars || verticalShapes)
-        && !source.wipeReverse && !source.scanlineEnabled && source.karaokeAnimation == "none"
+        && !source.wipeReverse && !source.scanlineEnabled && !source.strokeFlashEnabled
+        && (source.karaokeAnimation == "none" || verticalScale)
         && source.entryAnimation == "none" && source.exitAnimation == "none";
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
-        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
+        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
+            && !scaledSinging && !verticalParticles)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)

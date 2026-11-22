@@ -3,6 +3,7 @@
 from ..layout.line.skia_geometry import write_horizontal_pivots
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import is_noise_animation, ordinary_line_animation
+from .skia_particle_ir import vertical_singing_particle_modes
 
 
 def vertical_singing_lines(ir, plan):
@@ -16,7 +17,8 @@ def vertical_singing_lines(ir, plan):
                 and ordinary_line_animation(source)
                 and ({source.get('entry_anim'), source.get('exit_anim')} == {'none'}
                      or not item.line.wipe_reverse)
-                and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
+                and not source.get('stroke_flash')
+                and (not source.get('fx_bursts') or vertical_singing_particle_modes(source))
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):
             tracks.add(item.track_index)
     return tracks

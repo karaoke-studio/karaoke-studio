@@ -370,11 +370,13 @@ def test_singing_star_speed_preserves_birth_and_respects_display_window(binary, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('variant,with_reading,dpr', [
-    ('twinkle', False, 1), ('twinkle_classic', True, 1.5),
-    ('note', True, 1.5), ('heart', False, 1), ('ripple', True, 1.5),
+@pytest.mark.parametrize('variant,with_reading,dpr,karaoke', [
+    ('twinkle', False, 1, 'none'), ('twinkle_classic', True, 1.5, 'none'),
+    ('note', True, 1.5, 'none'), ('heart', False, 1, 'none'), ('ripple', True, 1.5, 'none'),
+    ('twinkle', False, 1, 'utopia'), ('note', True, 1.5, 'zoom_pulse'),
+    ('ripple', True, 1.5, 'utopia'),
 ])
-def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr):
+def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr, karaoke):
     from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
 
     if with_reading:
@@ -387,12 +389,19 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
                                           display_end_override_ms=2500)])
     blank = colors('#00000000', '#00000000')
     style = replace(style, karaoke_colors=blank, ruby_karaoke_colors=blank, stroke_width_px=0,
-                    stroke2_enabled=False, sing_fx=variant,
+                    stroke2_enabled=False, sing_fx=variant, karaoke_anim=karaoke, zoom_pulse_peak_pct=150,
                     fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=dpr)
     feature = 'p07_vertical_sing_twinkle' if variant.startswith('twinkle') else 'p07_vertical_sing_shapes'
     assert {feature, 'p07_sing_twinkle'} <= set(ir['required_features'])
+    composition = 'p07_vertical_singing_with_particles'
+    if karaoke == 'none':
+        assert composition not in ir['required_features']
+        unscaled = None
+    else:
+        assert {composition, 'p07_vertical_singing_scale'} <= set(ir['required_features'])
+        unscaled = ir_for(binary, (track, replace(style, karaoke_anim='none')), dpr=dpr)
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     layer, = ir['track']['lines']
     bursts = layer['fx_bursts']
@@ -403,7 +412,7 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
         assert burst['start_ms'] == layer['resolved_intervals'][burst['char_index']][0]
     times = [100, 350, 500, 1750, 1900, 2501]
     invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
+    invalid['required_features'].remove(feature if karaoke == 'none' else composition)
     invalid_sweep = copy.deepcopy(ir)
     invalid_sweep['track']['lines'][0]['fx_bursts'][0]['sweep'] = int(variant != 'twinkle')
     captures = []
@@ -422,6 +431,10 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
             with pytest.raises(NativeRendererError):
                 configure(process, invalid_sweep)
             replay, _ = collect(process, times[::-1], generation=2)
+            if unscaled is not None:
+                configure(process, unscaled)
+                unscaled_frames, _ = collect(process, times, generation=3)
+                assert all(np.array_equal(a, b) for a, b in zip(frames, unscaled_frames, strict=True))
         assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
         assert not frames[0].any() and not frames[-1].any()
         assert center(frames[3:5]) - center(frames[1:3]) > 20 * dpr

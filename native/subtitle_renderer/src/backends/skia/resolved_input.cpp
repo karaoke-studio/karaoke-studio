@@ -239,6 +239,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool verticalSingingAnimation = style.vertical && singingScale && ordinaryLineAnimation
             && !line.wipeReverse && features.contains("p07_vertical_singing_line_animation")
             && (!line.scanlineEnabled || features.contains("p07_vertical_singing_scanline_line_animation"));
+        const bool verticalScaledParticles = style.vertical && singingScale && !line.bursts.empty()
+            && features.contains("p07_vertical_singing_with_particles");
         const bool verticalSinging = style.vertical && singingScale && features.contains("p07_vertical_singing_scale")
             && (!style.dualLineLayout || features.contains("p07_vertical_columns_singing_scale"))
             && (!line.zoomPulseEnabled || features.contains("p07_vertical_zoom_pulse"))
@@ -247,7 +249,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !style.rightToLeft && !vectorGuides && !hasInlineRoles
             && (verticalSingingAnimation || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && (!line.scanlineEnabled || features.contains("p07_vertical_scanline_singing"))
-            && !line.strokeFlashEnabled && line.bursts.empty();
+            && !line.strokeFlashEnabled && (line.bursts.empty() || verticalScaledParticles);
         const bool unscaledLineMotion = !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
@@ -359,7 +361,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
-            || (!line.bursts.empty() && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
+            || (!line.bursts.empty() && !verticalScaledParticles
+                && (!rubyParticles || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit
                 || (line.zoomPulseEnabled && !features.contains(style.vertical
                     ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
