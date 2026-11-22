@@ -43,17 +43,19 @@ public:
     void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I(), const GlowGradients& gradients = {});
     bool visible(bool after) const;
     SkRect sourceBounds() const;
-    Source createSource(SkCanvas&, const SkRect& transitionBounds = SkRect::MakeEmpty()) const;
+    Source createSource(SkCanvas&, const SkRect& transitionBounds = SkRect::MakeEmpty(),
+                        bool canonical = false) const;
     void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                   const SkPath* posed = nullptr, float opacity = 1.f, bool vertical = false, bool reverse = false) const;
     void composite(SkCanvas&, const Source&, bool bytePasses = false) const;
+    void compositeCanonical(SkCanvas&, const Source&) const;
     void compositeTransformedCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                                   const SkMatrix&, float opacity) const;
 
 private:
     PreparedGlow(const StaticGlow&, const GlowState&, std::optional<bool> phase);
     SkPaint strokePaint() const;
-    Source makeSource(SkCanvas&, const SkRect&, bool canonical) const;
+    Source makeSource(SkCanvas&, const SkRect&, std::optional<SkColorType> rasterFormat = std::nullopt) const;
     std::uint32_t before_, after_;
     int radius_;
     float strokeWidth_;

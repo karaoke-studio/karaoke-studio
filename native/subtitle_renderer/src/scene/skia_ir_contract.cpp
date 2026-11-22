@@ -158,6 +158,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_utopia_exit_body_glow",
         "p07_character_fade",
         "p07_character_entry_fade_composition",
+        "p07_ruby_character_exit_fade",
         "p07_scanline_band",
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
@@ -671,6 +672,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 逐字淡化布局版本无效");
     if (features.contains("p07_character_entry_fade_composition") && !features.contains("p07_character_fade"))
         throw BackendError("Skia 逐字淡化组合缺少动画能力声明");
+    if (features.contains("p07_ruby_character_exit_fade")
+        && (!features.contains("p07_character_fade") || !features.contains("p05_resolved_ruby")))
+        throw BackendError("Skia 注音逐字淡出缺少动画或注音能力声明");
     if (features.contains("p07_scanline_shape")
         && (layout.value("scanline_shape_schema").toDouble(-1) != 1 || !features.contains("p07_scanline_band")))
         throw BackendError("Skia 扫字线形态布局版本无效");

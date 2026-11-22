@@ -132,6 +132,39 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_character_exit_fade_uses_owner_and_preserves_previous_scene(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'two_groups')
+    style = replace(style, entry_anim='none', exit_anim='char_fade', exit_fade_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_character_exit_fade'
+    assert feature in ir['required_features']
+    layout = ir['skia_layout']['lines'][0]
+    groups = layout['ruby_groups']
+    assert [group['fade_owner'] for group in groups] == [0, 1]
+    end = ir['track']['lines'][0]['display_end_ms']
+    times = [end - 600, end - 125, end - 4, end - 1, end]
+    missing = copy.deepcopy(ir)
+    missing['required_features'].remove(feature)
+    bad_owner = copy.deepcopy(ir)
+    bad_owner['skia_layout']['lines'][0]['ruby_groups'][0]['fade_owner'] = len(layout['cells'])
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        for malformed in (missing, bad_owner):
+            with pytest.raises(NativeRendererError):
+                configure(process, malformed)
+        replay, _ = collect(process, times[::-1], generation=2)
+        configure(process, ir)
+        reconfigured, _ = collect(process, [end - 1], generation=3)
+    coverages = [int(frame[..., 3].sum()) for frame in frames]
+    assert all(a > b for a, b in zip(coverages, coverages[1:])) and coverages[-1] == 0
+    assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
+    assert np.array_equal(frames[-2], reconfigured[0])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('animation', [
     'spin_flip', 'entry_spin_flip', 'tracking_in', 'wave_in', 'assemble_in', 'dissolve_out', 'petal', 'note', 'ripple', 'snow',
     'scatter_out', 'converge_out',
@@ -700,6 +733,16 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
     elif case_id in {'exit_snow', 'exit_ripple'}:
         times = tuple(sorted({*times, 4901, 5300, 5498, 5500, 5510}))
     assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_p00_ruby_character_exit_fade_matches_actual_gpu(binary, application, tmp_path, dpr):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_char_fade')
+    times = tuple(sorted({*case.timestamps_ms, *range(5475, 5501), 5300, 5450}))
+    assert_ruby_transition_gpu_parity(binary, case, times, dpr=dpr)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

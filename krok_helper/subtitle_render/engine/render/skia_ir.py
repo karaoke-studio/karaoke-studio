@@ -104,9 +104,10 @@ def _uses_role_glow(item):
     ))
 
 
-def _composes_character_fade(source, item):
+def _composes_character_fade(source, item, *, entering=True):
     look = item.layout_style
-    return (source.get('entry_anim') == 'char_fade' and source.get('exit_anim') == 'none'
+    phases = source.get('entry_anim'), source.get('exit_anim')
+    return (phases == (('char_fade', 'none') if entering else ('none', 'char_fade'))
             and source.get('karaoke_anim') in {'none', 'utopia'} and not source.get('zoom_pulse')
             and not item.line.wipe_reverse
             and not (look.vertical or look.right_to_left or look.lower_ruby_enabled)
@@ -424,6 +425,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         }
         if fade_lines:
             ir['required_features'].append('p07_character_entry_fade_composition')
+        if geometry.ruby is not None:
+            exit_fade_lines = {
+                index for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True))
+                if reading.rubies
+                and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False)
+                and all('shadow' not in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
+            }
+            if exit_fade_lines:
+                fade_lines |= exit_fade_lines
+                ir['required_features'].append('p07_ruby_character_exit_fade')
     if any(line.get('scanline') for line in ir['track']['lines']):
         ir['required_features'] += scanline_features(
             track, style, ir['track']['lines'], particle_band_tracks, vertical_singing)

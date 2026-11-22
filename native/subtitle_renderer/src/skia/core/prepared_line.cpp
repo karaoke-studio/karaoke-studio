@@ -88,6 +88,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool utopia = !rubyGeometryPhase && (line.singingScale.active || line.utopiaTransition.active())
         && fadeSide == 0;
     const bool fadeActive = fadeSide != 0;
+    const bool rubyExitFade = fadeSide > 0 && line.characterFade.exitKind == CharacterFade::Kind::Fade
+        && !line.rubyGroups.empty();
     const bool compositingSpin = fadeActive
         && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.spins(); });
     const bool entrySpin = compositingSpin && fadeSide < 0;
@@ -323,6 +325,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return;
             }
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
+            if (rubyExitFade && opacity < .125f && !transform.transformed && !shader) {
+                drawSamplePatternPath(canvas, path, paint, true);
+                return;
+            }
             // Near the start of a spin, a one-byte change in edge coverage
             // can remove the only visible part of a letter from one target.
             if (entrySpin && drawOutline && animatedInk && !shader && transform.opacity < .125f) {
@@ -407,7 +413,20 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && std::ranges::any_of(states, [](const State& state) {
             return state.transform.opacity > 0.f && state.transform.opacity < 1.f;
         });
-    if (opacityTransition && !particleExitFade && !particleEntryGlow) {
+    // At the tail, each halo contributes only a few alpha steps, so a
+    // difference in the blur source's rounding can change the visible edge.
+    const bool canonicalFadeGlow = rubyExitFade && hasGlow && std::ranges::none_of(states, [](const State& state) {
+        return state.transform.opacity > .02f;
+    });
+    const auto glowOpacity = [=](float opacity) {
+        return canonicalFadeGlow ? std::floor(opacity * opacitySteps) / opacitySteps : opacity;
+    };
+    // Accumulate contributions of at most one rounded alpha step before
+    // quantizing the complete stack.
+    const bool subByteFade = canonicalFadeGlow && std::ranges::none_of(states, [](const State& state) {
+        return state.transform.opacity * 255.f >= 1.5f;
+    });
+    if (opacityTransition && !particleExitFade && !particleEntryGlow && (!rubyExitFade || subByteFade)) {
         const auto* bounds = line.characterFade.transforms() || rubyGeometryPhase || utopiaExitGlow ? nullptr : &line.paintBounds;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
@@ -419,7 +438,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         SkRect transitionBounds = SkRect::MakeEmpty();
         if (line.utopiaTransition.leave)
             for (const auto index : readings) transitionBounds.join(line.rubyGroups[index].inkBounds());
-        const auto source = layer.createSource(canvas, transitionBounds);
+        const auto source = layer.createSource(canvas, transitionBounds, canonicalFadeGlow);
         if (source.surface) {
             for (const auto index : readings) {
                 const auto& group = line.rubyGroups[index];
@@ -427,10 +446,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 const int done = owner ? line.followingDone[*owner] : 0;
                 if (rubyPose(group).isIdentity())
                     group.drawGlowSource(*source.surface->getCanvas(), layer, tMs, after,
-                                         rubyScale, line.rubySingingOrigin, rubyOpacity(group),
+                                         rubyScale, line.rubySingingOrigin, glowOpacity(rubyOpacity(group)),
                                          owner && tMs > done ? &line.utopiaTransition : nullptr, done);
             }
-            layer.composite(canvas, source);
+            if (canonicalFadeGlow) layer.compositeCanonical(canvas, source);
+            else layer.composite(canvas, source);
         }
         for (const auto index : readings) {
             const auto& group = line.rubyGroups[index];
@@ -469,14 +489,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return state.transform.opacity > 0
                     && ((before && state.phase != Phase::After) || (after && state.phase != Phase::Before));
             })) continue;
-        const auto source = layer.createSource(canvas, line.bodyGlowTransitionBounds);
+        const auto source = layer.createSource(canvas, line.bodyGlowTransitionBounds, canonicalFadeGlow);
         if (!source.surface) continue;
         auto& glowCanvas = *source.surface->getCanvas();
         inPhaseOrder([&](std::size_t index, Phase phase) {
             if ((compositingSpin || rubyGeometryPhase) && states[index].transform.transformed) return;
             const auto& ink = states[index].animatedInk;
             const auto* posed = ink ? &*ink : nullptr;
-            const float opacity = states[index].transform.opacity * titleOpacity;
+            const float opacity = glowOpacity(states[index].transform.opacity * titleOpacity);
             if (phase == Phase::Wiping) {
                 const float edge = utopia && !line.vertical ? transformedEdge(index) : states[index].edge;
                 layer.drawCell(glowCanvas, index, false, edge, posed, opacity, line.vertical, line.wipeRightToLeft);
@@ -485,7 +505,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt, posed, opacity);
             }
         });
-        layer.composite(canvas, source, particleEntryGlow);
+        if (canonicalFadeGlow) layer.compositeCanonical(canvas, source);
+        else layer.composite(canvas, source, particleEntryGlow);
         if (compositingSpin)
             inPhaseOrder([&](std::size_t index, Phase phase) {
                 const auto& state = states[index];
