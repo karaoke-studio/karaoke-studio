@@ -200,14 +200,17 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_ruby_spin_pair_requires_both_phase_capabilities(binary, reading, target):
+@pytest.mark.parametrize('entry,entry_capability', [
+    ('spin_flip', 'p07_ruby_character_entry_spin'), ('fade', 'p07_line_fade'), ('rise', 'p07_line_motion'),
+])
+def test_ruby_spin_pair_requires_both_phase_capabilities(binary, reading, target, entry, entry_capability):
     from test_subtitle_skia_static_glow import glowing_ruby
 
     track, style = glowing_ruby(reading, 'inherited')
-    style = replace(style, entry_anim='spin_flip', exit_anim='spin_flip',
+    style = replace(style, entry_anim=entry, exit_anim='spin_flip',
                     entry_lead_ms=600, exit_fade_ms=600, karaoke_anim='utopia')
     ir = upper_ir(binary, (track, style), 1)
-    features = ('p07_ruby_character_entry_spin', 'p07_ruby_character_exit_spin')
+    features = (entry_capability, 'p07_ruby_character_exit_spin')
     assert set(features) <= set(ir['required_features'])
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     assert group['fade_owner'] == 0
@@ -708,6 +711,19 @@ def test_ruby_can_spin_in_and_out_on_the_same_line(binary, application, tmp_path
     style = replace(case.style, exit_anim='spin_flip')
     times = (299, 300, 301, 302, 306, 325, 450, 650, 1000, 1500,
              4500, 4899, 4900, 5100, 5300, 5450, 5499, 5500, 5900)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times, dpr=dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry', ['fade', 'rise'])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_whole_line_entry_and_ruby_spin_exit_match_gpu(binary, application, tmp_path, entry, dpr):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_spin_flip')
+    style = replace(case.style, entry_anim=entry)
+    times = (299, 301, 306, 325, 450, 650, 899, 1500, 4899,
+             4900, 5100, 5300, 5450, 5499, 5500, 5900)
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times, dpr=dpr)
 
 

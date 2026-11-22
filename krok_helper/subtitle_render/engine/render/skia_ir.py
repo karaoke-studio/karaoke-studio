@@ -329,7 +329,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         if effect == 'flame':
                             particle_affine_lines.add(index)
                 continue
-            if ({entry, leave} <= {'none', 'spin_flip'}
+            if (entry in {'none', 'fade', 'rise', 'spin_flip'} and leave in {'none', 'spin_flip'}
                     and ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
                          or (leave == 'spin_flip' and source['exit_duration_ms'] > 0))):
                 spin_lines.add(index)
