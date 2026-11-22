@@ -276,11 +276,13 @@ def build_render_ir(
     roll_shift_ms: int = 0,
     layout_plan_builder=None,
     serialize_source_baselines: bool = True,
+    vertical_scanline_particles: bool = False,
 ) -> dict[str, Any]:
     """Build one JSON-friendly native snapshot from shared layout plans.
 
     Final-geometry consumers disable ``serialize_source_baselines`` to avoid
     querying Qt row metrics; existing native consumers retain that projection.
+    Renderers that can emit from a vertical wipe opt into ``vertical_scanline_particles``.
 
     ``relayout_scope``（新增入参，默认 None = 全量）：
     - ``None``：全轨重排——各源布局计划绕过缓存直接重建（时间/布局等
@@ -425,6 +427,7 @@ def build_render_ir(
                 primary_style,
                 layout_plan=primary_plan,
                 serialize_source_baselines=serialize_source_baselines,
+                vertical_scanline_particles=vertical_scanline_particles,
                 glyph_table=glyph_table,
                 fx_table=fx_table,
                 layout_table=layout_table,
@@ -440,6 +443,7 @@ def build_render_ir(
                     source_style,
                     layout_plan=plan,
                     serialize_source_baselines=serialize_source_baselines,
+                    vertical_scanline_particles=vertical_scanline_particles,
                     glyph_table=glyph_table,
                     fx_table=fx_table,
                     layout_table=layout_table,

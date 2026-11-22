@@ -31,12 +31,14 @@ _VERTICAL_SHAPES = {(kind, 0) for kind in ('note', 'heart', 'ripple')}
 _VERTICAL_FALLING = {(kind, 0) for kind in FALLING_PARTICLES}
 _VERTICAL_LIGHTNING = {(kind, 0) for kind in ('lightning', 'lightning_glow')}
 _VERTICAL_FLAME = set(_FLAME_SINGING_SWEEPS.items())
+_VERTICAL_SCANLINE = {('scanline', 0)}
 _VERTICAL_PARTICLE_FEATURES = (
     (_VERTICAL_STARS, 'p07_vertical_sing_twinkle'),
     (_VERTICAL_SHAPES, 'p07_vertical_sing_shapes'),
     (_VERTICAL_FALLING, 'p07_vertical_sing_falling'),
     (_VERTICAL_LIGHTNING, 'p07_vertical_sing_lightning'),
     (_VERTICAL_FLAME, 'p07_vertical_sing_flame'),
+    (_VERTICAL_SCANLINE, 'p07_vertical_scanline_particles'),
 )
 _VERTICAL_PARTICLE_MODES = set().union(*(modes for modes, _ in _VERTICAL_PARTICLE_FEATURES))
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
@@ -76,6 +78,8 @@ def vertical_singing_particle_modes(source):
             or (source.get('scanline') and source.get('wipe_reverse'))):
         return set()
     modes = {(burst['kind'], burst['sweep']) for burst in source.get('fx_bursts', ())}
+    if not source.get('scanline') and modes & _VERTICAL_SCANLINE:
+        return set()
     return modes if modes <= _VERTICAL_PARTICLE_MODES else set()
 
 
@@ -107,7 +111,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             vertical_scaled_particles |= source.get('karaoke_anim') == 'utopia'
             reverse_vertical_particles |= item.line.wipe_reverse
             motion_vertical_particles |= (entry, exit_) != ('none', 'none')
-            band_vertical_particles |= band
+            band_vertical_particles |= band and bool(vertical_modes - _VERTICAL_SCANLINE)
         petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
@@ -161,8 +165,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             if kind in _ENERGY_PARTICLES:
                 version = max(version, 6)
             if kind == 'scanline':
-                version = max(version, 7)
-                ruby_scanline = ruby_scanline or annotated
+                version = max(version, 8 if vertical_particles else 7)
+                ruby_scanline |= annotated and not vertical_particles
             elif band:
                 version = 8
         if animated:

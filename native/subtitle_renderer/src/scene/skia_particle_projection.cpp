@@ -47,9 +47,10 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool verticalFlame = features.contains("p07_vertical_sing_flame");
     const bool verticalScale = source.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_with_particles");
+    const bool verticalScanline = features.contains("p07_vertical_scanline_particles");
     const bool verticalBand = cfg.vertical && source.scanlineEnabled && !source.wipeReverse
         && version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"
-        && features.contains("p07_vertical_scanline_singing_particles");
+        && (verticalScanline || features.contains("p07_vertical_scanline_singing_particles"));
     const bool verticalMotion = features.contains("p07_vertical_singing_particle_line_animation")
         && !source.wipeReverse
         && !source.scanlineEnabled
@@ -58,7 +59,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (source.exitAnimation == "none" || source.exitAnimation == "fade"
             || source.exitAnimation == "slide_out" || source.exitAnimation == "rise");
     const bool verticalParticles = cfg.vertical
-        && (verticalStars || verticalShapes || verticalFalling || verticalLightning || verticalFlame)
+        && (verticalStars || verticalShapes || verticalFalling || verticalLightning || verticalFlame || verticalScanline)
         && (!source.wipeReverse || features.contains("p07_vertical_reverse_singing_particles"))
         && (!source.scanlineEnabled || verticalBand) && !source.strokeFlashEnabled
         && (source.karaokeAnimation == "none" || verticalScale)
@@ -135,7 +136,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                 && !(verticalShapes && (symbol || ripple) && fx.sweep == 0)
                 && !(verticalFalling && falling && fx.sweep == 0)
                 && !(verticalLightning && lightning && fx.sweep == 0)
-                && !(verticalFlame && flame && fx.sweep == singingFlameSweep))
+                && !(verticalFlame && flame && fx.sweep == singingFlameSweep)
+                && !(verticalScanline && verticalBand && scanline && fx.sweep == 0))
             || (rubyParticles && version == 12 && !star && !ripple)
             || (scanline && shapedSinging)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())

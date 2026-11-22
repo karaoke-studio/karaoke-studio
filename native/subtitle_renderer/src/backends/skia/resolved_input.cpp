@@ -593,7 +593,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     && !features.contains("p07_vertical_sing_shapes")
                     && !features.contains("p07_vertical_sing_falling")
                     && !features.contains("p07_vertical_sing_lightning")
-                    && !features.contains("p07_vertical_sing_flame")) || style.rightToLeft)
+                    && !features.contains("p07_vertical_sing_flame")
+                    && !features.contains("p07_vertical_scanline_particles")) || style.rightToLeft)
                 throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
                 const auto sprite = particleSprites.find(burst.sprite);

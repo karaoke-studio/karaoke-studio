@@ -901,6 +901,7 @@ def track_to_ir(
     layout_table: LineLayoutTable | None = None,
     time_offset_delta_ms: int = 0,
     serialize_source_baselines: bool = True,
+    vertical_scanline_particles: bool = False,
 ) -> dict[str, Any]:
     """Serialize one track; ``time_offset_delta_ms`` folds a per-track style
     timing offset into the per-source ``meta.offset_ms`` channel.
@@ -1172,6 +1173,7 @@ def track_to_ir(
                                 != bool(render_lines[index].wipe_reverse)
                             )
                         ),
+                        vertical_scanline_particles=vertical_scanline_particles,
                     )
                     if style is not None
                     else []

@@ -42,6 +42,7 @@ struct ParticleVisibility {
 };
 
 inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBurst>& bursts, int tMs, bool front,
+                              bool vertical,
                               std::string_view sampledKind, std::string_view quantizedKind) {
     SkPaint paint;
     paint.setAntiAlias(true);
@@ -53,18 +54,25 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
         const bool flameCore = item.burst.kind == "flame_alt";
         const bool sampled = item.burst.kind == sampledKind;
         const bool quantized = item.burst.kind == quantizedKind;
+        // The scanline evaluator works in local axes. A vertical column maps
+        // its along-sweep axis to screen Y and its cross-sweep axis to -X.
+        const bool verticalScanline = vertical && item.burst.kind == "scanline";
+        const float originAlong = verticalScanline ? item.originY : item.originX;
+        const float originAcross = verticalScanline ? -item.originX : item.originY;
         for (const auto& particle : krok::subtitle::native::effects::burstParticlesAt(
-                 item.burst, tMs, item.originX, item.originY, item.boxW, item.boxH)) {
+                 item.burst, tMs, originAlong, originAcross,
+                 verticalScanline ? item.boxH : item.boxW, verticalScanline ? item.boxW : item.boxH)) {
             if (particle.alpha <= 0.f || particle.sizePx <= 0.f) continue;
             const float alpha = colorAlpha * std::clamp(particle.alpha, 0.f, 1.f);
+            const SkPoint center = verticalScanline ? SkPoint{-particle.y, particle.x} : SkPoint{particle.x, particle.y};
             if (item.ring) {
                 auto color = paint.getColor4f();
                 color.fA = alpha;
-                drawParticleRing(canvas, {particle.x, particle.y}, *item.ring, particle.sizePx / 1000.f,
+                drawParticleRing(canvas, center, *item.ring, particle.sizePx / 1000.f,
                                  color, quantized);
                 continue;
             }
-            auto transform = SkMatrix::Translate(particle.x, particle.y);
+            auto transform = SkMatrix::Translate(center.x(), center.y());
             transform.preRotate(particle.rotationDeg);
             transform.preScale(particle.sizePx * particle.stretchX / 1000.f,
                                particle.sizePx * particle.stretchY / 1000.f);

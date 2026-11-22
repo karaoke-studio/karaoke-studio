@@ -76,8 +76,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (!textVisible) {
         if (particleExitFade)
             canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
-        drawSingParticles(canvas, line.particles, tMs, false, sampledKind, quantizedKind);
-        drawSingParticles(canvas, line.particles, tMs, true, sampledKind, quantizedKind);
+        drawSingParticles(canvas, line.particles, tMs, false, line.vertical, sampledKind, quantizedKind);
+        drawSingParticles(canvas, line.particles, tMs, true, line.vertical, sampledKind, quantizedKind);
         return;
     }
     // Fade the composed line, preserving overlaps and translucent strokes.
@@ -371,7 +371,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             drawCell(index, layer, roles.empty() || paint < 0 ? shaders : roles[paint]);
         });
     };
-    if (!line.particles.empty()) drawSingParticles(canvas, line.particles, tMs, false, sampledKind, quantizedKind);
+    if (!line.particles.empty())
+        drawSingParticles(canvas, line.particles, tMs, false, line.vertical, sampledKind, quantizedKind);
     if (geometry)
         for (std::size_t i = 0; i < line.cells.size(); ++i) {
             const auto& state = states[i];
@@ -593,7 +594,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         SkAutoCanvasRestore keep(&canvas, false);
         if (particleExitFade && opacityTransition)
             canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, nullptr, SkCanvas::kF16ColorType));
-        drawSingParticles(canvas, line.particles, tMs, true, sampledKind, quantizedKind);
+        drawSingParticles(canvas, line.particles, tMs, true, line.vertical, sampledKind, quantizedKind);
     }
     if (line.scanline.rubyHighlight && line.scanline.repaintsGlyphs()
         && line.scanline.frontAt(line.cells, tMs, line.inkStart))

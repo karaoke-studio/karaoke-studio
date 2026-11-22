@@ -195,6 +195,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_reverse_singing_particles",
         "p07_vertical_singing_particle_line_animation",
         "p07_vertical_scanline_singing_particles",
+        "p07_vertical_scanline_particles",
         "p07_stroke_flash",
         "p07_composed_stroke_flash",
         "p07_no_wipe_decoration",
@@ -788,7 +789,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
     const bool verticalParticles = features.contains("p07_vertical_sing_twinkle")
         || features.contains("p07_vertical_sing_shapes") || features.contains("p07_vertical_sing_falling")
-        || features.contains("p07_vertical_sing_lightning") || features.contains("p07_vertical_sing_flame");
+        || features.contains("p07_vertical_sing_lightning") || features.contains("p07_vertical_sing_flame")
+        || features.contains("p07_vertical_scanline_particles");
     if (verticalParticles
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排唱字粒子缺少对应布局或粒子能力");
@@ -801,7 +803,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_singing_particle_line_animation")
         && (!verticalParticles || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))
         throw BackendError("Skia 竖排唱字粒子缺少整行出入场能力");
-    if (features.contains("p07_vertical_scanline_singing_particles")
+    if ((features.contains("p07_vertical_scanline_singing_particles") || features.contains("p07_vertical_scanline_particles"))
         && (twinkleVersion < 8 || !verticalParticles || !features.contains("p07_vertical_scanline_band")))
         throw BackendError("Skia 竖排唱字粒子缺少高亮带或粒子能力");
     if (features.contains("p07_sing_twinkle")

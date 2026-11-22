@@ -705,13 +705,13 @@ def scanline_default_paints(effect: str) -> list[dict[str, object]] | None:
     return [{"color": color} for color in palette]
 
 
-def scanline_effect_from_style(style: Style) -> str:
+def scanline_effect_from_style(style: Style, *, allow_vertical: bool = False) -> str:
     """返回样式上启用且当前扫字线档位成立的扫字线粒子特效（否则 ``none``）。"""
 
     effect = str(getattr(style, "scanline_effect", "none") or "none")
     if effect not in SCANLINE_FX_SPRITES:
         return "none"
-    if getattr(style, "vertical", False):
+    if getattr(style, "vertical", False) and not allow_vertical:
         return "none"
     if not effective_karaoke_scanline(style):
         return "none"
@@ -2107,6 +2107,7 @@ def plan_line_bursts(
     char_visible: list[bool] | None = None,
     char_styles: list[Style | None] | None = None,
     reverse: bool = False,
+    vertical_scanline_particles: bool = False,
 ) -> list[dict[str, object]]:
     """把 style 的粒子档位规划成逐行 burst 列表（IR-ready dict）。
 
@@ -3583,7 +3584,7 @@ def plan_line_bursts(
     # 扫字线特效（2026-10）：沿走字锋面发射装饰粒子。只认显式扫字线档位；
     # 竖排与唱字装饰粒子一样不走这条通道（GPU 侧扫字线本身也只做横排）。
     scope = "scanline"
-    scanline_effect = scanline_effect_from_style(style)
+    scanline_effect = scanline_effect_from_style(style, allow_vertical=vertical_scanline_particles)
     if scanline_effect != "none":
         effect_size = font_px * (
             max(5, min(200, int(getattr(style, "scanline_effect_size_pct", 30))))

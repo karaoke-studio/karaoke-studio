@@ -248,7 +248,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         return result.plan
 
     ir = build_render_ir(track, style, layout_plan_builder=build_plan,
-                         serialize_source_baselines=False, **kwargs)
+                         serialize_source_baselines=False, vertical_scanline_particles=True, **kwargs)
     vertical_singing = vertical_singing_lines(ir, prepared[0].plan) if style.vertical else set()
     vertical_ruby = None
     if prepared[0].vertical_readings is not None:

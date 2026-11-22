@@ -803,15 +803,19 @@ effect_styles['vertical-motion-notes'] = dict(
 effect_styles['vertical-band-notes'] = dict(
     effect_styles['vertical-zoom-notes'], karaoke_anim='zoom_pulse_scanline', scanline_enabled=True,
     scanline_color='#FFFF00', scanline_width_px=25)
+effect_styles['vertical-sweep-particles'] = dict(
+    effect_styles['vertical-band-notes'], scanline_effect='star', scanline_effect_color_mode='color',
+    scanline_effect_color='#FF00FF', scanline_effect_color2='#FF00FF',
+    scanline_effect_count=20, scanline_effect_size_pct=50)
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
-    'vertical-band-notes',
+    'vertical-band-notes', 'vertical-sweep-particles',
 }
 vertical_motion = effect in {'vertical-zoom-motion', 'vertical-zoom-band-motion'}
 vertical_particles = effect in {
     'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals', 'vertical-lightning',
-    'vertical-reverse-notes', 'vertical-motion-notes', 'vertical-band-notes',
+    'vertical-reverse-notes', 'vertical-motion-notes', 'vertical-band-notes', 'vertical-sweep-particles',
 }
 vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
@@ -951,7 +955,7 @@ if '--compare-export' in sys.argv:
                     if effect == 'vertical-palette':
                         assert np.any((red < 32) & (green > 170) & (blue < 32) & (alpha > 128))
                         assert np.any((red > 170) & (green < 32) & (blue < 32) & (alpha > 128))
-                    elif effect == 'vertical-band-notes':
+                    elif effect in {'vertical-band-notes', 'vertical-sweep-particles'}:
                         assert np.any((red > 128) & (green > 128) & (blue < 32) & (alpha > 128))
                     else:
                         assert np.any((red < 32) & (green > 128) & (blue > 128) & (alpha > 128))
@@ -960,6 +964,8 @@ if '--compare-export' in sys.argv:
                 for frame in (expected, preview):
                     red, green, blue, alpha = np.moveaxis(frame, -1, 0)
                     assert np.any((red < 32) & (green > 102) & (blue > 102) & (alpha > 102))
+                    if effect == 'vertical-sweep-particles':
+                        assert np.any((red > 102) & (green < 32) & (blue > 102) & (alpha > 102))
     close_preview()
     print('Quick, offscreen GPU and export pipe compared', flush=True)
     sys.exit(0)
@@ -1034,13 +1040,13 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                                      'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
                                      'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
-                                     'vertical-band-notes', 'particle-image-band'],
+                                     'vertical-band-notes', 'vertical-sweep-particles', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                               'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
                               'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
-                              'vertical-band-notes', 'particle-image-band'])
+                              'vertical-band-notes', 'vertical-sweep-particles', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font
