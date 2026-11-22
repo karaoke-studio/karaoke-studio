@@ -17,9 +17,9 @@ def _prepare_one(action, label: str) -> None:
         _log.warning("字体预热失败（%s），继续准备其他字体", label, exc_info=True)
 
 
-def prepare_fonts(track, style, extra_tracks) -> None:
+def prepare_fonts(track, style, extra_tracks, *, use_skia_backend: bool | None = None) -> None:
     """Synchronous compatibility entry point for CLI and existing callers."""
-    for _ in iter_prepare_fonts(track, style, extra_tracks, incremental=False):
+    for _ in iter_prepare_fonts(track, style, extra_tracks, incremental=False, use_skia_backend=use_skia_backend):
         pass
 
 
@@ -27,7 +27,7 @@ def iter_prepare_fonts(
     track: Optional[TimingTrack],
     style: Optional[Style],
     extra_tracks: Optional[list[TimingTrack]],
-    *, incremental: bool = True,
+    *, incremental: bool = True, use_skia_backend: bool | None = None,
 ) -> Iterator[None]:
     """GUI 线程预热字体能力缓存，让渲染线程 configure 只读缓存、不碰 Qt 字体库。
 
@@ -78,7 +78,7 @@ def iter_prepare_fonts(
                 yield
         yield from _iter_prewarm_font_fallback(track, style, extra_tracks)
         from krok_helper.subtitle_render.native.backend_selection import skia_requested
-        if skia_requested() and track is not None and style is not None:
+        if skia_requested(use_skia_backend) and track is not None and style is not None:
             from krok_helper.subtitle_render.native.skia_font_preparation import iter_prepare_skia_fallbacks
             yield from iter_prepare_skia_fallbacks(track, style, extra_tracks)
     except Exception:  # noqa: BLE001 — 预热失败不阻断预览，渲染线程回退原路径

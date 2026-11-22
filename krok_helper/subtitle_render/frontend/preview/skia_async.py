@@ -66,7 +66,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
                 return
         try:
             # GUI thread and synchronous: no set_state can interleave here.
-            prepare_fonts(state[0], state[1], state[2])
+            prepare_fonts(state[0], state[1], state[2], use_skia_backend=True)
         finally:
             with self._condition:
                 self._font_change_pending = False

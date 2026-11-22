@@ -805,6 +805,13 @@ class PreviewPanel(DropPanel):
             return False
         return setter(bool(enabled)) is not False
 
+    def set_skia_backend_enabled(self, enabled: bool, *, gpu_enabled: bool) -> bool:
+        setter = getattr(self._canvas, "set_skia_backend_enabled", None)
+        if setter is None:
+            return False
+        setter(enabled, gpu_enabled=gpu_enabled)
+        return True
+
     def current_subtitle_frame(self) -> QImage | None:
         getter = getattr(self._canvas, "current_subtitle_frame", None)
         return getter() if getter is not None else None

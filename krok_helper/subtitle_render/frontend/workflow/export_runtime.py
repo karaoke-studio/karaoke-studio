@@ -72,8 +72,8 @@ class ExportRuntimeController:
         thread.finished.connect(callbacks.thread_finished)
         thread.started.connect(worker.run)
         handles = ExportRuntimeHandles(thread=thread, worker=worker)
+        steps = iter_prepare_fonts(job.track, job.style, list(job.extra_tracks), use_skia_backend=job.use_skia_backend)
         if isinstance(parent, QObject):
-            steps = iter_prepare_fonts(job.track, job.style, list(job.extra_tracks))
             timer = QTimer(parent)
             timer.setInterval(1)
             handles.preparation_timer = timer
@@ -90,7 +90,7 @@ class ExportRuntimeController:
 
             timer.timeout.connect(advance)
         else:
-            for _ in iter_prepare_fonts(job.track, job.style, list(job.extra_tracks)):
+            for _ in steps:
                 pass
         return handles
 

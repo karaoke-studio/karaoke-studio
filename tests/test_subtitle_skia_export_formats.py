@@ -77,6 +77,69 @@ def export(job, ffmpeg, target):
     return result, len(progress)
 
 
+def test_export_page_skia_checkbox_switches_preview_and_freezes_export(binary, supported_project, monkeypatch, tmp_path):
+    import time
+    from PyQt6.QtWidgets import QApplication
+    from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
+    from krok_helper.subtitle_render.frontend.preview.skia_async import SkiaAsyncSubtitleRenderer
+
+    class Settings:
+        def load(self):
+            return {}
+
+        def save(self, state):
+            assert 'use_skia_backend' not in state.get('output', {})
+
+    monkeypatch.delenv('KROK_SUBTITLE_RENDER_BACKEND', raising=False)
+    monkeypatch.setenv('KROK_SUBTITLE_SKIA_FALLBACK', 'none')
+    window = SubtitleRenderWindow(embedded=True, settings_provider=Settings())
+    try:
+        controls = window._export_controls
+        assert not controls.skia_backend_check.isChecked()
+        track, style = supported_project
+        window._timing_track = track
+        window._style = style
+        controls.skia_backend_check.click()
+        assert controls.skia_backend_check.isChecked()
+        controls.gpu_preview_check.setChecked(True)
+        controls.gpu_export_check.setChecked(True)
+        panel = window._preview_panel
+        assert isinstance(panel.canvas._async_renderer, SkiaAsyncSubtitleRenderer)
+        panel.set_output_size(WIDTH, HEIGHT)
+        panel.set_style(style)
+        panel.set_track(track)
+        panel.set_time(550)
+        window._preview_window.show()
+        deadline = time.monotonic() + 20
+        while panel.current_subtitle_frame() is None and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(.01)
+        assert panel.current_subtitle_frame() is not None
+        assert panel.canvas._async_renderer.current_backend_mode == 'gpu'
+
+        controls.format_combo.setCurrentIndex(controls.format_combo.findData(OUTPUT_FORMAT_PNG_TRANSPARENT))
+        controls.directory_edit.setText(str(tmp_path))
+        controls.name_edit.setText('ui-skia')
+        job = window._build_render_job()
+        assert job.use_skia_backend and job.gpu_export_enabled
+        controls.gpu_preview_check.setChecked(False)
+        assert panel.canvas._async_renderer.selection.target == 'raster'
+        controls.gpu_export_check.setChecked(False)
+        raster_job = window._build_render_job()
+        assert raster_job.use_skia_backend and not raster_job.gpu_export_enabled
+        controls.skia_backend_check.click()
+        assert not isinstance(panel.canvas._async_renderer, SkiaAsyncSubtitleRenderer)
+        assert not window._build_render_job().use_skia_backend
+        job = replace(job, width=WIDTH, height=HEIGHT, fps=30, duration_ms=1000)
+        result, count = export(job, export_ffmpeg(tmp_path), 'gpu')
+        assert count == 30 and any(read_png(path)[..., 3].any() for path in result.glob('*.png'))
+    finally:
+        window._preview_window.close()
+        window.close()
+        window.deleteLater()
+        QApplication.processEvents()
+
+
 @pytest.mark.parametrize('fmt', [OUTPUT_FORMAT_PNG_TRANSPARENT, OUTPUT_FORMAT_PNG_COMPOSITED,
                                  OUTPUT_FORMAT_MOV_QTRLE, OUTPUT_FORMAT_MOV_TRANSPARENT])
 def test_export_format_samples(binary, supported_project, export_target, fmt, tmp_path):

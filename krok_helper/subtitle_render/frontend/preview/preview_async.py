@@ -327,14 +327,14 @@ def _gpu_preview_default_enabled() -> bool:
     return os.name == "nt" and qpa_platform not in {"offscreen", "minimal"}
 
 
-def gpu_preview_supported() -> bool:
+def gpu_preview_supported(*, use_skia_backend: bool | None = None) -> bool:
     """Whether this platform has a selected GPU subtitle backend.
 
     MPS/MLX inference support does not supply the Windows Direct2D renderer.
     Explicit source-only Skia opt-in keeps its own capability/fallback checks.
     """
     from krok_helper.subtitle_render.native.backend import skia_requested
-    return os.name == "nt" or skia_requested()
+    return os.name == "nt" or skia_requested(use_skia_backend)
 
 
 def gpu_preview_enabled() -> bool:

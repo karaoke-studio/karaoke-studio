@@ -39,7 +39,7 @@ def test_unsupported_toggle_keeps_painter_and_reports_rejection(qapp, monkeypatc
     monkeypatch.setenv('KROK_SUBTITLE_GPU_PREVIEW', '1')
     monkeypatch.setenv('KROK_SUBTITLE_NATIVE_RENDER', '0')
     monkeypatch.setenv('KROK_SUBTITLE_ASYNC_PREVIEW', '1')
-    monkeypatch.setattr(pa, 'gpu_preview_supported', lambda: False)
+    monkeypatch.setattr(pa, 'gpu_preview_supported', lambda **_: False)
     def unexpected_gpu(*args, **kwargs):
         pytest.fail('Unsupported platform started a GPU renderer')
     monkeypatch.setattr(pg, 'GpuAsyncSubtitleRenderer', unexpected_gpu)
@@ -66,7 +66,7 @@ def test_unsupported_player_does_not_offer_gpu_retry(qapp, monkeypatch):
 
     monkeypatch.delenv('KROK_SUBTITLE_RENDER_BACKEND', raising=False)
     monkeypatch.setenv('KROK_SUBTITLE_NATIVE_RENDER', '0')
-    monkeypatch.setattr(pa, 'gpu_preview_supported', lambda: False)
+    monkeypatch.setattr(pa, 'gpu_preview_supported', lambda **_: False)
     monkeypatch.setattr(pw, 'gpu_preview_supported', lambda: False)
     owner = QWidget()
     window = pw.PreviewPlayerWindow(owner)

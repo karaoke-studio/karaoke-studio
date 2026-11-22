@@ -3311,6 +3311,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 ### 14.232 P09 字幕浮窗显式启用 GPU 直画（2026-11-21）
 
 - 源码运行同时指定 `KROK_SUBTITLE_RENDER_BACKEND=skia` 和 `KROK_SUBTITLE_SKIA_DIRECT_PREVIEW=1` 时，程序在创建顶层窗口前准备 Vulkan 或 Metal，再把已有的传输条、播放控制器和工程状态接入 Quick 画布。直画使用 GPU 纹理，缺失组件、图形设备不可用或配置失败时回到已有 Skia sidecar 通路，继续遵循其执行目标与 Raster 回退设置。关闭 GPU 走 Skia Raster。前黑或后黑段项目当前由原预览宿主经 Skia sidecar 合成。
+- 源码工作台可在第 5 步「导出」勾选「使用 Skia 后端」，切换当前工程的字幕预览与后续导出。此选择只保留在当前窗口，导出任务在创建时捕获选择。正常启动后勾选使用 Skia sidecar 预览。Quick GPU 直画沿用上述启动参数。预览和导出的 GPU 开关分别决定是否使用 Skia Raster。
 - 正式浮窗使用真实字幕，验证上屏像素、暂停 seek、三次隐藏/缩放/重开、项目清空、Skia Raster 切换及前黑段切换。Windows Vulkan、WSL X11 和 Wayland 的相关矩阵各 **9 通过**，增加三次窗口转换后专项复跑各 **1 通过**。Windows 原有传输、CPU 预览、平台、播放与预览控制器回归 **232 通过**。日志为 `build/p09-floating-*.log`。物理多显示器 DPR、真实 Linux GPU 及 Mac 真机门槛仍待验收。
 
 ### 14.233 P09.2/P09.4 播放限速与无字幕图片序列（2026-11-21）

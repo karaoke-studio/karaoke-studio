@@ -107,3 +107,5 @@ class RenderJob:
     """前黑开启且自动偏移时歌词展示层整体后移量（渲染器冻结值）。"""
     title_duration_ms: int | None = None
     """标题 tail 锚定时长（display 坐标的内容结束时刻；前黑后黑生效时由渲染器冻结）。"""
+    use_skia_backend: bool | None = None
+    """Session choice captured when export starts. None honors the launch setting."""

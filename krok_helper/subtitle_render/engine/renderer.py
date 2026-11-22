@@ -382,7 +382,7 @@ def _render_subtitle_video_prepared(
     job = replace(job, **freeze_kwargs)
     total_frames = _frame_count(duration_ms, job.fps)
     from krok_helper.subtitle_render.native.backend import skia_requested
-    skia_active = skia_requested()
+    skia_active = skia_requested(job.use_skia_backend)
     if skia_active:
         from krok_helper.subtitle_render.native.skia_backend import SkiaGpuDeviceError, resolve_skia_renderer_path
     native_export_requested = skia_active or _native_export_requested(job)
@@ -1320,7 +1320,7 @@ def _write_frames_native(
     options = dict(width=job.width, height=job.height, fps=job.fps,
                    duration_ms=_paint_duration_ms(job), roll_shift_ms=_job_roll_shift_ms(job),
                    renderer_path=renderer_path, should_cancel=should_cancel)
-    skia_active = skia_requested()
+    skia_active = skia_requested(job.use_skia_backend)
     if skia_active:
         from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
         enabled = job.gpu_export_enabled

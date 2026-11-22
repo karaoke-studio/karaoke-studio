@@ -1775,6 +1775,7 @@ class SubtitleRenderWindow(QWidget):
         )
         self._gpu_direct_check.toggled.connect(self._on_gpu_direct_present_changed)
         self._gpu_export_check.toggled.connect(self._on_gpu_export_changed)
+        self._skia_backend_check.toggled.connect(self._on_skia_backend_changed)
 
     def _switch_tab(self, key: str) -> None:
         idx = 0 if key == "preview" else 1
@@ -2832,8 +2833,7 @@ class SubtitleRenderWindow(QWidget):
         if gpu_env_override is not None or gpu_default_version < GPU_PREVIEW_DEFAULT_VERSION:
             gpu_preview_on = gpu_preview_enabled()
         else:
-            from krok_helper.subtitle_render.native.backend import skia_requested
-            gpu_preview_on = (sys.platform == "win32" or skia_requested()) and bool(
+            gpu_preview_on = (sys.platform == "win32" or self._skia_backend_check.isChecked()) and bool(
                 output.get("gpu_preview_enabled", True)
             )
         try:
@@ -2842,8 +2842,7 @@ class SubtitleRenderWindow(QWidget):
             )
         except (TypeError, ValueError):
             gpu_export_default_version = 0
-        from krok_helper.subtitle_render.native.backend import skia_requested
-        gpu_platform = sys.platform == "win32" or skia_requested()
+        gpu_platform = sys.platform == "win32" or self._skia_backend_check.isChecked()
         if gpu_export_default_version < GPU_EXPORT_DEFAULT_VERSION:
             gpu_export_enabled = gpu_platform
         else:
@@ -4204,6 +4203,8 @@ class SubtitleRenderWindow(QWidget):
             gpu_preview_checked=gpu_preview_enabled(),
             gpu_controls_visible=sys.platform == "win32" or skia_requested(),
             gpu_direct_present_checked=self._load_direct_present_preference(),
+            skia_backend_visible=not getattr(sys, "frozen", False),
+            skia_backend_checked=skia_requested(),
         )
         page.locationSettingsRequested.connect(
             self._open_export_location_settings
@@ -4243,6 +4244,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_native_check = controls.native_check
         self._gpu_preview_check = controls.gpu_preview_check
         self._gpu_export_check = controls.gpu_export_check
+        self._skia_backend_check = controls.skia_backend_check
 
         self._gpu_direct_check = controls.gpu_direct_present_check
         if skia_requested():
@@ -9700,6 +9702,30 @@ class SubtitleRenderWindow(QWidget):
             }
         )
 
+    def _on_skia_backend_changed(self, enabled: bool) -> None:
+        if enabled:
+            from krok_helper.subtitle_render.native.backend import NativeRendererError
+            from krok_helper.subtitle_render.native.skia_process import resolve_skia_renderer_path
+
+            try:
+                resolve_skia_renderer_path()
+            except NativeRendererError as error:
+                previous = self._skia_backend_check.blockSignals(True)
+                try:
+                    self._skia_backend_check.setChecked(False)
+                finally:
+                    self._skia_backend_check.blockSignals(previous)
+                self._show_gpu_preview_fallback(str(error))
+                return
+        gpu_controls_visible = sys.platform == "win32" or enabled
+        self._gpu_preview_check.setVisible(gpu_controls_visible)
+        self._gpu_export_check.setVisible(gpu_controls_visible)
+        self._gpu_direct_check.setVisible(sys.platform == "win32" and not enabled)
+        if not self._preview_panel.set_skia_backend_enabled(
+            enabled, gpu_enabled=gpu_controls_visible and self._gpu_preview_check.isChecked()
+        ) and enabled:
+            self._show_gpu_preview_fallback("当前预览模式不支持 Skia，导出仍可使用 Skia。")
+
     def _on_gpu_preview_changed(self, enabled: bool) -> None:
         """Apply and persist the experimental subtitle-preview backend."""
         self._preview_preference_controller.apply_gpu_enabled(enabled)
@@ -9791,9 +9817,8 @@ class SubtitleRenderWindow(QWidget):
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
         # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
-        from krok_helper.subtitle_render.native.backend import skia_requested
         InfoBar.warning(
-            title="Skia 字幕渲染" if skia_requested() else "GPU 预览已回退",
+            title="Skia 字幕渲染" if self._skia_backend_check.isChecked() else "GPU 预览已回退",
             content=str(message),
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
@@ -12314,6 +12339,7 @@ class SubtitleRenderWindow(QWidget):
                 preset=str(self._export_preset_combo.currentData() or "medium"),
                 codec=self._export_codec_value(),
                 gpu_export_enabled=self._gpu_export_check.isChecked(),
+                use_skia_backend=self._skia_backend_check.isChecked(),
                 render_workers=self._export_render_workers_value(),
                 output_format=self._export_format_value(),
                 pre_roll=self._pre_roll,

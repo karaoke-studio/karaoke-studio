@@ -55,6 +55,7 @@ class ExportJobInputs:
     gpu_export_enabled: bool
     render_workers: int | None
     output_format: str = OUTPUT_FORMAT_MP4
+    use_skia_backend: bool | None = None
     bitrate_mbps: int = DEFAULT_VIDEO_BITRATE_MBPS
     pre_roll: RollSegmentConfig | None = None
     post_roll: RollSegmentConfig | None = None
@@ -137,6 +138,7 @@ class ExportJobController:
             output_format=output_format,
             native_export_enabled=False,
             gpu_export_enabled=inputs.gpu_export_enabled,
+            use_skia_backend=inputs.use_skia_backend,
             render_workers=inputs.render_workers,
         )
         # 组装阶段就拦下「导出名压在素材上」与非法/超长输出路径：留到渲染线程

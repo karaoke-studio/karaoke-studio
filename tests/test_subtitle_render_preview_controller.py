@@ -424,7 +424,7 @@ def test_preview_font_preparation_discards_superseded_state(qapp, qtbot, monkeyp
         def request(self, t):
             requests.append(t)
     monkeypatch.setattr(graphics, "AsyncSubtitleRenderer", Renderer)
-    def prepare(track, style, extra):
+    def prepare(track, style, extra, *, use_skia_backend):
         for _ in range(3):
             import time
             time.sleep(0.01)
@@ -433,6 +433,7 @@ def test_preview_font_preparation_discards_superseded_state(qapp, qtbot, monkeyp
     commits, requests = [], []
     class Host(QObject):
         uses_skia_quick_preview = False
+        _use_skia_backend = False
         _refresh_async_state = graphics.PreviewGraphicsView._refresh_async_state
         _cancel_font_preparation = graphics.PreviewGraphicsView._cancel_font_preparation
         _request_prepared_frame = graphics.PreviewGraphicsView._request_prepared_frame

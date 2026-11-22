@@ -569,6 +569,7 @@ class ExportWorkspaceControls:
     quality_label: CaptionLabel
     render_workers_combo: FluentComboBox
     native_check: CheckBox
+    skia_backend_check: CheckBox
     gpu_preview_check: CheckBox
     gpu_direct_present_check: CheckBox
     gpu_export_check: CheckBox
@@ -613,6 +614,8 @@ class ExportWorkspaceView(QWidget):
         gpu_preview_checked: bool,
         gpu_controls_visible: bool,
         gpu_direct_present_checked: bool = True,
+        skia_backend_visible: bool = False,
+        skia_backend_checked: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -911,13 +914,14 @@ class ExportWorkspaceView(QWidget):
         native_check.setEnabled(False)
         native_check.setVisible(False)
         native_check.setToolTip("native 字幕渲染器暂时停用。")
+        skia_backend_check = CheckBox("使用 Skia 后端", settings_col)
+        skia_backend_check.setChecked(skia_backend_checked)
+        skia_backend_check.setVisible(skia_backend_visible)
+        skia_backend_check.setToolTip("本次运行的字幕预览和导出使用 Skia。GPU 开关分别决定使用 GPU 或 Skia Raster。")
         gpu_preview_check = CheckBox("使用 GPU 渲染字幕预览", settings_col)
         gpu_preview_check.setChecked(gpu_preview_checked)
         gpu_preview_check.setVisible(gpu_controls_visible)
-        gpu_preview_check.setToolTip(
-            "使用稳定的 G5 shared-memory/QImage 路径加速字幕透明层；"
-            "不可用或失败时自动回退 Painter。"
-        )
+        gpu_preview_check.setToolTip("开启后使用 GPU 渲染字幕预览，关闭后使用 CPU。")
         gpu_direct_present_check = CheckBox("GPU 直画上屏（建议开启）", settings_col)
         gpu_direct_present_check.setChecked(gpu_direct_present_checked)
         gpu_direct_present_check.setVisible(gpu_controls_visible)
@@ -928,10 +932,8 @@ class ExportWorkspaceView(QWidget):
         gpu_export_check = CheckBox("使用 GPU 渲染字幕导出", settings_col)
         gpu_export_check.setChecked(gpu_controls_visible)
         gpu_export_check.setVisible(gpu_controls_visible)
-        gpu_export_check.setToolTip(
-            "仅用 Direct2D 渲染字幕条带，仍由当前 ffmpeg 编码器输出；"
-            "失败时会删除半成品并从头回退 Painter。"
-        )
+        gpu_export_check.setToolTip("仅控制字幕渲染。视频仍由所选编码器输出。")
+        settings_layout.addWidget(skia_backend_check)
         settings_layout.addWidget(gpu_preview_check)
         settings_layout.addWidget(gpu_direct_present_check)
         settings_layout.addWidget(gpu_export_check)
@@ -1031,6 +1033,7 @@ class ExportWorkspaceView(QWidget):
             quality_label=quality_label,
             render_workers_combo=render_workers_combo,
             native_check=native_check,
+            skia_backend_check=skia_backend_check,
             gpu_preview_check=gpu_preview_check,
             gpu_direct_present_check=gpu_direct_present_check,
             gpu_export_check=gpu_export_check,

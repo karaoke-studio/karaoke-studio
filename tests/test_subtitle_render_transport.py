@@ -890,7 +890,7 @@ def test_preview_graphics_gpu_opt_in_takes_precedence(qapp, monkeypatch):
 
 def test_preview_graphics_switches_gpu_backend_at_runtime(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
@@ -952,7 +952,7 @@ def test_preview_graphics_switches_gpu_backend_at_runtime(qapp, monkeypatch):
 
 def test_preview_graphics_repeated_gpu_toggles_stop_worker_threads(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     import threading
 
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
@@ -1216,7 +1216,7 @@ def test_preview_graphics_g6_toggle_while_hidden_engages_on_show(qapp, monkeypat
     """实时切换的完整链路：开关在导出页触发时预览画布隐藏——G6 模式已选定
     但子窗口不建立（没有可见画布）；回到预览页（showEvent）后必须建立。"""
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
         PreviewGraphicsView,
@@ -4251,7 +4251,7 @@ def test_preview_graphics_render_badge_closes_on_snapped_frame_while_paused(
 def test_preview_graphics_render_backend_label_tracks_actual_mode(qapp, monkeypatch):
     """画布的实际后端标签：以真实出帧后端为准，渲染器切换时发信号。"""
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     import krok_helper.subtitle_render.frontend.preview.preview_async as preview_async
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
@@ -4313,7 +4313,7 @@ def test_preview_graphics_render_backend_label_tracks_actual_mode(qapp, monkeypa
 def test_preview_graphics_render_backend_emits_in_sync_painter_mode(qapp, monkeypatch):
     """async 全关时手动开/关 GPU：两次切换都必须发信号（关回同步模式不漏报）。"""
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     import krok_helper.subtitle_render.frontend.preview.preview_async as preview_async
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
@@ -4360,7 +4360,7 @@ def test_preview_graphics_ignores_stale_backend_signal_after_renderer_swap(
 ):
     """渲染器热切换后，旧渲染器仍在事件队列里的迟到信号不得污染新状态。"""
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     import krok_helper.subtitle_render.frontend.preview.preview_async as preview_async
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
@@ -4637,7 +4637,7 @@ def test_preview_window_drag_uses_system_move_with_manual_fallback(
 
 def test_packaged_preview_does_not_import_experimental_skia(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
-    monkeypatch.setattr(pa, "gpu_preview_supported", lambda: True)
+    monkeypatch.setattr(pa, "gpu_preview_supported", lambda **_: True)
     import builtins
     import sys
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg

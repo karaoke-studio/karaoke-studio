@@ -455,7 +455,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._render_busy_timer.setInterval(_RENDER_BUSY_POLL_MS)
         self._render_busy_timer.timeout.connect(self._update_render_busy_badge)
         from krok_helper.subtitle_render.native.backend import skia_requested
-        skia = skia_requested()
+        skia = self._use_skia_backend = skia_requested()
         if async_preview_enabled() or skia:
             if skia:
                 from .skia_async import SkiaAsyncSubtitleRenderer
@@ -467,7 +467,7 @@ class PreviewGraphicsView(QGraphicsView):
             else:
                 renderer_cls = AsyncSubtitleRenderer
             self._async_renderer = renderer_cls(self._output_w, self._output_h, self)
-            self._connect_async_frame_signal(skia=skia)
+            self._connect_async_frame_signal()
             self._connect_render_progress_signal()
             self._connect_native_preview_signal()
             self._connect_gpu_fallback_signal()
@@ -624,13 +624,18 @@ class PreviewGraphicsView(QGraphicsView):
         self._sync_native_subtitle_visibility()
         return True
 
+    def set_skia_backend_enabled(self, enabled: bool, *, gpu_enabled: bool) -> None:
+        self._use_skia_backend = enabled
+        self._subtitle_item.clear_async_image()
+        self._native_cpu_fallback_active = False
+        self.set_gpu_preview_enabled(gpu_enabled)
+
     def set_gpu_preview_enabled(self, enabled: bool) -> bool:
         """Switch the subtitle worker between GPU and Painter at runtime."""
         from .preview_async import gpu_preview_supported
-        if enabled and not gpu_preview_supported():
+        if enabled and not gpu_preview_supported(use_skia_backend=self._use_skia_backend):
             return False
-        from krok_helper.subtitle_render.native.backend import skia_requested
-        skia = skia_requested()
+        skia = self._use_skia_backend
         if skia:
             from krok_helper.subtitle_render.native.skia_backend import SkiaSelection
             from .skia_async import SkiaAsyncSubtitleRenderer
@@ -642,13 +647,14 @@ class PreviewGraphicsView(QGraphicsView):
                 return True
         self._stop_async_renderer()
         if not skia and not enabled and not async_preview_enabled():
+            self._update_quick_preview()
             self._subtitle_item.set_async_mode(False)
             self._subtitle_item.set_time(self._t_ms)
             # 同步 QPainter 模式（async 全关）后端确定是 CPU，也必须通知 UI。
             self.renderBackendChanged.emit(self.render_backend_label())
             return True
         self._async_renderer = target_cls(self._output_w, self._output_h, self, **({"gpu_enabled": enabled} if skia else {}))
-        self._connect_async_frame_signal(skia=skia)
+        self._connect_async_frame_signal()
         self._connect_render_progress_signal()
         self._connect_native_preview_signal()
         self._connect_gpu_fallback_signal()
@@ -656,6 +662,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._connect_skia_error_signal()
         self._subtitle_item.set_async_mode(True)
         self._update_quick_preview()
+        self._sync_native_subtitle_visibility()
         if hasattr(self._async_renderer, "set_playing"):
             self._async_renderer.set_playing(self._video_playing)
         self._refresh_async_target()
@@ -696,6 +703,8 @@ class PreviewGraphicsView(QGraphicsView):
         self.gpuFallback.emit(reason)
 
     def _on_gpu_fallback(self, reason: str) -> None:
+        if self.sender() is not None and self.sender() is not self._async_renderer:
+            return
         # GPU 整帧回落后字幕由 CPU 图接管：Qt 字幕项要重新显示。
         self._native_cpu_fallback_active = True
         self._sync_native_subtitle_visibility()
@@ -856,7 +865,8 @@ class PreviewGraphicsView(QGraphicsView):
             self._commit_async_state()
             return
         from krok_helper.subtitle_render.engine.text.font_preparation import iter_prepare_fonts
-        steps = iter_prepare_fonts(self._track, self._style, self._subtitle_item._extra_tracks)
+        steps = iter_prepare_fonts(self._track, self._style, self._subtitle_item._extra_tracks,
+                                   use_skia_backend=self._use_skia_backend)
         timer = QTimer(self)
         timer.setInterval(1)
         self._font_preparation_timer = timer
@@ -1034,16 +1044,16 @@ class PreviewGraphicsView(QGraphicsView):
             return _ASYNC_PLAYBACK_STALE_TOLERANCE_MS
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
 
-    def _connect_async_frame_signal(self, *, skia: bool) -> None:
+    def _connect_async_frame_signal(self) -> None:
         renderer = self._async_renderer
 
-        def deliver_skia_frame(image: QImage, t_ms: int) -> None:
+        def deliver_frame(image: QImage, t_ms: int) -> None:
             # An image queued by a retired worker can still match the current time.
             if self._async_renderer is renderer:
                 self._on_async_frame(image, t_ms)
 
         renderer.frame_ready.connect(
-            deliver_skia_frame if skia else self._on_async_frame,
+            deliver_frame,
             Qt.ConnectionType.QueuedConnection,
         )
 

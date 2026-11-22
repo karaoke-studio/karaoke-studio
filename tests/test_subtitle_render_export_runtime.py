@@ -83,7 +83,7 @@ def test_export_runtime_prepares_worker_thread_and_all_signal_routes() -> None:
         thread_finished=_callback("thread_finished"),
     )
     parent = object()
-    job = SimpleNamespace(track=None, style=None, extra_tracks=())
+    job = SimpleNamespace(track=None, style=None, extra_tracks=(), use_skia_backend=None)
     preview_path = Path("preview.jpg")
 
     handles = controller.prepare(
@@ -117,7 +117,7 @@ def test_export_runtime_start_active_and_cancel_use_retained_handles() -> None:
     callback = _callback("callback")
     handles = controller.prepare(
         parent=object(),
-        job=SimpleNamespace(track=None, style=None, extra_tracks=()),
+        job=SimpleNamespace(track=None, style=None, extra_tracks=(), use_skia_backend=None),
         ffmpeg_dir=None,
         preview_image_path=None,
         preview_width=320,
@@ -144,7 +144,7 @@ def test_export_preparation_yields_and_can_cancel(qapp, qtbot, monkeypatch):
     from krok_helper.subtitle_render.engine.text import font_preparation
     steps = []
 
-    def prepare(*args):
+    def prepare(*args, **kwargs):
         for i in range(100):
             steps.append(i)
             yield
@@ -154,7 +154,7 @@ def test_export_preparation_yields_and_can_cancel(qapp, qtbot, monkeypatch):
     callback = _callback("callback")
     parent = QObject()
     handles = controller.prepare(parent=parent,
-        job=SimpleNamespace(track=None, style=None, extra_tracks=()),
+        job=SimpleNamespace(track=None, style=None, extra_tracks=(), use_skia_backend=None),
         ffmpeg_dir=None, preview_image_path=None, preview_width=320,
         callbacks=ExportRuntimeCallbacks(callback, callback, callback, callback, callback, callback))
     assert steps == []
@@ -184,7 +184,7 @@ def test_export_worker_starts_only_after_last_preparation_step(qapp, qtbot, monk
     from PyQt6.QtCore import QObject
     from krok_helper.subtitle_render.engine.text import font_preparation
     steps = []
-    def prepare(*args):
+    def prepare(*args, **kwargs):
         for i in range(3):
             steps.append(i)
             yield
@@ -193,7 +193,7 @@ def test_export_worker_starts_only_after_last_preparation_step(qapp, qtbot, monk
     callback = _callback("callback")
     parent = QObject()
     handles = controller.prepare(parent=parent,
-        job=SimpleNamespace(track=None, style=None, extra_tracks=()),
+        job=SimpleNamespace(track=None, style=None, extra_tracks=(), use_skia_backend=None),
         ffmpeg_dir=None, preview_image_path=None, preview_width=320,
         callbacks=ExportRuntimeCallbacks(callback, callback, callback, callback, callback, callback))
     controller.start(handles)
@@ -222,7 +222,7 @@ def test_real_export_thread_cancelled_during_preparation(qapp, qtbot, monkeypatc
     from krok_helper.subtitle_render.engine.text import font_preparation
     from krok_helper.subtitle_render.frontend.workflow import background_tasks
     steps = []
-    def prepare(*args):
+    def prepare(*args, **kwargs):
         for index in range(1000):
             steps.append(index)
             yield
@@ -235,7 +235,7 @@ def test_real_export_thread_cancelled_during_preparation(qapp, qtbot, monkeypatc
     controller = ExportRuntimeController()
     ignore = lambda *args: None
     handles = controller.prepare(parent=parent,
-        job=SimpleNamespace(track=None, style=None, extra_tracks=()),
+        job=SimpleNamespace(track=None, style=None, extra_tracks=(), use_skia_backend=None),
         ffmpeg_dir=None, preview_image_path=None, preview_width=320,
         callbacks=ExportRuntimeCallbacks(ignore, ignore,
             lambda *args: events.append("success"),
