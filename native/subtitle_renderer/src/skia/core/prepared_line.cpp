@@ -92,7 +92,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && !line.rubyGroups.empty();
     const bool compositingSpin = fadeActive
         && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.spins(); });
-    const bool entrySpin = compositingSpin && fadeSide < 0;
+    const bool entrySpin = compositingSpin && fadeSide < 0
+        && line.characterFade.entryKind == CharacterFade::Kind::Spin;
+    const bool fadeBeforeSpin = compositingSpin && fadeSide < 0
+        && line.characterFade.entryKind == CharacterFade::Kind::Fade;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     // Vertical singing particles can drift beyond the static glyph bounds.
@@ -325,7 +328,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return;
             }
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
-            if (rubyExitFade && opacity < .125f && !transform.transformed && !shader) {
+            // Entry also needs consistent edge coverage once the paint
+            // contributes more than one rounded alpha step.
+            if ((rubyExitFade || (fadeBeforeSpin && opacity * 255.f >= 1.5f))
+                && opacity < .125f && !transform.transformed && !shader) {
                 drawSamplePatternPath(canvas, path, paint, true);
                 return;
             }

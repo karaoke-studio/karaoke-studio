@@ -104,12 +104,11 @@ def _uses_role_glow(item):
     ))
 
 
-def _composes_character_fade(source, item, *, entering=True, paired=False):
+def _composes_character_fade(source, item, *, entering=True, other_animations=()):
     look = item.layout_style
     phase, opposite = ('entry', 'exit') if entering else ('exit', 'entry')
     return (source.get(f'{phase}_anim') == 'char_fade'
-            and (source.get(f'{opposite}_anim') == 'none'
-                 or (paired and source.get(f'{opposite}_anim') == 'char_fade'))
+            and source.get(f'{opposite}_anim') in ('none', *other_animations)
             and source.get('karaoke_anim') in {'none', 'utopia'} and not source.get('zoom_pulse')
             and not item.line.wipe_reverse
             and not (look.vertical or look.right_to_left or look.lower_ruby_enabled)
@@ -332,7 +331,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         if effect == 'flame':
                             particle_affine_lines.add(index)
                 continue
-            if (entry in {'none', 'fade', 'rise', 'spin_flip'} and leave in {'none', 'spin_flip'}
+            if (entry in {'none', 'fade', 'rise', 'spin_flip', 'char_fade'} and leave in {'none', 'spin_flip'}
                     and ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
                          or (leave == 'spin_flip' and source['exit_duration_ms'] > 0))):
                 spin_lines.add(index)
@@ -425,12 +424,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             exit_fade_lines = {
                 index for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True))
                 if reading.rubies
-                and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False, paired=True)
+                and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False,
+                                             other_animations=('char_fade',))
                 and all('shadow' not in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
             }
+        paired_fade_lines = exit_fade_lines | spin_lines
         entry_fade_lines = {
             index for index, item in enumerate(plan.lines)
-            if _composes_character_fade(ir['track']['lines'][item.track_index], item, paired=index in exit_fade_lines)
+            if _composes_character_fade(ir['track']['lines'][item.track_index], item,
+                                        other_animations=('char_fade', 'spin_flip')
+                                        if index in paired_fade_lines else ())
             and (geometry.ruby is not None or uses_authored_decoration(item.layout_style, 'glow'))
         }
         if entry_fade_lines:

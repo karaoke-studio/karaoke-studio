@@ -300,9 +300,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && readingDecor(false) && readingDecor(true);
         const bool spinEntry = line.entryAnimation == "spin_flip" && line.entryDurationMs > 0;
         const bool spinExit = line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
+        const bool fadeEntry = features.contains("p07_character_entry_fade_composition")
+            && line.entryAnimation == "char_fade";
         const bool spinComposition = transformedRuby && line.bursts.empty() && (spinEntry || spinExit)
             && (line.entryAnimation == "none" || line.entryAnimation == "fade"
-                || line.entryAnimation == "rise" || line.entryAnimation == "spin_flip")
+                || line.entryAnimation == "rise" || line.entryAnimation == "spin_flip" || fadeEntry)
             && (line.exitAnimation == "none" || line.exitAnimation == "spin_flip")
             && (!spinEntry || features.contains("p07_ruby_character_entry_spin"))
             && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
@@ -347,8 +349,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(true))))
             throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
-        const bool fadeEntry = features.contains("p07_character_entry_fade_composition")
-            && line.entryAnimation == "char_fade";
         const bool fadeExit = features.contains("p07_ruby_character_exit_fade") && annotated
             && line.exitAnimation == "char_fade"
             && style.rubyDecorationKindForState(false) != "shadow"

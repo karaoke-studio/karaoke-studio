@@ -242,6 +242,7 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('entry,entry_capability', [
     ('spin_flip', 'p07_ruby_character_entry_spin'), ('fade', 'p07_line_fade'), ('rise', 'p07_line_motion'),
+    ('char_fade', 'p07_character_entry_fade_composition'),
 ])
 def test_ruby_spin_pair_requires_both_phase_capabilities(binary, reading, target, entry, entry_capability):
     from test_subtitle_skia_static_glow import glowing_ruby
@@ -769,15 +770,17 @@ def test_ruby_can_spin_in_and_out_on_the_same_line(binary, application, tmp_path
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('entry', ['fade', 'rise'])
+@pytest.mark.parametrize('entry', ['fade', 'rise', 'char_fade'])
 @pytest.mark.parametrize('dpr', [1, 1.5])
-def test_whole_line_entry_and_ruby_spin_exit_match_gpu(binary, application, tmp_path, entry, dpr):
+def test_entry_fade_or_rise_and_ruby_spin_exit_match_gpu(binary, application, tmp_path, entry, dpr):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 
     case = next(case for case in build_cases(tmp_path) if case.case_id == 'exit_spin_flip')
     style = replace(case.style, entry_anim=entry)
     times = (299, 301, 306, 325, 450, 650, 899, 1500, 4899,
              4900, 5100, 5300, 5450, 5499, 5500, 5900)
+    if entry == 'char_fade':
+        times = tuple(sorted({*times, 300, 302, 303, 307, 310, 317, 330, 335, 360, 400}))
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times, dpr=dpr)
 
 
