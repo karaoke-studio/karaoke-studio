@@ -160,8 +160,17 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_faded_scanline_prefix_guides");
         const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
             && style.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
+        const bool ordinaryLineAnimation = (line.entryAnimation == "none" || line.entryAnimation == "fade"
+                || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
+            && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
+                || line.exitAnimation == "rise");
+        const bool animatedGuideGradients = features.contains("p05_vector_guide_composition")
+            && features.contains("p06_animated_singing_gradient_fill") && line.karaokeAnimation == "utopia"
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.scanlineEnabled
+            && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
+            && ordinaryLineAnimation;
         if (gradientGlowWithoutTexturedRoles && !(brightenedScanlineGradient
-                || (prefixFadedScanline && features.contains("p06_faded_scanline_gradient_fill")))
+                || animatedGuideGradients || (prefixFadedScanline && features.contains("p06_faded_scanline_gradient_fill")))
             && (style.vertical || style.rightToLeft || line.wipeReverse
             || line.karaokeAnimation != "none" || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || (line.entryAnimation != "none" && line.entryAnimation != "fade")
@@ -228,10 +237,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
         const bool rtlRubyNoWipe = rtlRuby && prepared.noWipe && features.contains("p07_rtl_ruby_no_wipe");
         const bool rtlRubyMotion = rtlRubySinging && features.contains("p07_rtl_ruby_line_animation");
-        const bool ordinaryLineAnimation = (line.entryAnimation == "none" || line.entryAnimation == "fade"
-                || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
-            && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
-                || line.exitAnimation == "rise");
         const bool verticalMotion = style.vertical && features.contains("p07_vertical_decoration_line_motion")
             && ordinaryLineAnimation && (line.karaokeAnimation == "none"
                 || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
