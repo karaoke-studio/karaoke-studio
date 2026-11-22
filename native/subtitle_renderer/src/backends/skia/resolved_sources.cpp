@@ -41,7 +41,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p05_mixed_fonts", "p05_reverse_wipe", "p05_reverse_overlap",
         "p05_resolved_ruby", "p05_upper_ruby", "p05_lower_ruby",
         "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
-        "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_multi_lane_outline",
+        "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_latin_secondary_outline", "p06_multi_lane_outline",
         "p06_role_solid_outlines", "p06_role_body_paints", "p06_ruby_role_paints", "p06_role_outline_gradient",
         "p06_outline_ruby", "p06_ruby_solid_outline", "p06_ruby_outline_gradient", "p07_ruby_line_animation",
         "p06_body_gradient", "p06_outline_gradient", "p06_image_fill",
@@ -90,7 +90,9 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     };
     const auto sourceFeatures = source.value("required_features").toArray();
     const bool vertical = kind == SourceKind::VerticalLyrics && isVerticalSource(source);
-    const bool prefixGuides = kind != SourceKind::Title && sourceFeatures.contains("p07_faded_scanline_prefix_guides");
+    const bool prefixGuides = kind != SourceKind::Title && (sourceFeatures.contains("p07_faded_scanline_prefix_guides")
+        || (sourceFeatures.contains("p05_vector_guide_composition")
+            && sourceFeatures.contains("p06_animated_singing_gradient_fill")));
     static const QJsonArray prefixGuideFeatures{
         "p05_vector_guides", "p05_vector_guide_composition", "p07_faded_scanline_prefix_guides"
     };

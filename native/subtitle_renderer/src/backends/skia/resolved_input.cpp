@@ -75,6 +75,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_vertical_gradient_glow") ? GlowPaintSupport::VerticalGradient : GlowPaintSupport::Solid;
     const bool gradientGlow = glowPaints != GlowPaintSupport::Solid;
     const bool latinPrimaryOutline = features.contains("p06_latin_primary_outline");
+    const bool latinSecondaryOutline = features.contains("p06_latin_secondary_outline");
     const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
     const bool roleOutlineGradients = features.contains("p06_role_outline_gradient");
     const bool outlineGradients = features.contains("p06_outline_gradient") || roleOutlineGradients;
@@ -93,8 +94,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
         .roleStaticGlow = roleStaticGlow, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
-    if (latinPrimaryOutline && (roleBodyPaints || roleStaticGlow || staticGlow))
-        splitLatinOutlineStyles(projected);
+    const bool secondaryScriptStylesOnly = latinSecondaryOutline && projected.charStyles.empty();
+    if ((latinPrimaryOutline || latinSecondaryOutline) && (roleBodyPaints || roleStaticGlow || staticGlow))
+        splitLatinOutlineStyles(projected, latinPrimaryOutline, latinSecondaryOutline);
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
@@ -165,6 +167,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
+        if (latinSecondaryOutline && (style.vertical || style.rightToLeft || line.wipeReverse
+            || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
+            || !ordinaryLineAnimation || line.karaokeAnimation == "no_wipe"))
+            throw BackendError("Skia 英数第二道描边需要正向横排和整行动画");
         const bool animatedGuideGradients = features.contains("p05_vector_guide_composition")
             && features.contains("p06_animated_singing_gradient_fill") && line.karaokeAnimation == "utopia"
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.scanlineEnabled
@@ -420,7 +426,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (annotated && (!features.contains("p07_ruby_singing_scale")
                 || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
                 || utopiaEntry || (utopiaExit && !rubyUtopiaExit)))
-            || (!projected.charStyles.empty() && !roleSinging)))
+            || (!projected.charStyles.empty() && !(roleSinging || secondaryScriptStylesOnly))))
             throw BackendError("Skia Utopia 动画当前仅支持正向横排实色正文");
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
         if (singingScale && annotated && !verticalSinging) {
@@ -522,8 +528,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (latin) {
                 if (paint.strokeWidth != paint.latinStrokeWidth && !latinPrimaryOutline)
                     throw BackendError("Skia 英数首层描边缺少能力声明");
-                if (paint.stroke2Width != paint.latinStroke2Width)
-                    throw BackendError("Skia 暂不支持英数与正文使用不同的第二道描边");
+                if (paint.stroke2Width != paint.latinStroke2Width && !latinSecondaryOutline)
+                    throw BackendError("Skia 英数第二道描边缺少能力声明");
             }
             if (roleFadedScanline) {
                 const auto supported = [](const PaintStyle& fill) {
@@ -533,6 +539,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     throw BackendError("Skia 行内角色扫字线支持实色和纵向渐变填充");
             }
             const float strokeWidth = latin ? paint.latinStrokeWidth : paint.strokeWidth;
+            const float stroke2Width = latin ? paint.latinStroke2Width : paint.stroke2Width;
             const auto beforeColor = argb(paint.beforeFillPaint.color);
             const auto afterColor = argb(paint.afterFillPaint.color);
             const double wipePad = std::floor(std::round(strokeWidth / glyphs.dpr) / 2);
@@ -572,11 +579,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     glyph.outline = ::subtitle::skia::SolidOutline{
                         ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth),
                         beforeOutline, afterOutline, bodyAlpha, strokeWidth};
-                if (paint.stroke2Width > 0)
+                if (stroke2Width > 0)
                     glyph.outerOutline = ::subtitle::skia::SolidOutline{
-                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth + paint.stroke2Width),
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth + stroke2Width),
                         argb(paint.beforeStroke2Paint.color), argb(paint.afterStroke2Paint.color),
-                        bodyAlpha || strokeAlpha, strokeWidth + paint.stroke2Width};
+                        bodyAlpha || strokeAlpha, strokeWidth + stroke2Width};
             }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
@@ -703,7 +710,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool lineGradientGlow = gradientGlow
             && ((prepared.glow.before.radius > 0 && style.beforeDecorPaint.mode != "solid")
                 || (prepared.glow.after.radius > 0 && style.afterDecorPaint.mode != "solid"));
-        if (lineGradientGlow || ((roleStaticGlow || (latinPrimaryOutline && staticGlow))
+        if (lineGradientGlow || ((roleStaticGlow || ((latinPrimaryOutline || latinSecondaryOutline) && staticGlow))
             && (hasInlineRoles || roleFadedScanline))) {
             resolveRoleGlows(prepared, line, style, projected.charStyles,
                              gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr);
@@ -800,7 +807,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (!movingGradient && (line.entryAnimation != "none" || line.exitAnimation != "none"
                     || line.scanlineEnabled || !line.bursts.empty()))
                 || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
-                || (!prepared.rubyGroups.empty() && !rubyMainPaint) || !projected.charStyles.empty())
+                || (!prepared.rubyGroups.empty() && !rubyMainPaint)
+                || (!projected.charStyles.empty() && !secondaryScriptStylesOnly))
                 throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");
             // Image paints need no line domain: the existing GPU tiles them on the canvas.
             for (int i = 0; i < 6 && image; ++i)

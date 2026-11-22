@@ -113,7 +113,7 @@ VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient',
     'p06_static_shadow', 'p06_ruby_shadow', 'p06_gradient_glow', 'p06_animated_singing_gradient_fill'})
 VECTOR_GUIDE_LINE_MOTION_FEATURES = frozenset({
-    'p06_multi_lane_outline',
+    'p06_multi_lane_outline', 'p06_latin_secondary_outline',
     'p07_line_fade', 'p07_line_motion', 'p07_utopia_line_animation', 'p07_ruby_line_animation'})
 VECTOR_GUIDE_FADED_SCANLINE_FEATURES = frozenset({
     'p06_faded_scanline_gradient_fill', 'p07_faded_scanline_prefix_guides',

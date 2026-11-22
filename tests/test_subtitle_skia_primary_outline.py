@@ -148,6 +148,21 @@ def test_latin_primary_outline_matches_actual_gpu(binary, project, use_role, dpr
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('latin_enabled', [False, True], ids=['japanese-only', 'latin-only'])
+def test_latin_secondary_outline_matches_actual_gpu(binary, project, latin_enabled):
+    track, style = latin_outline_project(project, use_role=False)
+    style = replace(style, latin_stroke_width_px=None, stroke2_enabled=not latin_enabled,
+                    stroke2_width_px=5, latin_stroke2_enabled=latin_enabled, latin_stroke2_width_px=7)
+    ir = ir_for(binary, (track, style))
+    feature = 'p06_latin_secondary_outline'
+    assert feature in ir['required_features']
+    ir['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process, pytest.raises(NativeRendererError):
+        configure(process, ir)
+    assert_outline_matches_actual_gpu(binary, track, style, dpr=1)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('width,translucent,semantics,dpr,effect,position,gap', [
     (6, False, 'legacy', 1, 'none', 'bottom', 0),
     (7, True, 'legacy', 1.5, 'none', 'bottom', 0),

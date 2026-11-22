@@ -30,5 +30,5 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, con
                           bool outlineGradients);
 void resolveRoleGlows(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
                       std::span<const TextStyle>, const RolePaintBounds* gradientBounds);
-void splitLatinOutlineStyles(RenderScene&);
+void splitLatinOutlineStyles(RenderScene&, bool primary, bool secondary);
 }

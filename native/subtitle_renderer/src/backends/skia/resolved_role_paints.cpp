@@ -10,7 +10,7 @@
 #include <algorithm>
 
 namespace krok::subtitle::native {
-void splitLatinOutlineStyles(RenderScene& scene) {
+void splitLatinOutlineStyles(RenderScene& scene, bool primary, bool secondary) {
     // Match the GPU style projection: distinct script stroke widths also
     // partition role gradient domains and phase masks for glow.
     std::vector<int> roleVariants(scene.charStyles.size(), -1);
@@ -21,11 +21,14 @@ void splitLatinOutlineStyles(RenderScene& scene) {
             if (cell.vectorGlyph || cell.bitmapGuide || !isLatinText(cell.text)) continue;
             const int role = cell.styleIndex;
             const auto& style = role < 0 ? lineStyle : scene.charStyles[role];
-            if (style.latinStrokeWidth == style.strokeWidth) continue;
+            const bool first = primary && style.latinStrokeWidth != style.strokeWidth;
+            const bool second = secondary && style.latinStroke2Width != style.stroke2Width;
+            if (!first && !second) continue;
             auto& variant = role < 0 ? lineVariant : roleVariants[role];
             if (variant < 0) {
                 auto latin = style;
-                latin.strokeWidth = latin.latinStrokeWidth;
+                if (first) latin.strokeWidth = latin.latinStrokeWidth;
+                if (second) latin.stroke2Width = latin.latinStroke2Width;
                 variant = int(scene.charStyles.size());
                 scene.charStyles.push_back(std::move(latin));
             }
