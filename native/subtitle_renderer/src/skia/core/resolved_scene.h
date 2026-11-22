@@ -60,6 +60,8 @@ struct ResolvedRubyGroup {
     ScanlineGradients scanlineGradients;
     bool drip = false;
 };
+enum class ParticleEntryGlow { None, Standard, SampledSymbols };
+
 struct ResolvedLine {
     std::vector<ResolvedCell> cells;
     int startMs = 0, endMs = 0;
@@ -90,6 +92,7 @@ struct ResolvedLine {
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
     bool rubyGeometryComposition = false;
+    ParticleEntryGlow particleEntryGlow = ParticleEntryGlow::None;
     SingingScale singingScale;
     float rubySingingOrigin = 0;
     UtopiaTransition utopiaTransition;

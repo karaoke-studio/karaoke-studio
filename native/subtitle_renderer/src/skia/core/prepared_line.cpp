@@ -57,7 +57,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (placement.x() != 0 || placement.y() != 0) canvas.translate(placement.x(), placement.y());
     const bool rubyGeometryPhase = line.rubyGeometryComposition
         && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
-    const bool particleEntryGlow = line.byteParticleEntryGlow && line.characterGeometry.inEntryWindow(tMs, line.startMs);
+    const bool hasParticleEntryGlow = line.particleEntryGlow != ParticleEntryGlow::None;
+    const bool particleEntryGlow = hasParticleEntryGlow && line.characterGeometry.inEntryWindow(tMs, line.startMs);
+    const bool sampledSymbols = line.particleEntryGlow == ParticleEntryGlow::SampledSymbols;
+    const bool symbolEntryGlow = particleEntryGlow && sampledSymbols;
     const std::string_view exitKind = line.characterGeometry.exit;
     const std::string_view entryKind = line.characterGeometry.entry;
     const bool pairedSparkle = entryKind == "petal" && exitKind == "sparkle";
@@ -68,10 +71,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (snowEntry) {
         sampledKind = entryKind;
         quantizedKind = entryKind;
+    } else if (sampledSymbols) {
+        sampledKind = entryKind;
+        if (entryKind != "note") quantizedKind = entryKind;
     } else if (line.rubyGeometryComposition && exitKind.empty() && (entryKind == "note" || entryKind == "ripple")) {
         sampledKind = entryKind;
         if (entryKind == "ripple") quantizedKind = entryKind;
-    } else if (line.byteParticleEntryGlow && entryKind == "feather") {
+    } else if (hasParticleEntryGlow && entryKind == "feather") {
         sampledKind = entryKind;
     }
     const bool particleExitFade = rubyGeometryPhase && !line.particles.empty() && line.glow.empty() && !line.hasRubyGlow()
@@ -331,7 +337,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             paint.setShader(shader);
             paint.setColor(shader ? SK_ColorWHITE : drawOutline ? (sung ? stroke->after : stroke->before)
                                                                : (sung ? cell.after : cell.before));
-            if (particleExitFade && opacity < 1.f && !transform.transformed && !shader) {
+            if ((particleExitFade || symbolEntryGlow) && opacity < 1.f && !transform.transformed && !shader) {
                 // Sample stroke coverage before applying the fixed-point fade.
                 // Round the painted pass before blending it into the target.
                 const float fixed = std::floor(opacity * opacitySteps) / opacitySteps;
@@ -440,9 +446,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         });
     // At the tail, each halo contributes only a few alpha steps, so a
     // difference in the blur source's rounding can change the visible edge.
-    const bool canonicalFadeGlow = rubyExitFade && hasGlow && std::ranges::none_of(states, [](const State& state) {
-        return state.transform.opacity > .02f;
-    });
+    const bool canonicalFadeGlow = (rubyExitFade || symbolEntryGlow) && hasGlow
+        && std::ranges::none_of(states, [](const State& state) { return state.transform.opacity > .02f; });
     const auto glowOpacity = [=](float opacity) {
         return canonicalFadeGlow ? std::floor(opacity * opacitySteps) / opacitySteps : opacity;
     };

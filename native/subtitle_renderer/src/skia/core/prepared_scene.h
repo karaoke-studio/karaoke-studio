@@ -81,7 +81,7 @@ private:
         StaticShadow shadow;
         std::vector<StaticShadow> cellShadows;
         std::vector<PreparedGlow> glow;
-        bool byteParticleEntryGlow = false;
+        ParticleEntryGlow particleEntryGlow = ParticleEntryGlow::None;
         SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();
         struct RoleGlow { std::vector<PreparedGlow> phases; std::vector<std::size_t> cells; };
         std::vector<RoleGlow> roleGlows;

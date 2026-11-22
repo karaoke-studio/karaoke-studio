@@ -62,12 +62,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             throw std::runtime_error("Skia 角色阴影单元数量无效");
         line.cellShadows = source.cellShadows;
         line.glow = PreparedGlow::prepare(source.glow);
-        line.byteParticleEntryGlow = !line.glow.empty() && source.rubyGeometryComposition
-            && (source.characterGeometry.entry == "heart" || source.characterGeometry.entry == "petal"
-                || source.characterGeometry.entry == "feather"
-                || source.characterGeometry.entry == "snow" || source.characterGeometry.entry == "snow_solid")
-            && (source.characterGeometry.exit.empty() || source.characterGeometry.exit == "note");
-        if (line.byteParticleEntryGlow)
+        if (!line.glow.empty()) line.particleEntryGlow = source.particleEntryGlow;
+        if (line.particleEntryGlow != ParticleEntryGlow::None)
             for (auto& layer : line.glow) layer.prepareBytePasses();
         line.bodyGlowTransitionBounds = source.bodyGlowTransitionBounds;
         line.isolateVerticalDecoration = line.vertical && (line.shadow.visible() || !line.glow.empty()

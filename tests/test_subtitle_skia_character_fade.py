@@ -417,17 +417,19 @@ def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('effect', ['heart', 'petal', 'feather', 'snow', 'snow_solid'])
+@pytest.mark.parametrize('effect', _RUBY_PARTICLE_ENTRIES)
 def test_ruby_particle_entry_body_glow_replays(binary, reading, target, effect):
     track, style = reading
     style = replace(style, entry_anim=effect, entry_lead_ms=600, exit_anim='none', karaoke_anim='utopia',
                     decoration_kind='glow', glow_before_radius_px=9, glow_after_radius_px=9,
                     ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     ir = upper_ir(binary, (track, style), 1.5)
-    feature = 'p07_ruby_particle_entry_glow'
-    assert feature in ir['required_features']
+    features = ir['required_features']
+    symbol = effect in {'sparkle', 'ripple', 'note'}
+    assert 'p07_ruby_particle_entry_glow' in features
+    assert ('p07_ruby_symbol_entry_glow' in features) == symbol
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
+    bad['required_features'].remove('p07_ruby_symbol_entry_glow' if symbol else 'p07_ruby_particle_entry_glow')
     start = ir['track']['lines'][0]['display_start_ms']
     times = [start + 1, start + 2, start + 17, start + 150, start + 600]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -543,18 +545,16 @@ def test_ruby_assembly_pair_owns_both_phases_and_replays(binary, reading, target
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
 
 
-@pytest.mark.parametrize('layer', ['decoration_kind', 'ruby_decoration_kind'])
-def test_ruby_particle_entry_rejects_unverified_glow(binary, reading, layer):
+def test_ruby_particle_entry_rejects_ruby_only_glow(binary, reading):
     track, style = reading
-    style = replace(style, entry_anim='sparkle', exit_anim='none', **{layer: 'glow'})
+    style = replace(style, entry_anim='sparkle', exit_anim='none', ruby_decoration_kind='glow')
     with pytest.raises(ValueError, match='粒子入场暂不支持阴影或光晕'):
         upper_ir(binary, (track, style), 1)
 
 
-def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None, dpr=1):
+def render_ruby_transition_frames(binary, case, times, *, extra_tracks=None, dpr=1):
     from krok_helper.subtitle_render.engine.export.native_export import native_export_chunk_frames
     from test_subtitle_render_gpu_backend import _render_g1_frames
-    from test_subtitle_skia_static_glow import assert_glow_parity
 
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, case.style, times, force_warp=False,
@@ -572,7 +572,14 @@ def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None,
                 batch, _ = collect(process, times[start:start + chunk], generation=generation)
                 frames.extend(batch)
             rendered.append(frames)
-    assert_glow_parity(times, reference, *rendered, case.case_id, check_p00_edges=True)
+    return reference, *rendered
+
+
+def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None, dpr=1):
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    images = render_ruby_transition_frames(binary, case, times, extra_tracks=extra_tracks, dpr=dpr)
+    assert_glow_parity(times, *images, case.case_id, check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -957,6 +964,37 @@ def test_ruby_particle_entry_body_glow_matches_actual_gpu(binary, application, t
     case = next(case for case in build_cases(tmp_path) if case.case_id == f'entry_{effect}')
     times = tuple(sorted({*case.timestamps_ms, 240, 300, 302, 307, 310, 317, 336, 400, 550, 899, 900, 901}))
     assert_ruby_transition_gpu_parity(binary, case, times, dpr=dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['sparkle', 'ripple', 'note'])
+def test_ruby_symbol_entry_body_glow_matches_actual_gpu(binary, application, tmp_path, effect):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path, include_real=False) if case.case_id == f'entry_{effect}')
+    # Check the first visible millisecond separately so a 16/17 alpha rounding
+    # difference cannot move an otherwise matching halo across the mask cutoff.
+    times = (299, 300, 302, 305, 310, 450, 650, 899, 900, 901, 1500, 3500)
+    reference, gpu, raster = render_ruby_transition_frames(binary, case, (*times, 301))
+    assert_glow_parity(times, reference[:-1], gpu[:-1], raster[:-1], case.case_id, check_p00_edges=True)
+    assert_glow_parity((301,), None, gpu[-1:], raster[-1:], case.case_id, check_p00_edges=True)
+    expected, actual = reference[-1], gpu[-1]
+    before, after = expected[..., 3], actual[..., 3]
+    union = (before > 16) | (after > 16)
+    assert (before > 16).any() and (after > 16).any()
+    differing = ((before > 16) != (after > 16)) & (abs(before.astype(int) - after) > 1)
+    budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
+    assert 1 - differing.sum() / union.sum() >= budget['min_alpha_iou']
+    occupied = [np.where(alpha > 16) for alpha in (before, after)]
+    for first, second in zip(*occupied, strict=True):
+        assert max(abs(first.min() - second.min()), abs(first.max() - second.max())) <= 2
+    mass = [int(alpha.sum()) for alpha in (before, after)]
+    assert abs(mass[0] - mass[1]) / max(mass) <= budget['max_alpha_sum_relative']
+    delta = abs(premultiplied(expected[union]) - premultiplied(actual[union]))
+    assert delta.mean() <= budget['max_union_channel_mae']
+    assert np.percentile(delta, 95) <= budget['max_union_p95']
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

@@ -13,6 +13,7 @@ PARTICLE_TRANSITIONS = {
 }
 RUBY_PARTICLE_EXITS = {'petal', 'feather', 'snow', 'snow_solid', 'note', 'heart', 'ripple', 'sparkle'}
 RUBY_PARTICLE_ENTRIES = RUBY_PARTICLE_EXITS
+RUBY_SYMBOL_ENTRIES = {'sparkle', 'ripple', 'note'}
 RUBY_PAIRED_PARTICLES = {'petal', 'feather', 'heart'}
 # Companion layers the existing planner emits around each energy transition:
 # fire tongues, back glow, embers and the ignition impact; bolts with their back

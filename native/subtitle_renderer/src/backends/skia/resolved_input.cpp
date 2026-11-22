@@ -378,12 +378,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && ((line.entryDurationMs > 0 && line.exitAnimation == "none")
                 || (line.exitDurationMs > 0 && line.entryAnimation == "none") || pairedParticles)
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
-        const bool particleEntryGlow = features.contains("p07_ruby_particle_entry_glow")
+        const bool symbolEntry = line.entryAnimation == "sparkle" || line.entryAnimation == "ripple"
+            || line.entryAnimation == "note";
+        const bool particleEntryGlow = particleComposition && features.contains("p07_ruby_particle_entry_glow")
             && (line.exitAnimation == "none" || petalNotePair)
-            && (line.entryAnimation == "heart" || line.entryAnimation == "petal" || line.entryAnimation == "feather"
-                || line.entryAnimation == "snow" || line.entryAnimation == "snow_solid")
+            && (!symbolEntry || features.contains("p07_ruby_symbol_entry_glow"))
             && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow")
-            && (petalNotePair || !features.contains("p07_ruby_petal_entry_flame_singing"));
+            && (petalNotePair || !features.contains("p07_ruby_petal_entry_flame_singing"))
+            && (symbolEntry || line.entryAnimation == "heart" || scene::isSkiaFallingParticle(entryParticleKind));
         const auto supportsParticleEntryDecoration = [particleEntryGlow](const auto& kind) {
             return kind == "none" || (particleEntryGlow && kind == "glow");
         };
@@ -472,6 +474,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (geometry && !geometryComposition && (style.strokeWidth > 0 || style.stroke2Width > 0))
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
         prepared.rubyGeometryComposition = geometryComposition;
+        if (particleEntryGlow) {
+            using Glow = ::subtitle::skia::ParticleEntryGlow;
+            prepared.particleEntryGlow = symbolEntry ? Glow::SampledSymbols : Glow::Standard;
+        }
         const bool transforms = prepared.characterFade.transforms() || geometry;
         prepared.transformedWipe = transforms && allowTransformedWipe;
         const bool pivots = transforms || utopia || (!style.vertical && !line.bursts.empty());

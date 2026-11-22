@@ -35,7 +35,7 @@ from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS,
-    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_PAIRED_PARTICLES,
+    RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_PAIRED_PARTICLES, RUBY_SYMBOL_ENTRIES,
     petal_entry_with_flame, petal_entry_with_scanline, petal_scanline_with_note_exit,
     vertical_singing_particle_modes, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
@@ -291,6 +291,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     same_energy_pair = False
     particle_entry_lines = set()
     particle_entry_glow = False
+    symbol_entry_glow = False
     repeated_particle_pair = False
     mixed_particle_pair = False
     petal_note_pair = False
@@ -332,10 +333,10 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                                             for kind in ruby_decoration_kinds(reading.target.style)}
                         body_glow = uses_authored_decoration(look, 'glow')
                         if ('shadow' in ruby_decorations or ('glow' in ruby_decorations and not body_glow)
-                                or (body_glow and (paired or (with_flame and not note_exit)
-                                                   or entry not in {'heart', 'petal', 'feather', 'snow', 'snow_solid'}))):
+                                or (body_glow and (paired or (with_flame and not note_exit)))):
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
                         particle_entry_glow |= body_glow
+                        symbol_entry_glow |= body_glow and entry in RUBY_SYMBOL_ENTRIES
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= paired and entry == leave
                         mixed_particle_pair |= paired and entry != leave
@@ -711,6 +712,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_entry')
         if particle_entry_glow:
             ir['required_features'].append('p07_ruby_particle_entry_glow')
+        if symbol_entry_glow:
+            ir['required_features'].append('p07_ruby_symbol_entry_glow')
         if repeated_particle_pair:
             ir['required_features'].append('p07_ruby_particle_entry_exit')
         if mixed_particle_pair:
