@@ -68,6 +68,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (snowEntry) {
         sampledKind = entryKind;
         quantizedKind = entryKind;
+    } else if (line.rubyGeometryComposition && exitKind.empty() && (entryKind == "note" || entryKind == "ripple")) {
+        sampledKind = entryKind;
+        if (entryKind == "ripple") quantizedKind = entryKind;
     } else if (line.byteParticleEntryGlow && entryKind == "feather") {
         sampledKind = entryKind;
     }

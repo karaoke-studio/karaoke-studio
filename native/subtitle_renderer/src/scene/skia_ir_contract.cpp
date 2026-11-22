@@ -293,12 +293,9 @@ bool allowsSkiaRubyParticleTransition(const QString& entry, const QString& exit,
     if (kind == "assemble" || kind == "dissolve") return features.contains("p07_ruby_particle_assembly");
     const bool allowFade = features.contains("p07_ruby_particle_fade");
     if (isSkiaEnergyTransition(kind)) return allowFade;
-    if (exit.isEmpty()) return features.contains("p07_ruby_particle_entry")
-        && (kind == "petal" || kind == "feather" || kind == "heart" || kind == "sparkle"
-            || kind == "snow" || kind == "snow_solid");
-    return allowFade && (kind == "petal" || kind == "feather"
-        || kind == "snow" || kind == "snow_solid" || kind == "note"
-        || kind == "heart" || kind == "ripple" || kind == "sparkle");
+    const bool ordinaryParticle = isSkiaFallingParticle(kind) || kind == "note" || kind == "heart"
+        || kind == "ripple" || kind == "sparkle";
+    return ordinaryParticle && (exit.isEmpty() ? features.contains("p07_ruby_particle_entry") : allowFade);
 }
 
 bool isSkiaTransitionLayer(const QString& transition, const QString& kind, bool entry) {

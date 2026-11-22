@@ -67,7 +67,7 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             if (particle.alpha <= 0.f || particle.sizePx <= 0.f) continue;
             const float alpha = colorAlpha * std::clamp(particle.alpha, 0.f, 1.f);
             const SkPoint center = verticalScanline ? SkPoint{-particle.y, particle.x} : SkPoint{particle.x, particle.y};
-            if (item.ring) {
+            if (item.ring && !sampled) {
                 auto color = paint.getColor4f();
                 color.fA = alpha;
                 drawParticleRing(canvas, center, *item.ring, particle.sizePx / 1000.f,

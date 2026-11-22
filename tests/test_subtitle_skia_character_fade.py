@@ -345,7 +345,7 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
     assert np.array_equal(frames[1], replay[0])
 
 
-_UNDECORATED_RUBY_PARTICLE_ENTRIES = ['sparkle', 'heart', 'petal', 'feather', 'snow', 'snow_solid']
+_RUBY_PARTICLE_ENTRIES = ['sparkle', 'ripple', 'note', 'heart', 'petal', 'feather', 'snow', 'snow_solid']
 _UNDECORATED_RUBY_PARTICLE_PAIRS = [
     ('heart', 'heart'), ('heart', 'petal'), ('heart', 'feather'),
     ('petal', 'heart'), ('petal', 'petal'), ('petal', 'feather'),
@@ -388,7 +388,7 @@ def test_undecorated_ruby_particle_pair_preserves_phase_clocks(binary, reading, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('effect', _UNDECORATED_RUBY_PARTICLE_ENTRIES)
+@pytest.mark.parametrize('effect', _RUBY_PARTICLE_ENTRIES)
 def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect):
     track, style = reading
     style = replace(style, entry_anim=effect, entry_lead_ms=600, exit_anim='none', karaoke_anim='utopia',
@@ -832,7 +832,7 @@ def test_ruby_particle_entry_body_glow_matches_actual_gpu(binary, application, t
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('effect', _UNDECORATED_RUBY_PARTICLE_ENTRIES)
+@pytest.mark.parametrize('effect', _RUBY_PARTICLE_ENTRIES)
 def test_undecorated_ruby_particle_entry_matches_actual_gpu(binary, application, tmp_path, effect):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 
