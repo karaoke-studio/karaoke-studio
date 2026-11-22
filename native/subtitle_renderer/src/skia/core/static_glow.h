@@ -55,7 +55,7 @@ public:
 private:
     PreparedGlow(const StaticGlow&, const GlowState&, std::optional<bool> phase);
     SkPaint strokePaint() const;
-    Source makeSource(SkCanvas&, const SkRect&, std::optional<SkColorType> rasterFormat = std::nullopt) const;
+    Source makeSource(SkCanvas&, const SkRect&, SkColorType format, bool raster = false) const;
     std::uint32_t before_, after_;
     int radius_;
     float strokeWidth_;

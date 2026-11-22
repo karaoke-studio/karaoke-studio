@@ -4170,6 +4170,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 原样 `exit_char_fade` 在 DPR 1 与 1.5 各比较 **33 帧**，含 **5475–5500ms** 逐毫秒扫描，两组原画质预算全部通过，原样统计增加 **6 帧**。Windows 相关 **48 项通过**，含缺少能力或归属越界后保留场景、倒序帧与重配逐字节相同、以及翻转与静态光晕回归。Windows Vulkan 与独立 Raster 干净构建各通过 **3 项 CTest**。
 - WSL Vulkan 与独立 Raster 干净构建各通过 **3 项 CTest**。X11 与 Wayland 的逐字淡化和静态光晕套件各 **173 通过、147 跳过**。Windows 原样工程 **23 帧**在 Vulkan 和 Raster 各自按顺序、倒序、乱序、同进程重配后独立定位、新进程乱序对比，哈希一致。
 - Windows 正式浮窗在 **6 个时刻**通过离屏 Vulkan 对照，离屏帧与编码前帧逐字节一致。1800、1950、1983ms 浮窗总 alpha 相差均小于 **0.1%**。证据前缀为 `build/p07-exit-fade-*`，时间点哈希为 `build/p00-skia-coverage/exit_char_fade-seek.json`。
+- 暗尾仍使用确定的 8 位光晕源，各次模糊改在目标后端的 F16 表面执行。Windows 1080p 原样工程 5495–5499ms 各复测 6 次，Vulkan sidecar 的 `render_ms` 中位数从 **135.013ms** 降至 **0.705ms**，P95 为 **1.556ms**。DPR 1 与 1.5 的画质预算、20 项 Windows 回归和正式浮窗复验均通过。同期 Raster 暗尾中位数为 **138.884ms**，继续核对局部覆盖成本。证据前缀 `build/p07-fade-perf-final-win-*`。
 
 ### 14.381 P07.1 同一行逐字淡入和淡出（2026-11-22）
 
