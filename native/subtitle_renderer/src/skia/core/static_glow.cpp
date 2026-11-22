@@ -212,11 +212,11 @@ void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index,
     if (!visible(after) || opacity <= 0 || path.isEmpty()) return;
     const float margin = 3.f * radius_ + 2.f;
     const auto bounds = path.getBounds().makeOutset(margin, margin);
-    // Blur in glyph space first. A floating-point source keeps the
-    // early and late alpha ramps consistent across Skia devices.
+    // Prepare the same floating-point glyph mask on every device, then
+    // blur in glyph space on the destination backend before transforming it.
     auto mask = makeSource(canvas, bounds, kRGBA_F16_SkColorType, true);
     drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, opacity);
-    auto blurred = makeSource(canvas, bounds, kRGBA_F16_SkColorType, true);
+    auto blurred = makeSource(canvas, bounds, kRGBA_F16_SkColorType);
     composite(*blurred.surface->getCanvas(), mask);
     auto pixels = blurred.surface->makeImageSnapshot();
     if (!pixels) throw std::runtime_error("Skia 逐字光晕临时表面无法取样");
