@@ -835,6 +835,54 @@ def test_vertical_particles_composite_sources_in_track_order(binary, project, re
     assert abs(results[0] - results[1]).mean() < .15
 
 
+@pytest.mark.parametrize('reverse,with_reading,body', [(False, True, 'glow'), (True, False, 'shadow')])
+def test_vertical_singing_particles_compose_with_body_and_reading_decoration(binary, project, reverse, with_reading, body):
+    from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
+
+    if with_reading:
+        track, style = vertical_ruby_source(project, position='center')
+        line = replace(track.lines[0], chars=track.lines[0].chars[:2])
+        track = replace(track, lines=[line])
+    else:
+        track, style = vertical_source(project, texts=['字', '字'], position='center', reverse=reverse)
+    base = colors('#FF303030', '#FF404040')
+    decoration = PaintFill(color='#FFFF0000')
+    palette = replace(base, before=replace(base.before, shadow=decoration),
+                      after=replace(base.after, shadow=decoration))
+    style = replace(style, karaoke_colors=palette, ruby_karaoke_colors=palette, decoration_kind=body,
+                    shadow_offset_x=14, shadow_offset_y=4, glow_before_radius_px=8, glow_after_radius_px=8,
+                    ruby_decoration_kind='shadow' if with_reading else 'none',
+                    ruby_shadow_offset_x=10, ruby_shadow_offset_y=-7, karaoke_anim='zoom_pulse',
+                    reverse_karaoke_anim='zoom_pulse', sing_fx='note', stroke_width_px=0, stroke2_enabled=False,
+                    fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    feature = 'p07_vertical_decorated_singing_particles'
+    assert {feature, f'p06_vertical_{body}', 'p07_vertical_singing_with_particles'} <= set(ir['required_features'])
+    malformed = copy.deepcopy(ir)
+    malformed['required_features'].remove(feature)
+    baseline = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
+    assert ir['skia_layout']['lines'] == baseline['skia_layout']['lines']
+    times = [150, 450, 750, 1300, 1700]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, malformed)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, baseline)
+            without_particles, _ = collect(process, times, generation=3)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert np.array_equal(frames[0], without_particles[0])
+        for frame in (frames[1], frames[2]):
+            red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+            assert (alpha[(red > 125) & (green < 40) & (blue < 40)] > 100).any()
+            assert (alpha[(blue > 125) & (green < 40) & (red < 40)] > 100).any()
+        results.append(premultiplied(np.stack(frames)))
+    assert abs(results[0] - results[1]).mean() < .15
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])

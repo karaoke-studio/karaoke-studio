@@ -199,6 +199,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_reverse_scanline_particles",
         "p07_vertical_scanline_particle_line_animation",
         "p07_vertical_outlined_singing_particles",
+        "p07_vertical_decorated_singing_particles",
         "p07_stroke_flash",
         "p07_composed_stroke_flash",
         "p07_no_wipe_decoration",
@@ -822,6 +823,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_outlined_singing_particles")
         && (!verticalParticles || !features.contains("p06_vertical_outline")))
         throw BackendError("Skia 竖排唱字粒子缺少描边能力");
+    if (features.contains("p07_vertical_decorated_singing_particles")
+        && (!verticalParticles || !(verticalGlow || verticalShadow || verticalRubyDecoration)))
+        throw BackendError("Skia 竖排唱字粒子缺少光晕或阴影能力");
     if (features.contains("p07_sing_twinkle")
         && (twinkleVersion < 1 || twinkleVersion > kSingingParticleSchema || std::floor(twinkleVersion) != twinkleVersion))
         throw BackendError("Skia 唱字粒子布局版本无效");

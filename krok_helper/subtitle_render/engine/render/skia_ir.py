@@ -34,7 +34,8 @@ from .skia_title_ir import build_title_sources
 from .skia_particle_ir import (
     ENERGY_TRANSITIONS, FALLING_PARTICLES, PARTICLE_TRANSITIONS,
     RUBY_PARTICLE_ENTRIES, RUBY_PARTICLE_EXITS, RUBY_PAIRED_PARTICLES,
-    petal_entry_with_flame, petal_entry_with_scanline, petal_scanline_with_note_exit, write_particle_anchors)
+    petal_entry_with_flame, petal_entry_with_scanline, petal_scanline_with_note_exit,
+    vertical_singing_particle_modes, write_particle_anchors)
 from .skia_gradient_ir import write_body_gradient_bounds
 from .skia_direction_ir import validate_reverse_source, project_reverse_wipe
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import line_endpoints
@@ -460,9 +461,11 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
         if any((index not in vertical_singing and line.get('karaoke_anim') not in modes)
                or not ordinary_line_animation(line)
-               or line.get('stroke_flash') or line.get('fx_bursts')
+               or line.get('stroke_flash') or (line.get('fx_bursts') and not vertical_singing_particle_modes(line))
                for index, line in enumerate(ir['track']['lines'])):
             raise ValueError('Skia 竖排静态装饰超出已支持的走字组合')
+        if any(line.get('fx_bursts') for line in ir['track']['lines']):
+            ir['required_features'].append('p07_vertical_decorated_singing_particles')
         if 'p07_vertical_scanline_band' in ir['required_features']:
             ir['required_features'].append('p07_vertical_scanline_decoration')
         ir['required_features'].extend(f'p06_vertical_{kind}' for kind in decorations)

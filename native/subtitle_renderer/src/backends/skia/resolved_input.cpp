@@ -714,6 +714,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_vertical_scanline_decoration");
         const bool verticalSingingShadow = verticalSinging && features.contains("p07_vertical_singing_shadow");
         const bool verticalDecorationAnimation = verticalFade || verticalMotion || verticalSingingAnimation;
+        const bool verticalParticleDecoration = style.vertical && features.contains("p07_vertical_decorated_singing_particles");
         const bool verticalDecoration = style.vertical && columnDecoration
             && (!annotated || features.contains("p06_vertical_ruby_decoration"))
             && (!hasGlow || features.contains("p06_vertical_glow"))
@@ -721,7 +722,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || (verticalSinging && (!hasShadow || verticalSingingShadow))
                 || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
             && (verticalDecorationAnimation || (line.entryAnimation == "none" && line.exitAnimation == "none"))
-            && (!line.scanlineEnabled || verticalScanlineDecoration) && !line.strokeFlashEnabled && line.bursts.empty();
+            && (!line.scanlineEnabled || verticalScanlineDecoration) && !line.strokeFlashEnabled
+            && (line.bursts.empty() || verticalParticleDecoration);
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
             && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
@@ -748,7 +750,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !(scanlineGlow || verticalScanlineDecoration))
-                || (!line.bursts.empty() && !particleGlow) || (line.strokeFlashEnabled && !flashGlow)
+                || (!line.bursts.empty() && !(particleGlow || (verticalParticleDecoration && verticalDecoration)))
+                || (line.strokeFlashEnabled && !flashGlow)
                 || hasInlineRoles || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
