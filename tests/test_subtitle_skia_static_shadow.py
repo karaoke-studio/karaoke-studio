@@ -326,6 +326,30 @@ def test_ruby_shadow_keeps_clocks_and_seeks(binary, reading, target, utopia, tmp
         }, sort_keys=True), encoding='utf-8')
 
 
+def test_faded_gradient_preserves_body_and_annotation_shadows(binary, reading):
+    track, style = shaded_ruby(reading, utopia=True, separate=True)
+    track = replace(track, lines=[replace(track.lines[0], display_end_override_ms=2700)])
+    palette = style.karaoke_colors
+    fill = PaintFill(mode='gradient_vertical', start_color='#FFA08010', end_color='#FFFAC020')
+    style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, text=fill)),
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600)
+    ir = upper_ir(binary, (track, style), 1)
+    plain_style = replace(style, decoration_kind='none', ruby_decoration_kind='none')
+    plain = upper_ir(binary, (track, plain_style), 1)
+    assert {'p06_animated_singing_gradient_fill', 'p06_static_shadow', 'p06_ruby_shadow'} <= set(ir['required_features'])
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    line, = ir['track']['lines']
+    times = [line['display_start_ms'] + 150, 850, line['display_end_ms'] - line['exit_duration_ms'] // 2]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [*times, times[0]])
+        configure(process, plain)
+        bare, _ = collect(process, times, generation=2)
+    assert np.array_equal(frames[0], frames[-1])
+    for t, frame, no_shadow in zip(times, frames[:3], bare, strict=True):
+        assert np.count_nonzero(frame[..., 3] > 16) > np.count_nonzero(no_shadow[..., 3] > 16), t
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('utopia,separate,dpr', [(False, False, 1), (False, True, 1.5), (True, False, 1), (True, True, 1.5)])
 def test_ruby_shadow_matches_actual_d2d_and_gpu_raster(binary, reading, utopia, separate, dpr):

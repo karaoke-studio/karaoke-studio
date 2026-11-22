@@ -687,7 +687,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !features.contains("p05_lower_ruby");
         const bool singingMainPaint = movingGradient || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
             && features.contains("p06_utopia_main_paint"));
-        const bool paintedGlow = (rubyMainPaint || movingGradient) && !hasShadow;
+        const bool movingGradientShadow = movingSingingGradientFill && movingGradient && hasShadow && !hasGlow;
+        const bool paintedDecoration = (rubyMainPaint || movingGradient) && (!hasShadow || movingGradientShadow);
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");
@@ -731,14 +732,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
                     || horizontalShadowMotion || horizontalGlowMotion
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
-                || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion
+                || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion || movingGradientShadow
                       || (verticalDecoration && verticalDecorationAnimation)
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !(scanlineGlow || verticalScanlineDecoration))
                 || (!line.bursts.empty() && !(particleGlow || (verticalParticleDecoration && verticalDecoration)))
                 || (line.strokeFlashEnabled && !flashGlow)
-                || hasInlineRoles || ((gradient || image) && !paintedGlow) || (hasGlow && utopia && !singingGlow)
+                || hasInlineRoles || ((gradient || image) && !paintedDecoration)
+                || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (!roleBodyPaints && (gradient || image)) {

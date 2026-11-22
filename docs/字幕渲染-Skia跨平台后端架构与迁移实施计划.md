@@ -4291,6 +4291,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 「Ghost Sequence」48 行、90 处注音；「カレンデュラ レクイエム」62 行、187 处注音。两份原工程各抽取 21 个 1080p 时刻，通过 D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 的原有验收门槛。「Ghost Sequence」实际浮窗播放原视频 20 秒并完成两次跳转。Windows 专项 14 项通过。日志前缀 `build/skia-animated-gradient-*`。
 - WSL X11 与 Wayland 各 6 项通过，覆盖前置和行首替换导唱符、渐变描边与回跳。Windows 和 WSL 的 Vulkan 构建各通过 3 项 CTest。
 
+### 14.397 P06 / P07 整行出入场中的渐变与实色阴影（2026-11-22）
+
+- 横排 Utopia 整行出入场可同时保留纵向渐变正文与上下错开的实色阴影。正文与上注音沿用各自的走字裁切和阴影偏移，合成后共同进入整行淡化。行首矢量导唱符使用同一行的画笔和阴影。
+- 「光のない街」原工程 41 行、111 处注音，26 个 1080p 时刻覆盖行首替换导唱符、出入场以及走字。D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 各通过全部采样。Windows 专项 18 项通过。日志前缀 `build/skia-moving-shadow-*`。
+- WSL X11 和 Wayland 各 6 项通过。Windows 和 WSL 的 Vulkan 构建各通过 3 项 CTest。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
