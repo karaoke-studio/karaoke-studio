@@ -235,6 +235,16 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
+        if (std::ranges::any_of(line.cells, [](const auto& cell) {
+                return cell.bitmap && cell.bitmap->wipes() && cell.bitmap->usesLineFront();
+            })) {
+            SkRect ink = SkRect::MakeEmpty();
+            for (const auto& cell : line.cells) {
+                if (cell.bitmap) ink.join(cell.bitmap->box());
+                else if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
+            }
+            line.bitmapLineFrontOrigin = line.wipeRightToLeft ? ink.right() : ink.left();
+        }
         if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)

@@ -11,7 +11,7 @@
 namespace subtitle::skia {
 PreparedBitmapGuide::PreparedBitmapGuide(const BitmapGuide& guide, std::size_t& remainingHaloBytes)
     : before_(guide.before), after_(guide.after), box_(guide.box), clipPad_(guide.clipPad),
-      animation_(guide.animation) {
+      useLineFront_(guide.useLineFront), animation_(guide.animation) {
     if (!box_.isFinite() || box_.isEmpty() || !std::isfinite(clipPad_) || clipPad_ < 0
         || (!before_ && !after_))
         throw std::runtime_error("Skia 图片导唱符的图片或绘制框无效");

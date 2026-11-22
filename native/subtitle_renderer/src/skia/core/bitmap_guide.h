@@ -30,6 +30,7 @@ struct BitmapGuide {
     bool decorate = true;
     float clipPad = 0; // Wipe clip reach beyond the box (stroke widths + 4).
     std::shared_ptr<const BitmapGuideAnimation> animation; // Title before image, looping on media time.
+    bool useLineFront = false;
 };
 
 class PreparedBitmapGuide {
@@ -38,6 +39,7 @@ public:
     bool wipes() const { return bool(after_); }
     const SkRect& box() const { return box_; }
     float clipPad() const { return clipPad_; }
+    bool usesLineFront() const { return useLineFront_; }
     void draw(SkCanvas&, bool after, float opacity, int mediaTimeMs = 0) const;
 
 private:
@@ -49,6 +51,7 @@ private:
     sk_sp<SkImage> before_, after_;
     SkRect box_;
     float clipPad_;
+    bool useLineFront_;
     std::vector<Halo> halo_[2];
     std::shared_ptr<const BitmapGuideAnimation> animation_;
 };

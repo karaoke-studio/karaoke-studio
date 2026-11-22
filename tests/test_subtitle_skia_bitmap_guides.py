@@ -292,6 +292,7 @@ VARIANTS = {
                       'bitmap_margin_bottom_px': 6},
     'zoom_two_images': {'bitmap_zoom_percent': 130, 'after_path': 'after'},
     'anchored': {'prefix_timing': 'anchored'},
+    'displaced': {'bitmap_margin_bottom_px': -115, 'bitmap_margin_right_px': -999},
 }
 
 
@@ -321,7 +322,7 @@ def test_p00_bitmap_guide_matches_actual_gpu(binary, application, tmp_path, vari
             rendered.append(frames)
     assert_glow_parity(TIMES, reference, *rendered, f'guide_bitmap-{variant}', check_p00_edges=True)
     # The whole-frame budget must not hide the guide: compare its own region too.
-    region = (slice(440, 700), slice(560, 800))
+    region = (slice(440, 820 if variant == 'displaced' else 700), slice(560, 800))
     for t, ref, gpu in zip(TIMES, reference, rendered[0]):
         def premultiplied(frame):
             frame = frame[region].astype(float)

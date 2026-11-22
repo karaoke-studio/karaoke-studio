@@ -97,6 +97,7 @@ private:
         UtopiaTransition utopiaTransition;
         std::vector<int> followingDone;
         std::optional<float> inkCenter;
+        std::optional<float> bitmapLineFrontOrigin;
         bool transformedWipe = false;
         ScanlineBand scanline;
         std::optional<ShapeSignal> shapeSignal;

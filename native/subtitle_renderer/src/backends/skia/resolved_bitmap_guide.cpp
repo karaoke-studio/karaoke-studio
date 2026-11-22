@@ -75,7 +75,8 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
         SkRect::MakeLTRB(float((x + ink[0]) * dpr), float((y + ink[1]) * dpr),
                          float((x + ink[2]) * dpr), float((y + ink[3]) * dpr)),
         skiaStaticGlow(style), !guide.noDecor,
-        std::max(style.strokeWidth + style.stroke2Width, 2.f) + 4.f, animation};
+        std::max(style.strokeWidth + style.stroke2Width, 2.f) + 4.f, animation,
+        std::abs(double(guide.marginBottom)) >= contentH};
     return out;
 }
 }

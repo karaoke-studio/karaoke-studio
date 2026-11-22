@@ -252,7 +252,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             return;
         }
         float edge = front(cell, rawProgress(cell));
-        if (tMs > wipeEnd(cell)) {
+        if (guide.usesLineFront() && line.bitmapLineFrontOrigin) {
+            // A guide displaced from the lyric row keeps its own box and takes
+            // the owning line's wipe position while its before/after parts draw.
+            edge = lineWipeFront(line.cells, tMs, *line.bitmapLineFrontOrigin, line.scanline.restingPad,
+                                 line.wipeRightToLeft);
+        } else if (tMs > wipeEnd(cell)) {
             if (index + 1 < line.cells.size() && !line.cells[index + 1].path.isEmpty()) {
                 edge = front(line.cells[index + 1], rawProgress(line.cells[index + 1]));
             } else {
