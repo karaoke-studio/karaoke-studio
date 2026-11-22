@@ -1089,6 +1089,81 @@ def test_vertical_scanline_moves_and_fades_with_the_line(binary, project, entry,
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+@pytest.mark.parametrize('karaoke,mode,entry,exit_', [
+    ('utopia', 'color', 'rise', 'slide_out'),
+    ('zoom_pulse', 'brighten', 'slide_in', 'rise'),
+])
+def test_vertical_singing_scanline_and_line_transition_share_the_scene(binary, project, karaoke, mode, entry, exit_):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, base = vertical_ruby_source(project, position='center')
+    line, = track.lines
+    track = replace(track, lines=[replace(line, display_start_override_ms=0,
+                                          display_end_override_ms=line.end_ms + 500)])
+    base = replace(base, karaoke_anim=karaoke, zoom_pulse_peak_pct=140,
+                   karaoke_colors=colors('#700000', '#007000'),
+                   ruby_karaoke_colors=colors('#000070', '#700070'),
+                   scanline_enabled=True, scanline_mode=mode, scanline_shape='band', scanline_color='#00FFFF',
+                   scanline_width_px=32, scanline_glow_px=5, scanline_brightness_pct=100,
+                   decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6,
+                   ruby_decoration_kind='glow', ruby_glow_before_radius_px=4, ruby_glow_after_radius_px=5)
+    animated = replace(base, entry_anim=entry, exit_anim=exit_, entry_lead_ms=800, exit_fade_ms=650)
+    dpr = 1.5
+    ir = ir_for(binary, (track, animated), dpr=dpr)
+    static = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p07_vertical_singing_scanline_line_animation'
+    assert {feature, 'p07_vertical_singing_line_animation', 'p07_vertical_scanline_singing',
+            'p07_ruby_scanline'} <= set(ir['required_features'])
+    line_ir, = ir['track']['lines']
+    start, end = line_ir['display_start_ms'], line_ir['display_end_ms']
+    enter_ms, leave_ms = line_ir['entry_duration_ms'], line_ir['exit_duration_ms']
+    assert enter_ms > 0 and leave_ms > 0
+    times = [start + enter_ms // 2, 400, end - leave_ms + 200]
+    if karaoke == 'zoom_pulse':
+        assert times[-1] < line_ir['resolved_intervals'][-1][1] + 300
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    targets = []
+
+    def highlighted(frame):
+        red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+        paint = ((red < 38) & (green > 176) & (blue > 176) if mode == 'color'
+                 else np.maximum.reduce((red, green, blue)) > 176)
+        return paint & (alpha > 60)
+
+    def center(frame):
+        alpha = frame[..., 3]
+        return np.array([np.average(np.arange(alpha.shape[1]), weights=alpha.sum(axis=0)),
+                         np.average(np.arange(alpha.shape[0]), weights=alpha.sum(axis=1))])
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, static)
+            reference, _ = collect(process, times, generation=3)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert np.array_equal(frames[1], reference[1])
+        assert np.count_nonzero(highlighted(frames[1])) > 10
+        assert not highlighted(frames[0]).any() and not highlighted(frames[2]).any()
+        enter = center(frames[0]) - center(reference[0])
+        leave = center(frames[2]) - center(reference[2])
+        if entry == 'rise':
+            assert enter[1] > 6 and abs(enter[0]) < 3, enter
+            assert leave[0] < -9 and abs(leave[1]) < 3, leave
+        else:
+            assert enter[0] < -9 and abs(enter[1]) < 3, enter
+            assert leave[1] < -6 and abs(leave[0]) < 3, leave
+        assert all(0 < frames[i][..., 3].sum() < reference[i][..., 3].sum() for i in (0, 2))
+        targets.append(np.stack(frames))
+    diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('body_decoration', [False, True])
 @pytest.mark.parametrize('before,after', [('glow', 'glow'), ('shadow', 'shadow'),

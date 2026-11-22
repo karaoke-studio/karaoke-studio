@@ -15,6 +15,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     singing_vertical_palette = False
     vertical_zoom_band = False
     reverse_vertical_singing = False
+    moving_vertical_singing = False
     shapes = set()
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
@@ -28,15 +29,16 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             motion = not ordinary and ordinary_line_animation(line) and not source.wipe_reverse
             singing = index in vertical_singing_tracks
             palette = (look.scanline_mode in {'brighten', 'follow_before', 'follow_after'}
-                       and ordinary)
+                       and (ordinary or (motion and singing)))
             if (look.scanline_shape != 'band' or (look.scanline_mode != 'color' and not palette) or not (ordinary or motion)
                     or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                     or line.get('stroke_flash') or bursts):
                 raise ValueError('Skia 竖排扫字线的布局或高亮组合暂不支持')
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse
-            moving_vertical_band |= motion
+            moving_vertical_band |= motion and not singing
             vertical_singing_band |= singing
+            moving_vertical_singing |= motion and singing
             reverse_vertical_singing |= singing and source.wipe_reverse
             vertical_zoom_band |= singing and bool(line.get('zoom_pulse'))
             vertical_palette_band |= palette
@@ -95,6 +97,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_vertical_scanline_singing')
     if reverse_vertical_singing:
         features.append('p07_vertical_reverse_scanline_singing')
+    if moving_vertical_singing:
+        features.append('p07_vertical_singing_scanline_line_animation')
     if vertical_zoom_band:
         features.append('p07_vertical_zoom_scanline')
     if vertical_palette_band:
@@ -148,7 +152,8 @@ def write_scanline_schema(ir, track, style):
 def declare_vertical_scanline_viewport(ir):
     features = set(ir['required_features'])
     if 'p07_vertical_scanline_band' in features and not features.intersection({
-            'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation'}):
+            'p07_vertical_reverse_scanline', 'p07_vertical_scanline_line_animation',
+            'p07_vertical_singing_scanline_line_animation'}):
         ir['required_features'].append('p08_vertical_scanline_viewport')
         if 'p07_vertical_scanline_palette' in features:
             ir['required_features'].append('p08_vertical_scanline_palette_viewport')

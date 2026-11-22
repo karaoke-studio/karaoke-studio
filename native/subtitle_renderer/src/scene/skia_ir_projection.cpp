@@ -308,13 +308,16 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineMode == "color" && !source.wipeReverse
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && (source.fxBursts.empty() || shapedSinging);
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
+        const bool movingVerticalSingingScanline = cfg.vertical && utopiaSinging
+            && features.contains("p07_vertical_singing_scanline_line_animation");
         const bool movingUnscaledScanline = features.contains("p07_scanline_unscaled_line_animation")
             && source.karaokeAnimation == "none" && !source.wipeReverse;
-        const bool movingScanline = (movingUtopiaScanline || movingUnscaledScanline)
+        const bool movingScanline = (movingUtopiaScanline || movingUnscaledScanline || movingVerticalSingingScanline)
             && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
-            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
+            && (!source.zoomPulseEnabled || (movingVerticalSingingScanline && composedScanline))
+            && !source.wipeReverse && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool particleScanline = features.contains("p07_ruby_petal_entry_scanline") && utopiaSinging
             && source.entryAnimation == "petal" && (source.exitAnimation == "none" || noteExit)
             && (resolved.scanlineShape == "band" || particleScanlineImage) && resolved.scanlineMode == "color"
@@ -329,11 +332,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
             && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
-        const bool verticalScanlineMotion = movingUnscaledScanline && movingScanline
-            && features.contains("p07_vertical_scanline_line_animation");
+        const bool verticalScanlineMotion = movingScanline && (movingVerticalSingingScanline
+            || (movingUnscaledScanline && features.contains("p07_vertical_scanline_line_animation")));
         const bool mixedVerticalScanline = cfg.vertical && features.contains("p07_vertical_mixed_scanline");
         const bool verticalPaletteBand = features.contains("p07_vertical_scanline_palette")
-            && staticScanline && (source.karaokeAnimation == "none"
+            && (staticScanline || (movingVerticalSingingScanline && movingScanline))
+            && (source.karaokeAnimation == "none"
                 || (utopiaScanline && features.contains("p07_vertical_singing_scanline_palette")))
             && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_palette"))
             && (resolved.scanlineMode == "brighten" || resolved.scanlineMode == "follow_before"

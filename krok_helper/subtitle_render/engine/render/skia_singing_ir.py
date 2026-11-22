@@ -15,7 +15,7 @@ def vertical_singing_lines(ir, plan):
                 and source.get('karaoke_anim') == 'utopia'
                 and ordinary_line_animation(source)
                 and ({source.get('entry_anim'), source.get('exit_anim')} == {'none'}
-                     or not (item.line.wipe_reverse or source.get('scanline')))
+                     or not item.line.wipe_reverse)
                 and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
                 and not uses_authored_decoration(look, 'shadow')
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):

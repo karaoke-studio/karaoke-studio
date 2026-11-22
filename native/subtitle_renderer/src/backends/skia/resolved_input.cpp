@@ -237,7 +237,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
         const bool verticalSingingAnimation = style.vertical && singingScale && ordinaryLineAnimation
-            && !line.wipeReverse && !line.scanlineEnabled && features.contains("p07_vertical_singing_line_animation");
+            && !line.wipeReverse && features.contains("p07_vertical_singing_line_animation")
+            && (!line.scanlineEnabled || features.contains("p07_vertical_singing_scanline_line_animation"));
         const bool verticalSinging = style.vertical && singingScale && features.contains("p07_vertical_singing_scale")
             && (!style.dualLineLayout || features.contains("p07_vertical_columns_singing_scale"))
             && (!line.zoomPulseEnabled || features.contains("p07_vertical_zoom_pulse"))

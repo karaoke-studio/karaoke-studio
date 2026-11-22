@@ -163,6 +163,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_scanline_line_animation",
         "p07_vertical_scanline_singing",
         "p07_vertical_reverse_scanline_singing",
+        "p07_vertical_singing_scanline_line_animation",
         "p07_vertical_zoom_scanline",
         "p07_vertical_scanline_palette",
         "p07_vertical_reverse_scanline_palette",
@@ -341,7 +342,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool verticalScanlinePalette = features.contains("p07_vertical_scanline_palette");
     if (verticalScanlineViewport
         && (!features.contains("p08_vertical_viewport") || !features.contains("p07_vertical_scanline_band")
-            || features.contains("p07_vertical_reverse_scanline") || features.contains("p07_vertical_scanline_line_animation")))
+            || features.contains("p07_vertical_reverse_scanline") || features.contains("p07_vertical_scanline_line_animation")
+            || features.contains("p07_vertical_singing_scanline_line_animation")))
         throw BackendError("Skia 竖排扫字线视口当前仅支持无整行出入场的正向走字");
     if (features.contains("p08_vertical_scanline_palette_viewport") != (verticalScanlinePalette && verticalScanlineViewport))
         throw BackendError("Skia 竖排扫字线取色缺少对应视口能力");
@@ -708,6 +710,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_vertical_scanline_singing") || !features.contains("p07_vertical_reverse_singing")
             || !features.contains("p07_vertical_reverse_scanline")))
         throw BackendError("Skia 反向竖排扫字线缺少对应唱字能力");
+    if (features.contains("p07_vertical_singing_scanline_line_animation")
+        && (!features.contains("p07_vertical_scanline_singing") || !features.contains("p07_vertical_singing_line_animation")))
+        throw BackendError("Skia 竖排唱字扫字线缺少对应整行出入场能力");
     if (features.contains("p07_vertical_zoom_scanline")
         && (!features.contains("p07_vertical_scanline_singing") || !features.contains("p07_vertical_zoom_pulse")))
         throw BackendError("Skia 竖排扫字线缺少对应整字放大能力");
