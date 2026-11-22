@@ -1,9 +1,14 @@
-"""Declare whole-line fade and movement in the Skia scene protocol."""
+"""Check line animation modes and declare whole-line animation in Skia IR."""
 
 
 def ordinary_line_animation(source):
     return (source.get('entry_anim') in {'none', 'fade', 'slide_in', 'rise'}
             and source.get('exit_anim') in {'none', 'fade', 'slide_out', 'rise'})
+
+
+def is_noise_animation(source):
+    animations = {source.get('entry_anim'), source.get('exit_anim')}
+    return 'noise' in animations and animations <= {'none', 'noise'}
 
 
 def declare_line_animations(ir):

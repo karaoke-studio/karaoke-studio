@@ -3931,6 +3931,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows **23 通过**，WSL X11 和 Wayland 各 **22 通过、1 项 Windows 专用跳过**。三份原生构建各通过 **3 项 CTest**。日志前缀为 `build/p07-vertical-singing-motion-*`。
 - 正式浮窗和导出抽取入场、唱中和退场共 **4 帧**。Windows Vulkan、WSL X11 和 Wayland 各通过 **1 项**，浮窗满足既有画面预算，离屏和导出逐字节一致。日志前缀为 `build/p09-vertical-zoom-motion-quick-*`。
 
+### 14.345 P07 唱字能力与轴心声明（2026-11-22）
+
+- `skia_singing_ir.py` 接管 Utopia、整字放大和对应的布局及特效组合声明。场景编排仍提供时间计划、字体度量和各阶段已解析的组合结果。轴心数据使用既有布局函数和格式。
+- 以 `a7a1bde4` 为基准，比较 **129 个原样输入**、DPR 1 与 1.5 的前后结果。**242 份**可编译 IR 的 SHA-256 与 **16 份**拒绝原因全部一致。Windows 架构、竖排唱字、整行出入场和多轨专项 **40 通过**。证据为 `build/p07-singing-ir-exact.json`。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
