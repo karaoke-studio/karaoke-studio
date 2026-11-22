@@ -4177,6 +4177,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 上注音沿用一次解析的正文归属，入场和退场使用同一个逐字窗口与既有退场优先规则。两段能力分别协商，去掉任何一个声明都会拒绝该配置，已配置场景的回放保持一致。
 - P00 样式启用两段逐字淡化，DPR 1、1.5 各测 **38 帧**，包括入场起始和逐毫秒暗尾。共 **76 帧**通过两组原画质预算。Windows 专项 **12 通过**，WSL X11 和 Wayland 专项各 **8 通过**，两份 Vulkan 构建各通过 **3 项 CTest**。日志前缀 `build/p07-fade-pair-*`。
+- `97510eba` 的托管 Mac CI **5 项通过**。Apple Silicon 与 Intel 的产品套件各 **2449 通过、1591 跳过**，两份干净环境验证包各 **290 通过**，**98 份**规范样例哈希一致。此轮使用虚拟 Metal，继续保留物理设备验收。[Mac CI 44993133752](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44993133752)
 
 ### 14.382 P07.1 上注音逐字滴落复验（2026-11-22）
 
@@ -4189,6 +4190,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 入场的低透明度边线按固定位置采样。最初仅有一级有效 alpha 的笔刷沿用原始覆盖合成。DPR 1、1.5 各测 **26 帧**，共 **52 帧**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原预算。
 - Windows 聚焦 **26 通过**，WSL X11 与 Wayland 各 **12 通过**，两份 Vulkan 构建各通过 **3 项 CTest**。证据前缀为 `build/p07-fade-spin-*`。
 - `8aa3c6c6` 在 Windows 真实 D2D GPU、Vulkan 与 Raster 三条路径各自复用进程，连续重配 **122 个原样场景、560 帧**，全部通过两组原画质预算。单独验收的 1 个竖排样本沿用 §14.365。证据为 `build/p00-skia-coverage/original-warm-pixels-8aa3c6c6.json`。
+- `7a27563d` 在暗尾性能修复后重跑同一批 **122 个场景、560 帧**，两组画面对照均通过。WSL Vulkan 与独立 Raster 干净构建各 **3 项 CTest**，X11 和 Wayland 的淡出回放各 **4 项通过**。证据为 `build/p00-skia-coverage/original-warm-pixels-7a27563d.json` 和 `build/p07-fade-crop-final-wsl-*`。
 
 ## 15. 前期探针清理范围
 
