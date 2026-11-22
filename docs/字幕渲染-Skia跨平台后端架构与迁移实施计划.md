@@ -626,6 +626,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - [x] 正向横排同一行同时使用逐字翻转入场和退场，见 §14.377。
   - [x] 正向横排整行淡入或升入，接带上注音的逐字翻转退场，见 §14.379。
   - [x] 正向横排逐字淡入，接带上注音的逐字翻转退场，见 §14.383。
+  - [x] 正向横排逐字翻转入场，接带上注音的逐字淡出，见 §14.384。
   - [x] 已验收整行淡化、横移、升降和基础逐字淡化，见 §14.58–§14.60。
   - [x] 已验收正向、无描边横排正文的逐字滴落和翻转，以及该范围的零时长，见 §14.62。
   - [x] 已验收该范围内逐字滴落、翻转与唱字重叠的动态走字前沿，见 §14.64。
@@ -3586,6 +3587,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 仍保留有光晕的原样配置门槛。301ms 切到目标格式后，四种原样的 D2D/Vulkan 通过，该帧 Vulkan/Raster 的遮罩 IoU 为 **0.9439–0.9633**。音符、涟漪和两类雪花的无装饰变体也仍有未达预算的帧。保留现有绘制精度，逐帧日志为 `build/p07-annotated-particle-entry-*-win.log`，配置扫描原样集合仍为 **107/129**。
 - 音符、涟漪、星光的试验用固定 16 个子像素位置采样粒子路径。三种带光晕原样在 DPR 1.5 各 **14 帧**符合原预算。DPR 1 的 301ms Vulkan/Raster 已通过，D2D/Vulkan 的遮罩 IoU 分别为 **0.9690、0.9681、0.9689**，低于 **0.97**。无光晕变体的 302ms 正文边缘仍有差异。试验已撤回，证据为 `build/p07-entry-particle-pattern-*.log` 与 `build/p07-note-ripple-sparkle-16-sample-unverified.patch`。 [Microsoft 的多重采样位置说明](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_standard_multisample_quality_levels)
 - 2026-11-22 复验三种原样入场各 **29 帧**。固定位置环采样通过涟漪的 300ms 临界帧。浮点合成与固定光晕边界的试验在 Vulkan 对 Raster **87/87 帧通过**，D2D 对 Vulkan 每种仍有 **301ms** 一帧超遮罩预算，最大总 alpha 差为 **0.21%**。音符的另一试验在该帧把 IoU 收至 **0.96904**。三种组合保留原门槛，证据前缀为 `build/p07-symbol-*`。
+- 只改变实色光晕源的路径覆盖采样，音符 301ms 的 D2D 对 Vulkan IoU 达到 **0.96980**，原预算为 **0.97**。对正文各层单独启用固定采样或 2 倍覆盖，仍未通过该帧。保留实验 `build/p07-symbol-entry-coverage-layers-unverified.patch` 和相应帧，继续沿用已有产品范围。
 
 ### 14.281 P00 主线原样配置与画面复验（2026-11-21）
 
@@ -4191,6 +4193,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 聚焦 **26 通过**，WSL X11 与 Wayland 各 **12 通过**，两份 Vulkan 构建各通过 **3 项 CTest**。证据前缀为 `build/p07-fade-spin-*`。
 - `8aa3c6c6` 在 Windows 真实 D2D GPU、Vulkan 与 Raster 三条路径各自复用进程，连续重配 **122 个原样场景、560 帧**，全部通过两组原画质预算。单独验收的 1 个竖排样本沿用 §14.365。证据为 `build/p00-skia-coverage/original-warm-pixels-8aa3c6c6.json`。
 - `7a27563d` 在暗尾性能修复后重跑同一批 **122 个场景、560 帧**，两组画面对照均通过。WSL Vulkan 与独立 Raster 干净构建各 **3 项 CTest**，X11 和 Wayland 的淡出回放各 **4 项通过**。证据为 `build/p00-skia-coverage/original-warm-pixels-7a27563d.json` 和 `build/p07-fade-crop-final-wsl-*`。
+
+### 14.384 P07.1 逐字翻转入场接逐字淡出（2026-11-22）
+
+- 两段共用注音归属，翻转入场使用注音组轴心，逐字淡出仅使用所属正文单元的透明度。缺任一阶段的声明或注音归属越界时拒绝本次配置，旧场景继续正确回放。
+- P00 样式的组合变体在 DPR 1、1.5 各测 **45 帧**，覆盖低透明度翻转与逐毫秒淡出暗尾，**90 帧**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 两组原画质预算。Windows 有 **24 项**相关回归通过，WSL X11 与 Wayland 各 **14 项通过**。两份 Vulkan 构建各通过 **3 项 CTest**。日志前缀为 `build/p07-spin-entry-fade-exit-*`。
 
 ## 15. 前期探针清理范围
 

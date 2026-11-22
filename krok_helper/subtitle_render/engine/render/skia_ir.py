@@ -331,7 +331,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         if effect == 'flame':
                             particle_affine_lines.add(index)
                 continue
-            if (entry in {'none', 'fade', 'rise', 'spin_flip', 'char_fade'} and leave in {'none', 'spin_flip'}
+            if (entry in {'none', 'fade', 'rise', 'spin_flip', 'char_fade'}
+                    and (leave in {'none', 'spin_flip'} or (entry == 'spin_flip' and leave == 'char_fade'))
                     and ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
                          or (leave == 'spin_flip' and source['exit_duration_ms'] > 0))):
                 spin_lines.add(index)
@@ -425,7 +426,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 index for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True))
                 if reading.rubies
                 and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False,
-                                             other_animations=('char_fade',))
+                                             other_animations=('char_fade', 'spin_flip') if index in spin_lines
+                                             else ('char_fade',))
                 and all('shadow' not in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
             }
         paired_fade_lines = exit_fade_lines | spin_lines
