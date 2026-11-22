@@ -91,6 +91,25 @@ std::array<sk_sp<SkShader>, 2> rubyGradients(const std::array<const PaintStyle*,
 bool validPhases(const QJsonObject& layer) {
     return !layer.isEmpty() && layer.size() == int(layer.contains("before")) + int(layer.contains("after"));
 }
+PaintStyle lowerFillGradient(const QJsonObject& gradients, const char* phase) {
+    PaintStyle fill;
+    if (!gradients.contains(phase)) return fill;
+    const auto stops = gradients.value(phase).toArray();
+    if (stops.size() < 2 || stops.size() > 4096) throw BackendError("Skia 下方注音渐变色标无效");
+    fill.mode = "gradient_vertical";
+    double previous = -1;
+    for (const auto& stop : stops) {
+        const auto pair = stop.toArray();
+        const double position = pair.size() == 2 ? pair[0].toDouble(-1) : -1;
+        if (!std::isfinite(position) || position < 0 || position > 100 || position < previous)
+            throw BackendError("Skia 下方注音渐变色标位置无效");
+        const auto color = rgbaPaint(pair[1]);
+        fill.stops.push_back({float(position / 100), {std::uint8_t(color >> 16), std::uint8_t(color >> 8),
+                                                      std::uint8_t(color), std::uint8_t(color >> 24)}});
+        previous = position;
+    }
+    return fill;
+}
 ::subtitle::skia::GlowState lowerGlowState(const QJsonObject& glow, const char* phase, double dpr) {
     if (!glow.contains(phase)) return {};
     const auto state = glow.value(phase).toObject();
@@ -223,9 +242,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool lowerScanline = line.scanlineEnabled && line.karaokeAnimation != "no_wipe"
         && features.contains("p07_lower_ruby_scanline")
         && (staticLine || (decorationMotion.lower && features.contains("p07_lower_ruby_scanline_line_animation")));
+    const bool lowerScanlineParticles = lowerScanline && fadedUtopiaScanline && fixedScanlinePaint && !line.bursts.empty()
+        && features.contains("p07_lower_ruby_scanline_singing_particles");
     const bool allowLowerDecoration = !vertical && (staticLine || decorationMotion.lower)
         && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
-        && (!line.scanlineEnabled || lowerScanline) && !line.strokeFlashEnabled && line.bursts.empty() && scene.charStyles.empty();
+        && (!line.scanlineEnabled || lowerScanline) && !line.strokeFlashEnabled
+        && (line.bursts.empty() || lowerScanlineParticles) && scene.charStyles.empty();
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const bool allowVerticalRotation = features.contains("p05_vertical_rotated_ruby");
@@ -302,8 +324,15 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         };
         ::subtitle::skia::StaticGlow glow{
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
-        const bool gradientFill = !lower && (rubyFillGradientMode(paint.rubyBeforeFillPaint)
-                                           || rubyFillGradientMode(paint.rubyAfterFillPaint));
+        const auto lowerGradients = object.value("fill_gradient").toObject();
+        if (object.contains("fill_gradient") && (!lower || !lowerScanlineParticles
+            || !features.contains("p06_lower_ruby_fill_gradient") || !validPhases(lowerGradients)))
+            throw BackendError("Skia 下方注音渐变缺少对应画笔能力");
+        auto lowerBefore = lowerFillGradient(lowerGradients, "before");
+        auto lowerAfter = lowerFillGradient(lowerGradients, "after");
+        const auto& beforeFill = lower ? lowerBefore : paint.rubyBeforeFillPaint;
+        const auto& afterFill = lower ? lowerAfter : paint.rubyAfterFillPaint;
+        const bool gradientFill = rubyFillGradientMode(beforeFill) || rubyFillGradientMode(afterFill);
         const bool imageFill = !lower && (paint.rubyBeforeFillPaint.mode == "image" || paint.rubyAfterFillPaint.mode == "image");
         const bool allowFillPaint = !vertical && (staticLine || roleLineFade) && lowerWipe && line.karaokeAnimation != "no_wipe"
             && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
@@ -328,6 +357,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto fill = object.value("paint").toObject();
         const auto before = lower ? rgbaPaint(fill.value("before")) : argb(paint.rubyBeforeFillPaint.color);
         const auto after = lower ? rgbaPaint(fill.value("after")) : argb(paint.rubyAfterFillPaint.color);
+        if (lower) {
+            const auto rgba = [](std::uint32_t color) {
+                return RgbaColor{std::uint8_t(color >> 16), std::uint8_t(color >> 8),
+                                 std::uint8_t(color), std::uint8_t(color >> 24)};
+            };
+            lowerBefore.color = rgba(before);
+            lowerAfter.color = rgba(after);
+        }
         const auto units = object.value("units");
         if (!units.isArray() || units.toArray().isEmpty() || units.toArray().size() > 4096
             || (totalCells += units.toArray().size()) > 65536)
@@ -356,8 +393,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool protectPrimary = primary.width && (primary.hasAlpha() || (gradientOutlines
             && (paintNeedsBodyProtection(paint.rubyBeforeStrokePaint) || paintNeedsBodyProtection(paint.rubyAfterStrokePaint))));
         const bool protectFill = imageFill || (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
-            && (::subtitle::skia::paintNeedsBodyProtection(paint.rubyBeforeFillPaint)
-                || ::subtitle::skia::paintNeedsBodyProtection(paint.rubyAfterFillPaint)));
+            && (paintNeedsBodyProtection(beforeFill) || paintNeedsBodyProtection(afterFill)));
         const float innerWidth = float(primary.width * glyphs.dpr);
         const float secondaryWidth = float(secondary.width * glyphs.dpr);
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
@@ -511,8 +547,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             for (const auto& cell : cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
         const auto outlinePad = ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr));
-        auto gradients = gradientFill ? rubyGradients({&paint.rubyBeforeFillPaint, &paint.rubyAfterFillPaint},
-            paint.rubyHorizontalGradientWithMain, source, ink, outlinePad, glyphs.dpr,
+        auto gradients = gradientFill ? rubyGradients({&beforeFill, &afterFill},
+            !lower && paint.rubyHorizontalGradientWithMain, source, ink, outlinePad, glyphs.dpr,
             allowRoleFill ? &roleBounds->forRole(role) : nullptr)
             : std::array<sk_sp<SkShader>, 2>{};
         std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;

@@ -743,7 +743,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
-            && !features.contains("p05_lower_ruby");
+            && (!features.contains("p05_lower_ruby")
+                || (fadedScanlineParticles && features.contains("p07_lower_ruby_scanline_singing_particles")));
         const bool singingMainPaint = movingGradient || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
             && features.contains("p06_utopia_main_paint"));
         const bool movingGradientShadow = movingSingingGradientFill && movingGradient && hasShadow && !hasGlow;

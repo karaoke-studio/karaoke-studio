@@ -337,7 +337,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool lowerScanline = features.contains("p07_lower_ruby_scanline")
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
-            && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
+            && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled
+            && (source.fxBursts.empty() || (fadedBandParticles && features.contains("p07_lower_ruby_scanline_singing_particles")));
         const bool verticalScanlineMotion = movingScanline && (movingVerticalSingingScanline
             || (movingUnscaledScanline && features.contains("p07_vertical_scanline_line_animation")));
         const bool mixedVerticalScanline = cfg.vertical && features.contains("p07_vertical_mixed_scanline");

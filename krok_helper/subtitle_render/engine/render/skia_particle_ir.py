@@ -77,7 +77,7 @@ def faded_band_singing_particles(line, style):
     return (bool(bursts) and 'fade' in animations and animations <= {'none', 'fade'}
             and line.get('scanline') and line.get('karaoke_anim') == 'utopia'
             and style.scanline_shape == 'band' and style.scanline_mode != 'role'
-            and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('wipe_reverse')
+            and not (style.vertical or style.right_to_left or line.get('wipe_reverse')
                      or line.get('zoom_pulse') or line.get('stroke_flash'))
             and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart', 'snow_solid'} for burst in bursts))
 
@@ -169,7 +169,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                     and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not petal_with_flame)))
-                or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
+                or (look.lower_ruby_enabled and not (faded_band
+                    and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
+                or (annotated and animated and index not in composed_lines)
                 or (not (annotated or vertical_particles or faded_band) and outlined)
                 or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')

@@ -134,7 +134,9 @@ def write_body_gradient_bounds(ir, plan):
                 or (not (faded_band or palette_band or moving) and (animations != {'none'}
                                                   or source.get('scanline') or source.get('fx_bursts')))
                 or source.get('stroke_flash')
-                or (source.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
+                or (source.get('karaoke_anim') != 'none' and not singing)
+                or (look.lower_ruby_enabled and not (particle_band
+                    and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or any(c.role_label is not None or (c.vector_glyph is not None
                        and (not (moving or prefix_band) or guide_symbol_is_bitmap(c.vector_glyph)))
                        for c in item.render_line.chars)):

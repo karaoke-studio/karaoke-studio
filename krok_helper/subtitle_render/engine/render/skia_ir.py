@@ -605,6 +605,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
+            lower_gradients='p07_lower_ruby_scanline_singing_particles' in ir['required_features'],
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
             fade_lines=fade_lines | composed_geometry_lines, spin_lines=spin_lines,
             affine_lines=affine_geometry_lines | utopia_exit_lines, utopia_exit_lines=utopia_exit_lines)
@@ -652,6 +653,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 ir['required_features'].append('p06_ruby_role_glow')
         if 'lower_ruby_glow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_glow')
+        if 'lower_ruby_fill_gradient_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_fill_gradient')
         if 'lower_ruby_shadow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow')
         spin_sources = [ir['track']['lines'][plan.lines[index].track_index] for index in spin_lines]

@@ -30,6 +30,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     moving_vertical_singing = False
     shapes = set()
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
+    lower_singing_particles = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -74,8 +75,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
                   and (ordinary or motion or particle_entry))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
+        lower_particles = faded_band and look.scanline_mode in {'default', 'color'}
         lower_band = (look.lower_ruby_enabled and (ordinary or motion) and look.scanline_shape == 'band'
-                      and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash or bursts))
+                      and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash)
+                      and (not bursts or lower_particles))
         role_composition = look.scanline_mode == 'role' and (bool(track.rubies) or uses_authored_decoration(look, 'glow'))
         chars = render_line_with_guide_symbols(source).chars
         inline_roles = any(c.role_label is not None for c in chars)
@@ -102,6 +105,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         unscaled_line_motion |= motion and not utopia
         lower_readings = lower_readings or lower_band
         moving_lower_readings |= lower_band and motion
+        lower_singing_particles |= lower_band and lower_particles
         if shape:
             shapes.add(look.scanline_shape)
             particle_scanline_image |= image_during_transition
@@ -150,6 +154,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_scanline_unscaled_line_animation')
     if moving_lower_readings:
         features.append('p07_lower_ruby_scanline_line_animation')
+    if lower_singing_particles:
+        features.append('p07_lower_ruby_scanline_singing_particles')
     if particle_band_tracks:
         features.append('p07_ruby_petal_entry_scanline')
     if moving_shapes:

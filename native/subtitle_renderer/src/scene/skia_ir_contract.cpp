@@ -197,6 +197,8 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_scanline",
         "p07_lower_ruby_scanline",
         "p07_lower_ruby_scanline_line_animation",
+        "p07_lower_ruby_scanline_singing_particles",
+        "p06_lower_ruby_fill_gradient",
         "p07_ruby_scanline_particles",
         "p07_character_transform",
         "p07_sing_twinkle",
@@ -915,7 +917,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 唱字粒子布局版本无效");
     if (twinkleVersion >= 12
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_resolved_ruby")
-            || features.contains("p05_lower_ruby")))
+            || (features.contains("p05_lower_ruby") && !features.contains("p07_lower_ruby_scanline_singing_particles"))))
         throw BackendError("Skia 注音粒子缺少上注音或唱字粒子能力声明");
     if (features.contains("p07_ruby_scanline_particles")
         && (twinkleVersion < 13 || !features.contains("p07_ruby_scanline")))
@@ -1000,6 +1002,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_outline_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 描边渐变缺少正文渐变或描边能力声明");
+    if (features.contains("p07_lower_ruby_scanline_singing_particles")
+        && (!features.contains("p07_lower_ruby_scanline_line_animation")
+            || !features.contains("p07_faded_scanline_singing_particles")))
+        throw BackendError("Skia 下方注音的淡化扫字线缺少唱字粒子能力");
+    if (features.contains("p06_lower_ruby_fill_gradient")
+        && (!features.contains("p07_lower_ruby_scanline_singing_particles")
+            || layout.value("lower_ruby_fill_gradient_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音渐变缺少对应布局能力");
     const bool animatedSingingGradient = features.contains("p06_animated_singing_gradient_fill");
     const bool rubySingingPaint = features.contains("p06_ruby_main_paint") && features.contains("p07_ruby_singing_scale");
     if (features.contains("p06_utopia_main_paint")

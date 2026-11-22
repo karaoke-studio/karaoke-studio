@@ -36,7 +36,7 @@ void validateSkiaLowerLayout(const QJsonObject& ir) {
             if (group.contains("lower") && !group.value("lower").isBool())
                 throw BackendError("Skia 下方注音组标记无效");
             if (!group.value("lower").toBool()) {
-                if (group.contains("paint") || group.contains("source_index"))
+                if (group.contains("paint") || group.contains("source_index") || group.contains("fill_gradient"))
                     throw BackendError("Skia 上注音不能携带下方注音外观或来源");
                 continue;
             }

@@ -1,8 +1,9 @@
-"""Materialize lower-reading provenance and solid appearance at the IR boundary."""
+"""Materialize lower-reading provenance and appearance at the IR boundary."""
 from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
 from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius, ruby_shadow_dx, ruby_shadow_dy
+from .effects.fills import gradient_stops
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
@@ -21,13 +22,21 @@ def lower_sources(prepared):
     return sources, indices
 
 
-def lower_solid_appearance(style):
+def lower_appearance(style, *, allow_gradient=False):
     before, after = ruby_decoration_kinds(style)
     colors = effective_ruby_karaoke_colors(style)
-    if colors.before.text.mode != 'solid' or colors.after.text.mode != 'solid':
-        raise ValueError('Skia 下方注音文字当前仅支持实色')
     result = {'paint': {'before': list(rgba(colors.before.text.color)),
                         'after': list(rgba(colors.after.text.color))}}
+    gradients = {}
+    for phase, palette in (('before', colors.before), ('after', colors.after)):
+        fill = palette.text
+        if fill.mode == 'solid':
+            continue
+        if not allow_gradient or fill.mode != 'gradient_vertical':
+            raise ValueError('Skia 下方注音文字当前仅支持实色或已验证的纵向渐变')
+        gradients[phase] = [[position, list(rgba(color))] for position, color in gradient_stops(fill)]
+    if gradients:
+        result['fill_gradient'] = gradients
     glow, shadow = {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':

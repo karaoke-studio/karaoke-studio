@@ -15,6 +15,7 @@ from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia 
 from test_subtitle_skia_roles import colors
 from test_subtitle_skia_ruby_groups import configure
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
@@ -389,6 +390,38 @@ def test_lower_scanline_line_motion_matches_actual_gpu(binary, application, tmp_
     times = (950, 951, 957, 967, 986, 1120, 1260, 1380, 1550, 2600,
              4110, 4280, 4450, 4530, 4610, 4614, 4633, 4643, 4649, 4650)
     assert_ruby_transition_gpu_parity(binary, case, times, dpr=dpr)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_lower_gradient_scanline_with_singing_particles_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
+
+    base = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    line = replace(base.track.lines[0], display_start_override_ms=950, display_end_override_ms=4650)
+    style = replace(base.style, karaoke_anim='utopia', entry_anim='fade', exit_anim='fade',
+                    scanline_enabled=True, scanline_forward_enabled=True, scanline_mode='default',
+                    scanline_effect='none', sing_fx='twinkle', lower_ruby_follow_upper=True,
+                    ruby_colors_follow_main=True)
+    ramp = PaintFill(mode='gradient_vertical', start_color='#FFF0A030', end_color='#FF4060E0')
+    colors = style.karaoke_colors
+    style = replace(style, karaoke_colors=replace(colors, before=replace(colors.before, text=ramp)))
+    case = replace(base, track=replace(base.track, lines=[line]), style=style)
+    valid = prepare_skia_scene_ir(case.track, style, executable=binary, width=1920, height=1080, fps=60)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, valid)
+        assert 'p06_lower_ruby_fill_gradient' in valid['required_features']
+        invalid = copy.deepcopy(valid)
+        group = next(group for group in invalid['skia_layout']['lines'][0]['ruby_groups']
+                     if 'fill_gradient' in group)
+        group['fill_gradient']['before'][0][0] = -1
+        frames, _ = collect(process, [1550, 2600])
+        with pytest.raises(NativeRendererError, match='色标'):
+            configure(process, invalid)
+        replay, _ = collect(process, [2600, 1550], generation=2)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+    assert_ruby_transition_gpu_parity(binary, case, (951, 1120, 1260, 1380, 1550, 2600, 4110, 4450, 4530, 4649))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

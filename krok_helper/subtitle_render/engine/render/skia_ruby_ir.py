@@ -7,13 +7,14 @@ from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positio
 from krok_helper.subtitle_render.engine.ruby.skia_timing import prepare_ruby_wipe_timing, wipe_points_to_ir
 from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marker
 from krok_helper.subtitle_render.engine.ruby.skia_overlap import prepare_overlap_wipes
-from .skia_lower_ir import lower_solid_appearance
+from .skia_lower_ir import lower_appearance
 from .skia_ruby_paint_ir import ruby_decoration_kinds, ruby_outlines
 from ..guide.skia_bitmap import uses_inline_bitmap_guides
 from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts_with_mark
 
 
 def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None,
+                         lower_gradients=False,
                          singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=(), affine_lines=(), utopia_exit_lines=()):
     geometry, measured = prepared.geometry, prepared.measured
     ruby = geometry.ruby
@@ -40,6 +41,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     has_gradient_outline = False
     has_lower_glow = False
     has_lower_shadow = False
+    has_lower_gradient = False
     inline_bitmaps = uses_inline_bitmap_guides(prepared.plan.lines)
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
@@ -115,7 +117,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 has_outlines = True
             if group.target.lower:
                 serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index])
-                serialized.update(lower_solid_appearance(group.target.style))
+                serialized.update(lower_appearance(group.target.style, allow_gradient=lower_gradients))
+                has_lower_gradient |= 'fill_gradient' in serialized
                 has_lower_glow = has_lower_glow or 'lower_glow' in serialized
                 has_lower_shadow = has_lower_shadow or 'lower_shadow' in serialized
             else:
@@ -133,6 +136,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'standalone_mark_schema': 1} if standalone_marks else {}),
             'overlap_schema': 1,
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
+            **({'lower_ruby_fill_gradient_schema': 1} if has_lower_gradient else {}),
             **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
             **({'ruby_outline_gradient_schema': 1} if has_gradient_outline else {}),
             **({'ruby_shadow_schema': 1} if has_shadow else {}),
