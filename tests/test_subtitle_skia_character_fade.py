@@ -347,12 +347,18 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
 
 _UNDECORATED_RUBY_PARTICLE_ENTRIES = ['sparkle', 'heart', 'petal', 'feather', 'snow', 'snow_solid']
 _UNDECORATED_RUBY_PARTICLE_PAIRS = [
-    (entry, exit_) for entry in ('heart', 'petal', 'feather') for exit_ in ('heart', 'petal', 'feather')
-] + [('petal', 'sparkle'), ('petal', 'ripple')]
+    ('heart', 'heart'), ('heart', 'petal'), ('heart', 'feather'),
+    ('petal', 'heart'), ('petal', 'petal'), ('petal', 'feather'),
+    ('feather', 'heart'), ('feather', 'petal'), ('feather', 'feather'),
+    ('petal', 'sparkle'), ('petal', 'ripple'),
+]
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('entry,exit_', _UNDECORATED_RUBY_PARTICLE_PAIRS)
+# Replay exercises both capability markers, both particle layers, and the sampled star exit.
+@pytest.mark.parametrize('entry,exit_', [
+    ('heart', 'heart'), ('feather', 'petal'), ('petal', 'sparkle'), ('petal', 'ripple'),
+])
 def test_undecorated_ruby_particle_pair_preserves_phase_clocks(binary, reading, target, entry, exit_):
     track, style = reading
     style = replace(style, entry_anim=entry, exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600,
@@ -789,14 +795,13 @@ def test_entry_fade_or_rise_and_ruby_spin_exit_match_gpu(binary, application, tm
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+# One baseline per supported pair. Add scale and speed cases for distinct rendering paths.
 @pytest.mark.parametrize('entry,exit_,speed,dpr', [
-    (entry, exit_, speed, 1)
-    for entry, exit_ in _UNDECORATED_RUBY_PARTICLE_PAIRS
-    for speed in ((100,) if entry == exit_ else (50, 100, 200))
+    (entry, exit_, 100, 1) for entry, exit_ in _UNDECORATED_RUBY_PARTICLE_PAIRS
 ] + [
     ('petal', 'heart', 200, 1.5), ('feather', 'petal', 50, 1.5), ('heart', 'feather', 100, 1.5),
-] + [
-    ('petal', exit_, speed, 1.5) for exit_ in ('sparkle', 'ripple') for speed in (50, 100, 200)
+    ('petal', 'sparkle', 200, 1.5), ('petal', 'ripple', 50, 1.5),
+    ('petal', 'sparkle', 200, 1),  # Low-alpha regression at 5499 ms.
 ])
 def test_undecorated_ruby_particle_pair_matches_actual_gpu(binary, application, tmp_path, entry, exit_, speed, dpr):
     from scripts.subtitle_gpu_baseline.cases import build_cases

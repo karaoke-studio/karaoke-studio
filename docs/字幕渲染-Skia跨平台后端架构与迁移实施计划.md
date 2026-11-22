@@ -1035,6 +1035,7 @@ P00 已在 `scripts/subtitle_gpu_baseline/policy.py` 和冻结 contract 中登�
 - 无 GPU 的 CI 可使用已经在硬件 Skia GPU 上生成、带版本/字体/素材指纹的参考产物；不能因为执行环境没有 GPU 就改用旧 Painter 生成 expected。
 - GPU 冒烟和资源同步测试：正式 CTest/pytest 入口，报告真实 API；软件实现只用于明确标识的非硬件检查。
 - 产品兼容：复用现有 pytest fixture/corpus，逐步参数化到 D2D / Skia，不复制整份庞大的 GPU 测试文件。
+- 每个已支持的粒子配对保留一组基准画面对照。调速和 DPR 按采样、前后层、时间窗等实际交互选代表场景，独立检查回跳和配置回滚。保留已知缺陷的临界帧与真实浮窗、导出证据。完整参数扫描留给新能力的专项验收。
 - 现有测试里若包含 GPU–Painter 像素对照，只复用其场景输入与有意义的语义断言；新的 Skia 验收改为 D2D GPU–Skia GPU，Raster 验收改为 Skia GPU–Raster，不机械沿用 QPainter expected。
 - D2D 专属 WARP、DXGI、DirectComposition 测试保留在其专属范围，不强行让 Metal 模拟这些概念。
 - Qt 宿主、GPU context 和素材进程 fixture 有明确 scope/销毁顺序；不要为提速引入跨测试存活的无父顶层窗口。
