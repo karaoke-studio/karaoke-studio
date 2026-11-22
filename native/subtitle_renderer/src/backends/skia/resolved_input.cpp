@@ -151,12 +151,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto& line = projected.lines[index];
         const auto& style = projected.lineStyles[index];
         const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, style);
-        const bool roleFadedScanline = fadedUtopiaScanline && line.bursts.empty()
-            && (style.scanlineMode == "default" || style.scanlineMode == "color")
+        const bool fixedFadedScanline = fadedUtopiaScanline && (style.scanlineMode == "default" || style.scanlineMode == "color");
+        const bool roleFadedScanline = fixedFadedScanline && line.bursts.empty()
             && features.contains("p07_inline_role_faded_scanline");
+        const bool prefixFadedScanline = fixedFadedScanline && line.bursts.empty()
+            && features.contains("p07_faded_scanline_prefix_guides");
         const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
             && style.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
-        if (gradientGlowWithoutTexturedRoles && !brightenedScanlineGradient
+        if (gradientGlowWithoutTexturedRoles && !(brightenedScanlineGradient
+                || (prefixFadedScanline && features.contains("p06_faded_scanline_gradient_fill")))
             && (style.vertical || style.rightToLeft || line.wipeReverse
             || line.karaokeAnimation != "none" || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || (line.entryAnimation != "none" && line.entryAnimation != "fade")
@@ -372,9 +375,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
         const bool fadedScanlineParticles = features.contains("p07_faded_scanline_singing_particles")
             && !line.bursts.empty() && fadedUtopiaScanline;
-        const bool fadedScanlineGradientFill = fadedScanlineParticles
-            && features.contains("p06_faded_scanline_gradient_fill")
-            && (style.scanlineMode == "default" || style.scanlineMode == "color");
+        const bool fadedScanlineGradientFill = fixedFadedScanline && (fadedScanlineParticles || prefixFadedScanline)
+            && features.contains("p06_faded_scanline_gradient_fill");
         const bool lineAnimation = verticalSingingAnimation || (singingScale && !line.zoomPulseEnabled
             && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation);
         const bool movingSingingGradientFill = lineAnimation && singingScale && !style.vertical
@@ -388,6 +390,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.strokeFlashEnabled && line.bursts.empty();
         if (line.scanlineEnabled && hasInlineRoles && !roleFadedScanline)
             throw BackendError("Skia 行内角色扫字线需要正向横排和整行淡化");
+        if (line.scanlineEnabled && vectorGuides && !prefixFadedScanline)
+            throw BackendError("Skia 前置导唱符扫字线需要正向横排和整行淡化");
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit

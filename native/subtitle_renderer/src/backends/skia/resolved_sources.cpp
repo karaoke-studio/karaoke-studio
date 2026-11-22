@@ -86,10 +86,16 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p07_vertical_reverse_scanline", "p07_vertical_reverse_scanline_singing",
         "p07_vertical_reverse_scanline_particles", "p07_vertical_outlined_singing_particles"
     };
+    const auto sourceFeatures = source.value("required_features").toArray();
     const bool vertical = kind == SourceKind::VerticalLyrics && isVerticalSource(source);
-    for (const auto& feature : source.value("required_features").toArray())
+    const bool prefixGuides = kind != SourceKind::Title && sourceFeatures.contains("p07_faded_scanline_prefix_guides");
+    static const QJsonArray prefixGuideFeatures{
+        "p05_vector_guides", "p05_vector_guide_composition", "p07_faded_scanline_prefix_guides"
+    };
+    for (const auto& feature : sourceFeatures)
         if (!allowed.contains(feature)
             && !(vertical && verticalAllowed.contains(feature))
+            && !(prefixGuides && prefixGuideFeatures.contains(feature))
             && !(kind == SourceKind::Title && (feature == QJsonValue("p05_vector_guides") || feature == QJsonValue("p08_bitmap_guides")
                            || feature == QJsonValue("p08_animated_title_guides")
                            || feature == QJsonValue("p08_title_role_outlines"))))

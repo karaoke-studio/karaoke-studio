@@ -79,7 +79,7 @@ def vector_guide_ink(glyph, size):
 
 
 def validate_vector_guides(track, style):
-    """vector_guide_schema=1 subset: solid horizontal LTR main text only."""
+    """Validate the geometry shared by the horizontal vector-guide profiles."""
     from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
     from ..layout.line.style import style_for_line
     for line in track.lines:
@@ -114,6 +114,16 @@ VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p06_static_shadow', 'p06_ruby_shadow',
     'p06_animated_singing_gradient_fill',
     'p07_line_fade', 'p07_line_motion', 'p07_utopia_line_animation', 'p07_ruby_line_animation'})
+VECTOR_GUIDE_FADED_SCANLINE_FEATURES = frozenset({
+    'p06_faded_scanline_gradient_fill', 'p07_faded_scanline_prefix_guides',
+    'p07_scanline_band', 'p07_ruby_scanline', 'p07_scanline_line_animation'})
+
+
+def vector_guides_form_prefix(chars):
+    from .semantics import guide_symbol_is_bitmap
+    guides = [c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars]
+    count = sum(guides)
+    return count > 0 and all(guides[:count])
 
 
 def compose_vector_guides(track, features):
@@ -122,18 +132,20 @@ def compose_vector_guides(track, features):
     if 'p05_vector_guides' not in features or not VECTOR_GUIDE_COMPOSITION_TRIGGERS.intersection(features):
         return
     animated_gradient = 'p06_animated_singing_gradient_fill' in features
+    faded_scanline = 'p07_faded_scanline_prefix_guides' in features
     for line in track.lines:
-        guides = [c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
-                  for c in render_line_with_guide_symbols(line).chars]
-        if not any(guides):
+        chars = render_line_with_guide_symbols(line).chars
+        if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
             continue
-        if animated_gradient and all(guides[:sum(guides)]):
+        if (animated_gradient or faded_scanline) and vector_guides_form_prefix(chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
     allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
-    if animated_gradient:
+    if animated_gradient or faded_scanline:
         allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES
+    if faded_scanline:
+        allowed |= VECTOR_GUIDE_FADED_SCANLINE_FEATURES
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')

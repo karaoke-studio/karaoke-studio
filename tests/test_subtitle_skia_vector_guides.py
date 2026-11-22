@@ -170,7 +170,8 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-def test_faded_gradient_with_leading_replacement_guide(binary, project):
+@pytest.mark.parametrize('scanline', [False, True], ids=['gradient', 'scanline'])
+def test_faded_gradient_with_leading_replacement_guide(binary, project, scanline):
     from test_subtitle_skia_outline_ruby import outlined
 
     track, style = guide_source(project, effect='utopia')
@@ -185,8 +186,11 @@ def test_faded_gradient_with_leading_replacement_guide(binary, project):
     style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, stroke=ramp)),
                     ruby_colors_follow_main=True, entry_anim='fade', exit_anim='fade',
                     entry_lead_ms=500, exit_fade_ms=400)
+    if scanline:
+        style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_mode='color',
+                        scanline_color='#FFFFFF', scanline_width_px=20, scanline_glow_px=3)
     ir = ir_for(binary, (track, style))
-    feature = 'p06_animated_singing_gradient_fill'
+    feature = 'p07_faded_scanline_prefix_guides' if scanline else 'p06_animated_singing_gradient_fill'
     assert {feature, 'p05_vector_guide_composition', 'p06_ruby_outline_gradient'} <= set(ir['required_features'])
     assert ir['track']['lines'][0]['chars'][0].get('vector_glyph_id')
     assert ir['skia_layout']['lines'][0]['ruby_groups'][0]['style_cell'] == 2
@@ -199,7 +203,7 @@ def test_faded_gradient_with_leading_replacement_guide(binary, project):
             configure(process, invalid)
     assert frames[0][..., 3].any() and not np.array_equal(frames[1], frames[2])
     assert np.array_equal(frames[0], frames[-1])
-    with pytest.raises(ValueError, match='前置导唱符'):
+    with pytest.raises(ValueError, match='前置导唱符|扫字线'):
         ir_for(binary, (replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})]), style))
 
 

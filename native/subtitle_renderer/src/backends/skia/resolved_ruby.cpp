@@ -158,8 +158,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, scanlineStyle);
     const bool roleFadedScanline = fadedUtopiaScanline && fixedScanlinePaint && line.bursts.empty()
         && features.contains("p07_inline_role_faded_scanline");
-    const bool fadedScanlineGradient = fadedUtopiaScanline && fixedScanlinePaint && !line.bursts.empty()
-        && features.contains("p06_faded_scanline_gradient_fill");
+    const bool fadedScanlineGradient = fadedUtopiaScanline && fixedScanlinePaint
+        && features.contains("p06_faded_scanline_gradient_fill")
+        && (line.bursts.empty() ? features.contains("p07_faded_scanline_prefix_guides")
+                                : features.contains("p07_faded_scanline_singing_particles"));
     const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
         && scanlineStyle.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
     const bool allowOutlineGradient = features.contains("p06_ruby_outline_gradient")

@@ -5,6 +5,7 @@ from ..guide.semantics import guide_symbol_is_bitmap
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles
 from .skia_ruby_paint_ir import ruby_decoration_kinds
+from .skia_scanline_ir import fixed_faded_utopia_band
 
 
 _GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
@@ -109,9 +110,11 @@ def write_body_gradient_bounds(ir, plan):
             continue
         source = ir['track']['lines'][item.track_index]
         annotated = bool(final.get('ruby_groups'))
-        faded_band = ('p07_faded_scanline_singing_particles' in ir['required_features']
-                      and faded_band_singing_particles(source, look) and look.scanline_mode in {'default', 'color'}
-                      and modes <= {'solid', 'gradient_vertical'})
+        prefix_band = ('p07_faded_scanline_prefix_guides' in ir['required_features']
+                       and fixed_faded_utopia_band(source, look))
+        particle_band = ('p07_faded_scanline_singing_particles' in ir['required_features']
+                         and faded_band_singing_particles(source, look) and look.scanline_mode in {'default', 'color'})
+        faded_band = (prefix_band or particle_band) and modes <= {'solid', 'gradient_vertical'}
         animations = {source.get('entry_anim'), source.get('exit_anim')}
         palette_band = (source.get('scanline') and look.scanline_shape == 'band' and look.scanline_mode == 'brighten'
                         and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
@@ -130,7 +133,8 @@ def write_body_gradient_bounds(ir, plan):
                 or source.get('stroke_flash')
                 or (source.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                 or any(c.role_label is not None or (c.vector_glyph is not None
-                       and (not moving or guide_symbol_is_bitmap(c.vector_glyph))) for c in item.render_line.chars)):
+                       and (not (moving or prefix_band) or guide_symbol_is_bitmap(c.vector_glyph)))
+                       for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint |= annotated or moving
         singing_paint |= singing and (annotated or moving)

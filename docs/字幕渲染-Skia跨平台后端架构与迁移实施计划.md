@@ -4310,6 +4310,11 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 「金木犀」原工程 47 行、148 处注音、8 行行内和声角色。包含和声词时段的 58 个 1080p 采样通过 D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 的原画质门槛。真实浮窗 Vulkan 直画 20 秒并完成两次跳转。Windows 专项 20 项通过。日志前缀 `build/skia-role-faded-band-*`。
 - WSL X11 与 Wayland 各 7 项通过。Windows 和 WSL 的 Vulkan 构建各通过 3 项 CTest。
 
+### 14.400 P05 / P06 / P07 行首矢量导唱符与淡化扫字线（2026-11-22）
+
+- `p07_faded_scanline_prefix_guides` 接通正向横排 Utopia、整行淡化与固定色高亮带中的行首矢量导唱符。导唱符轮廓与歌词共享原画笔和时钟，各轨独立保留导唱符位置及渐变范围。
+- 「ゼッタイMUST断面」原工程保留附加轨，62 个 1080p 采样通过。「プルシュカ」原工程保留正文与上注音渐变及光晕，41 个采样通过。两者均通过 D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 的原画质门槛。Windows 专项 14 项、WSL X11 和 Wayland 各 6 项通过。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

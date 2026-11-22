@@ -179,6 +179,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_line_animation",
         "p07_faded_scanline_singing_particles",
         "p07_inline_role_faded_scanline",
+        "p07_faded_scanline_prefix_guides",
         "p07_faded_scanline_particle_paint",
         "p07_scanline_unscaled_line_animation",
         "p07_scanline_shape",
@@ -599,13 +600,22 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_static_shadow", "p06_ruby_shadow",
             "p06_animated_singing_gradient_fill", "p07_line_fade", "p07_line_motion",
             "p07_utopia_line_animation", "p07_ruby_line_animation"};
-        const bool useAnimatedGradients = features.contains("p06_animated_singing_gradient_fill");
+        static const QJsonArray fadedScanline{
+            "p06_faded_scanline_gradient_fill", "p07_faded_scanline_prefix_guides",
+            "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation"};
+        const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
+        const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
         if (!features.contains("p05_vector_guides"))
             throw BackendError("Skia 导唱符组合缺少导唱符能力");
         for (const auto& feature : features)
-            if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature)))
+            if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature))
+                && !(useFadedScanline && fadedScanline.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
+    if (features.contains("p07_faded_scanline_prefix_guides")
+        && (!features.contains("p05_vector_guide_composition") || !features.contains("p07_scanline_line_animation")
+            || !features.contains("p07_line_fade")))
+        throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
     if (features.contains("p08_bitmap_guides")) {
         // Verified line-prefix image guides with Utopia, upper ruby, solid outlines and glow only.
         static const QJsonArray allowed{
@@ -956,8 +966,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 上注音渐变缺少正文画笔或注音能力声明");
     if (features.contains("p06_faded_scanline_gradient_fill")
         && (!features.contains("p06_body_gradient") || !features.contains("p07_singing_scale")
-            || !features.contains("p07_faded_scanline_singing_particles")))
-        throw BackendError("Skia 淡化扫字线渐变缺少正文画笔或唱字粒子能力声明");
+            || !(features.contains("p07_faded_scanline_singing_particles")
+                 || features.contains("p07_faded_scanline_prefix_guides"))))
+        throw BackendError("Skia 淡化扫字线渐变缺少正文画笔或组合能力声明");
     if (features.contains("p06_animated_singing_gradient_fill")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_utopia_main_paint")
             || !features.contains("p05_upper_ruby") || !features.contains("p07_utopia_line_animation")))

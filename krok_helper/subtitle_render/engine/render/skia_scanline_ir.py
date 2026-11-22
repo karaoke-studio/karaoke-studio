@@ -1,13 +1,14 @@
 """Resolve Skia scanline capabilities and the serialized shape and band versions."""
 
 from ..guide.semantics import render_line_with_guide_symbols
+from ..guide.skia_vector import vector_guides_form_prefix
 from ..layout.line.style import style_for_line
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 
 
-def inline_role_faded_band(line, style):
+def fixed_faded_utopia_band(line, style):
     animations = {line.get('entry_anim'), line.get('exit_anim')}
     return (line.get('scanline') and style.scanline_shape == 'band'
             and style.scanline_mode in {'default', 'color'} and line.get('karaoke_anim') == 'utopia'
@@ -20,7 +21,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
     unscaled_line_motion = faded_band_particles = False
-    inline_role_fade = False
+    inline_role_fade = prefix_guide_fade = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
     reverse_vertical_palette = False
     singing_vertical_palette = False
@@ -78,7 +79,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         role_composition = look.scanline_mode == 'role' and (bool(track.rubies) or uses_authored_decoration(look, 'glow'))
         chars = render_line_with_guide_symbols(source).chars
         inline_roles = any(c.role_label is not None for c in chars)
-        role_fade = inline_roles and inline_role_faded_band(line, look)
+        vector_guides = any(c.vector_glyph is not None for c in chars)
+        fixed_fade = fixed_faded_utopia_band(line, look)
+        role_fade = inline_roles and fixed_fade
+        prefix_fade = vector_guides and fixed_fade and not inline_roles and vector_guides_form_prefix(chars)
         if ((look.scanline_shape != 'band' and not shape) or look.right_to_left
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
@@ -86,13 +90,14 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                 or uses_authored_decoration(look, 'shadow')
                 or (role_composition and (not ordinary or utopia or source.wipe_reverse or line.get('fx_bursts')))
                 or (track.rubies and not (ordinary or motion or particle_entry))
-                or (inline_roles and not role_fade) or any(c.vector_glyph is not None for c in chars)):
+                or (inline_roles and not role_fade) or (vector_guides and not prefix_fade)):
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
         line_motion |= motion and utopia
         faded_band_particles |= faded_band
         inline_role_fade |= role_fade
+        prefix_guide_fade |= prefix_fade
         unscaled_line_motion |= motion and not utopia
         lower_readings = lower_readings or lower_band
         moving_lower_readings |= lower_band and motion
@@ -104,6 +109,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     features = []
     if inline_role_fade:
         features.append('p07_inline_role_faded_scanline')
+    if prefix_guide_fade:
+        features.append('p07_faded_scanline_prefix_guides')
     if vertical_band:
         features.append('p07_vertical_scanline_band')
     if reverse_vertical_band:

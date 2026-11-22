@@ -4,7 +4,7 @@ from ..layout.line.skia_geometry import write_horizontal_pivots
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import is_noise_animation, ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
-from .skia_scanline_ir import inline_role_faded_band
+from .skia_scanline_ir import fixed_faded_utopia_band
 
 
 def vertical_singing_lines(ir, plan):
@@ -58,7 +58,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         static_role_scale = animations == {'none'} and not (
             source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
         faded_role_scale = ('p07_inline_role_faded_scanline' in ir['required_features']
-                            and inline_role_faded_band(source, style))
+                            and fixed_faded_utopia_band(source, style))
         role_scale = inline_roles and scales and (static_role_scale or faded_role_scale)
         rtl_singing = scales and annotated and 'p07_rtl_ruby_singing_scale' in ir['required_features']
         if (style.vertical or (style.right_to_left and not rtl_singing) or item.line.wipe_reverse
