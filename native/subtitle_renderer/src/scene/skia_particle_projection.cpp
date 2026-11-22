@@ -47,8 +47,12 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool verticalFlame = features.contains("p07_vertical_sing_flame");
     const bool verticalScale = source.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_with_particles");
+    const bool verticalBand = cfg.vertical && source.scanlineEnabled && !source.wipeReverse
+        && version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"
+        && features.contains("p07_vertical_scanline_singing_particles");
     const bool verticalMotion = features.contains("p07_vertical_singing_particle_line_animation")
         && !source.wipeReverse
+        && !source.scanlineEnabled
         && (source.entryAnimation == "none" || source.entryAnimation == "fade"
             || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")
         && (source.exitAnimation == "none" || source.exitAnimation == "fade"
@@ -56,7 +60,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool verticalParticles = cfg.vertical
         && (verticalStars || verticalShapes || verticalFalling || verticalLightning || verticalFlame)
         && (!source.wipeReverse || features.contains("p07_vertical_reverse_singing_particles"))
-        && !source.scanlineEnabled && !source.strokeFlashEnabled
+        && (!source.scanlineEnabled || verticalBand) && !source.strokeFlashEnabled
         && (source.karaokeAnimation == "none" || verticalScale)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     // Singing particles follow the existing burst clocks. The line
@@ -70,7 +74,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
-            || (source.scanlineEnabled && !rubyScanline)))
+            || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
         || (!rubyParticles && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
@@ -124,7 +128,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
-            : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
+            : !source.scanlineEnabled || verticalBand
+                || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (verticalParticles && !(verticalStars && star && fx.sweep == (fx.kind == "twinkle" ? 1 : 0))
                 && !(verticalShapes && (symbol || ripple) && fx.sweep == 0)

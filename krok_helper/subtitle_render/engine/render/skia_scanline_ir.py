@@ -4,6 +4,7 @@ from ..guide.semantics import render_line_with_guide_symbols
 from ..layout.line.style import style_for_line
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import ordinary_line_animation
+from .skia_particle_ir import vertical_singing_particle_modes
 
 
 def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks):
@@ -32,7 +33,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                        and (ordinary or (motion and singing)))
             if (look.scanline_shape != 'band' or (look.scanline_mode != 'color' and not palette) or not (ordinary or motion)
                     or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
-                    or line.get('stroke_flash') or bursts):
+                    or line.get('stroke_flash') or (bursts and not vertical_singing_particle_modes(line))):
                 raise ValueError('Skia 竖排扫字线的布局或高亮组合暂不支持')
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse

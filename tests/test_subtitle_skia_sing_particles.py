@@ -623,6 +623,50 @@ def test_vertical_singing_particles_follow_whole_line_motion(binary, project, en
     assert abs(results[0] - results[1]).mean() < .15
 
 
+@pytest.mark.parametrize('karaoke,band,mode', [
+    ('none', 'scanline', 'color'), ('zoom_pulse', 'zoom_pulse_scanline', 'follow_after'),
+])
+def test_vertical_singing_particles_keep_independent_band_and_bursts(binary, project, karaoke, band, mode):
+    from test_subtitle_skia_vertical import vertical_ruby_source
+
+    track, style = vertical_ruby_source(project, position='center')
+    line, = track.lines
+    track = replace(track, lines=[replace(line, chars=line.chars[:2], end_ms=1100)])
+    palette = colors('#FF0000', '#00FF00')
+    style = replace(style, karaoke_colors=palette, ruby_karaoke_colors=palette, stroke_width_px=0,
+                    stroke2_enabled=False, karaoke_anim=band, scanline_enabled=True, scanline_mode=mode,
+                    scanline_color='#FFFF00', scanline_width_px=16, sing_fx='note',
+                    fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    required = 'p07_vertical_scanline_singing_particles'
+    assert {required, 'p07_vertical_scanline_band', 'p07_vertical_sing_shapes'} <= set(ir['required_features'])
+    only_particles = ir_for(binary, (track, replace(style, karaoke_anim=karaoke, scanline_enabled=False)), dpr=1.5)
+    only_band = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
+    assert ir['track']['lines'][0]['fx_bursts'] == only_particles['track']['lines'][0]['fx_bursts']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(required)
+    times = [150, 450, 750, 1100, 2100]
+    results = []
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, only_particles)
+            particles, _ = collect(process, times, generation=3)
+            configure(process, only_band)
+            bands, _ = collect(process, times, generation=4)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert not np.array_equal(frames[1], particles[1])
+        assert np.count_nonzero(blue_coverage(frames[1]) - blue_coverage(bands[1]) > 40) > 30
+        results.append(premultiplied(np.stack(frames)))
+    diff = abs(results[0] - results[1])
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])

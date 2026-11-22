@@ -69,9 +69,11 @@ def petal_entry_with_scanline(line, style):
 
 def vertical_singing_particle_modes(source):
     """Return supported particle kinds and sweeps for a fixed vertical cell anchor."""
-    if (source.get('scanline') or source.get('stroke_flash')
+    limited_motion = (source.get('scanline') or source.get('wipe_reverse')) and (
+        source.get('entry_anim'), source.get('exit_anim')) != ('none', 'none')
+    if (source.get('stroke_flash') or limited_motion
             or source.get('karaoke_anim') not in {'none', 'utopia'} or not ordinary_line_animation(source)
-            or (source.get('wipe_reverse') and {source.get('entry_anim'), source.get('exit_anim')} != {'none'})):
+            or (source.get('scanline') and source.get('wipe_reverse'))):
         return set()
     modes = {(burst['kind'], burst['sweep']) for burst in source.get('fx_bursts', ())}
     return modes if modes <= _VERTICAL_PARTICLE_MODES else set()
@@ -85,6 +87,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     vertical_scaled_particles = False
     reverse_vertical_particles = False
     motion_vertical_particles = False
+    band_vertical_particles = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -96,20 +99,23 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
         annotated = bool(track.rubies)
-        vertical_modes = vertical_singing_particle_modes(source) if look.vertical else set()
+        supported_band = not band or (look.scanline_shape == 'band' and look.scanline_mode != 'role')
+        vertical_modes = vertical_singing_particle_modes(source) if look.vertical and supported_band else set()
         vertical_particles = bool(vertical_modes)
         if vertical_particles:
             vertical_modes_used.update(vertical_modes)
             vertical_scaled_particles |= source.get('karaoke_anim') == 'utopia'
             reverse_vertical_particles |= item.line.wipe_reverse
             motion_vertical_particles |= (entry, exit_) != ('none', 'none')
+            band_vertical_particles |= band
         petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
         singing_under_shape = (annotated and band and (not animated or petal_with_band) and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
-        singing_under_band = (annotated and band and (not animated or petal_with_band) and look.scanline_shape == 'band'
+        singing_under_band = (not look.vertical and annotated and band
+                              and (not animated or petal_with_band) and look.scanline_shape == 'band'
                               and look.scanline_mode != 'role' and not item.line.wipe_reverse
                               and any(burst['kind'] != 'scanline' for burst in bursts))
         ruby_band_singing = ruby_band_singing or singing_under_band
@@ -132,7 +138,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             kind = burst['kind']
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not band)
-                    or (annotated and band and kind != 'scanline' and not (singing_under_shape or singing_under_band))
+                    or (annotated and band and kind != 'scanline'
+                        and not (vertical_particles or singing_under_shape or singing_under_band))
                     or (singing_under_shape and kind == 'scanline')
                     or (band and item.line.wipe_reverse and kind != 'scanline')
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
@@ -178,6 +185,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_vertical_reverse_singing_particles')
     if motion_vertical_particles:
         ir['required_features'].append('p07_vertical_singing_particle_line_animation')
+    if band_vertical_particles:
+        ir['required_features'].append('p07_vertical_scanline_singing_particles')
     if ruby_scanline:
         ir['required_features'].append('p07_ruby_scanline_particles')
     if ruby_band_singing:
