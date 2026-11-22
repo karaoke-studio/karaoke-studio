@@ -132,7 +132,7 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('entry', ['none', 'char_fade', 'spin_flip'])
+@pytest.mark.parametrize('entry', ['none', 'char_fade', 'spin_flip', 'fade', 'rise'])
 def test_ruby_character_exit_fade_uses_owner_and_preserves_previous_scene(binary, reading, target, entry):
     from test_subtitle_skia_static_glow import glowing_ruby
 
@@ -152,7 +152,8 @@ def test_ruby_character_exit_fade_uses_owner_and_preserves_previous_scene(binary
     invalid = [missing]
     if entry != 'none':
         missing_entry = copy.deepcopy(ir)
-        entry_feature = {'char_fade': 'p07_character_entry_fade_composition', 'spin_flip': 'p07_ruby_character_entry_spin'}
+        entry_feature = {'char_fade': 'p07_character_entry_fade_composition', 'spin_flip': 'p07_ruby_character_entry_spin',
+                         'fade': 'p07_line_fade', 'rise': 'p07_line_motion'}
         missing_entry['required_features'].remove(entry_feature[entry])
         invalid.append(missing_entry)
     bad_owner = copy.deepcopy(ir)
@@ -746,7 +747,7 @@ def test_p00_ruby_character_transform_matches_actual_gpu(binary, application, tm
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('dpr', [1, 1.5])
-@pytest.mark.parametrize('entry', ['none', 'char_fade', 'spin_flip'])
+@pytest.mark.parametrize('entry', ['none', 'char_fade', 'spin_flip', 'fade', 'rise'])
 def test_p00_ruby_character_exit_fade_matches_actual_gpu(binary, application, tmp_path, dpr, entry):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 

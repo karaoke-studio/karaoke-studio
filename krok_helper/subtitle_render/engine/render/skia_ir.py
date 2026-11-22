@@ -422,12 +422,13 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].append('p07_character_fade')
         exit_fade_lines = set()
         if geometry.ruby is not None:
+            exit_fade_entry_modes = ('char_fade', 'fade', 'rise')
             exit_fade_lines = {
                 index for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True))
                 if reading.rubies
                 and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False,
-                                             other_animations=('char_fade', 'spin_flip') if index in spin_lines
-                                             else ('char_fade',))
+                                             other_animations=(*exit_fade_entry_modes, 'spin_flip')
+                                             if index in spin_lines else exit_fade_entry_modes)
                 and all('shadow' not in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
             }
         paired_fade_lines = exit_fade_lines | spin_lines

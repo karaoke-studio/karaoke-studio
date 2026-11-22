@@ -354,7 +354,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         const bool fadeComposition = (fadeEntry || fadeExit)
-            && (line.entryAnimation == "none" || fadeEntry) && (line.exitAnimation == "none" || fadeExit)
+            && (line.entryAnimation == "none" || fadeEntry
+                || (fadeExit && (line.entryAnimation == "fade" || line.entryAnimation == "rise")))
+            && (line.exitAnimation == "none" || fadeExit)
             && (line.karaokeAnimation == "none" || (singingScale && !line.zoomPulseEnabled))
             && !line.wipeReverse && !style.vertical && !style.rightToLeft
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
