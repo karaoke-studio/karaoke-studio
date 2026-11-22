@@ -3589,6 +3589,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 音符、涟漪、星光的试验用固定 16 个子像素位置采样粒子路径。三种带光晕原样在 DPR 1.5 各 **14 帧**符合原预算。DPR 1 的 301ms Vulkan/Raster 已通过，D2D/Vulkan 的遮罩 IoU 分别为 **0.9690、0.9681、0.9689**，低于 **0.97**。无光晕变体的 302ms 正文边缘仍有差异。试验已撤回，证据为 `build/p07-entry-particle-pattern-*.log` 与 `build/p07-note-ripple-sparkle-16-sample-unverified.patch`。 [Microsoft 的多重采样位置说明](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_standard_multisample_quality_levels)
 - 2026-11-22 复验三种原样入场各 **29 帧**。固定位置环采样通过涟漪的 300ms 临界帧。浮点合成与固定光晕边界的试验在 Vulkan 对 Raster **87/87 帧通过**，D2D 对 Vulkan 每种仍有 **301ms** 一帧超遮罩预算，最大总 alpha 差为 **0.21%**。音符的另一试验在该帧把 IoU 收至 **0.96904**。三种组合保留原门槛，证据前缀为 `build/p07-symbol-*`。
 - 只改变实色光晕源的路径覆盖采样，音符 301ms 的 D2D 对 Vulkan IoU 达到 **0.96980**，原预算为 **0.97**。对正文各层单独启用固定采样或 2 倍覆盖，仍未通过该帧。保留实验 `build/p07-symbol-entry-coverage-layers-unverified.patch` 和相应帧，继续沿用已有产品范围。
+- 对 `build/p00-skia-coverage/entry-*-faint-alpha.npz` 对应的三份原始 alpha 数组复查，301ms 音符、涟漪和星光各有 **82、81、81** 个像素跨过既有的 alpha 16 遮罩边界，其中 **81 个坐标三者共有**。应优先检查共同的字形边缘与光晕合成，保留原画质门槛。
 
 ### 14.281 P00 主线原样配置与画面复验（2026-11-21）
 
@@ -4214,6 +4215,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Raster 用静态画笔生成 8 位光晕源，模糊后在每次混合前施加动画透明度，保持 F16 合成和原轴心。同批计时的多字组中位数从 **238.255ms** 降至 **162.946ms**，P95 从 **316.466ms** 降至 **177.093ms**。Vulkan 同组中位数 **2.243ms**。Windows **26 项**画质与协议回归、两条路径 **29 帧**重复回跳、无 Vulkan 驱动的独立 Raster **2 项**以及 WSL X11 和 Wayland 各 **4 项**均通过。证据前缀为 `build/p07-spin-raster-normalized-*`。
 - `b037f3cd` 连续重配 **122 个原样场景、560 帧**，两组画面对照全部通过。开启 Khronos 同步验证后复验 Windows 正式浮窗逐字翻转、离屏与导出，验证层成功启用，未报告同步错误或新增警告。记录为 `build/p00-skia-coverage/original-warm-pixels-b037f3cd.json` 与 `build/p07-spin-glow-runtime-validation*.log`。
 - 同一渲染器的 Windows 五种导出格式、MP4 音视频时间线和实际浮窗生命周期测试合计 **16 项通过**。翻转滤镜最新代码的 Apple Silicon / Intel 复验已发起。[Mac CI 45005825493](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45005825493)
+
+### 14.387 P07.1 / P11.7 避免空白翻转光晕的模糊（2026-11-22）
+
+- 正文与上注音仅在有可见字形使用静态光晕时为这一层创建表面及执行模糊。逐字翻转的字形继续使用原地生成、按字形轴心变换的光晕。正文合成顺序和注音归属保持原规则。
+- 同一台 Windows 机器上复用 1080p 原样工程与两个 **30 帧**样本。Raster 窄幅翻转中位数从 **171.607ms** 降至 **18.248ms**，多字同时翻转从 **162.946ms** 降至 **26.265ms**。多字组 P95 为 **162.569ms**，部分字形已落定的混合帧仍有明显开销。Vulkan 对应中位数为 **0.581ms、2.053ms**。
+- Windows 翻转和上注音淡出关联测试 **42 项通过**。原样 **29 帧**在 Vulkan 和 Raster 各自的五种回放顺序中逐字节一致，**58 份**输出哈希也与前一构建相同。Windows 正式构建通过 **3 项 CTest**。日志前缀 `build/p07-spin-empty-glow-win-*`。
 
 ## 15. 前期探针清理范围
 
