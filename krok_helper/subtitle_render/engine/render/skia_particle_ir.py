@@ -79,7 +79,7 @@ def faded_band_singing_particles(line, style):
             and style.scanline_shape == 'band' and style.scanline_mode != 'role'
             and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('wipe_reverse')
                      or line.get('zoom_pulse') or line.get('stroke_flash'))
-            and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart'} for burst in bursts))
+            and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart', 'snow_solid'} for burst in bursts))
 
 
 def _supports_singing_particle_paint(paint):

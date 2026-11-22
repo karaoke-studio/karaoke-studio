@@ -18,7 +18,8 @@ bool hasFadedScanlineSingingParticles(const protocol::RenderConfig& cfg, const p
         && fadeOrNone(source.entryAnimation) && fadeOrNone(source.exitAnimation)
         && (source.entryAnimation == "fade" || source.exitAnimation == "fade") && !source.fxBursts.empty()
         && std::ranges::all_of(source.fxBursts, [](const auto& burst) {
-            return burst.kind == "twinkle" || burst.kind == "twinkle_classic" || burst.kind == "note" || burst.kind == "heart";
+            return burst.kind == "twinkle" || burst.kind == "twinkle_classic" || burst.kind == "note"
+                || burst.kind == "heart" || burst.kind == "snow_solid";
         });
 }
 
