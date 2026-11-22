@@ -579,14 +579,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
-        // Anchor stars on the final vertical glyph's ink center and cell height.
+        // Anchor particles on the final vertical glyph's ink center and cell height.
         // Horizontal bursts keep their original pivot and measured line box.
         if (!line.bursts.empty()) {
             const auto box = source.value("particle_box_height");
             const bool validBox = style.vertical ? box.isUndefined()
                 : box.isDouble() && std::isfinite(box.toDouble()) && box.toDouble() >= 0 && box.toDouble() <= 1e5;
             if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
-                || (style.vertical && !features.contains("p07_vertical_sing_twinkle")) || style.rightToLeft)
+                || (style.vertical && !features.contains("p07_vertical_sing_twinkle")
+                    && !features.contains("p07_vertical_sing_shapes")) || style.rightToLeft)
                 throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
                 const auto sprite = particleSprites.find(burst.sprite);

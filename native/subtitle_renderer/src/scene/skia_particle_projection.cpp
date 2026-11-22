@@ -40,12 +40,14 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool scaledSinging = rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled;
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
-    const bool verticalStars = cfg.vertical && features.contains("p07_vertical_sing_twinkle")
+    const bool verticalStars = features.contains("p07_vertical_sing_twinkle");
+    const bool verticalShapes = features.contains("p07_vertical_sing_shapes");
+    const bool verticalParticles = cfg.vertical && (verticalStars || verticalShapes)
         && !source.wipeReverse && !source.scanlineEnabled && source.karaokeAnimation == "none"
         && source.entryAnimation == "none" && source.exitAnimation == "none";
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
-    if ((cfg.vertical && !verticalStars) || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
+    if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft || (source.wipeReverse && !source.scanlineEnabled)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit" && !scaledSinging)
         || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
@@ -107,7 +109,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool validBand = scanline ? source.scanlineEnabled
             : !source.scanlineEnabled || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
-            || (verticalStars && (!star || fx.sweep != (fx.kind == "twinkle" ? 1 : 0)))
+            || (verticalParticles && !(verticalStars && star && fx.sweep == (fx.kind == "twinkle" ? 1 : 0))
+                && !(verticalShapes && (symbol || ripple) && fx.sweep == 0))
             || (rubyParticles && version == 12 && !star && !ripple)
             || (scanline && shapedSinging)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())

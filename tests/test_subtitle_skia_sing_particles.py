@@ -370,8 +370,11 @@ def test_singing_star_speed_preserves_birth_and_respects_display_window(binary, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('variant,with_reading,dpr', [('twinkle', False, 1), ('twinkle_classic', True, 1.5)])
-def test_vertical_singing_stars_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr):
+@pytest.mark.parametrize('variant,with_reading,dpr', [
+    ('twinkle', False, 1), ('twinkle_classic', True, 1.5),
+    ('note', True, 1.5), ('heart', False, 1), ('ripple', True, 1.5),
+])
+def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr):
     from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
 
     if with_reading:
@@ -388,7 +391,7 @@ def test_vertical_singing_stars_keep_each_glyph_anchor(binary, project, variant,
                     fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
     ir = ir_for(binary, (track, style), dpr=dpr)
     plain = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=dpr)
-    feature = 'p07_vertical_sing_twinkle'
+    feature = 'p07_vertical_sing_twinkle' if variant.startswith('twinkle') else 'p07_vertical_sing_shapes'
     assert {feature, 'p07_sing_twinkle'} <= set(ir['required_features'])
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     layer, = ir['track']['lines']
@@ -396,6 +399,7 @@ def test_vertical_singing_stars_keep_each_glyph_anchor(binary, project, variant,
     assert {burst['char_index'] for burst in bursts} == {0, 1}
     for burst in bursts:
         assert burst['kind'] == variant and burst['sweep'] == int(variant == 'twinkle')
+        assert burst['front'] == (variant != 'ripple')
         assert burst['start_ms'] == layer['resolved_intervals'][burst['char_index']][0]
     times = [100, 350, 500, 1750, 1900, 2501]
     invalid = copy.deepcopy(ir)

@@ -792,12 +792,14 @@ effect_styles['vertical-shadow-viewport'] = dict(
 effect_styles['vertical-stars'] = dict(
     vertical=True, karaoke_anim='none', sing_fx='twinkle_classic', stroke_width_px=0, stroke2_enabled=False,
     fx_particle_color='#00FFFF', fx_particle_color2='#00FFFF')
+effect_styles['vertical-notes'] = dict(effect_styles['vertical-stars'], sing_fx='note')
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
 }
 vertical_motion = effect in {'vertical-zoom-motion', 'vertical-zoom-band-motion'}
-vertical_effect = vertical_scanline or vertical_motion or effect == 'vertical-stars'
+vertical_particles = effect in {'vertical-stars', 'vertical-notes'}
+vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
     style = replace(style, **effect_styles[effect])
     if effect == 'particle-image-band':
@@ -930,7 +932,7 @@ if '--compare-export' in sys.argv:
                         assert np.any((red > 170) & (green < 32) & (blue < 32) & (alpha > 128))
                     else:
                         assert np.any((red < 32) & (green > 128) & (blue > 128) & (alpha > 128))
-            if effect == 'vertical-stars' and index == 33:
+            if vertical_particles and index == 33:
                 for frame in (expected, preview):
                     red, green, blue, alpha = np.moveaxis(frame, -1, 0)
                     assert np.any((red < 32) & (green > 102) & (blue > 102) & (alpha > 102))
@@ -1006,11 +1008,11 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
 @pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair',
                                      'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                                      'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
-                                     'vertical-stars', 'particle-image-band'],
+                                     'vertical-stars', 'vertical-notes', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
-                              'vertical-stars', 'particle-image-band'])
+                              'vertical-stars', 'vertical-notes', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

@@ -95,9 +95,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             const auto& burst = item.burst;
             const bool verticalStar = (burst.kind == "twinkle" && burst.sweep == 1)
                 || (burst.kind == "twinkle_classic" && burst.sweep == 0);
+            const bool verticalShape = burst.sweep == 0
+                && (burst.kind == "note" || burst.kind == "heart" || burst.kind == "ripple");
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
-                || (source.vertical && !verticalStar) || source.noWipe
+                || (source.vertical && !verticalStar && !verticalShape) || source.noWipe
                 || burst.reverse != source.wipeRightToLeft
                 || (source.wipeRightToLeft && (!band.enabled || burst.kind != "scanline")))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
