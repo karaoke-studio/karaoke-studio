@@ -732,6 +732,10 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_lower_ruby_decoration_line_animation')
         if lower_motion_modes & {'none', 'no_wipe'}:
             ir['required_features'].append('p07_lower_ruby_unscaled_line_animation')
+    features = set(ir['required_features'])
+    role_glow = bool(features & {'p06_role_static_glow', 'p06_ruby_role_glow'})
+    role_line_fade = 'p07_line_fade' in features and (
+        role_glow or bool(features & {'p06_role_solid_outlines', 'p06_role_body_paints'}))
     if animates_line and not (style.vertical or style.right_to_left or style.lower_ruby_enabled):
         motion_decorations = set()
         for index, item in enumerate(plan.lines):
@@ -746,16 +750,14 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 kinds.update(kind for kind in ('shadow', 'glow') if uses_authored_decoration(item.layout_style, kind))
                 if 'shadow' in kinds:
                     motion_decorations.add('shadow')
-                elif 'glow' in kinds and 'p06_gradient_glow' not in ir['required_features']:
+                elif 'glow' in kinds and not role_line_fade and 'p06_gradient_glow' not in features:
                     motion_decorations.add('glow')
         ir['required_features'].extend(f'p07_horizontal_{kind}_line_animation' for kind in sorted(motion_decorations))
     if 'p07_character_fade' in ir['required_features']:
         ir['skia_layout']['character_fade_schema'] = 1
     write_utopia_pivots(ir, plan, measured, fade_lines | spin_lines | composed_geometry_lines | utopia_exit_lines,
                        particle_band_tracks, vertical_singing)
-    role_glow = any(feature in ir['required_features'] for feature in ('p06_role_static_glow', 'p06_ruby_role_glow'))
-    if 'p07_line_fade' in ir['required_features'] and (role_glow or any(
-            feature in ir['required_features'] for feature in ('p06_role_solid_outlines', 'p06_role_body_paints'))):
+    if role_line_fade:
         ir['required_features'].append('p07_role_line_fade')
     if 'p07_singing_scale' in ir['required_features'] and (
             role_glow or 'p06_static_glow' in ir['required_features'] or 'p06_ruby_glow' in ir['required_features']):

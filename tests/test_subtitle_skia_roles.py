@@ -385,6 +385,30 @@ def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, 
         assert difference.max() <= 2, (time_ms, strength, difference.max())
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_role_line_fade_accepts_a_glowing_line_without_roles_in_the_same_source(binary, project, tmp_path, target):
+    from test_subtitle_skia_ruby_groups import configure
+
+    track, style = textured_roles(*project, tmp_path, 'gradient_horizontal')
+    first, = track.lines
+    second = replace(first, chars=[replace(cell, start_ms=cell.start_ms + 3000, role_label=None)
+                                   for cell in first.chars], end_ms=first.end_ms + 3000,
+                     display_start_override_ms=3000, display_end_override_ms=first.end_ms + 3500)
+    track = replace(track, lines=[first, second])
+    style = replace(style, karaoke_colors=colors('#FF0000', '#00FF00'))
+    style = gradient_glow_style(style, 'gradient_vertical', base=True)
+    style = replace(style, entry_anim='fade', entry_lead_ms=200, exit_anim='fade', exit_fade_ms=300)
+    ir = ir_for(binary, (track, style))
+    features = set(ir['required_features'])
+    assert {'p06_role_body_paints', 'p06_vertical_gradient_glow', 'p07_role_line_fade'} <= features
+    assert 'p07_horizontal_glow_line_animation' not in features
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 3450, 450])
+    assert all(frame[..., 3].max() == 255 for frame in frames)
+    assert np.array_equal(frames[0], frames[2]) and not np.array_equal(frames[0], frames[1])
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('direction,glow,latin,shared', [
     ('gradient_horizontal', 'none', False, True), ('gradient_vertical', 'none', False, True),
