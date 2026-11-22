@@ -348,12 +348,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         const bool fadeEntry = features.contains("p07_character_entry_fade_composition")
-            && line.entryAnimation == "char_fade" && line.exitAnimation == "none";
+            && line.entryAnimation == "char_fade";
         const bool fadeExit = features.contains("p07_ruby_character_exit_fade") && annotated
-            && line.entryAnimation == "none" && line.exitAnimation == "char_fade"
+            && line.exitAnimation == "char_fade"
             && style.rubyDecorationKindForState(false) != "shadow"
             && style.rubyDecorationKindForState(true) != "shadow";
         const bool fadeComposition = (fadeEntry || fadeExit)
+            && (line.entryAnimation == "none" || fadeEntry) && (line.exitAnimation == "none" || fadeExit)
             && (line.karaokeAnimation == "none" || (singingScale && !line.zoomPulseEnabled))
             && !line.wipeReverse && !style.vertical && !style.rightToLeft
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()

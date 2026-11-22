@@ -104,10 +104,12 @@ def _uses_role_glow(item):
     ))
 
 
-def _composes_character_fade(source, item, *, entering=True):
+def _composes_character_fade(source, item, *, entering=True, paired=False):
     look = item.layout_style
-    phases = source.get('entry_anim'), source.get('exit_anim')
-    return (phases == (('char_fade', 'none') if entering else ('none', 'char_fade'))
+    phase, opposite = ('entry', 'exit') if entering else ('exit', 'entry')
+    return (source.get(f'{phase}_anim') == 'char_fade'
+            and (source.get(f'{opposite}_anim') == 'none'
+                 or (paired and source.get(f'{opposite}_anim') == 'char_fade'))
             and source.get('karaoke_anim') in {'none', 'utopia'} and not source.get('zoom_pulse')
             and not item.line.wipe_reverse
             and not (look.vertical or look.right_to_left or look.lower_ruby_enabled)
@@ -418,23 +420,24 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if any(line.get('entry_anim') == 'char_fade' or line.get('exit_anim') == 'char_fade'
            for line in ir['track']['lines']):
         ir['required_features'].append('p07_character_fade')
-        fade_lines = {
-            index for index, item in enumerate(plan.lines)
-            if _composes_character_fade(ir['track']['lines'][item.track_index], item)
-            and (geometry.ruby is not None or uses_authored_decoration(item.layout_style, 'glow'))
-        }
-        if fade_lines:
-            ir['required_features'].append('p07_character_entry_fade_composition')
+        exit_fade_lines = set()
         if geometry.ruby is not None:
             exit_fade_lines = {
                 index for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True))
                 if reading.rubies
-                and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False)
+                and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False, paired=True)
                 and all('shadow' not in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
             }
-            if exit_fade_lines:
-                fade_lines |= exit_fade_lines
-                ir['required_features'].append('p07_ruby_character_exit_fade')
+        entry_fade_lines = {
+            index for index, item in enumerate(plan.lines)
+            if _composes_character_fade(ir['track']['lines'][item.track_index], item, paired=index in exit_fade_lines)
+            and (geometry.ruby is not None or uses_authored_decoration(item.layout_style, 'glow'))
+        }
+        if entry_fade_lines:
+            ir['required_features'].append('p07_character_entry_fade_composition')
+        if exit_fade_lines:
+            ir['required_features'].append('p07_ruby_character_exit_fade')
+        fade_lines = entry_fade_lines | exit_fade_lines
     if any(line.get('scanline') for line in ir['track']['lines']):
         ir['required_features'] += scanline_features(
             track, style, ir['track']['lines'], particle_band_tracks, vertical_singing)
