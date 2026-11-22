@@ -47,19 +47,26 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool verticalFlame = features.contains("p07_vertical_sing_flame");
     const bool verticalScale = source.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_with_particles");
+    const bool verticalMotion = features.contains("p07_vertical_singing_particle_line_animation")
+        && !source.wipeReverse
+        && (source.entryAnimation == "none" || source.entryAnimation == "fade"
+            || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")
+        && (source.exitAnimation == "none" || source.exitAnimation == "fade"
+            || source.exitAnimation == "slide_out" || source.exitAnimation == "rise");
     const bool verticalParticles = cfg.vertical
         && (verticalStars || verticalShapes || verticalFalling || verticalLightning || verticalFlame)
         && (!source.wipeReverse || features.contains("p07_vertical_reverse_singing_particles"))
         && !source.scanlineEnabled && !source.strokeFlashEnabled
         && (source.karaokeAnimation == "none" || verticalScale)
-        && source.entryAnimation == "none" && source.exitAnimation == "none";
+        && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft
         || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles)
-        || (source.entryAnimation != "none" && entry.isEmpty()) || (source.exitAnimation != "none" && exit.isEmpty())
+        || (!verticalParticles && ((source.entryAnimation != "none" && entry.isEmpty())
+            || (source.exitAnimation != "none" && exit.isEmpty())))
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)

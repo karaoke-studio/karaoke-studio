@@ -798,6 +798,8 @@ effect_styles['vertical-zoom-notes'] = dict(
 effect_styles['vertical-petals'] = dict(effect_styles['vertical-zoom-notes'], sing_fx='petal')
 effect_styles['vertical-lightning'] = dict(effect_styles['vertical-zoom-notes'], sing_fx='lightning')
 effect_styles['vertical-reverse-notes'] = dict(effect_styles['vertical-notes'], reverse_karaoke_anim='zoom_pulse')
+effect_styles['vertical-motion-notes'] = dict(
+    effect_styles['vertical-zoom-notes'], entry_anim='slide_in', entry_lead_ms=650, exit_anim='rise', exit_fade_ms=500)
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
@@ -805,7 +807,7 @@ vertical_scanline = effect in {
 vertical_motion = effect in {'vertical-zoom-motion', 'vertical-zoom-band-motion'}
 vertical_particles = effect in {
     'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals', 'vertical-lightning',
-    'vertical-reverse-notes',
+    'vertical-reverse-notes', 'vertical-motion-notes',
 }
 vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
@@ -825,6 +827,9 @@ if effect:
             style = replace(style, karaoke_colors=palette)
         line, = track.lines
         chars = [replace(char, text=text) for char, text in zip(line.chars, ('字', '한'), strict=True)]
+        if effect == 'vertical-motion-notes':
+            chars[1] = replace(chars[1], start_ms=1350)
+            line = replace(line, end_ms=1500)
         reading = RubyAnnotation('字', '字', pos_start_ms=400, pos_end_ms=700,
                                  target_line_index=0, target_char_start=0, target_char_end=1)
         reverse = effect == 'vertical-reverse-notes'
@@ -867,6 +872,7 @@ if '--compare-export' in sys.argv:
         'particle-image-band': {18: 300, 33: 550, 48: 800, 93: 1550, 105: 1750},
         'band-motion': {24: 400, 48: 800, 90: 1500, 93: 1550},
         'vertical-petals': {12: 200, 60: 1000, 81: 1350},
+        'vertical-motion-notes': {12: 200, 33: 550, 95: 1583},
     }.get(effect, {12: 200, 33: 550, 81: 1350})
     if vertical_scanline:
         indices = {23: 383, 33: 550, 48: 800, 81: 1350}
@@ -1021,12 +1027,14 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                                      'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                                      'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
-                                     'vertical-lightning', 'vertical-reverse-notes', 'particle-image-band'],
+                                     'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
+                                     'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                               'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
-                              'vertical-lightning', 'vertical-reverse-notes', 'particle-image-band'])
+                              'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
+                              'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

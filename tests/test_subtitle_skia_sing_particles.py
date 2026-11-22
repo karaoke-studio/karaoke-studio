@@ -564,6 +564,65 @@ def test_vertical_reverse_singing_particles_keep_clock_order(binary, project, va
     assert abs(captures[0] - captures[1]).mean() < .15
 
 
+@pytest.mark.parametrize('entry,exit_,karaoke', [
+    ('fade', 'fade', 'none'), ('slide_in', 'slide_out', 'zoom_pulse'), ('rise', 'rise', 'none'),
+])
+def test_vertical_singing_particles_follow_whole_line_motion(binary, project, entry, exit_, karaoke):
+    from test_subtitle_skia_vertical import vertical_ruby_source
+
+    track, style = vertical_ruby_source(project, position='center')
+    line, = track.lines
+    chars = [line.chars[0], replace(line.chars[1], start_ms=1400)]
+    track = replace(track, lines=[replace(line, chars=chars, end_ms=1550, display_end_override_ms=2050)])
+    blank = colors('#00000000', '#00000000')
+    style = replace(style, karaoke_colors=blank, ruby_karaoke_colors=blank, stroke_width_px=0,
+                    stroke2_enabled=False, sing_fx='note', karaoke_anim=karaoke,
+                    fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    baseline = ir_for(binary, (track, style))
+    animated = replace(style, entry_anim=entry, entry_lead_ms=800,
+                       exit_anim=exit_, exit_fade_ms=500)
+    ir = ir_for(binary, (track, animated))
+    feature = 'p07_vertical_singing_particle_line_animation'
+    assert feature in ir['required_features']
+    layer, = ir['track']['lines']
+    assert (layer['entry_anim'], layer['entry_duration_ms'], layer['display_start_ms']) == (entry, 200, 0)
+    assert (layer['exit_anim'], layer['exit_duration_ms'], layer['display_end_ms']) == (exit_, 500, 2050)
+    assert layer['fx_bursts'] == baseline['track']['lines'][0]['fx_bursts']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    times = [100, 450, 900, 1800, 2050]
+    results = []
+
+    def centroid(alpha):
+        return np.array([np.average(np.arange(weight.size), weights=weight)
+                         for weight in (alpha.sum(axis=0), alpha.sum(axis=1))])
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, baseline)
+            unchanged, _ = collect(process, times)
+            configure(process, ir)
+            frames, _ = collect(process, times, generation=2)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=3)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert not frames[0].any() and not frames[-1].any()
+        assert np.array_equal(frames[1:3], unchanged[1:3])
+        plain, moved = [frame[..., 3].astype(float) for frame in (unchanged[3], frames[3])]
+        assert plain.sum() > 1000
+        assert moved.sum() / plain.sum() == pytest.approx(.25, abs=.02)
+        dx, dy = centroid(moved) - centroid(plain)
+        if exit_ == 'slide_out':
+            assert dx < -5 and abs(dy) < .4
+        elif exit_ == 'rise':
+            assert abs(dx) < .4 and dy < -2
+        else:
+            assert [dx, dy] == pytest.approx([0, 0], abs=.2)
+        results.append(premultiplied(np.stack(frames)))
+    assert abs(results[0] - results[1]).mean() < .15
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])

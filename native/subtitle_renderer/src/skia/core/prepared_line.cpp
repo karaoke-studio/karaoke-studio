@@ -91,8 +91,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.spins(); });
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
-    if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (movingCells || !line.paintBounds.isEmpty())) {
-        const auto* bounds = movingCells ? nullptr : &line.paintBounds;
+    // Vertical singing particles can drift beyond the static glyph bounds.
+    const bool dynamicPaint = movingCells || (line.vertical && !line.particles.empty());
+    if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (dynamicPaint || !line.paintBounds.isEmpty())) {
+        const auto* bounds = dynamicPaint ? nullptr : &line.paintBounds;
         // Keep the same bounded destination-format layer at every opacity
         // for vertical decoration. Raster edge coverage depends on the target
         // origin when translucent outlines are composited over the shadow.
