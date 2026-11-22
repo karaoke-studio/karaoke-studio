@@ -151,8 +151,11 @@ def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, tar
 
 def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p00_edges=False):
     budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
-    for t, ref, gpu, raster in zip(times, refs, gpu_frames, raster_frames, strict=True):
-        for name, first, second in (('D2D', ref, gpu), ('Raster', gpu, raster)):
+    comparisons = [('Raster', gpu_frames, raster_frames)]
+    if refs is not None:
+        comparisons.insert(0, ('D2D', refs, gpu_frames))
+    for name, first_frames, second_frames in comparisons:
+        for t, first, second in zip(times, first_frames, second_frames, strict=True):
             a, b = first[..., 3], second[..., 3]
             left, right = a > 16, b > 16
             union = left | right

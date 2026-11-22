@@ -54,7 +54,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (verticalScanline || features.contains("p07_vertical_scanline_singing_particles"));
     const bool verticalMotion = features.contains("p07_vertical_singing_particle_line_animation")
         && !source.wipeReverse
-        && !source.scanlineEnabled
+        && (!source.scanlineEnabled || features.contains("p07_vertical_scanline_particle_line_animation"))
         && (source.entryAnimation == "none" || source.entryAnimation == "fade"
             || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")
         && (source.exitAnimation == "none" || source.exitAnimation == "fade"

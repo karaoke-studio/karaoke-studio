@@ -564,10 +564,12 @@ def test_vertical_reverse_singing_particles_keep_clock_order(binary, project, va
     assert abs(captures[0] - captures[1]).mean() < .15
 
 
-@pytest.mark.parametrize('entry,exit_,karaoke', [
-    ('fade', 'fade', 'none'), ('slide_in', 'slide_out', 'zoom_pulse'), ('rise', 'rise', 'none'),
+@pytest.mark.parametrize('entry,exit_,karaoke,sweep', [
+    ('fade', 'fade', 'none', 'none'), ('slide_in', 'slide_out', 'zoom_pulse', 'none'),
+    ('rise', 'rise', 'none', 'none'), ('slide_in', 'slide_out', 'scanline', 'star'),
+    ('rise', 'rise', 'zoom_pulse_scanline', 'note'),
 ])
-def test_vertical_singing_particles_follow_whole_line_motion(binary, project, entry, exit_, karaoke):
+def test_vertical_singing_particles_follow_whole_line_motion(binary, project, entry, exit_, karaoke, sweep):
     from test_subtitle_skia_vertical import vertical_ruby_source
 
     track, style = vertical_ruby_source(project, position='center')
@@ -578,18 +580,25 @@ def test_vertical_singing_particles_follow_whole_line_motion(binary, project, en
     style = replace(style, karaoke_colors=blank, ruby_karaoke_colors=blank, stroke_width_px=0,
                     stroke2_enabled=False, sing_fx='note', karaoke_anim=karaoke,
                     fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    if sweep != 'none':
+        style = replace(style, scanline_enabled=True, scanline_color='#00000000', scanline_glow_px=0,
+                        scanline_effect=sweep, scanline_effect_color_mode='color',
+                        scanline_effect_color='#FF00FF', scanline_effect_color2='#FF00FF')
     baseline = ir_for(binary, (track, style))
     animated = replace(style, entry_anim=entry, entry_lead_ms=800,
                        exit_anim=exit_, exit_fade_ms=500)
     ir = ir_for(binary, (track, animated))
     feature = 'p07_vertical_singing_particle_line_animation'
     assert feature in ir['required_features']
+    band_feature = 'p07_vertical_scanline_particle_line_animation'
+    if sweep != 'none':
+        assert band_feature in ir['required_features']
     layer, = ir['track']['lines']
     assert (layer['entry_anim'], layer['entry_duration_ms'], layer['display_start_ms']) == (entry, 200, 0)
     assert (layer['exit_anim'], layer['exit_duration_ms'], layer['display_end_ms']) == (exit_, 500, 2050)
     assert layer['fx_bursts'] == baseline['track']['lines'][0]['fx_bursts']
     invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
+    invalid['required_features'].remove(feature if sweep == 'none' else band_feature)
     times = [100, 450, 900, 1800, 2050]
     results = []
 

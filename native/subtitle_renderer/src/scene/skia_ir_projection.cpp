@@ -312,12 +312,15 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && features.contains("p07_vertical_singing_scanline_line_animation");
         const bool movingUnscaledScanline = features.contains("p07_scanline_unscaled_line_animation")
             && source.karaokeAnimation == "none" && !source.wipeReverse;
+        const bool movingVerticalBandParticles = cfg.vertical && resolved.scanlineShape == "band"
+            && features.contains("p07_vertical_scanline_particle_line_animation");
         const bool movingScanline = (movingUtopiaScanline || movingUnscaledScanline || movingVerticalSingingScanline)
             && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
             && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
             && (!source.zoomPulseEnabled || (movingVerticalSingingScanline && composedScanline))
-            && !source.wipeReverse && !source.strokeFlashEnabled && source.fxBursts.empty();
+            && !source.wipeReverse && !source.strokeFlashEnabled
+            && (source.fxBursts.empty() || movingVerticalBandParticles);
         const bool particleScanline = features.contains("p07_ruby_petal_entry_scanline") && utopiaSinging
             && source.entryAnimation == "petal" && (source.exitAnimation == "none" || noteExit)
             && (resolved.scanlineShape == "band" || particleScanlineImage) && resolved.scanlineMode == "color"
@@ -347,7 +350,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (source.karaokeAnimation == "none"
                 || (utopiaScanline && features.contains("p07_vertical_scanline_singing")))
             && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline"))
-            && !source.strokeFlashEnabled && (source.fxBursts.empty() || (staticScanline
+            && !source.strokeFlashEnabled && (source.fxBursts.empty() || ((staticScanline || movingVerticalBandParticles)
                 && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_particles"))
                 && (features.contains("p07_vertical_scanline_singing_particles")
                     || features.contains("p07_vertical_scanline_particles"))));

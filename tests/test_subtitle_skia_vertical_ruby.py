@@ -363,7 +363,7 @@ def test_vertical_singing_scale_original_corpus_gpu_raster(binary, application, 
             batch, _ = collect(process, case.timestamps_ms)
         frames.append(batch)
     assert all(np.any(frame[..., 3] > 16) for frame in frames[0])
-    assert_glow_parity(case.timestamps_ms, frames[0], *frames, case.case_id, check_p00_edges=True)
+    assert_glow_parity(case.timestamps_ms, None, *frames, case.case_id, check_p00_edges=True)
 
 
 @pytest.mark.parametrize('angle,dpr,glowing', [(28, 1, False), (-28, 1.5, False), (90, 1.5, False),
