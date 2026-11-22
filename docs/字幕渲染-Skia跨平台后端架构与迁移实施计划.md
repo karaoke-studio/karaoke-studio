@@ -3590,6 +3590,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 2026-11-22 复验三种原样入场各 **29 帧**。固定位置环采样通过涟漪的 300ms 临界帧。浮点合成与固定光晕边界的试验在 Vulkan 对 Raster **87/87 帧通过**，D2D 对 Vulkan 每种仍有 **301ms** 一帧超遮罩预算，最大总 alpha 差为 **0.21%**。音符的另一试验在该帧把 IoU 收至 **0.96904**。三种组合保留原门槛，证据前缀为 `build/p07-symbol-*`。
 - 只改变实色光晕源的路径覆盖采样，音符 301ms 的 D2D 对 Vulkan IoU 达到 **0.96980**，原预算为 **0.97**。对正文各层单独启用固定采样或 2 倍覆盖，仍未通过该帧。保留实验 `build/p07-symbol-entry-coverage-layers-unverified.patch` 和相应帧，继续沿用已有产品范围。
 - 对 `build/p00-skia-coverage/entry-*-faint-alpha.npz` 对应的三份原始 alpha 数组复查，301ms 音符、涟漪和星光各有 **82、81、81** 个像素跨过既有的 alpha 16 遮罩边界，其中 **81 个坐标三者共有**。应优先检查共同的字形边缘与光晕合成，保留原画质门槛。
+- 用同一份 D2D 输入只移除粒子数据做分层复验。音符 301ms 的差异含两处粒子覆盖：`(753,522)` 的 D2D alpha 在有粒子时为 **32**、单独字形为 **17**，Skia 试验帧为 **16**；`(742,524)` 的 D2D 两组均为 **13**，Skia 试验帧为 **28**。`(689,567)` 的差异来自字形或光晕。证据为 `build/p00-skia-coverage/entry_note-d2d-layer-isolation.npz`。
 
 ### 14.281 P00 主线原样配置与画面复验（2026-11-21）
 
@@ -4196,6 +4197,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 聚焦 **26 通过**，WSL X11 与 Wayland 各 **12 通过**，两份 Vulkan 构建各通过 **3 项 CTest**。证据前缀为 `build/p07-fade-spin-*`。
 - `8aa3c6c6` 在 Windows 真实 D2D GPU、Vulkan 与 Raster 三条路径各自复用进程，连续重配 **122 个原样场景、560 帧**，全部通过两组原画质预算。单独验收的 1 个竖排样本沿用 §14.365。证据为 `build/p00-skia-coverage/original-warm-pixels-8aa3c6c6.json`。
 - `7a27563d` 在暗尾性能修复后重跑同一批 **122 个场景、560 帧**，两组画面对照均通过。WSL Vulkan 与独立 Raster 干净构建各 **3 项 CTest**，X11 和 Wayland 的淡出回放各 **4 项通过**。证据为 `build/p00-skia-coverage/original-warm-pixels-7a27563d.json` 和 `build/p07-fade-crop-final-wsl-*`。
+- `a88a647e` 的托管 Mac CI **5 项通过**。Apple Silicon 与 Intel 的产品套件各 **2451 通过、1593 跳过**，两份干净环境验证包各 **290 通过**，**98 份**规范样例的哈希一致。托管运行仍使用虚拟 Metal，保留真机硬件验收。[Mac CI 45003048356](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45003048356)
 
 ### 14.384 P07.1 逐字翻转入场接逐字淡出（2026-11-22）
 
@@ -4229,6 +4231,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Windows 上沿用 §14.387 的两个 **30 帧**样本。Raster 窄幅组中位数 **14.948ms**，多字组中位数由 **26.265ms** 降至 **19.330ms**，P95 由 **162.569ms** 降至 **49.521ms**。
 - Windows 翻转对照和协议测试 **26 项通过**，原样 **29 帧**的五种回放顺序逐字节一致。Vulkan 的 29 帧与前版逐字节相同。Raster 在 **650ms** 的预乘通道最大变化为 **3/255**，遮罩 IoU **0.999516**，外框一致，alpha 总和变化约 **0.0173%**。原有画质预算通过，日志前缀 `build/p07-spin-filter-bounds-win-*`。
 - Windows Vulkan 与独立 Raster 的正式构建均已干净重编，各通过 **3 项 CTest**。
+- `e2311fdd` 的 Windows 正式构建复跑 **122 个原样场景、560 帧**，复用 D2D、硬件 Vulkan 与 Raster 进程连续重配，两组画面对照全通过。五种导出格式、MP4 时间线、实际浮窗合计 **16 通过**，关闭 Vulkan 驱动后的独立 Raster **2 通过**。WSL 的 Vulkan 和 Raster 构建各通过 **3 项 CTest**，X11、Wayland 各 **4 项通过**，禁用 Vulkan 的独立 Raster **2 项通过**。逐帧记录 `build/p00-skia-coverage/original-warm-pixels-e2311fdd.json`。
 
 ## 15. 前期探针清理范围
 
