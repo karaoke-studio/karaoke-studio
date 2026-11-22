@@ -620,6 +620,38 @@ def test_undecorated_ruby_drip_keeps_its_anchor_and_replays(binary, reading, tar
     assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_drip_shears_the_independent_glow(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'independent')
+    style = replace(style, entry_anim='char_drip', entry_lead_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_character_drip_glow'
+    assert feature in ir['required_features']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
+                                             ruby_decoration_kind_before='none')), 1)
+    start = ir['track']['lines'][0]['display_start_ms']
+    times = [start + 180, start + 250]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        glowing, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+        configure(process, plain)
+        bare, _ = collect(process, times, generation=3)
+    assert all(np.array_equal(a, b) for a, b in zip(glowing, replay[::-1], strict=True))
+    halo_centers = []
+    for with_glow, without_glow in zip(glowing, bare, strict=True):
+        halo = (without_glow[..., 3] == 0) & (with_glow[..., 3] > 16)
+        assert halo.any()
+        halo_centers.append(np.nonzero(halo)[0].mean())
+    assert halo_centers[0] < halo_centers[1]
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize(('case_id', 'edge', 'times'), [
     ('entry_char_drip', 301, (299, 300, 310, 325, 450, 650, 750, 899, 900, 1400)),
@@ -662,6 +694,33 @@ def test_undecorated_ruby_drip_matches_actual_gpu(binary, application, tmp_path,
     alpha_delta = abs(int(expected[..., 3].sum()) - int(actual[..., 3].sum()))
     assert alpha_delta / (255 * rows) <= .25
     assert abs(premultiplied(expected[union]) - premultiplied(actual[union])).mean() <= 5
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize(('case_id', 'dim_edges', 'ordinary'), [
+    ('entry_char_drip', (310, 325, 450), (299, 300, 301, 302, 303, 650, 1000, 1500)),
+    ('exit_char_drip', (5499,), (4000, 4500, 4900, 5100, 5900)),
+])
+def test_ruby_drip_with_glow_matches_actual_gpu(binary, application, tmp_path, case_id, dim_edges, ordinary):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path, include_real=False) if case.case_id == case_id)
+    samples = (*ordinary, *dim_edges)
+    reference, gpu, raster = render_ruby_transition_frames(binary, case, samples)
+    count = len(ordinary)
+    assert_glow_parity(samples, None, gpu, raster, case.case_id, check_p00_edges=True)
+    assert_glow_parity(ordinary, reference[:count], gpu[:count], raster[:count], case.case_id, check_p00_edges=True)
+    assert_glow_parity(dim_edges, reference[count:], gpu[count:], raster[count:], case.case_id)
+    # At maximum shear, one dark glow pixel can extend a long way along
+    # the tilted edge. Check the brighter contour's bounds as well as the
+    # original 16/255 mask overlap and alpha mass.
+    for time, expected, actual in zip(dim_edges, reference[count:], gpu[count:], strict=True):
+        before, after = (frame[..., 3] > 24 for frame in (expected, actual))
+        assert before.any() and after.any(), (case_id, time)
+        for axis in (0, 1):
+            first, second = (np.flatnonzero(mask.any(axis=axis)) for mask in (before, after))
+            assert max(abs(first[0] - second[0]), abs(first[-1] - second[-1])) <= 2, (case_id, time)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

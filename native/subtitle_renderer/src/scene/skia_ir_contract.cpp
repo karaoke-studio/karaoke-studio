@@ -227,6 +227,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_character_exit_spin",
         "p07_ruby_character_entry_spin",
         "p07_ruby_character_drip",
+        "p07_ruby_character_drip_glow",
         "p07_ruby_character_translation",
         "p07_ruby_character_affine_exit",
         "p07_ruby_character_stretch_exit",
@@ -892,6 +893,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || features.contains("p07_ruby_character_drip"))
         && (!features.contains("p07_character_transform") || !features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 逐字滴落或翻转缺少逐字变换或注音布局能力声明");
+    if (features.contains("p07_ruby_character_drip_glow")
+        && (!features.contains("p07_ruby_character_drip")
+            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
+        throw BackendError("Skia 上注音逐字滴落光晕缺少对应能力");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
     const bool verticalParticles = hasSkiaVerticalParticleProfile(features);
     if (verticalParticles

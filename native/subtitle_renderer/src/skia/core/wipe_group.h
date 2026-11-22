@@ -25,7 +25,7 @@ public:
                         const SingingScale&, float originX, float opacity,
                         const UtopiaTransition* exit = nullptr, int followingDone = 0,
                         std::optional<float> entryScale = {}) const;
-    void compositeSpinGlow(SkCanvas&, const PreparedGlow&, int timeMs, bool after, float opacity, const SkMatrix&) const;
+    void compositeTransformedGlow(SkCanvas&, const PreparedGlow&, int timeMs, bool after, float opacity, const SkMatrix&) const;
     void drawScanline(SkCanvas&, const ScanlineBand&, int timeMs, const SingingScale&, float originX) const;
 private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible,

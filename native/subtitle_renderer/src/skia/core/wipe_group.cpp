@@ -203,15 +203,17 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
     }
 }
 
-void PreparedWipeGroup::compositeSpinGlow(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
-                                         float opacity, const SkMatrix& pose) const {
+void PreparedWipeGroup::compositeTransformedGlow(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
+                                                float opacity, const SkMatrix& pose) const {
     if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
     const bool before = timeMs <= cells_.front().startMs;
     const bool complete = !before && lineWipeComplete(cells_, timeMs);
     if (after ? before : complete) return;
     const auto edge = before || complete ? std::nullopt : std::optional(frontAt(timeMs, bounds_.left()));
-    for (std::size_t index = 0; index < cells_.size(); ++index)
-        glow.compositeTransformedCell(canvas, *glowOffset_ + index, after, edge, pose, opacity);
+    for (std::size_t index = 0; index < cells_.size(); ++index) {
+        const auto matrix = drip_ ? readingDrip(cells_[index], pose) : pose;
+        glow.compositeTransformedCell(canvas, *glowOffset_ + index, after, edge, matrix, opacity);
+    }
 }
 
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {

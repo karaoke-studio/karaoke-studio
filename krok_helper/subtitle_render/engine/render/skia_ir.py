@@ -277,6 +277,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         reverse_bitmap_lines.add(item.track_index)
     spin_lines = set()
     drip_lines = set()
+    drip_glow = False
     translation_lines = set()
     affine_lines = set()
     stretch_lines = set()
@@ -356,10 +357,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 spin_lines.add(index)
             drip_active = ((entry == 'char_drip' and leave == 'none' and source['entry_duration_ms'] > 0)
                            or (leave == 'char_drip' and entry == 'none' and source['exit_duration_ms'] > 0))
-            if (drip_active and not uses_authored_decoration(look, 'glow')
-                    and all(ruby_decoration_kinds(reading.target.style) == ('none', 'none')
-                            for reading in geometry.ruby.lines[index].rubies)):
-                drip_lines.add(index)
+            if drip_active:
+                reading_decorations = {kind for reading in geometry.ruby.lines[index].rubies
+                                       for kind in ruby_decoration_kinds(reading.target.style)}
+                if 'shadow' not in reading_decorations:
+                    drip_lines.add(index)
+                    drip_glow |= 'glow' in reading_decorations or uses_authored_decoration(look, 'glow')
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
                 translation_lines.add(index)
@@ -690,6 +693,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 ir['required_features'].append(f'p07_ruby_character_{phase}_spin')
         if drip_lines:
             ir['required_features'].append('p07_ruby_character_drip')
+        if drip_glow:
+            ir['required_features'].append('p07_ruby_character_drip_glow')
         if translation_lines:
             ir['required_features'].append('p07_ruby_character_translation')
         if affine_lines:

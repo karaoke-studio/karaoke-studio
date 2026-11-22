@@ -108,6 +108,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && line.characterFade.entryKind == CharacterFade::Kind::Spin;
     const bool fadeBeforeSpin = compositingSpin && fadeSide < 0
         && line.characterFade.entryKind == CharacterFade::Kind::Fade;
+    const bool compositingDrip = fadeActive
+        && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.drips(); });
+    const bool movingGlow = compositingSpin || compositingDrip;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     // Volume bars and vertical particles can extend outside the text paint bounds.
@@ -498,7 +501,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         for (const auto index : readings) {
             const auto& group = line.rubyGroups[index];
             if (const auto pose = rubyPose(group); !rubyGeometryPhase && !pose.isIdentity())
-                group.compositeSpinGlow(canvas, layer, tMs, after, rubyOpacity(group), pose);
+                group.compositeTransformedGlow(canvas, layer, tMs, after, rubyOpacity(group), pose);
         }
     };
     for (const auto& lane : line.rubyGlows)
@@ -530,7 +533,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const bool before = layer.visible(false), after = layer.visible(true);
         const auto usesStaticGlow = [&](const State& state) {
             return state.transform.opacity > 0.f
-                && !((compositingSpin || rubyGeometryPhase) && state.transform.transformed)
+                && !((movingGlow || rubyGeometryPhase) && state.transform.transformed)
                 && ((before && state.phase != Phase::After) || (after && state.phase != Phase::Before));
         };
         const auto source = std::ranges::any_of(states, usesStaticGlow)
@@ -555,7 +558,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             if (canonicalFadeGlow || canonicalUtopiaGlow) layer.compositeCanonical(canvas, source);
             else layer.composite(canvas, source, particleEntryGlow || rubyUtopiaEntry, compositingSpin);
         }
-        if (compositingSpin)
+        if (movingGlow)
             inPhaseOrder([&](std::size_t index, Phase phase) {
                 const auto& state = states[index];
                 if (!state.transform.transformed) return;

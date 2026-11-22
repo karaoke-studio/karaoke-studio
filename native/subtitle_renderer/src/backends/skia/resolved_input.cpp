@@ -349,7 +349,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.exitAnimation == "none" || line.exitAnimation == "spin_flip" || fadeExit)
             && (!spinEntry || features.contains("p07_ruby_character_entry_spin"))
             && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
-        const bool dripComposition = transformedRuby && !usesDecoration("shadow") && !usesDecoration("glow")
+        const bool dripGlow = features.contains("p07_ruby_character_drip_glow")
+            && glowPaints == GlowPaintSupport::Solid;
+        const bool dripComposition = transformedRuby && !usesDecoration("shadow")
+            && (dripGlow || !usesDecoration("glow"))
             && line.bursts.empty()
             && features.contains("p07_ruby_character_drip")
             && ((line.entryAnimation == "char_drip" && line.entryDurationMs > 0 && line.exitAnimation == "none")
@@ -761,7 +764,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool unscaledScanlineMotion = line.scanlineEnabled && line.karaokeAnimation == "none" && ordinaryLineAnimation
             && features.contains("p07_scanline_unscaled_line_animation");
         const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion || horizontalGlowMotion
-            || fadeComposition || noiseComposition || spinComposition
+            || fadeComposition || noiseComposition || warpComposition
             || geometryComposition || rubyUtopiaEntry || rubyUtopiaExit)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled

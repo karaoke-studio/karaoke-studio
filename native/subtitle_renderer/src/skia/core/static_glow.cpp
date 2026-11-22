@@ -240,12 +240,15 @@ void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index,
     if (!visible(after) || opacity <= 0 || path.isEmpty()) return;
     const float margin = 3.f * radius_ + 2.f;
     const auto bounds = path.getBounds().makeOutset(margin, margin);
-    const bool raster = usesSoftwareCanvas(canvas);
+    // A drip shears an opaque, unscaled glyph. Use the same floating-point
+    // blur before the shear so dark glow edges agree on both devices.
+    const bool opaqueShear = opacity == 1.f && transform.getScaleX() == 1.f && transform.getSkewY() != 0.f;
+    const bool byteSource = usesSoftwareCanvas(canvas) && !opaqueShear;
     // Blur in glyph space before applying the animation transform.
-    auto mask = makeSource(canvas, bounds, raster ? kN32_SkColorType : kRGBA_F16_SkColorType, true);
-    drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, raster ? 1.f : opacity);
+    auto mask = makeSource(canvas, bounds, byteSource ? kN32_SkColorType : kRGBA_F16_SkColorType, true);
+    drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, byteSource ? 1.f : opacity);
     auto blurred = makeSource(canvas, bounds, kRGBA_F16_SkColorType);
-    if (raster) {
+    if (byteSource) {
         // Blur is linear in alpha. Filter at full brush opacity in N32,
         // then apply the animation alpha to each pass before F16 blending.
         auto pass = makeSource(canvas, bounds, kN32_SkColorType);
