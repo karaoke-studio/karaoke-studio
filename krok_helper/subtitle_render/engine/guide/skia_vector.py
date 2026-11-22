@@ -118,6 +118,9 @@ VECTOR_GUIDE_LINE_MOTION_FEATURES = frozenset({
 VECTOR_GUIDE_FADED_SCANLINE_FEATURES = frozenset({
     'p06_faded_scanline_gradient_fill', 'p07_faded_scanline_prefix_guides',
     'p07_scanline_band', 'p07_ruby_scanline', 'p07_scanline_line_animation'})
+VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES = frozenset({
+    'p07_faded_scanline_singing_particles', 'p07_faded_scanline_particle_paint',
+    'p07_sing_twinkle', 'p07_ruby_band_singing_particles'})
 
 
 def vector_guides_form_prefix(chars):
@@ -150,6 +153,8 @@ def compose_vector_guides(track, features):
         allowed |= VECTOR_GUIDE_LINE_MOTION_FEATURES
     if faded_scanline:
         allowed |= VECTOR_GUIDE_FADED_SCANLINE_FEATURES
+        if 'p07_faded_scanline_singing_particles' in features:
+            allowed |= VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')

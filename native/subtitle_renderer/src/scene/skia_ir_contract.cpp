@@ -604,15 +604,20 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray fadedScanline{
             "p06_faded_scanline_gradient_fill", "p07_faded_scanline_prefix_guides",
             "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation"};
+        static const QJsonArray fadedScanlineParticles{
+            "p07_faded_scanline_singing_particles", "p07_faded_scanline_particle_paint",
+            "p07_sing_twinkle", "p07_ruby_band_singing_particles"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
         const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
+        const bool useFadedScanlineParticles = useFadedScanline && features.contains("p07_faded_scanline_singing_particles");
         if (!features.contains("p05_vector_guides"))
             throw BackendError("Skia 导唱符组合缺少导唱符能力");
         for (const auto& feature : features)
             if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature))
                 && !(useLineMotion && lineMotion.contains(feature))
-                && !(useFadedScanline && fadedScanline.contains(feature)))
+                && !(useFadedScanline && fadedScanline.contains(feature))
+                && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
     if (features.contains("p07_faded_scanline_prefix_guides")

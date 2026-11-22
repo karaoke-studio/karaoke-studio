@@ -1,4 +1,5 @@
 """Canonical anchors and capabilities for the singing-particle planner."""
+from ..guide.skia_vector import vector_guides_form_prefix
 from ..layout.line.skia_geometry import write_horizontal_pivots
 from .skia_line_animation_ir import ordinary_line_animation
 
@@ -85,7 +86,7 @@ def _supports_singing_particle_paint(paint):
     decor = paint.get('decor')
     return (paint['fill']['mode'] in {'solid', 'gradient_vertical'}
             and paint['stroke_width_px'] == paint['stroke2_width_px'] == 0
-            and (decor is None or (decor['kind'] == 'glow' and decor['fill']['mode'] == 'solid')))
+            and (decor is None or (decor['kind'] == 'glow' and decor['fill']['mode'] in {'solid', 'gradient_vertical'})))
 
 
 def vertical_singing_particle_modes(source):
@@ -146,6 +147,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
         faded_band = faded_band_singing_particles(source, look)
+        chars = item.render_line.chars
+        prefix_guides = (faded_band and 'p07_faded_scanline_prefix_guides' in ir['required_features']
+                         and vector_guides_form_prefix(chars))
         singing_under_shape = (annotated and band and (not animated or petal_with_band) and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         singing_under_band = (not look.vertical and annotated and band
@@ -167,7 +171,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                                   or (look.sing_fx != 'none' and not petal_with_flame)))
                 or look.lower_ruby_enabled or (annotated and animated and index not in composed_lines)
                 or (not (annotated or vertical_particles or faded_band) and outlined)
-                or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
+                or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         for burst in bursts:
             kind = burst['kind']

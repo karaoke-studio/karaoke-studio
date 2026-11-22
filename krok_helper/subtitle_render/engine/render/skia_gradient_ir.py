@@ -113,10 +113,10 @@ def write_body_gradient_bounds(ir, plan):
             continue
         source = ir['track']['lines'][item.track_index]
         annotated = bool(final.get('ruby_groups'))
-        prefix_band = ('p07_faded_scanline_prefix_guides' in ir['required_features']
-                       and fixed_faded_utopia_band(source, look))
         particle_band = ('p07_faded_scanline_singing_particles' in ir['required_features']
                          and faded_band_singing_particles(source, look) and look.scanline_mode in {'default', 'color'})
+        prefix_band = ('p07_faded_scanline_prefix_guides' in ir['required_features']
+                       and (fixed_faded_utopia_band(source, look) or particle_band))
         faded_band = (prefix_band or particle_band) and modes <= {'solid', 'gradient_vertical'}
         animations = {source.get('entry_anim'), source.get('exit_anim')}
         palette_band = (source.get('scanline') and look.scanline_shape == 'band' and look.scanline_mode == 'brighten'

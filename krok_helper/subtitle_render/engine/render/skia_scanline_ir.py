@@ -82,7 +82,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         vector_guides = any(c.vector_glyph is not None for c in chars)
         fixed_fade = fixed_faded_utopia_band(line, look)
         role_fade = inline_roles and fixed_fade
-        prefix_fade = vector_guides and fixed_fade and not inline_roles and vector_guides_form_prefix(chars)
+        prefix_fade = (vector_guides and not inline_roles and vector_guides_form_prefix(chars)
+                       and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'})))
         if ((look.scanline_shape != 'band' and not shape) or look.right_to_left
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))

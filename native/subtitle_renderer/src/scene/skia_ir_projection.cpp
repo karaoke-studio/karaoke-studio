@@ -449,6 +449,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool composedGuide = features.contains("p05_vector_guide_composition");
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
+        const bool prefixGuideParticles = prefixFadedScanline
+            && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
+            && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
             && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
@@ -488,7 +491,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 唱字描边闪光暂不支持导唱符或行内角色");
             if (noise && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 噪声出入场暂不支持导唱符或行内角色");
-            if (!source.fxBursts.empty() && (cell.vectorGlyph || &cellStyle != &resolved))
+            if (!source.fxBursts.empty() && ((cell.vectorGlyph && !prefixGuideParticles) || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved))

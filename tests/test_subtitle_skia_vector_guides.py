@@ -172,7 +172,7 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('effect', ['gradient', 'scanline', 'gradient_glow'])
+@pytest.mark.parametrize('effect', ['gradient', 'scanline', 'gradient_glow', 'scanline_particles'])
 def test_faded_gradient_with_leading_replacement_guide(binary, project, effect):
     from test_subtitle_skia_outline_ruby import outlined
 
@@ -189,10 +189,16 @@ def test_faded_gradient_with_leading_replacement_guide(binary, project, effect):
                     ruby_colors_follow_main=True, entry_anim='fade', exit_anim='fade',
                     entry_lead_ms=500, exit_fade_ms=400)
     feature = 'p06_animated_singing_gradient_fill'
-    if effect == 'scanline':
+    if effect in {'scanline', 'scanline_particles'}:
         style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_mode='color',
                         scanline_color='#FFFFFF', scanline_width_px=20, scanline_glow_px=3)
         feature = 'p07_faded_scanline_prefix_guides'
+        if effect == 'scanline_particles':
+            palette = style.karaoke_colors
+            style = replace(style, sing_fx='twinkle',
+                            karaoke_colors=replace(palette, before=replace(palette.before, shadow=ramp)),
+                            decoration_kind='glow', glow_before_radius_px=6, glow_after_radius_px=6,
+                            fx_particle_color_mode='follow_before', fx_particle_color_layers='decor')
     elif effect == 'gradient_glow':
         palette = style.karaoke_colors
         style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, shadow=ramp)),
@@ -201,6 +207,8 @@ def test_faded_gradient_with_leading_replacement_guide(binary, project, effect):
         feature = 'p06_gradient_glow'
     ir = ir_for(binary, (track, style))
     assert {feature, 'p05_vector_guide_composition', 'p06_ruby_outline_gradient'} <= set(ir['required_features'])
+    if effect == 'scanline_particles':
+        assert {'p07_faded_scanline_singing_particles', 'p07_faded_scanline_particle_paint'} <= set(ir['required_features'])
     assert ir['track']['lines'][0]['chars'][0].get('vector_glyph_id')
     assert ir['skia_layout']['lines'][0]['ruby_groups'][0]['style_cell'] == 2
     invalid = copy.deepcopy(ir)

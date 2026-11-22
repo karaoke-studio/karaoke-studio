@@ -105,7 +105,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool painted = fadedBand && features.contains("p07_faded_scanline_particle_paint") && fx.hasPaint
             && (fx.fill.mode == "solid" || fx.fill.mode == "gradient_vertical")
             && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0
-            && (!fx.hasDecor || (fx.decorKind == "glow" && fx.decor.mode == "solid"
+            && (!fx.hasDecor || (fx.decorKind == "glow"
+                && (fx.decor.mode == "solid" || fx.decor.mode == "gradient_vertical")
                 && std::isfinite(fx.decorRadius) && fx.decorRadius >= 0 && fx.decorRadius <= 532
                 && fx.decorConcentration >= 0 && fx.decorConcentration <= 2));
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");

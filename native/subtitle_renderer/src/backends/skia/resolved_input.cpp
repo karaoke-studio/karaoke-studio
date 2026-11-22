@@ -156,7 +156,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool fixedFadedScanline = fadedUtopiaScanline && (style.scanlineMode == "default" || style.scanlineMode == "color");
         const bool roleFadedScanline = fixedFadedScanline && line.bursts.empty()
             && features.contains("p07_inline_role_faded_scanline");
-        const bool prefixFadedScanline = fixedFadedScanline && line.bursts.empty()
+        const bool prefixFadedScanline = fixedFadedScanline
+            && (line.bursts.empty() || features.contains("p07_faded_scanline_singing_particles"))
             && features.contains("p07_faded_scanline_prefix_guides");
         const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
             && style.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
