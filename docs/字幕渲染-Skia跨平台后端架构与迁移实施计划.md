@@ -4218,6 +4218,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - Raster 用静态画笔生成 8 位光晕源，模糊后在每次混合前施加动画透明度，保持 F16 合成和原轴心。同批计时的多字组中位数从 **238.255ms** 降至 **162.946ms**，P95 从 **316.466ms** 降至 **177.093ms**。Vulkan 同组中位数 **2.243ms**。Windows **26 项**画质与协议回归、两条路径 **29 帧**重复回跳、无 Vulkan 驱动的独立 Raster **2 项**以及 WSL X11 和 Wayland 各 **4 项**均通过。证据前缀为 `build/p07-spin-raster-normalized-*`。
 - `b037f3cd` 连续重配 **122 个原样场景、560 帧**，两组画面对照全部通过。开启 Khronos 同步验证后复验 Windows 正式浮窗逐字翻转、离屏与导出，验证层成功启用，未报告同步错误或新增警告。记录为 `build/p00-skia-coverage/original-warm-pixels-b037f3cd.json` 与 `build/p07-spin-glow-runtime-validation*.log`。
 - 同一渲染器的 Windows 五种导出格式、MP4 音视频时间线和实际浮窗生命周期测试合计 **16 项通过**。翻转滤镜最新代码的 Apple Silicon / Intel 复验已发起。[Mac CI 45005825493](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45005825493)
+- `407157dc` 的该轮双架构 CI **5 项通过**。两架构产品套件各 **2457 通过、1599 跳过**，干净环境包各 **290 通过**，**98 份**规范样例哈希一致。托管虚拟 Metal 的结果继续与最终真机验收分别记录。
 
 ### 14.387 P07.1 / P11.7 避免空白翻转光晕的模糊（2026-11-22）
 
@@ -4238,7 +4239,10 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - 正向横排单行允许花瓣入场接星光退场，覆盖双描边、上注音和普通走字或 Utopia 唱字。正文与注音维持无阴影和无光晕。两个粒子阶段各自使用已解析时钟，星光轮廓在固定位置采样并量化覆盖。缺少粒子配对能力时拒绝新场景，旧场景可继续确定性回放。
 - 在 DPR 1、1.5 各测 50%、100%、200% 三档速度，共 **132 帧**通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的原画质预算。Windows 粒子配对及单独入场回归 **68 通过**，原配对和新配对的浮窗、离屏 GPU、PNG 编码前帧对照 **2 通过**。WSL X11 和 Wayland 的配对时钟、回跳和实际浮窗各 **3 通过**。Windows 与 WSL Vulkan 构建各 **3 项 CTest**。日志前缀 `build/p07-petal-sparkle-*`。
+- Windows 与 WSL 的独立 Raster 构建各通过 **3 项 CTest**。禁用 Vulkan 驱动后，该组合在两边的相同场景配对、拒绝和回跳复验各 **1 项通过**。
 - 星光作入场以及爱心、羽毛接星光退场的变体仍有未达预算的临界帧。直接保留音符原始曲线的试验在 300ms 增加了粒子边缘误差，原样音符仍待收口。证据见 `build/p07-sparkle-exit-pair-candidate.log` 与 `build/p07-symbol-curve-original.log`。
+- `1be4c419` 的 Apple Silicon 与 Intel 集中复验已发起，包含两项 Raster 翻转优化及花瓣与星光组合。[Mac CI 45010263630](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45010263630)
+- 无装饰星光入场 302ms 的 **114** 个遮罩差异像素中，**109** 个位于单独字形边缘，**5** 个涉及粒子。2 倍覆盖采样、逐层量化的试验仍有 **93** 个差异像素，遮罩 IoU 为 **0.96862**，低于 **0.97**。固定 16 点采样与直接换用 8 位合成分别增加了字形边缘差异。记录为 `build/p07-symbol-entry-both-layers.log` 和 `build/p07-particle-entry-byte-trial-*.log`。
 
 ## 15. 前期探针清理范围
 
