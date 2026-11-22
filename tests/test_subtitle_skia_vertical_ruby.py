@@ -728,6 +728,8 @@ def test_vertical_reading_and_body_zoom_use_separate_clocks(binary, project):
     ('slide_in', 'slide_out', False, 'glow', 'none'), ('rise', 'rise', True, 'shadow', 'none'),
     ('fade', 'rise', True, 'glow', 'none'), ('fade', 'fade', True, 'glow', 'no_wipe'),
     ('slide_in', 'slide_out', False, 'glow', 'no_wipe'), ('rise', 'rise', True, 'shadow', 'no_wipe'),
+    ('fade', 'fade', False, 'glow', 'utopia'), ('rise', 'rise', True, 'glow', 'utopia'),
+    ('slide_in', 'slide_out', False, 'glow', 'zoom_pulse'), ('rise', 'rise', True, 'glow', 'zoom_pulse'),
 ])
 def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, exit_, two_lanes, decoration, karaoke):
     from test_subtitle_skia_outline_ruby import premultiplied
@@ -747,8 +749,12 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
     style = replace(base, entry_anim=entry, exit_anim=exit_, entry_lead_ms=500, exit_fade_ms=500)
     ir = ir_for(binary, (track, style), dpr=1.5)
     plain = ir_for(binary, (track, base), dpr=1.5)
-    feature = ('p07_vertical_decoration_no_wipe_animation' if karaoke == 'no_wipe'
-               else 'p07_vertical_decoration_line_motion')
+    feature = {
+        'none': 'p07_vertical_decoration_line_motion',
+        'no_wipe': 'p07_vertical_decoration_no_wipe_animation',
+        'utopia': 'p07_vertical_singing_line_animation',
+        'zoom_pulse': 'p07_vertical_singing_line_animation',
+    }[karaoke]
     animation_feature = 'p07_line_fade' if entry == exit_ == 'fade' else 'p07_line_motion'
     assert {feature, animation_feature, 'p06_vertical_ruby_decoration'} <= set(ir['required_features'])
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']

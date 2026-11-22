@@ -236,13 +236,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
+        const bool verticalSingingAnimation = style.vertical && singingScale && ordinaryLineAnimation
+            && !line.wipeReverse && !line.scanlineEnabled && features.contains("p07_vertical_singing_line_animation");
         const bool verticalSinging = style.vertical && singingScale && features.contains("p07_vertical_singing_scale")
             && (!style.dualLineLayout || features.contains("p07_vertical_columns_singing_scale"))
             && (!line.zoomPulseEnabled || features.contains("p07_vertical_zoom_pulse"))
             && (!line.wipeReverse || (features.contains("p07_vertical_reverse_singing")
                 && !line.scanlineEnabled && !annotated))
-            && !style.rightToLeft && !vectorGuides
-            && !hasInlineRoles && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !style.rightToLeft && !vectorGuides && !hasInlineRoles
+            && (verticalSingingAnimation || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && (!line.scanlineEnabled || features.contains("p07_vertical_scanline_singing"))
             && !line.strokeFlashEnabled && line.bursts.empty();
         const bool unscaledLineMotion = !style.vertical && !style.rightToLeft && !line.wipeReverse
@@ -346,8 +348,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
-        const bool lineAnimation = singingScale && !line.zoomPulseEnabled
-            && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation;
+        const bool lineAnimation = verticalSingingAnimation || (singingScale && !line.zoomPulseEnabled
+            && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation);
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && line.entryAnimation == "none" && line.exitAnimation == "none"
@@ -696,7 +698,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!hasShadow || features.contains("p06_vertical_shadow"))
             && (line.karaokeAnimation == "none" || (verticalSinging && !hasShadow)
                 || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
-            && (verticalFade || verticalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
+            && (verticalFade || verticalMotion || verticalSingingAnimation
+                || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && (!line.scanlineEnabled || verticalScanlineDecoration) && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseVerticalDecoration = verticalDecoration && !annotated
             && (!hasGlow || features.contains("p06_vertical_reverse_glow"))

@@ -124,7 +124,9 @@ def _vertical_singing_lines(ir, plan):
         source = ir['track']['lines'][item.track_index]
         if (look.vertical and not look.right_to_left
                 and source.get('karaoke_anim') == 'utopia'
-                and {source.get('entry_anim'), source.get('exit_anim')} == {'none'}
+                and ordinary_line_animation(source)
+                and ({source.get('entry_anim'), source.get('exit_anim')} == {'none'}
+                     or not (item.line.wipe_reverse or source.get('scanline')))
                 and not (item.line.wipe_reverse and source.get('scanline'))
                 and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
                 and not uses_authored_decoration(look, 'shadow')
@@ -136,6 +138,7 @@ def _vertical_singing_lines(ir, plan):
 def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tracks, vertical_singing):
     singing, transition, singing_ruby = False, False, False
     vertical_ruby_zoom = False
+    vertical_line_animation = False
     role_singing = False
     with_line_animation = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
@@ -150,6 +153,7 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
             singing = True
             singing_ruby |= annotated
             vertical_ruby_zoom |= annotated and bool(source.get('zoom_pulse'))
+            vertical_line_animation |= animations != {'none'}
             continue
         line_animation = scales and animations != {'none'} and ordinary_line_animation(source)
         with_character_transition = index in transition_lines
@@ -199,7 +203,9 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
         ir['required_features'].append('p07_ruby_singing_scale')
     if vertical_ruby_zoom:
         ir['required_features'].append('p07_ruby_zoom_pulse')
-    if with_line_animation:
+    if vertical_line_animation:
+        ir['required_features'].append('p07_vertical_singing_line_animation')
+    if with_line_animation or vertical_line_animation:
         ir['required_features'].append('p07_utopia_line_animation')
 
 

@@ -780,13 +780,17 @@ effect_styles['vertical-palette'] = dict(effect_styles['vertical-scanline'],
                                         scanline_mode='brighten', scanline_brightness_pct=100)
 effect_styles['vertical-zoom'] = dict(effect_styles['vertical-scanline'], karaoke_anim='zoom_pulse_scanline',
                                      zoom_pulse_peak_pct=140, zoom_pulse_curve_level=2)
+effect_styles['vertical-zoom-motion'] = dict(
+    effect_styles['vertical-zoom'], karaoke_anim='zoom_pulse', scanline_enabled=False,
+    entry_anim='slide_in', exit_anim='fade', entry_lead_ms=400, exit_fade_ms=400)
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {'vertical-scanline', 'vertical-palette', 'vertical-zoom'}
+vertical_effect = vertical_scanline or effect == 'vertical-zoom-motion'
 if effect:
     style = replace(style, **effect_styles[effect])
     if effect == 'particle-image-band':
         style = replace(style, scanline_image_path=str(Path(sys.argv[-1]) / 'scanline.gif'))
-    if vertical_scanline:
+    if vertical_effect:
         from PyQt6.QtGui import QFontDatabase
 
         font_id = QFontDatabase.addApplicationFont(str(Path(sys.argv[-1]) / 'vertical.ttf'))
@@ -841,6 +845,8 @@ if '--compare-export' in sys.argv:
     }.get(effect, {12: 200, 33: 550, 81: 1350})
     if vertical_scanline:
         indices = {23: 383, 33: 550, 48: 800, 81: 1350}
+    if effect == 'vertical-zoom-motion':
+        indices = {14: 233, 33: 550, 48: 800, 100: 1667}
     captures = {}
     for index, time_ms in indices.items():
         transport.set_time(time_ms)
@@ -877,9 +883,9 @@ if '--compare-export' in sys.argv:
         process = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
         process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000)
         preview_reference = process
-        if vertical_scanline or effect in {'band-motion', 'particle-image-band'}:
-            # The scanline feather spans device pixels. Compare the preview
-            # at its actual rendering scale and keep the export reference at 1x.
+        if vertical_effect or effect in {'band-motion', 'particle-image-band'}:
+            # Compare device-pixel strokes and feathering at the preview's actual
+            # rendering scale and keep the export reference at 1x.
             preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
             preview_reference.configure(track, style, width=640, height=360, fps=60,
                                         duration_ms=2000, dpr=quick._target[2])
@@ -899,7 +905,7 @@ if '--compare-export' in sys.argv:
             left, right = expected[..., 3] >= 128, preview[..., 3] >= 128
             area = expected[..., 3] > 0
             union = left | right
-            assert union.sum() > 200
+            assert union.sum() > 200, (index, int(union.sum()))
             overlap = np.sum(left & right) / union.sum()
             delta = np.abs(expected.astype(np.int16) - preview.astype(np.int16))
             mean = delta[area | (preview[..., 3] > 0)].mean()
@@ -983,12 +989,12 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
 
 @pytest.mark.parametrize('effects', [None, 'particle-scanline', 'shadow-motion', 'particle-pair',
                                      'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
-                                     'particle-image-band'],
+                                     'vertical-zoom-motion', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
-                              'particle-image-band'])
+                              'vertical-zoom-motion', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
-    if effects in {'vertical-scanline', 'vertical-palette', 'vertical-zoom'}:
+    if effects in {'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-motion'}:
         from skia_text_fixture import make_font
 
         make_font(tmp_path / 'vertical.ttf')

@@ -627,6 +627,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 - [ ] P07.2 tracking/wave/scatter/converge/stretch/glow、noise、assemble/dissolve；处理字符中心、行中心、geometry 与 glow 的联合变换。
   - [x] 正向竖排单列、双列及上注音的整字放大，正文和读音使用各自走字时钟，见 §14.340。
   - [x] 反向竖排正文的 Utopia 与整字放大，覆盖上注音来源抑制和正文光晕，见 §14.342。
+  - [x] 正向竖排 Utopia 或整字放大叠加整行淡化、横移和升降，含双列及上注音光晕，见 §14.344。
   - [x] 正向横排无描边正文的字距展开、波浪、散开和收拢，含不同入退场时长和走字重叠，见 §14.76。
   - [x] 字距展开与波浪入场叠加上注音、双描边、光晕和普通 Utopia，见 §14.135。
   - [x] 拼接入场、消散退场与上注音、双描边、光晕和普通 Utopia，见 §14.136。
@@ -3882,6 +3883,7 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - Python 的扫字线模式、组合能力和版本字段集中在 `skia_scanline_ir.py`。整行淡化与位移声明由 `skia_line_animation_ir.py` 按同一规则提供给扫字线和场景组装，样式层负责判断唱前与唱后是否配置装饰。C++ 负责协议校验，Skia 核心负责在解析出的局部轴上裁剪和绘制。
 - 全部 **129 个原样输入**在 DPR 1 和 1.5 下比较重构前后结果，**242 份**可编译 IR 的 SHA-256 一致，**16 份**拒绝原因一致。Windows 架构、竖排、多轨与浮窗专项 **32 通过**。证据 `build/p07-scanline-ir-exact.json`。
+- `77e4d050` 的 Mac 双架构 CI 五项成功，arm64 和 x64 各 **2342 通过、1579 跳过**；两份干净包各 **272 通过**，**98 份**规范样本 SHA-256 一致。托管 Metal 的硬件门槛仍待真机验证。 [Mac CI 44963024414](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44963024414)
 
 ### 14.337 P08 竖排扫字取色与多轨视口（2026-11-22）
 
@@ -3921,6 +3923,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p08_vertical_singing_scanline_viewport` 组合正向竖排 Utopia 或整字放大与共享视口。正文、上注音缩放及高亮先在各自轨道的局部坐标完成，再应用共同的缩放、位移和旋转。多个轨道仍按来源顺序合成。
 - Windows、WSL X11 和 Wayland 各 **13 通过**。覆盖分离与重叠的双轨画面、实色和配色扫字、缺少子轨能力时回滚。各轨独立渲染后合成与双轨同帧的差异在 **2 个预乘通道值**内。三份原生构建各通过 **3 项 CTest**。日志前缀为 `build/p08-vertical-singing-band-viewport-*`。
+- `d6d81003` 复验原样 **119/129 场景、545 帧 1080p**，全部通过 Direct2D GPU 对 Vulkan、Vulkan 对 Raster 的既有画面预算。逐帧证据为 `build/p00-skia-coverage/original-warm-pixels-d6d81003.json`。同提交启动双架构复验。 [Mac CI 44966822696](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44966822696)
+
+### 14.344 P07.2 / P09 / P10 竖排唱字与整行出入场（2026-11-22）
+
+- `p07_vertical_singing_line_animation` 支持正向竖排在普通 Utopia 或整字放大期间执行整行淡化、横移和升降。各字及上注音在自己的轴心缩放，整行变换应用于已合成的正文、注音和实色光晕。
+- Windows **23 通过**，WSL X11 和 Wayland 各 **22 通过、1 项 Windows 专用跳过**。三份原生构建各通过 **3 项 CTest**。日志前缀为 `build/p07-vertical-singing-motion-*`。
+- 正式浮窗和导出抽取入场、唱中和退场共 **4 帧**。Windows Vulkan、WSL X11 和 Wayland 各通过 **1 项**，浮窗满足既有画面预算，离屏和导出逐字节一致。日志前缀为 `build/p09-vertical-zoom-motion-quick-*`。
 
 ## 15. 前期探针清理范围
 
