@@ -178,6 +178,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_scanline_decoration",
         "p07_scanline_line_animation",
         "p07_faded_scanline_singing_particles",
+        "p07_inline_role_faded_scanline",
         "p07_faded_scanline_particle_paint",
         "p07_scanline_unscaled_line_animation",
         "p07_scanline_shape",
@@ -658,6 +659,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool roleSinging = features.contains("p07_role_singing_scale");
     if (roleSinging && (!features.contains("p07_singing_scale") || !features.contains("p05_inline_roles")))
         throw BackendError("Skia 角色唱字放大缺少对应能力声明");
+    const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
+    if (roleFadedScanline && (!roleSinging || !features.contains("p07_scanline_line_animation")
+        || !features.contains("p07_line_fade") || features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 行内角色扫字线缺少唱字或整行淡化能力声明");
     const bool roleSingingGlow = features.contains("p07_role_singing_glow");
     const bool hasRoleGlow = features.contains("p06_role_static_glow") || features.contains("p06_ruby_role_glow");
     if (roleSingingGlow != (roleSinging && hasRoleGlow)
@@ -1007,7 +1012,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         || roleStaticGlow || rubyRoleGlow;
     const bool roleLineFade = features.contains("p07_role_line_fade");
     if (roleLineFade != (roleLayers && features.contains("p07_line_fade"))
-        || (roleLineFade && (features.contains("p05_lower_ruby") || features.contains("p07_singing_scale"))))
+        || (roleLineFade && (features.contains("p05_lower_ruby")
+            || (features.contains("p07_singing_scale") && !roleFadedScanline))))
         throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字和受支持的上注音画笔");
     if (roleLayers) {
         static const QJsonArray allowed{
@@ -1024,10 +1030,16 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p07_singing_glow", "p07_role_singing_glow",
             "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
         };
+        static const QJsonArray fadedScanline{
+            "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation",
+            "p07_utopia_line_animation", "p07_inline_role_faded_scanline"
+        };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
             || ((roleBodyPaints || roleStaticGlow) && !features.contains("p05_inline_roles"))
-            || std::any_of(features.begin(), features.end(), [](const auto& v) { return !allowed.contains(v); }))
+            || std::any_of(features.begin(), features.end(), [&](const auto& v) {
+                return !allowed.contains(v) && !(roleFadedScanline && fadedScanline.contains(v));
+            }))
             throw BackendError("Skia 正文角色画笔当前支持正向横排和普通走字");
     }
     if (style.contains("right_to_left")

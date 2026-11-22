@@ -151,6 +151,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto& line = projected.lines[index];
         const auto& style = projected.lineStyles[index];
         const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, style);
+        const bool roleFadedScanline = fadedUtopiaScanline && line.bursts.empty()
+            && (style.scanlineMode == "default" || style.scanlineMode == "color")
+            && features.contains("p07_inline_role_faded_scanline");
         const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
             && style.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
         if (gradientGlowWithoutTexturedRoles && !brightenedScanlineGradient
@@ -380,8 +383,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p06_animated_singing_gradient_fill");
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
-            && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+            && ((line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled)
+                || roleFadedScanline)
+            && !line.strokeFlashEnabled && line.bursts.empty();
+        if (line.scanlineEnabled && hasInlineRoles && !roleFadedScanline)
+            throw BackendError("Skia 行内角色扫字线需要正向横排和整行淡化");
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
@@ -494,6 +500,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || interval[1].toDouble() < interval[0].toDouble())
                 throw BackendError("Skia 最终 IR 必须提供有效且完整的解析计时区间");
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
+            if (roleFadedScanline) {
+                const auto supported = [](const PaintStyle& fill) {
+                    return fill.mode == "solid" || fill.mode == "gradient_vertical";
+                };
+                if (!supported(paint.beforeFillPaint) || !supported(paint.afterFillPaint))
+                    throw BackendError("Skia 行内角色扫字线支持实色和纵向渐变填充");
+            }
             const float strokeWidth = latinPrimaryOutline && isLatinText(line.chars[j].text)
                 ? paint.latinStrokeWidth : paint.strokeWidth;
             const auto beforeColor = argb(paint.beforeFillPaint.color);
@@ -659,7 +672,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool lineGradientGlow = gradientGlow
             && ((prepared.glow.before.radius > 0 && style.beforeDecorPaint.mode != "solid")
                 || (prepared.glow.after.radius > 0 && style.afterDecorPaint.mode != "solid"));
-        if (lineGradientGlow || ((roleStaticGlow || (latinPrimaryOutline && staticGlow)) && hasInlineRoles)) {
+        if (lineGradientGlow || ((roleStaticGlow || (latinPrimaryOutline && staticGlow))
+            && (hasInlineRoles || roleFadedScanline))) {
             resolveRoleGlows(prepared, line, style, projected.charStyles,
                              gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr);
             prepared.glow = {};

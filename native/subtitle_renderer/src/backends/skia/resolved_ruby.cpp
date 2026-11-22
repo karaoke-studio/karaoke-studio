@@ -156,6 +156,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const auto& scanlineStyle = scene.lineStyles[lineIndex];
     const bool fixedScanlinePaint = scanlineStyle.scanlineMode == "default" || scanlineStyle.scanlineMode == "color";
     const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, scanlineStyle);
+    const bool roleFadedScanline = fadedUtopiaScanline && fixedScanlinePaint && line.bursts.empty()
+        && features.contains("p07_inline_role_faded_scanline");
     const bool fadedScanlineGradient = fadedUtopiaScanline && fixedScanlinePaint && !line.bursts.empty()
         && features.contains("p06_faded_scanline_gradient_fill");
     const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
@@ -202,7 +204,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool roleGlow = features.contains("p06_ruby_role_glow") && !vertical && (staticLine || roleLineFade)
         && (line.karaokeAnimation == "none" || (allowSingingGlow && features.contains("p07_role_singing_glow")))
         && !line.wipeReverse && !line.zoomPulseEnabled
-        && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        && (!line.scanlineEnabled || roleFadedScanline) && !line.strokeFlashEnabled && line.bursts.empty();
     const bool allowGlow = features.contains("p06_ruby_glow")
         && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
@@ -307,6 +309,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
+                || (roleFadedScanline && allowRoleFill && fill.mode == "gradient_vertical")
                 || ((fadedScanlineGradient || brightenedScanlineGradient || decorationMotion.singingGradient)
                     && scene.charStyles.empty()
                     && features.contains("p06_ruby_fill_gradient")

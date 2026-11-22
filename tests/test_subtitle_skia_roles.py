@@ -475,6 +475,33 @@ def test_role_singing_scale_replays_with_local_paints(binary, project, tmp_path,
     assert not np.array_equal(frames[1], frames[2])
 
 
+def test_faded_scanline_with_role_gradients_and_reading_glow(binary, project, tmp_path):
+    track, style = textured_roles(*project, tmp_path, 'gradient_vertical')
+    track = replace(track, rubies=[RubyAnnotation(kanji='字', reading='AA', pos_start_ms=400, pos_end_ms=600)])
+    roles = style.custom_style_schemes
+    palette = roles['a'].karaoke_colors
+    style = replace(style, karaoke_colors=role_outline_palette(),
+                    custom_style_schemes={**roles, 'b': replace(roles['b'], karaoke_colors=palette)})
+    style = replace(role_static_glow_style(style, base=True), karaoke_anim='utopia',
+                    scanline_enabled=True, scanline_forward_enabled=True, scanline_mode='color',
+                    scanline_color='#FFFFFF', scanline_width_px=21, scanline_glow_px=4,
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600)
+    ir = ir_for(binary, (track, style))
+    feature = 'p07_inline_role_faded_scanline'
+    assert {feature, 'p07_role_singing_glow', 'p06_ruby_role_paints'} <= set(ir['required_features'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        process.configure(track, style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [300, 500, 300])
+        process._send({'cmd': 'configure', 'ir': invalid})
+        with pytest.raises(NativeRendererError):
+            process._expect_ok(process._read_until_event('configured'))
+        replay, _ = collect(process, [500], generation=2)
+    assert np.array_equal(frames[0], frames[-1]) and np.array_equal(frames[1], replay[0])
+    assert frames[0][..., 3].any() and not np.array_equal(frames[0], frames[1])
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('ruby', [False, True], ids=['body', 'upper'])
 def test_role_singing_scale_matches_actual_d2d_gpu(binary, application, tmp_path, ruby):

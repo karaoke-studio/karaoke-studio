@@ -4304,6 +4304,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 原视频 Vulkan 浮窗直画 20 秒并完成两次跳转。Windows 扫字线和渐变相关专项 27 项通过，导出页 Skia 选项另有 1 项回归通过。以项目内显式 Skia 选项从「カレンデュラ レクイエム」导出 4.5 秒透明 QTRLE，硬件 Vulkan 写出 270 个 1080p60 帧。解码 2.65 秒的字幕帧，透明度及可见像素 RGB 与离屏 Vulkan 一致。
 - WSL X11 和 Wayland 各 3 项通过。Windows 独立 Raster 禁用 Vulkan 驱动后 4 项通过。Windows 两种构建和 WSL Vulkan 构建各通过 3 项 CTest。
 
+### 14.399 P05 / P06 / P07 行内角色配色与淡化扫字线（2026-11-22）
+
+- `p07_inline_role_faded_scanline` 接通正向横排 Utopia 中的行内角色、固定色高亮带、实色或纵向渐变填充、上注音与整行淡化。行内角色的字体、配色、光晕和上注音继续走现有逐角色画笔与走字时钟。固定色高亮带重画对应单元的轮廓。
+- 「金木犀」原工程 47 行、148 处注音、8 行行内和声角色。包含和声词时段的 58 个 1080p 采样通过 D2D GPU 对硬件 Vulkan、Vulkan 对 Raster 的原画质门槛。真实浮窗 Vulkan 直画 20 秒并完成两次跳转。Windows 专项 20 项通过。日志前缀 `build/skia-role-faded-band-*`。
+- WSL X11 与 Wayland 各 7 项通过。Windows 和 WSL 的 Vulkan 构建各通过 3 项 CTest。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。
