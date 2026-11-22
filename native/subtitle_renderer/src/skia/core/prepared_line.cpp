@@ -461,7 +461,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                      owner && tMs > done ? &line.utopiaTransition : nullptr, done);
             }
             if (canonicalFadeGlow) layer.compositeCanonical(canvas, source);
-            else layer.composite(canvas, source);
+            else layer.composite(canvas, source, false, compositingSpin);
         }
         for (const auto index : readings) {
             const auto& group = line.rubyGroups[index];
@@ -519,7 +519,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 }
             });
             if (canonicalFadeGlow) layer.compositeCanonical(canvas, source);
-            else layer.composite(canvas, source, particleEntryGlow);
+            else layer.composite(canvas, source, particleEntryGlow, compositingSpin);
         }
         if (compositingSpin)
             inPhaseOrder([&](std::size_t index, Phase phase) {

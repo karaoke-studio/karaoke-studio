@@ -164,11 +164,28 @@ void PreparedGlow::prepareBytePasses() {
     for (const auto& filter : filters_) byteFilters_.push_back(SkImageFilters::ColorFilter(rounded, filter));
 }
 
-void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePasses) const {
+void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePasses, bool cropRaster) const {
+    const bool crop = cropRaster && usesSoftwareCanvas(canvas) && canvas.getTotalMatrix().rectStaysRect();
+    SkAutoCanvasRestore restore(&canvas, crop || source.outputClip.has_value());
+    if (source.outputClip) canvas.clipRect(*source.outputClip);
+    if (crop) {
+        // Only part of the line has settled during a spin. Keep the original
+        // source grid and restrict the software filter's output to its support.
+        SkPixmap mask;
+        if (!source.surface->peekPixels(&mask)) throw std::runtime_error("Skia 光晕表面无法取样");
+        auto ink = alphaBounds(mask);
+        if (ink.isEmpty()) return;
+        ink.offset(source.origin.x(), source.origin.y());
+        const auto transform = canvas.getTotalMatrix();
+        auto deviceInk = transform.mapRect(SkRect::Make(ink)).roundOut();
+        deviceInk.outset(1, 1); // Include the image's sampling margin in device pixels.
+        const auto output = filters_.front()->filterBounds(deviceInk, transform, SkImageFilter::kForward_MapDirection);
+        canvas.resetMatrix();
+        canvas.clipRect(SkRect::Make(output));
+        canvas.setMatrix(transform);
+    }
     auto image = source.surface->makeImageSnapshot();
     if (!image) throw std::runtime_error("Skia 字幕光晕临时表面无法取样");
-    SkAutoCanvasRestore restore(&canvas, source.outputClip.has_value());
-    if (source.outputClip) canvas.clipRect(*source.outputClip);
     SkPaint paint;
     for (const auto& filter : bytePasses ? byteFilters_ : filters_) {
         paint.setImageFilter(filter);
