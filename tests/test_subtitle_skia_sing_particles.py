@@ -828,9 +828,14 @@ def test_vertical_particles_composite_sources_in_track_order(binary, project, re
         bottom, top = (premultiplied(np.stack(clip)) for clip in actual)
         expected = top + bottom * (1 - top[..., 3:4] / 255)
         reverse_order = bottom + top * (1 - bottom[..., 3:4] / 255)
-        assert abs(expected - reverse_order).max() > 10
         actual = premultiplied(np.stack(frames))
-        assert abs(expected - actual).max() <= 2
+        error = abs(expected - actual)
+        order_signal = abs(expected - reverse_order) > 10
+        assert order_signal.any()
+        assert np.all(error[order_signal] < abs(reverse_order - actual)[order_signal])
+        # Compare in whole premultiplied channel steps. Converting straight
+        # BGRA8 back to premultiplied values also leaves fractional steps.
+        assert np.rint(error).max() <= 2
         results.append(actual)
     assert abs(results[0] - results[1]).mean() < .15
 
