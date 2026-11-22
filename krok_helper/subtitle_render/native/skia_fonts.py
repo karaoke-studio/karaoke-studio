@@ -1,7 +1,9 @@
 """Platform font discovery exports bytes/instance decisions, never layout metrics."""
 from contextlib import contextmanager
 import hashlib
+import sys
 import threading
+from krok_helper.subtitle_render.engine.text.font_slots import is_emoji_text
 from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance, prepared_font_instance
 from .backend import NativeRendererError
 from .skia_font_aliases import gui_font_instance, missing_family, prepared_alias
@@ -9,6 +11,13 @@ from .skia_font_aliases import gui_font_instance, missing_family, prepared_alias
 
 class SkiaFontNotPreparedError(NativeRendererError):
     """A worker needed a font decision the GUI thread has not prepared."""
+
+
+def body_symbol_family(text):
+    """Windows' legacy monochrome slot for single-symbol lyric cells."""
+    if sys.platform == 'win32' and len(text) == 1 and is_emoji_text(text):
+        return 'Segoe UI Symbol'
+    return None
 
 
 def _on_gui_thread():
@@ -99,6 +108,15 @@ class SkiaFontResolver:
     def __call__(self, style):
         instance = font_instance(style.font_family, style.font_weight, style.italic)
         return self._export(instance, style.font_family)
+
+    def resolve_body_cell_fonts(self, style, text):
+        chain = self.resolve_cell_fonts(style, text)
+        if family := body_symbol_family(text):
+            instance = font_instance(family, style.font_weight, style.italic)
+            if instance.resource_path:
+                symbol = self._export(instance, family)
+                return [symbol, *(candidate for candidate in chain if candidate != symbol)]
+        return chain
 
     def resolve_cell_fonts(self, style, text):
         from PyQt6.QtGui import QGuiApplication

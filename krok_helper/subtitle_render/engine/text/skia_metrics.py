@@ -57,7 +57,7 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
                 role_styles[char.role_label] = style_for_role_in_layout(appearance, char.role_label)
             appearance_slot = main_script_stroke_style(role_styles[char.role_label], char.text)
             selected, stretch = font_style_for_cell(appearance_slot, char.text)
-            run = instance(selected, stretch, text=char.text)
+            run = instance(selected, stretch, text=char.text, body=True)
             cells.append((run, batch.cell(run, char.text), selected))
         references.append((main, cells))
     measured = batch.measure(measure)

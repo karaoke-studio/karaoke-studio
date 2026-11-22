@@ -22,12 +22,13 @@ class TextMeasurementBatch:
         self._instances, self._texts = {}, []
         self._chains = {}
 
-    def instance(self, appearance, stretch=1.0, *, text=None):
-        discover = getattr(self.resolve_font, 'resolve_cell_fonts', None)
+    def instance(self, appearance, stretch=1.0, *, text=None, body=False):
+        body_discover = getattr(self.resolve_font, 'resolve_body_cell_fonts', None) if body else None
+        discover = body_discover or getattr(self.resolve_font, 'resolve_cell_fonts', None)
         if discover is None:
             text = None
         key = (appearance.font_family, appearance.font_weight, appearance.italic,
-               appearance.font_size_px, stretch, text)
+               appearance.font_size_px, stretch, text, body_discover is not None)
         if key not in self._instances:
             chain = (discover(appearance, text) if text is not None and discover is not None
                      else [self.resolve_font(appearance)])

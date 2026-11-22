@@ -197,6 +197,36 @@ def test_platform_preparation_exports_physical_faces_and_worker_never_discovers(
     assert frames[0][...,3].max() > 0
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows monochrome lyric symbol font and Direct2D reference')
+def test_original_grapheme_corpus_uses_the_legacy_symbol_font(binary, application, tmp_path, monkeypatch):
+    from fontTools.ttLib import TTFont
+    from krok_helper.subtitle_render.native import skia_fonts
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'grapheme_fallback')
+    list(iter_prepare_skia_fallbacks(case.track, case.style))
+    with monkeypatch.context() as worker:
+        worker.setattr(skia_fonts, 'gui_font_instance', lambda *a, **k: pytest.fail('worker font discovery'))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            ir = pool.submit(ir_for, binary, (case.track, case.style, SkiaFontResolver())).result(timeout=20)
+    layout = ir['skia_layout']
+    line, = layout['lines']
+    symbol_path = None
+    for cell in line['cells'][-2:]:
+        run = layout['runs'][cell['run_index']]
+        selected = cell['metrics']['selected_font']
+        assert selected == 0
+        assert cell['metrics']['outline_available']
+        path = layout['fonts'][run['font_ids'][selected]]['path']
+        assert symbol_path is None or path == symbol_path
+        symbol_path = path
+    with TTFont(symbol_path) as font:
+        assert 'Segoe UI Symbol' in {record.toUnicode() for record in font['name'].names if record.nameID == 1}
+        assert 'COLR' not in font
+    assert_ruby_transition_gpu_parity(binary, case, (1500, 2600, 3575, 4125, 4400))
+
+
 @pytest.mark.parametrize('target', ['gpu','raster'])
 @pytest.mark.parametrize('discovery', ['explicit','platform_worker'])
 def test_upper_and_lower_readings_use_the_same_explicit_chain(binary, source, target, discovery, monkeypatch):

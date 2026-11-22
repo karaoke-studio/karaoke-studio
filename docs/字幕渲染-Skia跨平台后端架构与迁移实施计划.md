@@ -517,6 +517,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 - [ ] P05.1 实现字体内容身份、face/axes/simulations 和 fallback 资源消费，覆盖应用内注册字体和本地化 family 名称。字体实例、度量资源和单行绘制已消费显式资源；显式单元级矢量 fallback 产品接入见 §14.32，完整字体链与字体校准尚未完成，见 §14.10/§14.11。
 - [ ] P05.2 实现 shaping 与歌词单元 / ruby checkpoint 的 cluster 映射；覆盖 CJK、Latin、韩文、emoji、组合字符和缺字。歌词单元 UTF-8 cluster、显式 fallback 度量和矢量字形绘制已接入；分段注音单元见 §14.30，单元级绘制回退链见 §14.32，完整 emoji 与 Unicode/跨字体边界仍待完成。
+  - [x] Windows 正文使用既有单色符号字体匹配原样 `grapheme_fallback`，见 §14.347。
 - [x] P05.3 提供不需要 GPU 初始化的批量度量；为宿主计划引入可注入的度量快照，解除 orchestrator 对 Qt 度量的隐式直连。原调用者显式传旧 resolver，正式 Skia IR 的规范度量切换仍属 P05.4，见 §14.10。
 - [ ] P05.4 保留同一份时间/分页/窗口规则；用规范度量重新生成最终 IR，不让 native 再重分配 resolved intervals。legacy / n3_1074 单行、多行网格、跨页碰撞/填充和智能水平布局已接通，见 §14.11/§14.13/§14.15–§14.17；ruby 等完整布局与 D2D 画质验收仍未完成。
 - [ ] P05.5 横排、角色混排、主字/英数字体、stretch、粗斜体、字间距、空格、AllowBiting、N3 边距逐项对照。主字/英数独立实例见 §14.12；单行锚点与轮廓精度见 §14.13；行内角色字体和实色子集见 §14.14。完整 N3 布局、角色复杂外观与严格画质门槛仍待完成。
@@ -3942,6 +3943,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - `p07_vertical_reverse_scanline_singing` 支持反向竖排正文的 Utopia 和整字放大与高亮带同场。唱后取色位于走字锋面下方，唱前取色在上方。两侧按固定字格剪裁，使用当前缩放后的文字和描边轮廓。
 - Windows 扫字回归 **69 通过**，含横排与竖排；WSL X11 和 Wayland 各 **60 通过、13 项 Windows 专用跳过**。三份原生构建各通过 **3 项 CTest**。日志前缀为 `build/p07-vertical-reverse-singing-band-*`。
 - 同轨正反向行专项在三种显示环境各 **10 通过**。正向注音按自己的时钟绘制，反向行在有、无工程注音来源时逐帧一致。日志前缀为 `build/p07-vertical-mixed-singing-band-*`。
+
+### 14.347 P05.2 Windows 单色符号与字素回退（2026-11-22）
+
+- Windows 正文遇到单码点 emoji 或符号时，字体适配层优先提供物理 Segoe UI Symbol。HarfBuzz 仍按整个歌词单元选择可覆盖的字体，正文行框仍使用主字体。GUI 预热符号字体，工作线程只读取对应代次的物理实例与内容身份。
+- 原样 `grapheme_fallback` 中的拉丁组合字符、韩文和两个 emoji，取 **5 张 1080p 帧**，全部通过 D2D GPU 对 Vulkan、Vulkan 对 Raster 的既有画面预算。测试同时核对工作线程选中的字体。彩色字形、复杂 emoji 序列及其他系统的字体可用性仍待验收。
+- Windows 字体回退、轮廓、混合字体及产品预览、导出回归 **95 通过**。WSL X11 和 Wayland 各 **86 通过、9 项 Windows 专用跳过**。日志前缀为 `build/p05-symbol-grapheme-*`。
 
 ## 15. 前期探针清理范围
 
