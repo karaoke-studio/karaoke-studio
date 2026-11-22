@@ -538,6 +538,7 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
   - 竖排按产品预期验收。以[字幕渲染需求](字幕渲染模块-需求设计.md)和[布局约定](字幕布局-N3对齐改造计划.md)为起点，明确字形方向、标点与小假名位置、列序与列距、注音锚点及走字时序的预期，并用独立用例断言几何和时钟。现有 Direct2D 竖排尚未做完，其画面仅用于核对已确认正确的行为。Skia Vulkan、Metal 与 Raster 用同一组预期验证结果。
 - [x] P05.8 测试字体更换/注册/移除后关联 key 失效；无 GPU 时 Raster 与规范度量仍可用，CPU/GPU 使用相同字体和几何结果。字体内容变化、应用内注册/移除和预览重准备见 §14.37/§14.40。2026-11-20 在 Windows 和 WSL Wayland 各复验 11 项通过，覆盖主字、注音、角色字体与预览重准备、GPU loader 缺失、独立 Raster 和度量快照一致性。
 - [ ] P05.9 在三平台相同字体资源上比较规范度量、cluster、时间区间和关键锚点，单独记录不同系统缺字 fallback 的环境差异。
+  - [x] 相同字体资源的 98 份规范样本，在 Windows、WSL X11/Wayland 和 macOS 双架构逐字节一致，见 §14.349。
   - [x] 三平台用同一字体的实例、glyph/cluster、时间区间和最终几何对照，见 §14.38 和 §14.126 的产品证据。
   - [ ] 补系统字体缺失时的差异矩阵，覆盖彩色和位图字形、真实跨字体缺字及平台字体目录。
 
@@ -3926,7 +3927,8 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p08_vertical_singing_scanline_viewport` 组合正向竖排 Utopia 或整字放大与共享视口。正文、上注音缩放及高亮先在各自轨道的局部坐标完成，再应用共同的缩放、位移和旋转。多个轨道仍按来源顺序合成。
 - Windows、WSL X11 和 Wayland 各 **13 通过**。覆盖分离与重叠的双轨画面、实色和配色扫字、缺少子轨能力时回滚。各轨独立渲染后合成与双轨同帧的差异在 **2 个预乘通道值**内。三份原生构建各通过 **3 项 CTest**。日志前缀为 `build/p08-vertical-singing-band-viewport-*`。
-- `d6d81003` 复验原样 **119/129 场景、545 帧 1080p**，全部通过 Direct2D GPU 对 Vulkan、Vulkan 对 Raster 的既有画面预算。逐帧证据为 `build/p00-skia-coverage/original-warm-pixels-d6d81003.json`。同提交启动双架构复验。 [Mac CI 44966822696](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44966822696)
+- `d6d81003` 复验原样 **119/129 场景、545 帧 1080p**，全部通过 Direct2D GPU 对 Vulkan、Vulkan 对 Raster 的既有画面预算。逐帧证据为 `build/p00-skia-coverage/original-warm-pixels-d6d81003.json`。
+- 同提交的 Mac 双架构复验 **5 项全部成功**，两种架构各 **2362 通过、1579 跳过**，两份干净包各 **277 通过**，**98 份**规范样本 SHA-256 一致。物理 Metal 仍待真机验证。 [Mac CI 44966822696](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44966822696)
 
 ### 14.344 P07.2 / P09 / P10 竖排唱字与整行出入场（2026-11-22）
 
@@ -3956,6 +3958,12 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 
 - `p07_vertical_singing_scanline_line_animation` 支持正向竖排的 Utopia 或整字放大、扫字带与上注音，同场使用整行淡化、横移和升降。走字沿用已解析时钟，整行位移和透明度应用于合成后的正文、注音及光晕。自然时序下，高亮在唱中出现，整字放大可延续到整行退场期间。
 - Windows Vulkan、WSL X11 和 Wayland 各 **18 通过**，包含正式浮窗对照。浮窗满足既有画面预算，离屏帧与导出帧逐字节一致。三份原生构建各过 **3 项 CTest**。日志前缀为 `build/p07-vertical-singing-band-motion-*`。
+
+### 14.349 P05.9 同字体资源的五环境复验（2026-11-22）
+
+- 复用 Mac CI 的 **98 份**规范样本清单。Windows 与 WSL X11/Wayland 使用 `0f863223`，Mac arm64/x64 使用 `d6d81003` 的托管产物。本地三环境各 **378 项通过**。
+- 五份样本的字体身份、glyph、cluster、计时及锚点 **98/98 逐字节一致**，严格比较器的最大坐标差 **0px**。逐份哈希为 `build/p05-canonical-platforms.json`，本地日志前缀为 `build/p05-canonical-current-*`。
+- Windows 的真实单色符号回退另见 §14.347。WSL 的 Fontconfig 在当前安装下为 U+1F600 选择 DejaVu Sans。系统字体可用性与 Mac 真机字体回退仍单独验收。 [Mac CI 44966822696](https://github.com/karaoke-studio/karaoke-studio/actions/runs/44966822696)
 
 ## 15. 前期探针清理范围
 
