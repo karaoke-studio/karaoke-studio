@@ -814,17 +814,21 @@ effect_styles['vertical-motion-sweep-particles'] = dict(
     exit_anim='rise', exit_fade_ms=500)
 effect_styles['vertical-outlined-particles'] = dict(
     effect_styles['vertical-zoom-notes'], stroke_width_px=5, stroke2_enabled=True, stroke2_width_px=4)
+effect_styles['vertical-multi-sweep'] = dict(
+    effect_styles['vertical-sweep-particles'], reverse_karaoke_anim='zoom_pulse_scanline', scanline_reverse_enabled=True)
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
     'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
     'vertical-motion-sweep-particles',
+    'vertical-multi-sweep',
 }
 vertical_motion = effect in {'vertical-zoom-motion', 'vertical-zoom-band-motion'}
 vertical_particles = effect in {
     'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals', 'vertical-lightning',
     'vertical-reverse-notes', 'vertical-motion-notes', 'vertical-band-notes', 'vertical-sweep-particles',
     'vertical-reverse-sweep-particles', 'vertical-motion-sweep-particles', 'vertical-outlined-particles',
+    'vertical-multi-sweep',
 }
 vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
@@ -855,8 +859,14 @@ if effect:
                         rubies=[reading] if with_reading else [])
     else:
         track.rubies.append(RubyAnnotation(kanji='AB', reading='ab', pos_start_ms=400, pos_end_ms=1000))
+extra_tracks = []
+if effect == 'vertical-multi-sweep':
+    secondary = replace(track.lines[0], wipe_reverse=True)
+    extra_tracks.append(replace(track, lines=[secondary], rubies=[], meta=replace(track.meta, offset_ms=250)))
 panel.set_style(style)
 panel.set_track(track)
+if extra_tracks:
+    panel.set_extra_tracks(extra_tracks)
 window.show()
 if '--require-hardware' in sys.argv:
     wait_for(lambda: errors or panel.skia_quick_target_established)
@@ -923,7 +933,7 @@ if '--compare-export' in sys.argv:
 
     job = RenderJob(track, style, work / 'unused', work / '字幕', width=640, height=360,
                     fps=60, duration_ms=2000, include_audio=False, gpu_export_enabled=True,
-                    output_format=OUTPUT_FORMAT_PNG_TRANSPARENT)
+                    output_format=OUTPUT_FORMAT_PNG_TRANSPARENT, extra_tracks=tuple(extra_tracks))
     pipe = SimpleNamespace(stdin=SimpleNamespace(write=write_frame))
     _write_frames_native(pipe, job, 120, binary, None, None)
     assert frame_index == 120 and pipe_frames.keys() == indices.keys()
@@ -932,14 +942,14 @@ if '--compare-export' in sys.argv:
     selection = SkiaSelection.from_environment()
     with ExitStack() as stack:
         process = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
-        process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000)
+        process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000, extra_tracks=extra_tracks)
         preview_reference = process
         if vertical_effect or effect in {'band-motion', 'particle-image-band'}:
             # Compare device-pixel strokes and feathering at the preview's actual
             # rendering scale and keep the export reference at 1x.
             preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
             preview_reference.configure(track, style, width=640, height=360, fps=60,
-                                        duration_ms=2000, dpr=quick._target[2])
+                                        duration_ms=2000, dpr=quick._target[2], extra_tracks=extra_tracks)
         for index, time_ms in indices.items():
             path = work / f'offscreen-{index}.png'
             process.render_frame_png(time_ms, path)
@@ -968,7 +978,7 @@ if '--compare-export' in sys.argv:
                         assert np.any((red < 32) & (green > 170) & (blue < 32) & (alpha > 128))
                         assert np.any((red > 170) & (green < 32) & (blue < 32) & (alpha > 128))
                     elif effect in {'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
-                                     'vertical-motion-sweep-particles'}:
+                                     'vertical-motion-sweep-particles', 'vertical-multi-sweep'}:
                         assert np.any((red > 128) & (green > 128) & (blue < 32) & (alpha > 128))
                     else:
                         assert np.any((red < 32) & (green > 128) & (blue > 128) & (alpha > 128))
@@ -978,7 +988,7 @@ if '--compare-export' in sys.argv:
                     red, green, blue, alpha = np.moveaxis(frame, -1, 0)
                     assert np.any((red < 32) & (green > 102) & (blue > 102) & (alpha > 102))
                     if effect in {'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
-                                  'vertical-motion-sweep-particles'}:
+                                  'vertical-motion-sweep-particles', 'vertical-multi-sweep'}:
                         assert np.any((red > 102) & (green < 32) & (blue > 102) & (alpha > 102))
     close_preview()
     print('Quick, offscreen GPU and export pipe compared', flush=True)
@@ -1055,14 +1065,16 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
                                      'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
                                      'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
-                                     'vertical-motion-sweep-particles', 'vertical-outlined-particles', 'particle-image-band'],
+                                     'vertical-motion-sweep-particles', 'vertical-outlined-particles',
+                                     'vertical-multi-sweep', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                               'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
                               'vertical-lightning', 'vertical-reverse-notes', 'vertical-motion-notes',
                               'vertical-band-notes', 'vertical-sweep-particles', 'vertical-reverse-sweep-particles',
-                              'vertical-motion-sweep-particles', 'vertical-outlined-particles', 'particle-image-band'])
+                              'vertical-motion-sweep-particles', 'vertical-outlined-particles',
+                              'vertical-multi-sweep', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

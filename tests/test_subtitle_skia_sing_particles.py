@@ -782,6 +782,59 @@ def test_vertical_singing_particles_over_outlined_bare_lyrics(binary, project, l
     assert abs(results[0] - results[1]).mean() < .15
 
 
+@pytest.mark.parametrize('reverse,sweep', [(False, 'none'), (True, 'star')])
+def test_vertical_particles_composite_sources_in_track_order(binary, project, reverse, sweep):
+    from test_subtitle_skia_vertical import vertical_source
+
+    primary, style = vertical_source(project, texts=['字', '字'], position='center')
+    line = replace(primary.lines[0], end_ms=1100, display_end_override_ms=1800)
+    primary = replace(primary, lines=[line])
+    extra = replace(primary, lines=[replace(line, wipe_reverse=reverse)], meta=replace(primary.meta, offset_ms=400))
+    style = replace(style, karaoke_colors=colors('#A0FF0000', '#B000FF00'), stroke_width_px=0,
+                    stroke2_enabled=False, sing_fx='note', fx_particle_color='#A000FFFF',
+                    fx_particle_color2='#A000FFFF')
+    if sweep != 'none':
+        style = replace(style, karaoke_anim='zoom_pulse_scanline', reverse_karaoke_anim='zoom_pulse_scanline',
+                        scanline_enabled=True, scanline_reverse_enabled=True, scanline_effect=sweep,
+                        scanline_color='#B0FFFF00', scanline_effect_color_mode='color',
+                        scanline_effect_color='#A0FF00FF', scanline_effect_color2='#A0FF00FF')
+    combined = ir_for(binary, (primary, style), dpr=1.5, extra_tracks=[extra])
+    separate = [ir_for(binary, (source, style), dpr=1.5) for source in (primary, extra)]
+    assert 'p08_multiple_vertical_sources' in combined['required_features']
+    parts = [combined, *combined['skia_extra_sources']]
+    for actual, expected in zip(parts, separate, strict=True):
+        assert actual['skia_layout']['lines'] == expected['skia_layout']['lines']
+        assert actual['track']['lines'] == expected['track']['lines']
+    bad = copy.deepcopy(combined)
+    bad['skia_extra_sources'][0]['required_features'].remove('p07_vertical_sing_shapes')
+    times = [320, 740, 1250, 2000, 2300]
+    results = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, combined)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+            replay, _ = collect(process, times[::-1], generation=2)
+            actual = []
+            for generation, single in enumerate(separate, 3):
+                configure(process, single)
+                actual.append(collect(process, times, generation=generation)[0])
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        first, second = actual
+        assert first[0].any() and not second[0].any() and np.array_equal(frames[0], first[0])
+        assert not first[3].any() and second[3].any() and np.array_equal(frames[3], second[3])
+        assert not frames[-1].any()
+        bottom, top = (premultiplied(np.stack(clip)) for clip in actual)
+        expected = top + bottom * (1 - top[..., 3:4] / 255)
+        reverse_order = bottom + top * (1 - bottom[..., 3:4] / 255)
+        assert abs(expected - reverse_order).max() > 10
+        actual = premultiplied(np.stack(frames))
+        assert abs(expected - actual).max() <= 2
+        results.append(actual)
+    assert abs(results[0] - results[1]).mean() < .15
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])

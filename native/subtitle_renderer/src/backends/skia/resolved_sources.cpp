@@ -76,7 +76,13 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p07_vertical_scanline_band", "p07_vertical_scanline_decoration", "p07_vertical_scanline_palette",
         "p07_vertical_scanline_singing", "p07_vertical_singing_scanline_palette", "p07_vertical_zoom_scanline",
         "p08_vertical_scanline_viewport", "p08_vertical_scanline_palette_viewport",
-        "p08_vertical_singing_scanline_viewport"
+        "p08_vertical_singing_scanline_viewport",
+        "p07_vertical_sing_twinkle", "p07_vertical_sing_shapes", "p07_vertical_sing_falling",
+        "p07_vertical_sing_lightning", "p07_vertical_sing_flame", "p07_vertical_singing_with_particles",
+        "p07_vertical_reverse_singing_particles", "p07_vertical_reverse_singing",
+        "p07_vertical_scanline_singing_particles", "p07_vertical_scanline_particles",
+        "p07_vertical_reverse_scanline", "p07_vertical_reverse_scanline_singing",
+        "p07_vertical_reverse_scanline_particles", "p07_vertical_outlined_singing_particles"
     };
     const bool vertical = kind == SourceKind::VerticalLyrics && isVerticalSource(source);
     for (const auto& feature : source.value("required_features").toArray())
