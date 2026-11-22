@@ -818,12 +818,15 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('overlap,mode,karaoke', [
-    (False, None, 'none'), (True, None, 'none'), (False, 'color', 'none'), (True, 'color', 'none'),
-    (False, 'brighten', 'none'), (True, 'follow_after', 'none'),
-    (False, 'color', 'utopia'), (False, 'brighten', 'zoom_pulse'), (True, 'follow_after', 'zoom_pulse'),
+@pytest.mark.parametrize('overlap,mode,karaoke,shadow', [
+    (False, None, 'none', False), (True, None, 'none', False),
+    (False, 'color', 'none', False), (True, 'color', 'none', False),
+    (False, 'brighten', 'none', False), (True, 'follow_after', 'none', False),
+    (False, 'color', 'utopia', False), (False, 'brighten', 'zoom_pulse', False),
+    (True, 'follow_after', 'zoom_pulse', False),
+    (False, None, 'none', True), (False, 'brighten', 'zoom_pulse', True), (True, 'follow_after', 'utopia', True),
 ])
-def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap, mode, karaoke):
+def test_vertical_tracks_keep_independent_timing_and_source_order(binary, project, overlap, mode, karaoke, shadow):
     from krok_helper.subtitle_render.domain.models import LyricsLayout
     from test_subtitle_skia_outline_ruby import premultiplied
     from test_subtitle_skia_roles import colors
@@ -837,7 +840,10 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
     style = replace(style, layouts=[LyricsLayout(layout_id='top', line_y_position='top', line_y_margin_px=24)],
                     viewport_offset_x=-38, viewport_scale_pct=86, karaoke_anim=karaoke, zoom_pulse_peak_pct=130,
                     karaoke_colors=colors('#70FF0000', '#AD00FF00'))
-    if not overlap:
+    if shadow:
+        style = replace(style, decoration_kind='shadow', ruby_decoration_kind='shadow',
+                        shadow_offset_x=-8, shadow_offset_y=6, ruby_shadow_offset_x=6, ruby_shadow_offset_y=4)
+    elif not overlap:
         style = replace(style, decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=6,
                         ruby_decoration_kind='glow', ruby_glow_after_radius_px=5)
     else:
@@ -859,9 +865,12 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
         assert ('p07_vertical_scanline_band' in actual['required_features']) == bool(mode)
         assert ('p08_vertical_scanline_viewport' in actual['required_features']) == bool(mode)
         assert ('p08_vertical_scanline_palette_viewport' in actual['required_features']) == (mode not in {None, 'color'})
-        assert ('p08_vertical_singing_scanline_viewport' in actual['required_features']) == (karaoke != 'none')
+        assert ('p08_vertical_singing_scanline_viewport' in actual['required_features']) == (bool(mode) and karaoke != 'none')
+        assert ('p08_vertical_shadow_viewport' in actual['required_features']) == shadow
     invalid = copy.deepcopy(ir)
-    if karaoke != 'none':
+    if shadow:
+        invalid['skia_extra_sources'][0]['required_features'].remove('p08_vertical_shadow_viewport')
+    elif karaoke != 'none':
         invalid['skia_extra_sources'][0]['required_features'].remove('p08_vertical_singing_scanline_viewport')
     elif mode:
         viewport_feature = 'p08_vertical_scanline_viewport' if mode == 'color' else 'p08_vertical_scanline_palette_viewport'

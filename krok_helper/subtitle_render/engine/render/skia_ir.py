@@ -795,6 +795,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].append('p08_viewport')
         if style.vertical:
             ir['required_features'].append('p08_vertical_viewport')
+            if {'p06_static_shadow', 'p06_ruby_shadow'}.intersection(ir['required_features']):
+                ir['required_features'].append('p08_vertical_shadow_viewport')
             declare_vertical_scanline_viewport(ir)
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])
