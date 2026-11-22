@@ -110,9 +110,10 @@ VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
 VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
-    'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient', 'p06_multi_lane_outline',
-    'p06_static_shadow', 'p06_ruby_shadow',
-    'p06_animated_singing_gradient_fill',
+    'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient',
+    'p06_static_shadow', 'p06_ruby_shadow', 'p06_animated_singing_gradient_fill'})
+VECTOR_GUIDE_LINE_MOTION_FEATURES = frozenset({
+    'p06_multi_lane_outline',
     'p07_line_fade', 'p07_line_motion', 'p07_utopia_line_animation', 'p07_ruby_line_animation'})
 VECTOR_GUIDE_FADED_SCANLINE_FEATURES = frozenset({
     'p06_faded_scanline_gradient_fill', 'p07_faded_scanline_prefix_guides',
@@ -133,17 +134,20 @@ def compose_vector_guides(track, features):
         return
     animated_gradient = 'p06_animated_singing_gradient_fill' in features
     faded_scanline = 'p07_faded_scanline_prefix_guides' in features
+    line_motion = 'p07_utopia_line_animation' in features
     for line in track.lines:
         chars = render_line_with_guide_symbols(line).chars
         if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
             continue
-        if (animated_gradient or faded_scanline) and vector_guides_form_prefix(chars):
+        if (animated_gradient or faded_scanline or line_motion) and vector_guides_form_prefix(chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
     allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
     if animated_gradient or faded_scanline:
         allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES
+    if animated_gradient or faded_scanline or line_motion:
+        allowed |= VECTOR_GUIDE_LINE_MOTION_FEATURES
     if faded_scanline:
         allowed |= VECTOR_GUIDE_FADED_SCANLINE_FEATURES
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:

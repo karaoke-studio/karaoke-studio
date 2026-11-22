@@ -228,6 +228,19 @@ def test_p00_prefix_guide_with_utopia_ruby_outlines_and_glow_matches_actual_gpu(
     assert_glow_parity(times, reference, *rendered, f'guide_vector-{count}', check_p00_edges=True)
 
 
+@GPU
+def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tmp_path):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case, track = p00_guide(tmp_path)
+    line = track.lines[0]
+    guide = replace(line.guide_symbol, replacement_prefix=tuple(char.text for char in line.chars[:3]))
+    track = replace(track, lines=[replace(line, guide_symbol=guide)])
+    style = replace(case.style, karaoke_anim='utopia', entry_anim='fade', exit_anim='fade')
+    times = (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500)
+    assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
+
+
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'ink', 'advance', 'metrics_id', 'different_id',
                                       'inline_outline', 'wipe_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

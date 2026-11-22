@@ -596,19 +596,22 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray animatedGradient{
             "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_body_gradient", "p06_outline_gradient", "p06_ruby_main_paint",
-            "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient", "p06_multi_lane_outline",
-            "p06_static_shadow", "p06_ruby_shadow",
-            "p06_animated_singing_gradient_fill", "p07_line_fade", "p07_line_motion",
+            "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient",
+            "p06_static_shadow", "p06_ruby_shadow", "p06_animated_singing_gradient_fill"};
+        static const QJsonArray lineMotion{
+            "p06_multi_lane_outline", "p07_line_fade", "p07_line_motion",
             "p07_utopia_line_animation", "p07_ruby_line_animation"};
         static const QJsonArray fadedScanline{
             "p06_faded_scanline_gradient_fill", "p07_faded_scanline_prefix_guides",
             "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
+        const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
         if (!features.contains("p05_vector_guides"))
             throw BackendError("Skia 导唱符组合缺少导唱符能力");
         for (const auto& feature : features)
             if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature))
+                && !(useLineMotion && lineMotion.contains(feature))
                 && !(useFadedScanline && fadedScanline.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
