@@ -67,6 +67,16 @@ CharacterTransformState readingExit(const UtopiaTransition& exit, const Resolved
     return exit.at(time, 0, 0, 0, done, pivot, {}, cell.startMs, cell.endMs);
 }
 
+CharacterTransformState readingMotion(const ResolvedCell& cell, int time, const SingingScale& scale,
+                                      const UtopiaTransition* exit, int followingDone, std::optional<float> entryScale) {
+    if (exit) return readingExit(*exit, cell, time, followingDone);
+    if (!entryScale) return scale.at(time, cell.startMs, cell.endMs, cell.pivot);
+    CharacterTransformState transform;
+    transform.transformed = *entryScale != 1.f;
+    transform.matrix = UtopiaTransition::entryScaleMatrix(cell.pivot, *entryScale);
+    return transform;
+}
+
 SkMatrix readingDrip(const ResolvedCell& cell, const SkMatrix& pose) {
     const float shear = pose.getSkewY();
     return SkMatrix::MakeAll(1, 0, 0, shear, 1, -shear * cell.pivot.layoutRight, 0, 0, 1);
@@ -127,17 +137,9 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
     for (std::size_t index = 0; index < cells_.size(); ++index) {
         const auto& cell = cells_[index];
         if (cell.path.isEmpty()) continue;
-        CharacterTransformState transform;
-        if (exit) {
-            transform = readingExit(*exit, cell, timeMs, followingDone);
-            exitOpacity = transform.opacity;
-            if (exitOpacity <= 0.f) return;
-        } else if (entryScale) {
-            transform.transformed = *entryScale != 1.f;
-            transform.matrix.setScale(*entryScale, *entryScale, cell.pivot.layoutLeft, cell.pivot.baseline);
-        } else {
-            transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
-        }
+        const auto transform = readingMotion(cell, timeMs, scale, exit, followingDone, entryScale);
+        exitOpacity = transform.opacity;
+        if (exitOpacity <= 0.f) return;
         animated[index] = posedUnit(cell, transform);
     }
     for (bool after : {false, true}) {
@@ -165,7 +167,8 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
 
 void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glow, int timeMs, bool after,
                                       const SingingScale& scale, float originX, float opacity,
-                                      const UtopiaTransition* exit, int followingDone) const {
+                                      const UtopiaTransition* exit, int followingDone,
+                                      std::optional<float> entryScale) const {
     if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
     if ((scale.active && !vertical_) || exit) {
         for (std::size_t index = 0; index < cells_.size(); ++index) {
@@ -173,8 +176,7 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
             const bool before = timeMs <= cell.startMs;
             const bool complete = !before && timeMs >= cell.endMs;
             if (cell.path.isEmpty() || (after ? before : complete)) continue;
-            const auto transform = exit ? readingExit(*exit, cell, timeMs, followingDone)
-                                        : scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+            const auto transform = readingMotion(cell, timeMs, scale, exit, followingDone, entryScale);
             if (transform.opacity <= 0.f) continue;
             std::optional<SkPath> posed;
             if (transform.transformed) posed = cell.path.makeTransform(transform.matrix);
@@ -185,7 +187,7 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
                             : singingFront(cell, timeMs, originX, ink, rightToLeft_);
             }
             glow.drawCell(canvas, *glowOffset_ + index, after, edge, posed ? &*posed : nullptr,
-                          opacity * transform.opacity, false, rightToLeft_);
+                          opacity * transform.opacity, false, rightToLeft_, entryScale && opacity < .125f);
         }
         return;
     }

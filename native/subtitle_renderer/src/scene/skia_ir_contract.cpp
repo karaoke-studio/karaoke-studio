@@ -164,6 +164,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_utopia_transition",
         "p07_ruby_utopia_exit",
         "p07_ruby_utopia_entry",
+        "p07_ruby_utopia_entry_glow",
         "p07_ruby_utopia_exit_glow",
         "p07_ruby_utopia_exit_body_glow",
         "p07_character_fade",
@@ -741,6 +742,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_utopia_transition") || !features.contains("p07_ruby_singing_scale")
             || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 上注音 Utopia 入场缺少对应能力");
+    if (features.contains("p07_ruby_utopia_entry_glow")
+        && (!features.contains("p07_ruby_utopia_entry")
+            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
+        throw BackendError("Skia 上注音 Utopia 入场光晕缺少对应能力");
     if (features.contains("p07_ruby_utopia_exit_glow")
         && (!features.contains("p07_ruby_utopia_exit") || !features.contains("p06_ruby_glow")))
         throw BackendError("Skia 上注音 Utopia 退场光晕缺少对应能力");

@@ -4,12 +4,18 @@
 
 namespace subtitle::skia {
 struct UtopiaTransition {
+    static constexpr float entryPeakScale = 1.3f;
     bool enter = false, leave = false;
     int tailMs = 0;
     float amplitude = 0;
 
     bool active() const { return enter || leave; }
     bool inEntryWindow(int time, int displayStart) const { return enter && time <= displayStart + 700; }
+    static SkMatrix entryScaleMatrix(const CharacterPivot& pivot, float amount) {
+        SkMatrix matrix;
+        matrix.setScale(amount, amount, pivot.layoutLeft, pivot.baseline);
+        return matrix;
+    }
 
     CharacterTransformState at(int time, int displayStart, int index, int count, int followingDone,
                                const CharacterPivot& pivot, const SingingScale& scale,
@@ -22,7 +28,7 @@ struct UtopiaTransition {
             const int delay = count > 1 ? (200 / (count - 1)) * index : 0;
             const int elapsed = std::max(time - displayStart - delay, 0);
             state.opacity = std::min(float(elapsed) / 400.f, 1.f);
-            if (elapsed < 400) scaleX = scaleY = 1.3f * float(elapsed) / 400.f;
+            if (elapsed < 400) scaleX = scaleY = entryPeakScale * float(elapsed) / 400.f;
             else if (elapsed < 500) scaleX = scaleY = 1.f + .3f * float(500 - elapsed) / 100.f;
         } else if (leave && time > followingDone) {
             const float progress = std::clamp(float(time - followingDone) / 750.f, 0.f, 1.f);

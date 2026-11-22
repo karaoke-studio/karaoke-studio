@@ -560,6 +560,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p05_vertical_japanese_glyphs')
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
     utopia_entry_lines = set()
+    utopia_entry_glow = False
     utopia_exit_lines = set()
     utopia_exit_ruby_glow = False
     utopia_exit_body_glow = False
@@ -580,8 +581,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 body_glow = uses_authored_decoration(look, 'glow')
                 ruby_glow = any('glow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
                 phase = source.get('entry_anim'), source.get('exit_anim')
-                if phase == ('utopia', 'none') and not (body_glow or ruby_glow):
+                if phase == ('utopia', 'none'):
                     utopia_entry_lines.add(index)
+                    utopia_entry_glow |= body_glow or ruby_glow
                 if phase == ('none', 'utopia'):
                     utopia_exit_lines.add(index)
                     utopia_exit_body_glow |= body_glow
@@ -635,6 +637,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'] += ['p05_resolved_ruby', 'p05_upper_ruby']
         if utopia_entry_lines:
             ir['required_features'].append('p07_ruby_utopia_entry')
+        if utopia_entry_glow:
+            ir['required_features'].append('p07_ruby_utopia_entry_glow')
         if utopia_exit_lines:
             ir['required_features'].append('p07_ruby_utopia_exit')
         if utopia_exit_ruby_glow:

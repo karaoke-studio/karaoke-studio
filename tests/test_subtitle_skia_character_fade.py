@@ -710,6 +710,63 @@ def test_undecorated_ruby_utopia_entry_matches_actual_gpu(binary, application, t
                        check_p00_edges=True)
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_utopia_entry_glow_follows_scaled_reading(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'independent')
+    style = replace(style, entry_anim='utopia', entry_lead_ms=600, karaoke_anim='utopia')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_utopia_entry_glow'
+    assert feature in ir['required_features'] and 'p06_ruby_glow' in ir['required_features']
+    start = ir['track']['lines'][0]['display_start_ms']
+    times = [start, start + 120, start + 400, start + 701]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
+                                             ruby_decoration_kind_before='none')), 1)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        glowing, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+        configure(process, plain)
+        bare, _ = collect(process, times, generation=3)
+    assert not glowing[0][..., 3].any()
+    assert all(np.array_equal(a, b) for a, b in zip(glowing, replay[::-1], strict=True))
+    for with_glow, without_glow in zip(glowing[1:], bare[1:], strict=True):
+        assert np.any((without_glow[..., 3] == 0) & (with_glow[..., 3] > 16))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_ruby_utopia_entry_with_glow_matches_actual_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path, include_real=False) if case.case_id == 'entry_utopia')
+    faint = (301, 302, 303, 305, 310, 315, 320, 330)
+    normal = (299, 300, 340, 350, 366, 398, 419, 420, 450, 500, 550, 650, 700, 701, 740,
+              899, 900, 901, 1001, 1500, 3500, 3900)
+    reference, gpu, raster = render_ruby_transition_frames(binary, case, (*faint, *normal))
+    count = len(faint)
+    assert_glow_parity(normal, reference[count:], gpu[count:], raster[count:], case.case_id, check_p00_edges=True)
+    # Very small glyphs and their first glow pixels carry only a few alpha
+    # levels. Compare absolute per-pixel error over the whole visible region.
+    for name, first, second in (('D2D–Vulkan', reference, gpu), ('Vulkan–Raster', gpu, raster)):
+        for time, a, b in zip(faint, first[:count], second[:count], strict=True):
+            left, right = a[..., 3], b[..., 3]
+            assert left.any() and right.any(), (time, name)
+            union = (left > 0) | (right > 0)
+            delta = abs(premultiplied(a[union]) - premultiplied(b[union]))
+            assert delta.max() <= 6 and np.percentile(delta, 95) <= 2 and delta.mean() <= 1, (time, name)
+            if left.max() > 4 or right.max() > 4:
+                assert left.max() > 4 and right.max() > 4, (time, name)
+                for axis in (0, 1):
+                    x, y = (np.flatnonzero((alpha > 4).any(axis=axis)) for alpha in (left, right))
+                    assert max(abs(x[0] - y[0]), abs(x[-1] - y[-1])) <= 2, (time, name)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('entry,exit_', _ENERGY_PAIRS)
 def test_ruby_energy_pair_matches_actual_gpu(binary, application, tmp_path, entry, exit_):

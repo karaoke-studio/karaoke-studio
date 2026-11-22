@@ -46,7 +46,8 @@ public:
     Source createSource(SkCanvas&, const SkRect& transitionBounds = SkRect::MakeEmpty(),
                         bool canonical = false) const;
     void drawCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
-                  const SkPath* posed = nullptr, float opacity = 1.f, bool vertical = false, bool reverse = false) const;
+                  const SkPath* posed = nullptr, float opacity = 1.f, bool vertical = false, bool reverse = false,
+                  bool sampleCoverage = false) const;
     void composite(SkCanvas&, const Source&, bool bytePasses = false, bool cropRaster = false) const;
     void compositeCanonical(SkCanvas&, const Source&) const;
     void compositeTransformedCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,

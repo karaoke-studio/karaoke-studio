@@ -1,4 +1,5 @@
 #include "static_glow.h"
+#include "solid_outline.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkImage.h"
@@ -129,7 +130,7 @@ bool PreparedGlow::visible(bool after) const {
 }
 
 void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std::optional<float> edge,
-                            const SkPath* posed, float opacity, bool vertical, bool reverse) const {
+                            const SkPath* posed, float opacity, bool vertical, bool reverse, bool sampleCoverage) const {
     const auto& cell = cells_[index];
     const auto& path = posed ? *posed : cell.path;
     if (!visible(after) || path.isEmpty() || opacity <= 0) return;
@@ -147,7 +148,12 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     paint.setColor(cell.gradients[after] ? SK_ColorWHITE : after ? after_ : before_);
     paint.setShader(cell.gradients[after]);
     if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
-    canvas.drawPath(path, paint);
+    if (sampleCoverage && posed && !cell.gradients[after]) {
+        paint.setStyle(SkPaint::kFill_Style);
+        drawSamplePatternPath(canvas, prepareOutlinePath(*posed, strokeWidth_), paint, true);
+    } else {
+        canvas.drawPath(path, paint);
+    }
 }
 
 void PreparedGlow::prepareBytePasses() {

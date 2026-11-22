@@ -23,7 +23,8 @@ public:
                         float originX, float viewportHeight) const;
     void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
                         const SingingScale&, float originX, float opacity,
-                        const UtopiaTransition* exit = nullptr, int followingDone = 0) const;
+                        const UtopiaTransition* exit = nullptr, int followingDone = 0,
+                        std::optional<float> entryScale = {}) const;
     void compositeSpinGlow(SkCanvas&, const PreparedGlow&, int timeMs, bool after, float opacity, const SkMatrix&) const;
     void drawScanline(SkCanvas&, const ScanlineBand&, int timeMs, const SingingScale&, float originX) const;
 private:

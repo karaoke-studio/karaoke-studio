@@ -317,22 +317,24 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!line.scanlineEnabled || petalScanline) && !line.strokeFlashEnabled
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
-        const auto readingDecor = [&](bool after) {
-            const auto kind = style.rubyDecorationKindForState(after);
-            return kind == "none" || (kind == "glow" && features.contains("p07_ruby_utopia_exit_glow"));
-        };
-        const auto bodyDecor = [&](bool after) {
-            const auto kind = style.decorationKindForState(after);
-            return kind == "none" || (kind == "glow" && features.contains("p07_ruby_utopia_exit_body_glow"));
+        const auto utopiaDecor = [&](bool bodyGlow, bool rubyGlow) {
+            const auto allowed = [](const auto& kind, bool glow) {
+                return kind == "none" || (kind == "glow" && glow);
+            };
+            return allowed(style.decorationKindForState(false), bodyGlow)
+                && allowed(style.decorationKindForState(true), bodyGlow)
+                && allowed(style.rubyDecorationKindForState(false), rubyGlow)
+                && allowed(style.rubyDecorationKindForState(true), rubyGlow);
         };
         const bool rubyUtopiaExit = transformedRuby && utopiaExit && singingScale && line.entryAnimation == "none"
             && line.bursts.empty() && features.contains("p07_ruby_utopia_exit")
-            && bodyDecor(false) && bodyDecor(true)
-            && readingDecor(false) && readingDecor(true);
+            && utopiaDecor(features.contains("p07_ruby_utopia_exit_body_glow"),
+                          features.contains("p07_ruby_utopia_exit_glow"));
+        const bool utopiaEntryGlow = features.contains("p07_ruby_utopia_entry_glow")
+            && glowPaints == GlowPaintSupport::Solid;
         const bool rubyUtopiaEntry = transformedRuby && utopiaEntry && singingScale && line.exitAnimation == "none"
             && line.bursts.empty() && features.contains("p07_ruby_utopia_entry")
-            && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
-            && style.rubyDecorationKindForState(false) == "none" && style.rubyDecorationKindForState(true) == "none";
+            && utopiaDecor(utopiaEntryGlow, utopiaEntryGlow);
         const bool spinEntry = line.entryAnimation == "spin_flip" && line.entryDurationMs > 0;
         const bool spinExit = line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
         const bool fadeEntry = features.contains("p07_character_entry_fade_composition")
@@ -760,7 +762,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_scanline_unscaled_line_animation");
         const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion || horizontalGlowMotion
             || fadeComposition || noiseComposition || spinComposition
-            || geometryComposition || rubyUtopiaExit)
+            || geometryComposition || rubyUtopiaEntry || rubyUtopiaExit)
             && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
         const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_composed_stroke_flash");

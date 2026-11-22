@@ -63,7 +63,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.cellShadows = source.cellShadows;
         line.glow = PreparedGlow::prepare(source.glow);
         if (!line.glow.empty()) line.particleEntryGlow = source.particleEntryGlow;
-        if (line.particleEntryGlow != ParticleEntryGlow::None)
+        const bool rubyUtopiaEntry = source.utopiaTransition.enter && !source.rubyGroups.empty();
+        if (line.particleEntryGlow != ParticleEntryGlow::None || rubyUtopiaEntry)
             for (auto& layer : line.glow) layer.prepareBytePasses();
         line.bodyGlowTransitionBounds = source.bodyGlowTransitionBounds;
         line.isolateVerticalDecoration = line.vertical && (line.shadow.visible() || !line.glow.empty()
@@ -77,6 +78,10 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.singingScale = source.singingScale;
         line.rubySingingOrigin = source.rubySingingOrigin;
         line.utopiaTransition = source.utopiaTransition;
+        const auto glowPeak = [&](const CharacterPivot& pivot) {
+            return rubyUtopiaEntry ? UtopiaTransition::entryScaleMatrix(pivot, UtopiaTransition::entryPeakScale)
+                                   : line.singingScale.peakMatrix(pivot);
+        };
         line.transformedWipe = source.transformedWipe;
         line.scanline = source.scanline;
         const auto& band = source.scanline;
@@ -165,7 +170,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             if (cell.strokeFlashWidth > 0) line.hasStrokeFlash = true;
             if (needsPaintBounds) includeCellPaint(line.paintBounds, cell);
             for (auto& glow : line.glow)
-                glow.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot));
+                glow.appendCell(cell.path, glowPeak(cell.pivot));
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth,
@@ -214,14 +219,18 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 auto& lane = line.rubyGlows[group.lower];
                 auto [entry, inserted] = rubyGlowEntries.try_emplace(std::pair{group.lower, group.glowStyle},
                                                                     RubyGlowEntry{lane.size(), 0});
-                if (inserted) lane.push_back({PreparedGlow::prepare(*group.glow, false), {}});
+                if (inserted) {
+                    lane.push_back({PreparedGlow::prepare(*group.glow, false), {}});
+                    if (rubyUtopiaEntry)
+                        for (auto& phase : lane.back().phases) phase.prepareBytePasses();
+                }
                 auto& preparedGlow = lane[entry->second.index];
                 glowOffset = entry->second.nextCell;
                 entry->second.nextCell += group.cells.size();
                 preparedGlow.readings.push_back(line.rubyGroups.size());
                 for (auto& layer : preparedGlow.phases)
                     for (const auto& cell : group.cells)
-                        layer.appendCell(cell.path, line.singingScale.peakMatrix(cell.pivot), group.glowGradients);
+                        layer.appendCell(cell.path, glowPeak(cell.pivot), group.glowGradients);
             }
             if (group.utopiaExitOwner && (!line.utopiaTransition.leave || *group.utopiaExitOwner >= line.followingDone.size()))
                 throw std::runtime_error("Skia 上注音 Utopia 退场归属无效");
