@@ -214,6 +214,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || decorationMotion.upper)
         && (!line.zoomPulseEnabled || verticalSingingShadow)
         && (staticLine || verticalFade || decorationMotion.upper || decorationMotion.singingGradient
+            || (roleLineFade && features.contains("p05_role_vector_guides"))
             || (verticalSingingShadow && features.contains("p07_vertical_singing_line_animation")));
     const bool zoom = !vertical && line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")

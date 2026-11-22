@@ -550,7 +550,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 }
             });
     }
-    if (utopia && line.shadow.visible()) {
+    if (utopia && (line.shadow.visible() || !line.cellShadows.empty())) {
         const bool reverse = line.vertical && line.wipeRightToLeft;
         const float origin = line.vertical
             ? (reverse ? line.decorationInk.bottom() : line.decorationInk.top())
@@ -563,7 +563,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return StaticShadow::WipePose{state.transform, state.phase == Phase::Before,
                     state.phase == Phase::Wiping
                         ? std::optional<float>(line.vertical ? state.edge : transformedEdge(index)) : std::nullopt};
-            }, line.vertical, reverse);
+            }, line.vertical, reverse, line.cellShadows);
     } else {
         line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft,
                          titleOpacity, line.noWipe);

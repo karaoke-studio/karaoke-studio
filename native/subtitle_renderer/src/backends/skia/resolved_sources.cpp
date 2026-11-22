@@ -91,6 +91,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     const auto sourceFeatures = source.value("required_features").toArray();
     const bool vertical = kind == SourceKind::VerticalLyrics && isVerticalSource(source);
     const bool prefixGuides = kind != SourceKind::Title && (sourceFeatures.contains("p07_faded_scanline_prefix_guides")
+        || sourceFeatures.contains("p05_role_vector_guides")
         || (sourceFeatures.contains("p05_vector_guide_composition")
             && (sourceFeatures.contains("p06_animated_singing_gradient_fill")
                 || (sourceFeatures.contains("p06_latin_primary_outline") && sourceFeatures.contains("p07_utopia_line_animation")))));

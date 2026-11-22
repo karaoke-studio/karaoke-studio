@@ -6,6 +6,7 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include <cstdint>
+#include <span>
 
 namespace subtitle::skia {
 struct ShadowState {
@@ -88,19 +89,17 @@ struct StaticShadow {
     template <class Cell, class PoseAt>
     void drawAnimated(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
                       float edge, bool complete, float beforePad, PoseAt&& poseAt,
-                      bool vertical = false, bool reverse = false) const {
-        if (!visible() || ink.isEmpty()) return;
-        const float width = outlineWidth + secondaryWidth;
-        const float pad = std::max(width, 2.f) + 4.f;
+                      bool vertical = false, bool reverse = false,
+                      std::span<const StaticShadow> cellShadows = {}) const {
+        if ((!visible() && cellShadows.empty()) || ink.isEmpty()) return;
         const float low = vertical ? ink.top() : ink.left(), high = vertical ? ink.bottom() : ink.right();
         const auto band = [vertical](float start, float end) {
             return vertical ? SkRect::MakeLTRB(-1e6f, start, 1e6f, end)
                             : SkRect::MakeLTRB(start, -1e6f, end, 1e6f);
         };
         for (bool sung : {false, true}) {
-            const auto& state = sung ? after : before;
-            if (!state.visible() || (sung && (reverse ? edge >= high : edge <= low))) continue;
-            const bool beforeOnly = !sung && !after.enabled;
+            if (sung && (reverse ? edge >= high : edge <= low)) continue;
+            const bool beforeOnly = !sung && before.enabled && !after.enabled;
             if (beforeOnly && complete) continue;
             SkAutoCanvasRestore side(&canvas, beforeOnly);
             if (beforeOnly) {
@@ -112,6 +111,11 @@ struct StaticShadow {
             for (std::size_t index = 0; index < cells.size(); ++index) {
                 const auto& cell = cells[index];
                 if (cell.path.isEmpty()) continue;
+                const auto& shadow = cellShadows.empty() ? *this : cellShadows[index];
+                const auto& state = sung ? shadow.after : shadow.before;
+                if (!state.visible()) continue;
+                const float width = shadow.outlineWidth + shadow.secondaryWidth;
+                const float pad = std::max(width, 2.f) + 4.f;
                 const auto pose = poseAt(index);
                 if (pose.transform.opacity <= 0.f || (sung && pose.before)) continue;
                 const auto path = pose.transform.transformed ? cell.path.makeTransform(pose.transform.matrix) : cell.path;

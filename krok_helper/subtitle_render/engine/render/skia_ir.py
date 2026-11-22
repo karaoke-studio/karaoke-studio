@@ -467,6 +467,10 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_scanline')
     decorations = [kind for kind in ('shadow', 'glow') if any(
         uses_authored_decoration(item.layout_style, kind) for item in plan.lines)]
+    if role_vector_guides and 'shadow' not in decorations and any(
+            uses_authored_decoration(style_for_role_in_layout(item.layout_style, label), 'shadow')
+            for item in plan.lines for label in _inline_role_labels(item)):
+        decorations.append('shadow')
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
     if decorations and not (style.vertical or style.right_to_left or track.rubies):
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse

@@ -80,6 +80,7 @@ struct ResolvedLine {
     LineImageFills images; // Device-anchored static image paints; take precedence over gradients.
     std::vector<BodyPaint> roleBodyPaints;
     StaticShadow shadow;
+    std::vector<StaticShadow> cellShadows;
     StaticGlow glow;
     SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();
     struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; GlowGradients gradients; };

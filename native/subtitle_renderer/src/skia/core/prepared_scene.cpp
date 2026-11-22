@@ -58,6 +58,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
         line.afterOuterGradient = source.afterOuterGradient;
         line.images = source.images;
         line.shadow = source.shadow;
+        if (!source.cellShadows.empty() && source.cellShadows.size() != source.cells.size())
+            throw std::runtime_error("Skia 角色阴影单元数量无效");
+        line.cellShadows = source.cellShadows;
         line.glow = PreparedGlow::prepare(source.glow);
         line.byteParticleEntryGlow = !line.glow.empty() && source.rubyGeometryComposition
             && (source.characterGeometry.entry == "heart" || source.characterGeometry.entry == "petal"
@@ -193,7 +196,15 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 if (!cell.path.isEmpty()) next = &cell;
             }
         }
-        if (line.isolateVerticalDecoration || line.animation.active()) includeShadowPaint(line.paintBounds, line.shadow);
+        if (line.isolateVerticalDecoration || line.animation.active()) {
+            const auto bodyBounds = line.paintBounds;
+            includeShadowPaint(line.paintBounds, line.shadow);
+            for (const auto& shadow : line.cellShadows) {
+                auto bounds = bodyBounds;
+                includeShadowPaint(bounds, shadow);
+                line.paintBounds.join(bounds);
+            }
+        }
         struct RubyGlowEntry { std::size_t index, nextCell; };
         std::map<std::pair<bool, int>, RubyGlowEntry> rubyGlowEntries;
         for (const auto& group : source.rubyGroups) {
@@ -245,7 +256,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             }
             line.bitmapLineFrontOrigin = line.wipeRightToLeft ? ink.right() : ink.left();
         }
-        if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible()) {
+        if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible() || !line.cellShadows.empty()) {
             SkRect ink = SkRect::MakeEmpty();
             for (const auto& cell : line.cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
@@ -257,7 +268,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             }
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
             if (!ink.isEmpty()) line.inkCenter = ink.centerX();
-            if (line.shadow.visible()) line.decorationInk = ink;
+            if (line.shadow.visible() || !line.cellShadows.empty()) line.decorationInk = ink;
             line.bodyInk = ink;
         }
         if (line.scanline.shape)

@@ -79,6 +79,7 @@ private:
         LineImageFills images;
         std::vector<BodyPaint> roleBodyPaints;
         StaticShadow shadow;
+        std::vector<StaticShadow> cellShadows;
         std::vector<PreparedGlow> glow;
         bool byteParticleEntryGlow = false;
         SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();

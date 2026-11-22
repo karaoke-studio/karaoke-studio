@@ -130,6 +130,7 @@ VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES = frozenset({
     'p07_sing_twinkle', 'p07_ruby_band_singing_particles'})
 ROLE_VECTOR_GUIDE_FEATURES = frozenset({
     'p05_role_vector_guides', 'p06_role_solid_outlines', 'p06_role_static_glow', 'p06_ruby_role_glow',
+    'p06_static_shadow', 'p06_ruby_shadow',
     'p07_role_singing_scale', 'p07_role_singing_glow', 'p07_role_line_fade'})
 
 

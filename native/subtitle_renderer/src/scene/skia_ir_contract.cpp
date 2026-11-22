@@ -618,6 +618,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p07_sing_twinkle", "p07_ruby_band_singing_particles"};
         static const QJsonArray roleGuides{
             "p05_role_vector_guides", "p06_role_solid_outlines", "p06_role_static_glow", "p06_ruby_role_glow",
+            "p06_static_shadow", "p06_ruby_shadow",
             "p07_role_singing_scale", "p07_role_singing_glow", "p07_role_line_fade"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
@@ -1117,7 +1118,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
         };
         static const QJsonArray roleGuideFeatures{
-            "p05_vector_guides", "p05_vector_guide_composition", "p05_role_vector_guides", "p07_utopia_line_animation"
+            "p05_vector_guides", "p05_vector_guide_composition", "p05_role_vector_guides", "p07_utopia_line_animation",
+            "p06_static_shadow", "p06_ruby_shadow"
         };
         const bool roleBodyPaints = features.contains("p06_role_body_paints");
         if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))

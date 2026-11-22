@@ -69,6 +69,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
+    const bool roleVectorGuides = features.contains("p05_role_vector_guides");
     const bool gradientGlowWithoutTexturedRoles = features.contains("p06_gradient_glow");
     const auto glowPaints = (gradientGlowWithoutTexturedRoles || features.contains("p06_role_gradient_glow"))
         ? GlowPaintSupport::LineGradients
@@ -92,6 +93,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
+        .roleStaticShadow = roleVectorGuides && features.contains("p06_static_shadow"),
         .roleStaticGlow = roleStaticGlow, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
     const bool scriptStylesOnly = projected.charStyles.empty()
@@ -405,7 +407,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (rtlRubyMotion && !lineAnimation) throw BackendError("Skia 右至左上注音的整行出入场无效");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && ((line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled)
-                || roleFadedScanline || ((inlineAvatars || features.contains("p05_role_vector_guides"))
+                || roleFadedScanline || ((inlineAvatars || roleVectorGuides)
                     && lineAnimation && !line.scanlineEnabled
                     && (line.entryAnimation == "none" || line.entryAnimation == "fade")
                     && (line.exitAnimation == "none" || line.exitAnimation == "fade")))
@@ -720,7 +722,19 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             prepared.glow = {};
         }
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
-        const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled;
+        const bool roleGuideShadow = lineAnimation && (!hasInlineRoles || roleSinging)
+            && roleVectorGuides && features.contains("p06_static_shadow") && !line.scanlineEnabled
+            && !line.strokeFlashEnabled && line.bursts.empty();
+        if (roleGuideShadow && hasInlineRoles) {
+            prepared.cellShadows.reserve(line.chars.size());
+            for (const auto& cell : line.chars) {
+                const auto& look = cell.styleIndex < 0 ? style : projected.charStyles[cell.styleIndex];
+                prepared.cellShadows.push_back(skiaStaticShadow(look));
+            }
+            if (std::ranges::none_of(prepared.cellShadows, &::subtitle::skia::StaticShadow::visible))
+                prepared.cellShadows.clear();
+        }
+        const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled || !prepared.cellShadows.empty();
         const bool hasDecoration = hasGlow || hasShadow;
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")
             && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
@@ -793,14 +807,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
                     || horizontalShadowMotion || horizontalGlowMotion
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
-                || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion || movingGradientShadow
+                || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion || movingGradientShadow || roleGuideShadow
                       || (verticalDecoration && verticalDecorationAnimation)
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
                 || (line.scanlineEnabled && !(scanlineGlow || verticalScanlineDecoration))
                 || (!line.bursts.empty() && !(particleGlow || (verticalParticleDecoration && verticalDecoration)))
                 || (line.strokeFlashEnabled && !flashGlow)
-                || hasInlineRoles || ((gradient || image) && !paintedDecoration)
+                || (hasInlineRoles && !roleGuideShadow) || ((gradient || image) && !paintedDecoration)
                 || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
