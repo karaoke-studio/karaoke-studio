@@ -402,7 +402,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.rubyGeometryComposition = geometryComposition;
         const bool transforms = prepared.characterFade.transforms() || geometry;
         prepared.transformedWipe = transforms && allowTransformedWipe;
-        const bool pivots = transforms || utopia || !line.bursts.empty();
+        const bool pivots = transforms || utopia || (!style.vertical && !line.bursts.empty());
         if (line.scanlineEnabled) {
             const float halfWidth = std::max(style.scanlineWidth, 1.f) * .5f;
             using Mode = ::subtitle::skia::ScanlineColorMode;
@@ -579,12 +579,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
-        // Each burst anchors at its character pivot; the box is
-        // the wipe extent by the line's metric ascent + descent (glyph runs, never ink).
+        // Anchor stars on the final vertical glyph's ink center and cell height.
+        // Horizontal bursts keep their original pivot and measured line box.
         if (!line.bursts.empty()) {
             const auto box = source.value("particle_box_height");
-            if (!box.isDouble() || !std::isfinite(box.toDouble()) || box.toDouble() < 0 || box.toDouble() > 1e5
-                || (!prepared.rubyGroups.empty() && !rubyParticles) || style.vertical || style.rightToLeft)
+            const bool validBox = style.vertical ? box.isUndefined()
+                : box.isDouble() && std::isfinite(box.toDouble()) && box.toDouble() >= 0 && box.toDouble() <= 1e5;
+            if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
+                || (style.vertical && !features.contains("p07_vertical_sing_twinkle")) || style.rightToLeft)
                 throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
                 const auto sprite = particleSprites.find(burst.sprite);
@@ -593,9 +595,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     throw BackendError("Skia 字幕粒子缺少有效的轮廓或锚点");
                 const auto index = std::size_t(burst.charIndex);
                 const auto& anchor = prepared.cells[line.wipeReverse ? prepared.cells.size() - 1 - index : index];
+                const float x = style.vertical ? (anchor.left + anchor.right) * .5f
+                                               : (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f;
+                const float y = style.vertical ? (anchor.top + anchor.bottom) * .5f : anchor.pivot.centerY;
+                const float height = style.vertical ? anchor.bottom - anchor.top : float(box.toDouble() * glyphs.dpr);
                 prepared.particles.push_back({burst, sprite->second, argb(burst.color),
-                    (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f, anchor.pivot.centerY,
-                    std::max(anchor.right - anchor.left, 1.f), float(box.toDouble() * glyphs.dpr),
+                    x, y, std::max(anchor.right - anchor.left, 1.f), height,
                     // Ripple and shockwave both fill the same ring sprite in the existing GPU.
                     burst.kind == "ripple" || burst.kind == "shockwave"
                         ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});

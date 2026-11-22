@@ -1,4 +1,4 @@
-"""Canonical horizontal anchors for the existing singing-particle planner."""
+"""Canonical anchors and capabilities for the singing-particle planner."""
 from ..layout.line.skia_geometry import write_horizontal_pivots
 
 
@@ -25,6 +25,7 @@ _TRANSITION_LAYERS = {
 _FLAME_SINGING_SWEEPS = {'flame': 2, 'flame_alt': 2, 'flame_glow': 0, 'smoke': 0, 'ember': 0, 'spark': 0}
 _ENERGY_PARTICLES = {'lightning', 'lightning_glow'} | _FLAME_SINGING_SWEEPS.keys()
 _BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke', 'shockwave'}
+_VERTICAL_STARS = {('twinkle', 1), ('twinkle_classic', 0)}
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
 
@@ -57,6 +58,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = ruby_band_singing = False
+    vertical_stars = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -68,6 +70,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
         annotated = bool(track.rubies)
+        vertical_star_line = (look.vertical and not item.line.wipe_reverse and not band
+                              and {entry, exit_} == {'none'} and source.get('karaoke_anim') == 'none'
+                              and all((burst['kind'], burst['sweep']) in _VERTICAL_STARS
+                                      for burst in bursts))
         petal_with_flame = (annotated and petal_entry_with_flame(source, look)
                            and 'p07_ruby_petal_entry_flame_singing' in ir['required_features'])
         petal_with_band = (petal_with_flame and petal_entry_with_scanline(source, look)
@@ -81,7 +87,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         scaled_singing = annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
-        if (look.vertical or look.right_to_left or (item.line.wipe_reverse and not band)
+        if ((look.vertical and not vertical_star_line) or look.right_to_left or (item.line.wipe_reverse and not band)
                 or (source.get('karaoke_anim') != 'none' and not scaled_singing)
                 or (entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
@@ -91,7 +97,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (not annotated and (look.stroke_width_px > 0
                     or (look.stroke2_enabled and look.stroke2_width_px > 0)))
                 or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
-            raise ValueError('Skia 唱字粒子仅支持正向横排基础正文')
+            raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         for burst in bursts:
             kind = burst['kind']
             if (kind not in _PARTICLES
@@ -127,12 +133,17 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             version = 9 if falling_only else 10
             if {entry_kind, exit_kind} & ENERGY_TRANSITIONS:
                 version = 11
-        metrics = measured.lines[item.track_index]
-        write_horizontal_pivots(final['cells'], metrics)
-        final['particle_box_height'] = (
-            max(float(run['ascent']) for run in metrics.slot_metrics)
-            + max(float(run['descent']) for run in metrics.slot_metrics)
-        )
+        if vertical_star_line:
+            vertical_stars = True
+        else:
+            metrics = measured.lines[item.track_index]
+            write_horizontal_pivots(final['cells'], metrics)
+            final['particle_box_height'] = (
+                max(float(run['ascent']) for run in metrics.slot_metrics)
+                + max(float(run['descent']) for run in metrics.slot_metrics)
+            )
+    if vertical_stars:
+        ir['required_features'].append('p07_vertical_sing_twinkle')
     if ruby_scanline:
         ir['required_features'].append('p07_ruby_scanline_particles')
     if ruby_band_singing:

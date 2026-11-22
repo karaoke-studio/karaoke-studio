@@ -91,13 +91,17 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                              || source.noWipe || (!band.rubyHighlight && !source.rubyGroups.empty())))
             throw std::runtime_error("Skia 扫字线的方向、画笔或布局组合无效");
         if (source.particles.size() > 4096) throw std::runtime_error("Skia 字幕粒子数量超限");
-        for (const auto& item : source.particles)
+        for (const auto& item : source.particles) {
+            const auto& burst = item.burst;
+            const bool verticalStar = (burst.kind == "twinkle" && burst.sweep == 1)
+                || (burst.kind == "twinkle_classic" && burst.sweep == 0);
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
-                || source.vertical || source.noWipe
-                || item.burst.reverse != source.wipeRightToLeft
-                || (source.wipeRightToLeft && (!band.enabled || item.burst.kind != "scanline")))
+                || (source.vertical && !verticalStar) || source.noWipe
+                || burst.reverse != source.wipeRightToLeft
+                || (source.wipeRightToLeft && (!band.enabled || burst.kind != "scanline")))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
+        }
         line.particles = source.particles;
         line.particleVisibility = source.particleVisibility;
         line.shapeSignal = source.shapeSignal;

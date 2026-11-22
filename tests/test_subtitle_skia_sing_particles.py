@@ -370,6 +370,62 @@ def test_singing_star_speed_preserves_birth_and_respects_display_window(binary, 
         }, sort_keys=True), encoding='utf-8')
 
 
+@pytest.mark.parametrize('variant,with_reading,dpr', [('twinkle', False, 1), ('twinkle_classic', True, 1.5)])
+def test_vertical_singing_stars_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr):
+    from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
+
+    if with_reading:
+        track, style = vertical_ruby_source(project, position='top')
+    else:
+        track, style = vertical_source(project, texts=['字', '字'], position='top')
+    line, = track.lines
+    cells = [line.chars[0], replace(line.chars[1], start_ms=1600)]
+    track = replace(track, lines=[replace(line, chars=cells, end_ms=2200, display_start_override_ms=0,
+                                          display_end_override_ms=2500)])
+    blank = colors('#00000000', '#00000000')
+    style = replace(style, karaoke_colors=blank, ruby_karaoke_colors=blank, stroke_width_px=0,
+                    stroke2_enabled=False, sing_fx=variant,
+                    fx_particle_color='#0000FF', fx_particle_color2='#0000FF')
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    plain = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=dpr)
+    feature = 'p07_vertical_sing_twinkle'
+    assert {feature, 'p07_sing_twinkle'} <= set(ir['required_features'])
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    layer, = ir['track']['lines']
+    bursts = layer['fx_bursts']
+    assert {burst['char_index'] for burst in bursts} == {0, 1}
+    for burst in bursts:
+        assert burst['kind'] == variant and burst['sweep'] == int(variant == 'twinkle')
+        assert burst['start_ms'] == layer['resolved_intervals'][burst['char_index']][0]
+    times = [100, 350, 500, 1750, 1900, 2501]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    invalid_sweep = copy.deepcopy(ir)
+    invalid_sweep['track']['lines'][0]['fx_bursts'][0]['sweep'] = int(variant != 'twinkle')
+    captures = []
+
+    def center(frames):
+        rows = np.sum([blue_coverage(frame).sum(axis=1) for frame in frames], axis=0)
+        assert rows.sum() > 100
+        return np.average(np.arange(rows.size), weights=rows)
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid_sweep)
+            replay, _ = collect(process, times[::-1], generation=2)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        assert not frames[0].any() and not frames[-1].any()
+        assert center(frames[3:5]) - center(frames[1:3]) > 20 * dpr
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('variant,speed,crop', [('twinkle_classic', 0, False), ('twinkle_classic', -400, True),
                                                 ('twinkle', 350, False), ('twinkle', -350, True)])
