@@ -175,7 +175,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || decorationMotion.upper)
         && !line.zoomPulseEnabled
         && (staticLine || verticalFade || decorationMotion.upper);
-    const bool zoom = line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
+    const bool zoom = !vertical && line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
         && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
@@ -410,6 +410,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 if (pivot.size() != 2) throw BackendError("Skia 竖排注音唱字轴心无效");
                 glyph.pivot.layoutLeft = float(pivotCoordinate(pivot[0]) * glyphs.dpr);
                 glyph.pivot.baseline = float(pivotCoordinate(pivot[1]) * glyphs.dpr);
+                if (line.zoomPulseEnabled) {
+                    glyph.pivot.layoutRight = glyph.pivot.layoutLeft;
+                    glyph.pivot.centerY = glyph.pivot.baseline;
+                }
             }
             if (vertical) {
                 const auto top = cell.value("wipe_top"), bottom = cell.value("wipe_bottom");

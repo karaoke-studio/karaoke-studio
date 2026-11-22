@@ -139,6 +139,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_lower_ruby_no_wipe_decoration",
         "p07_singing_scale",
         "p07_vertical_singing_scale",
+        "p07_vertical_zoom_pulse",
         "p07_vertical_columns_singing_scale",
         "p07_role_singing_scale",
         "p07_role_singing_glow",
@@ -579,6 +580,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_singing_scale")
         && (!features.contains("p05_vertical_solid") || !features.contains("p07_singing_scale")))
         throw BackendError("Skia 竖排 Utopia 唱字缺少竖排或唱字放大能力");
+    if (features.contains("p07_vertical_zoom_pulse")
+        && !features.contains("p07_vertical_singing_scale"))
+        throw BackendError("Skia 竖排整字放大缺少对应布局能力");
     if (features.contains("p07_vertical_columns_singing_scale")
         != (verticalColumns && features.contains("p07_vertical_singing_scale")))
         throw BackendError("Skia 多列竖排 Utopia 唱字缺少对应布局能力");

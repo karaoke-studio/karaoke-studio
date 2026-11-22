@@ -125,7 +125,8 @@ def _vertical_singing_lines(ir, plan):
         if (look.vertical and not (look.right_to_left or item.line.wipe_reverse)
                 and source.get('karaoke_anim') == 'utopia'
                 and {source.get('entry_anim'), source.get('exit_anim')} == {'none'}
-                and not any(source.get(key) for key in ('zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                and not (source.get('zoom_pulse') and source.get('scanline'))
+                and not any(source.get(key) for key in ('stroke_flash', 'fx_bursts'))
                 and not uses_authored_decoration(look, 'shadow')
                 and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars)):
             tracks.add(item.track_index)
@@ -134,6 +135,7 @@ def _vertical_singing_lines(ir, plan):
 
 def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tracks, vertical_singing):
     singing, transition, singing_ruby = False, False, False
+    vertical_ruby_zoom = False
     role_singing = False
     with_line_animation = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
@@ -147,6 +149,7 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
         if item.track_index in vertical_singing:
             singing = True
             singing_ruby |= annotated
+            vertical_ruby_zoom |= annotated and bool(source.get('zoom_pulse'))
             continue
         line_animation = scales and animations != {'none'} and ordinary_line_animation(source)
         with_character_transition = index in transition_lines
@@ -181,6 +184,8 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
         ir['skia_layout']['singing_scale_schema'] = 1
     if vertical_singing:
         ir['required_features'].append('p07_vertical_singing_scale')
+        if any(ir['track']['lines'][index].get('zoom_pulse') for index in vertical_singing):
+            ir['required_features'].append('p07_vertical_zoom_pulse')
         if 'p05_vertical_columns' in ir['required_features']:
             ir['required_features'].append('p07_vertical_columns_singing_scale')
     if role_singing:
@@ -190,6 +195,8 @@ def _write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_tra
         ir['skia_layout']['utopia_transition_schema'] = 1
     if singing_ruby:
         ir['required_features'].append('p07_ruby_singing_scale')
+    if vertical_ruby_zoom:
+        ir['required_features'].append('p07_ruby_zoom_pulse')
     if with_line_animation:
         ir['required_features'].append('p07_utopia_line_animation')
 

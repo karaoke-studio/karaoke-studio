@@ -665,6 +665,65 @@ def test_vertical_ruby_columns_scale_only_the_current_reading(binary, project, d
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
+def test_vertical_reading_and_body_zoom_use_separate_clocks(binary, project):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_ruby_source(project, position='top')
+    line, = track.lines
+    ruby, = track.rubies
+    track = replace(track, lines=[replace(line, chars=line.chars[:1], end_ms=700)],
+                    rubies=[replace(ruby, reading='字字', reading_parts=['字', '字'],
+                                    reading_part_ms=[350], pos_start_ms=200, pos_end_ms=700)])
+    base = replace(style, karaoke_colors=colors('#00FF00', '#00FF00'),
+                   ruby_karaoke_colors=colors('#0000FF', '#0000FF'))
+    zoom = replace(base, karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=160, zoom_pulse_curve_level=2)
+    dpr = 1.5
+    ir = ir_for(binary, (track, zoom), dpr=dpr)
+    plain = ir_for(binary, (track, base), dpr=dpr)
+    feature = 'p07_ruby_zoom_pulse'
+    assert {feature, 'p07_vertical_zoom_pulse', 'p07_ruby_singing_scale'} <= set(ir['required_features'])
+    layout = ir['skia_layout']['lines'][0]
+    first, second = layout['ruby_groups'][0]['units']
+    points = layout['cells'][0]['wipe_points']
+    body_start, body_end = points[0]['time_ms'], points[-1]['time_ms']
+    reading_end = first['interval_ms'][1]
+    assert first['interval_ms'] == [body_start, 550]
+    assert second['interval_ms'] == [reading_end, body_end]
+    assert reading_end < body_end
+    # Use the corner away from both the growing body and the second reading.
+    x, y = first['vertical_singing_pivot']
+    upper_reading = np.s_[:round(y * dpr) - 6, round(x * dpr):]
+    times = [reading_end, body_end, reading_end + 300, body_end + 300]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    captures = []
+
+    def painted_areas(frame):
+        red, green, blue, alpha = np.moveaxis(frame, -1, 0)
+        opaque = (red < 30) & (alpha > 160)
+        return (np.count_nonzero(opaque & (green > 200) & (blue < 30)),
+                np.count_nonzero((opaque & (blue > 200) & (green < 30))[upper_reading]))
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, plain)
+            steady, _ = collect(process, times[-1:], generation=3)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        body_areas, ruby_areas = zip(*(painted_areas(frame) for frame in frames), strict=True)
+        assert body_areas[1] > body_areas[2] > body_areas[3] > 0
+        assert ruby_areas[0] > ruby_areas[1] > ruby_areas[2] == ruby_areas[3] > 0
+        assert np.array_equal(frames[-1], steady[0])
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
 @pytest.mark.parametrize('entry,exit_,two_lanes,decoration,karaoke', [
     ('slide_in', 'slide_out', False, 'glow', 'none'), ('rise', 'rise', True, 'shadow', 'none'),
     ('fade', 'rise', True, 'glow', 'none'), ('fade', 'fade', True, 'glow', 'no_wipe'),

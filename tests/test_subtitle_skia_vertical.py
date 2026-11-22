@@ -61,7 +61,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
 
 
 @pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'ruby', 'rtl',
-                                    'dual_ruby_zoom_pulse', 'dual_alt_grid', 'lower', 'offset'])
+                                    'dual_ruby_zoom_scanline', 'dual_alt_grid', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
@@ -72,9 +72,9 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=600, target_line_index=0,
                                                       target_char_start=0, target_char_end=1)])
     elif change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'dual_ruby_zoom_pulse':
+    elif change == 'dual_ruby_zoom_scanline':
         track, style = vertical_ruby_source(project)
-        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'], karaoke_anim='zoom_pulse')
+        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'], karaoke_anim='zoom_pulse_scanline')
     elif change == 'dual_alt_grid':
         track = replace(track, lines=[replace(line, layout_index=1)])
         style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
@@ -504,6 +504,60 @@ def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(binary, p
         assert centers[0] > centers[1] + 2
         targets.append(np.stack(frames))
     diff = abs(premultiplied(targets[0]) - premultiplied(targets[1]))
+    assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+@pytest.mark.parametrize('dpr,columns', [(1, False), (1.5, True)])
+def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, project, dpr, columns):
+    from test_subtitle_skia_outline_ruby import premultiplied
+    from test_subtitle_skia_roles import colors
+
+    track, style = vertical_source(project, texts=['字'], position='top')
+    line, = track.lines
+    line = replace(line, end_ms=line.chars[0].start_ms + 400)
+    track = replace(track, lines=[line])
+    if columns:
+        peer = replace(line, chars=[replace(cell, start_ms=cell.start_ms + 700) for cell in line.chars],
+                       end_ms=line.end_ms + 700, track_line_index=1)
+        track = replace(track, lines=[line, peer])
+        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'], line_gap_px=28,
+                        auto_fill_section_time=False, sync_entry=False,
+                        decoration_kind='glow', glow_before_radius_px=4, glow_after_radius_px=5)
+    style = replace(style, karaoke_colors=colors('#FF0000', '#00FF00'),
+                    karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=155, zoom_pulse_curve_level=2)
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    plain = ir_for(binary, (track, replace(style, karaoke_anim='none')), dpr=dpr)
+    feature = 'p07_vertical_zoom_pulse'
+    assert {feature, 'p07_vertical_singing_scale'} <= set(ir['required_features'])
+    assert ('p07_vertical_columns_singing_scale' in ir['required_features']) == columns
+    first = ir['skia_layout']['lines'][0]['cells'][0]
+    _, end = ir['track']['lines'][0]['resolved_intervals'][0]
+    x = first['layout_left']
+    box = np.s_[:round((first['wipe_bottom'] + 5) * dpr), round((x - 35)*dpr):round((x + 35)*dpr)]
+    times = [end, end + 120, end + 299, end + 300]
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    captures = []
+
+    def green_ink(frame):
+        red, green, blue, alpha = np.moveaxis(frame[box], -1, 0)
+        return np.count_nonzero((green > 200) & (red < 30) & (blue < 30) & (alpha > 160))
+
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+            with pytest.raises(NativeRendererError):
+                configure(process, invalid)
+            replay, _ = collect(process, times[::-1], generation=2)
+            configure(process, plain)
+            steady, _ = collect(process, [end + 300], generation=3)
+        assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
+        sizes = [green_ink(frame) for frame in frames]
+        assert sizes[0] > sizes[1] > sizes[2] >= sizes[3] > 0
+        assert np.array_equal(frames[3][box], steady[0][box])
+        captures.append(np.stack(frames))
+    diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
