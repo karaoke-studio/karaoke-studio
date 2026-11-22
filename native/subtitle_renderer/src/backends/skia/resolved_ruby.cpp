@@ -271,6 +271,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool utopiaExit = transition == RubyTransition::UtopiaExit;
         const bool animatedOwner = transition != RubyTransition::None && !utopiaExit;
         const bool spinComposition = transition == RubyTransition::Spin;
+        const bool dripComposition = transition == RubyTransition::Drip;
         const bool affineComposition = transition == RubyTransition::Affine || utopiaExit;
         if ((animatedOwner && lower) || object.contains("fade_owner") != animatedOwner)
             throw BackendError("Skia 注音缺少有效的逐字淡化归属");
@@ -473,6 +474,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             } else if (cell.contains("utopia_layout_left")) {
                 throw BackendError("Skia 注音单元轴心缺少 Utopia 能力声明");
             }
+            if (cell.contains("drip_layout_right") != dripComposition)
+                throw BackendError("Skia 注音滴落缺少有效的单元右边界");
+            if (dripComposition)
+                glyph.pivot.layoutRight = float(pivotCoordinate(cell.value("drip_layout_right")) * glyphs.dpr);
             if (cell.contains("vertical_singing_pivot") != verticalSinging)
                 throw BackendError("Skia 竖排注音轴心与唱字放大能力不匹配");
             if (verticalSinging) {
@@ -589,7 +594,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
                           roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner,
-                          std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients)});
+                          std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients), dripComposition});
     }
     return groups;
 }

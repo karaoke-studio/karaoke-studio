@@ -424,6 +424,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto rubyPose = [&](const PreparedWipeGroup& group) {
         const auto owner = group.fadeOwner();
         if (rubyGeometryPhase && owner) return states[*owner].transform.matrix;
+        if (fadeActive && owner && group.drips() && states[*owner].transform.transformed)
+            return states[*owner].transform.matrix;
         return fadeActive && owner ? group.spinMatrix(states[*owner].transform) : SkMatrix::I();
     };
     // Accumulate faint fill, outline and halo contributions before rounding

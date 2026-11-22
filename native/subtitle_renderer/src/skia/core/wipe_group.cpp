@@ -67,6 +67,11 @@ CharacterTransformState readingExit(const UtopiaTransition& exit, const Resolved
     return exit.at(time, 0, 0, 0, done, pivot, {}, cell.startMs, cell.endMs);
 }
 
+SkMatrix readingDrip(const ResolvedCell& cell, const SkMatrix& pose) {
+    const float shear = pose.getSkewY();
+    return SkMatrix::MakeAll(1, 0, 0, shear, 1, -shear * cell.pivot.layoutRight, 0, 0, 1);
+}
+
 }
 
 PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe, bool vertical,
@@ -75,6 +80,7 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
       utopiaExitOwner_(group.utopiaExitOwner),
       noWipe_(noWipe), vertical_(vertical), rightToLeft_(group.rightToLeft),
       spinPivot_(group.spinPivot), affine_(group.affine), lower_(group.lower),
+      drip_(group.drip),
       fillGradients_(group.fillGradients), fillImages_(group.fillImages),
       outlineGradients_(group.outlineGradients), outerOutlineGradients_(group.outerOutlineGradients),
       scanlineGradients_(group.scanlineGradients) {
@@ -317,7 +323,9 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
                 paintRubyCell(canvas, paint, posed ? *posed : cell, after, opacity, shaders);
             } else {
                 auto unitPose = pose;
-                if (affine_) {
+                if (drip_) {
+                    unitPose = readingDrip(cell, pose);
+                } else if (affine_) {
                     // The same affine motion acts around each reading's own
                     // pivot, shifted by the host's translation. Utopia singing
                     // replaces layoutLeft with its scale origin; layoutRight

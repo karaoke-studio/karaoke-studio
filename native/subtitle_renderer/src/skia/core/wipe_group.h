@@ -12,6 +12,7 @@ public:
     std::optional<std::size_t> utopiaExitOwner() const { return utopiaExitOwner_; }
     const SkRect& inkBounds() const { return bounds_; }
     bool spins() const { return spinPivot_.has_value(); }
+    bool drips() const { return drip_; }
     bool lower() const { return lower_; }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
@@ -44,6 +45,7 @@ private:
     std::optional<SkPoint> spinPivot_;
     bool affine_ = false;
     bool lower_ = false;
+    bool drip_ = false;
     std::array<sk_sp<SkShader>, 2> fillGradients_;
     std::array<ImageFill, 2> fillImages_;
     std::array<sk_sp<SkShader>, 2> outlineGradients_, outerOutlineGradients_;

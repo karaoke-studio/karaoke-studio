@@ -575,6 +575,88 @@ def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None,
     assert_glow_parity(times, reference, *rendered, case.case_id, check_p00_edges=True)
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+@pytest.mark.parametrize('phase', ['entry', 'exit'])
+def test_undecorated_ruby_drip_keeps_its_anchor_and_replays(binary, reading, target, phase):
+    track, style = reading
+    style = replace(style, entry_anim='char_drip' if phase == 'entry' else 'none',
+                    exit_anim='char_drip' if phase == 'exit' else 'none',
+                    entry_lead_ms=600, exit_fade_ms=600)
+    ir = upper_ir(binary, (track, style), 1)
+    assert 'p07_ruby_character_drip' in ir['required_features']
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert group['fade_owner'] == 0
+    pivots = [unit['drip_layout_right'] for unit in group['units']]
+    assert len(pivots) > 1 and np.isfinite(pivots).all() and np.all(np.diff(pivots) > 0)
+    invalid = copy.deepcopy(ir)
+    invalid['skia_layout']['lines'][0]['ruby_groups'][0]['units'][-1]['drip_layout_right'] = 'invalid'
+    line = ir['track']['lines'][0]
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = (start, start + 180, start + 600) if phase == 'entry' else (end - 600, end - 450, end)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+    blank, moving, steady = frames if phase == 'entry' else frames[::-1]
+    assert not blank[..., 3].any()
+    assert moving[..., 3].max() == steady[..., 3].max() == 128
+    moving_center, steady_center = (
+        np.average(np.arange(frame.shape[0]), weights=frame[..., 3].sum(axis=1))
+        for frame in (moving, steady)
+    )
+    if phase == 'entry':
+        assert moving_center < steady_center
+    else:
+        assert moving_center > steady_center
+    assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize(('case_id', 'edge', 'times'), [
+    ('entry_char_drip', 301, (299, 300, 310, 325, 450, 650, 750, 899, 900, 1400)),
+    ('exit_char_drip', 5499, (3500, 4899, 4900, 4901, 5000, 5100, 5250, 5375, 5500)),
+])
+def test_undecorated_ruby_drip_matches_actual_gpu(binary, application, tmp_path, case_id, edge, times):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path, include_real=False) if case.case_id == case_id)
+    style = replace(case.style, decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    samples = (*times, edge)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, samples, force_warp=False, track=case.track,
+                                   width=1920, height=1080, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(case.track, style, width=1920, height=1080, fps=60)
+            frames, _ = collect(process, samples)
+        rendered.append(frames)
+    gpu, raster = rendered
+    assert_glow_parity(times, reference[:-1], gpu[:-1], raster[:-1], case_id, check_p00_edges=True)
+    assert_glow_parity((edge,), None, gpu[-1:], raster[-1:], case_id, check_p00_edges=True)
+    expected, actual = reference[-1], gpu[-1]
+    before, after = expected[..., 3] > 16, actual[..., 3] > 16
+    union = before | after
+    assert before.any() and after.any()
+    assert (before & after).sum() / union.sum() >= .99
+    for axis in (0, 1):
+        intervals = [np.flatnonzero(mask.any(axis=axis)) for mask in (before, after)]
+        assert abs(intervals[0][0] - intervals[1][0]) <= 1
+        assert abs(intervals[0][-1] - intervals[1][-1]) <= 1
+    # The nearly vertical outline spans hundreds of rows. Compare the mean
+    # difference in its covered width in device pixels at the maximum shear.
+    rows = union.any(axis=1).sum()
+    alpha_delta = abs(int(expected[..., 3].sum()) - int(actual[..., 3].sum()))
+    assert alpha_delta / (255 * rows) <= .25
+    assert abs(premultiplied(expected[union]) - premultiplied(actual[union])).mean() <= 5
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 def test_undecorated_ruby_utopia_entry_matches_actual_gpu(binary, application, tmp_path):
     from scripts.subtitle_gpu_baseline.cases import build_cases

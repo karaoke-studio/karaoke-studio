@@ -225,6 +225,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_noise_composition",
         "p07_ruby_character_exit_spin",
         "p07_ruby_character_entry_spin",
+        "p07_ruby_character_drip",
         "p07_ruby_character_translation",
         "p07_ruby_character_affine_exit",
         "p07_ruby_character_stretch_exit",
@@ -879,9 +880,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_character_transform")
         && (transformVersion < 1 || transformVersion > kCharacterTransformSchema || std::floor(transformVersion) != transformVersion))
         throw BackendError("Skia 逐字变换布局版本无效");
-    if ((features.contains("p07_ruby_character_entry_spin") || features.contains("p07_ruby_character_exit_spin"))
+    if ((features.contains("p07_ruby_character_entry_spin") || features.contains("p07_ruby_character_exit_spin")
+            || features.contains("p07_ruby_character_drip"))
         && (!features.contains("p07_character_transform") || !features.contains("p05_resolved_ruby")))
-        throw BackendError("Skia 逐字翻转缺少逐字变换或注音布局能力声明");
+        throw BackendError("Skia 逐字滴落或翻转缺少逐字变换或注音布局能力声明");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
     const bool verticalParticles = hasSkiaVerticalParticleProfile(features);
     if (verticalParticles

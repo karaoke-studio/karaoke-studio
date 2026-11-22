@@ -347,6 +347,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.exitAnimation == "none" || line.exitAnimation == "spin_flip" || fadeExit)
             && (!spinEntry || features.contains("p07_ruby_character_entry_spin"))
             && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
+        const bool dripComposition = transformedRuby && !usesDecoration("shadow") && !usesDecoration("glow")
+            && line.bursts.empty()
+            && features.contains("p07_ruby_character_drip")
+            && ((line.entryAnimation == "char_drip" && line.entryDurationMs > 0 && line.exitAnimation == "none")
+                || (line.exitAnimation == "char_drip" && line.exitDurationMs > 0 && line.entryAnimation == "none"));
+        const bool warpComposition = spinComposition || dripComposition;
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
             && line.bursts.empty() && line.exitAnimation == "none" && line.entryDurationMs > 0;
@@ -429,7 +435,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (line.scanlineEnabled && (utopiaEntry || utopiaExit
                 || (line.zoomPulseEnabled && !features.contains(style.vertical
                     ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
-            || (!lineAnimation && !fadeComposition && !noiseComposition && !spinComposition && !geometryComposition
+            || (!lineAnimation && !fadeComposition && !noiseComposition && !warpComposition && !geometryComposition
                 && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
@@ -639,6 +645,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         auto rubyTransition = RubyTransition::None;
         if (fadeComposition || particleComposition || rubyUtopiaEntry) rubyTransition = RubyTransition::Fade;
         if (spinComposition) rubyTransition = RubyTransition::Spin;
+        if (dripComposition) rubyTransition = RubyTransition::Drip;
         if (translationComposition) rubyTransition = RubyTransition::Translation;
         if (affineComposition || (particleComposition && (entryParticleKind == "flame" || exitParticleKind == "flame")))
             rubyTransition = RubyTransition::Affine;
@@ -658,7 +665,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             {rtlRubyUnscaledMotion || horizontalShadowMotion || horizontalGlowMotion || verticalMotion,
              lowerUnscaledMotion || lowerUtopiaMotion, movingSingingGradientFill},
             totalCells, totalGroups);
-        if (((prepared.characterFade.active() && !fadeComposition && !spinComposition)
+        if (((prepared.characterFade.active() && !fadeComposition && !warpComposition)
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
         resolveSkiaParticleAnchors(source.value("particle_box_height"), features, line, style,

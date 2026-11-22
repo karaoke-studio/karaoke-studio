@@ -15,7 +15,8 @@ from krok_helper.subtitle_render.engine.ruby.skia_standalone_marks import starts
 
 def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices=None,
                          lower_gradients=False,
-                         singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=(), affine_lines=(), utopia_exit_lines=()):
+                         singing_lines=(), zoom_lines=(), fade_lines=(), spin_lines=(), drip_lines=(),
+                         affine_lines=(), utopia_exit_lines=()):
     geometry, measured = prepared.geometry, prepared.measured
     ruby = geometry.ruby
     if ruby is None:
@@ -89,6 +90,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                     units[-1]['utopia_layout_left'] = cell['layout_left'] + position.offset_x
                 if zoom:
                     units[-1]['utopia_layout_right'] = cell['layout_right'] + position.offset_x
+                if line_index in drip_lines:
+                    units[-1]['drip_layout_right'] = cell['layout_right'] + position.offset_x
                 if line_index in affine_lines:
                     units[-1]['affine_pivot_x'] = position.offset_x + (cell['layout_left'] + cell['layout_right']) / 2
                 if unit_projection:

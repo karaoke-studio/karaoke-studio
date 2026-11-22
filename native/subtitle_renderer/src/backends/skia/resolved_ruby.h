@@ -3,7 +3,7 @@
 #include "../../model/render_scene.h"
 
 namespace krok::subtitle::native {
-enum class RubyTransition { None, Fade, Spin, Translation, Affine, UtopiaExit };
+enum class RubyTransition { None, Fade, Spin, Drip, Translation, Affine, UtopiaExit };
 struct RubyDecorationMotion { bool upper, lower, singingGradient; };
 enum class GlowPaintSupport;
 class SkiaImageFillCache;

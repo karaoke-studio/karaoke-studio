@@ -160,7 +160,7 @@ _GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'}
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
-def _character_transforms(track, ir, plan, measured, spin_lines, composed_geometry_lines, particle_band_tracks) -> int:
+def _character_transforms(track, ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks) -> int:
     """Write canonical cell and glyph pivots and return the required version."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     version = 3
@@ -178,7 +178,7 @@ def _character_transforms(track, ir, plan, measured, spin_lines, composed_geomet
             version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
         line, look = track.lines[item.track_index], item.layout_style
         if (look.vertical or look.right_to_left or line.wipe_reverse
-                or (index not in spin_lines and index not in composed_geometry_lines
+                or (index not in character_warp_lines and index not in composed_geometry_lines
                     and (source.get('karaoke_anim') != 'none' or track.rubies))
                 or (source.get('scanline') and item.track_index not in particle_band_tracks) or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
@@ -276,6 +276,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         source['karaoke_anim'] = 'none'
         reverse_bitmap_lines.add(item.track_index)
     spin_lines = set()
+    drip_lines = set()
     translation_lines = set()
     affine_lines = set()
     stretch_lines = set()
@@ -352,6 +353,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     and ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
                          or (leave == 'spin_flip' and source['exit_duration_ms'] > 0))):
                 spin_lines.add(index)
+            drip_active = ((entry == 'char_drip' and leave == 'none' and source['entry_duration_ms'] > 0)
+                           or (leave == 'char_drip' and entry == 'none' and source['exit_duration_ms'] > 0))
+            if (drip_active and not uses_authored_decoration(look, 'glow')
+                    and all(ruby_decoration_kinds(reading.target.style) == ('none', 'none')
+                            for reading in geometry.ruby.lines[index].rubies)):
+                drip_lines.add(index)
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
                 translation_lines.add(index)
@@ -372,6 +379,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if (source.get('entry_anim') == 'wave_in' and source.get('exit_anim') == 'scatter_out'
                     and source.get('entry_duration_ms', 0) > 0 and source.get('exit_duration_ms', 0) > 0):
                 paired_geometry_lines.add(index)
+    character_warp_lines = spin_lines | drip_lines
     composed_particle_lines = assembly_lines | particle_fade_lines | energy_pair_lines | particle_entry_lines
     affine_geometry_lines = (affine_lines | stretch_lines | stretch_entry_lines | glow_lines
                              | paired_geometry_lines | particle_affine_lines)
@@ -609,7 +617,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         singing_lines = {
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
-            and (ordinary_line_animation(line) or index in fade_lines or index in spin_lines
+            and (ordinary_line_animation(line) or index in fade_lines or index in character_warp_lines
                  or index in utopia_entry_lines or index in utopia_exit_lines
                  or index in composed_geometry_lines or is_noise_animation(line))
         }
@@ -617,7 +625,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
             lower_gradients='p07_lower_ruby_scanline_singing_particles' in ir['required_features'],
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
-            fade_lines=fade_lines | composed_geometry_lines | utopia_entry_lines, spin_lines=spin_lines,
+            fade_lines=fade_lines | composed_geometry_lines | utopia_entry_lines | drip_lines,
+            spin_lines=spin_lines, drip_lines=drip_lines,
             affine_lines=affine_geometry_lines | utopia_exit_lines, utopia_exit_lines=utopia_exit_lines)
         if 'p05_vector_guides' in ir['required_features']:
             ir['skia_layout']['vector_guide_schema'] = 1
@@ -674,6 +683,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if any(source.get(f'{phase}_anim') == 'spin_flip' and source[f'{phase}_duration_ms'] > 0
                    for source in spin_sources):
                 ir['required_features'].append(f'p07_ruby_character_{phase}_spin')
+        if drip_lines:
+            ir['required_features'].append('p07_ruby_character_drip')
         if translation_lines:
             ir['required_features'].append('p07_ruby_character_translation')
         if affine_lines:
@@ -725,7 +736,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['kana_mark_schema'] = 1
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
-            track, ir, plan, measured, spin_lines, composed_geometry_lines, particle_band_tracks)
+            track, ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks)
         ir['required_features'].append('p07_character_transform')
     if adjust_position is None and uses_inline_bitmap_guides(plan.lines):
         ir['required_features'].append('p08_inline_bitmap_guides')
@@ -820,7 +831,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['skia_layout']['character_fade_schema'] = 1
     if role_vector_guides:
         ir['required_features'].append('p05_role_vector_guides')
-    transitions = fade_lines | spin_lines | composed_geometry_lines | utopia_entry_lines | utopia_exit_lines
+    transitions = fade_lines | character_warp_lines | composed_geometry_lines | utopia_entry_lines | utopia_exit_lines
     write_utopia_pivots(ir, plan, measured, transitions,
                        particle_band_tracks, vertical_singing)
     if role_line_fade:
