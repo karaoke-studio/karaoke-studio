@@ -796,12 +796,15 @@ effect_styles['vertical-notes'] = dict(effect_styles['vertical-stars'], sing_fx=
 effect_styles['vertical-zoom-notes'] = dict(
     effect_styles['vertical-notes'], karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=150)
 effect_styles['vertical-petals'] = dict(effect_styles['vertical-zoom-notes'], sing_fx='petal')
+effect_styles['vertical-lightning'] = dict(effect_styles['vertical-zoom-notes'], sing_fx='lightning')
 effect = next((name for name in effect_styles if f'--{name}' in sys.argv), None)
 vertical_scanline = effect in {
     'vertical-scanline', 'vertical-palette', 'vertical-zoom', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
 }
 vertical_motion = effect in {'vertical-zoom-motion', 'vertical-zoom-band-motion'}
-vertical_particles = effect in {'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals'}
+vertical_particles = effect in {
+    'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals', 'vertical-lightning',
+}
 vertical_effect = vertical_scanline or vertical_motion or vertical_particles
 if effect:
     style = replace(style, **effect_styles[effect])
@@ -1014,12 +1017,12 @@ def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):
                                      'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                                      'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                                      'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
-                                     'particle-image-band'],
+                                     'vertical-lightning', 'particle-image-band'],
                          ids=['plain', 'particle-scanline', 'shadow-motion', 'particle-pair',
                               'band-motion', 'vertical-scanline', 'vertical-palette', 'vertical-zoom',
                               'vertical-zoom-motion', 'vertical-zoom-band-motion', 'vertical-shadow-viewport',
                               'vertical-stars', 'vertical-notes', 'vertical-zoom-notes', 'vertical-petals',
-                              'particle-image-band'])
+                              'vertical-lightning', 'particle-image-band'])
 def test_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path, effects):
     if effects and effects.startswith('vertical-'):
         from skia_text_fixture import make_font

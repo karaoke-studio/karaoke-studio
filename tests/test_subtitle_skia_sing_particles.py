@@ -378,6 +378,7 @@ def test_singing_star_speed_preserves_birth_and_respects_display_window(binary, 
     ('twinkle_classic', False, 1, 'zoom_pulse'),
     ('petal', True, 1.5, 'zoom_pulse'), ('feather', False, 1, 'none'),
     ('snow', True, 1, 'none'), ('snow_solid', True, 1.5, 'utopia'),
+    ('lightning', False, 1, 'none'), ('lightning', True, 1.5, 'zoom_pulse'),
 ])
 def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, variant, with_reading, dpr, karaoke):
     from test_subtitle_skia_vertical import vertical_ruby_source, vertical_source
@@ -400,6 +401,8 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
         feature = 'p07_vertical_sing_twinkle'
     elif variant in {'petal', 'feather', 'snow', 'snow_solid'}:
         feature = 'p07_vertical_sing_falling'
+    elif variant == 'lightning':
+        feature = 'p07_vertical_sing_lightning'
     else:
         feature = 'p07_vertical_sing_shapes'
     assert {feature, 'p07_sing_twinkle'} <= set(ir['required_features'])
@@ -415,9 +418,17 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
     bursts = layer['fx_bursts']
     assert {burst['char_index'] for burst in bursts} == {0, 1}
     for burst in bursts:
-        assert burst['kind'] == variant and burst['sweep'] == int(variant == 'twinkle')
-        assert burst['front'] == (variant != 'ripple')
+        kind = burst['kind']
+        assert kind == variant or (variant == 'lightning' and kind == 'lightning_glow')
+        assert burst['sweep'] == int(variant == 'twinkle')
+        assert burst['front'] == (kind not in {'ripple', 'lightning_glow'})
         assert burst['start_ms'] == layer['resolved_intervals'][burst['char_index']][0]
+    if variant == 'lightning':
+        layers = {}
+        for burst in bursts:
+            key = burst['char_index'], burst['seed'], burst['sprite'], burst['start_ms'], burst['end_ms']
+            layers.setdefault(key, set()).add(burst['kind'])
+        assert all(pair == {'lightning', 'lightning_glow'} for pair in layers.values())
     times = [100, 350, 500, 1750, 1900, 2501]
     invalid = copy.deepcopy(ir)
     invalid['required_features'].remove(feature if karaoke == 'none' else composition)
@@ -449,6 +460,58 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
         captures.append(np.stack(frames))
     diff = abs(premultiplied(captures[0]) - premultiplied(captures[1]))
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
+
+
+def test_vertical_flame_moves_emitters_along_the_cell_y_axis(binary, project):
+    from test_subtitle_skia_vertical import vertical_ruby_source
+
+    track, style = vertical_ruby_source(project, position='center')
+    line, = track.lines
+    track = replace(track, lines=[replace(line, chars=line.chars[:1], end_ms=1450,
+                                          display_start_override_ms=0, display_end_override_ms=2200)])
+    blank = colors('#00000000', '#00000000')
+    style = replace(style, karaoke_colors=blank, ruby_karaoke_colors=blank, stroke_width_px=0,
+                    stroke2_enabled=False, sing_fx='flame', karaoke_anim='zoom_pulse')
+    ir = ir_for(binary, (track, style))
+    features = {'p07_vertical_sing_flame', 'p07_vertical_singing_with_particles', 'p07_vertical_zoom_pulse'}
+    assert features <= set(ir['required_features'])
+    source, = ir['track']['lines']
+    bursts = source['fx_bursts']
+    back = {'flame_glow', 'smoke'}
+    assert back | {'flame', 'flame_alt', 'ember', 'spark'} == {burst['kind'] for burst in bursts}
+    assert all(burst['front'] == (burst['kind'] not in back) for burst in bursts)
+    main = [burst for burst in bursts if burst['kind'] == 'flame']
+    assert main[0]['emit_x'] < 0 < main[-1]['emit_x']
+
+    cell, = ir['skia_layout']['lines'][0]['cells']
+    height = cell['wipe_bottom'] - cell['wipe_top']
+    low = copy.deepcopy(ir)
+    high = copy.deepcopy(ir)
+    # Hold seed, age, and paint constant while moving a single emitter.
+    probe = dict(main[0], count=6, color='#FFFFFFFF')
+    low['track']['lines'][0]['fx_bursts'] = [dict(probe, emit_x=-.4)]
+    high['track']['lines'][0]['fx_bursts'] = [dict(probe, emit_x=.4)]
+
+    def centroid(frame):
+        alpha = frame[..., 3].astype(float)
+        assert alpha.sum() > 500
+        return np.array([np.average(np.arange(weight.size), weights=weight)
+                         for weight in (alpha.sum(axis=0), alpha.sum(axis=1))])
+
+    time = (probe['start_ms'] + probe['end_ms']) // 2
+    rendered = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            (full,), _ = collect(process, [time])
+            assert full[..., 3].max() > 100
+            configure(process, low)
+            (top,), _ = collect(process, [time], generation=2)
+            configure(process, high)
+            (bottom,), _ = collect(process, [time], generation=3)
+            assert centroid(bottom) - centroid(top) == pytest.approx([0, .8 * height], abs=.2)
+        rendered.append(premultiplied(full))
+    assert abs(rendered[0] - rendered[1]).mean() < .15
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

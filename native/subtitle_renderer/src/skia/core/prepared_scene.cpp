@@ -98,10 +98,13 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             const bool verticalShape = burst.sweep == 0
                 && (burst.kind == "note" || burst.kind == "heart" || burst.kind == "ripple"
                     || burst.kind == "petal" || burst.kind == "feather" || burst.kind == "snow"
-                    || burst.kind == "snow_solid");
+                    || burst.kind == "snow_solid" || burst.kind == "lightning" || burst.kind == "lightning_glow");
+            const bool verticalFlame = (burst.sweep == 2 && (burst.kind == "flame" || burst.kind == "flame_alt"))
+                || (burst.sweep == 0 && (burst.kind == "flame_glow" || burst.kind == "smoke"
+                    || burst.kind == "ember" || burst.kind == "spark"));
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
-                || (source.vertical && !verticalStar && !verticalShape) || source.noWipe
+                || (source.vertical && !verticalStar && !verticalShape && !verticalFlame) || source.noWipe
                 || burst.reverse != source.wipeRightToLeft
                 || (source.wipeRightToLeft && (!band.enabled || burst.kind != "scanline")))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");

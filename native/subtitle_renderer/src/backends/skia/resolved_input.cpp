@@ -591,7 +591,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
                 || (style.vertical && !features.contains("p07_vertical_sing_twinkle")
                     && !features.contains("p07_vertical_sing_shapes")
-                    && !features.contains("p07_vertical_sing_falling")) || style.rightToLeft)
+                    && !features.contains("p07_vertical_sing_falling")
+                    && !features.contains("p07_vertical_sing_lightning")
+                    && !features.contains("p07_vertical_sing_flame")) || style.rightToLeft)
                 throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
             for (const auto& burst : line.bursts) {
                 const auto sprite = particleSprites.find(burst.sprite);
@@ -604,8 +606,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                                : (anchor.pivot.layoutLeft + anchor.pivot.layoutRight) * .5f;
                 const float y = style.vertical ? (anchor.top + anchor.bottom) * .5f : anchor.pivot.centerY;
                 const float height = style.vertical ? anchor.bottom - anchor.top : float(box.toDouble() * glyphs.dpr);
-                prepared.particles.push_back({burst, sprite->second, argb(burst.color),
-                    x, y, std::max(anchor.right - anchor.left, 1.f), height,
+                // Singing flame moves its successive emitters along the wipe axis.
+                // Its local plume still rises vertically in screen space.
+                auto localBurst = burst;
+                const float verticalEmit = style.vertical ? localBurst.emitX * height : 0.f;
+                if (style.vertical) localBurst.emitX = 0.f;
+                prepared.particles.push_back({std::move(localBurst), sprite->second, argb(burst.color),
+                    x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
                     // Ripple and shockwave both fill the same ring sprite in the existing GPU.
                     burst.kind == "ripple" || burst.kind == "shockwave"
                         ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt});

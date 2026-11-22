@@ -28,11 +28,16 @@ _BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke', 'shockwave
 _VERTICAL_STARS = {('twinkle', 1), ('twinkle_classic', 0)}
 _VERTICAL_SHAPES = {(kind, 0) for kind in ('note', 'heart', 'ripple')}
 _VERTICAL_FALLING = {(kind, 0) for kind in FALLING_PARTICLES}
+_VERTICAL_LIGHTNING = {(kind, 0) for kind in ('lightning', 'lightning_glow')}
+_VERTICAL_FLAME = set(_FLAME_SINGING_SWEEPS.items())
 _VERTICAL_PARTICLE_FEATURES = (
     (_VERTICAL_STARS, 'p07_vertical_sing_twinkle'),
     (_VERTICAL_SHAPES, 'p07_vertical_sing_shapes'),
     (_VERTICAL_FALLING, 'p07_vertical_sing_falling'),
+    (_VERTICAL_LIGHTNING, 'p07_vertical_sing_lightning'),
+    (_VERTICAL_FLAME, 'p07_vertical_sing_flame'),
 )
+_VERTICAL_PARTICLE_MODES = set().union(*(modes for modes, _ in _VERTICAL_PARTICLE_FEATURES))
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
 
@@ -68,7 +73,7 @@ def vertical_singing_particle_modes(source):
             or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}):
         return set()
     modes = {(burst['kind'], burst['sweep']) for burst in source.get('fx_bursts', ())}
-    return modes if modes <= (_VERTICAL_STARS | _VERTICAL_SHAPES | _VERTICAL_FALLING) else set()
+    return modes if modes <= _VERTICAL_PARTICLE_MODES else set()
 
 
 def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:

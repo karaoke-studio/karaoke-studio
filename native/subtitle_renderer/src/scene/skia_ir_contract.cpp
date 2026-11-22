@@ -189,6 +189,8 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_sing_twinkle",
         "p07_vertical_sing_shapes",
         "p07_vertical_sing_falling",
+        "p07_vertical_sing_lightning",
+        "p07_vertical_sing_flame",
         "p07_vertical_singing_with_particles",
         "p07_stroke_flash",
         "p07_composed_stroke_flash",
@@ -782,7 +784,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 逐字变换布局版本无效");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
     const bool verticalParticles = features.contains("p07_vertical_sing_twinkle")
-        || features.contains("p07_vertical_sing_shapes") || features.contains("p07_vertical_sing_falling");
+        || features.contains("p07_vertical_sing_shapes") || features.contains("p07_vertical_sing_falling")
+        || features.contains("p07_vertical_sing_lightning") || features.contains("p07_vertical_sing_flame");
     if (verticalParticles
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排唱字粒子缺少对应布局或粒子能力");
