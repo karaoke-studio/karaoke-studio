@@ -277,6 +277,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         reverse_bitmap_lines.add(item.track_index)
     spin_lines = set()
     drip_lines = set()
+    paired_drips = False
     drip_glow = False
     translation_lines = set()
     affine_lines = set()
@@ -292,6 +293,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     same_energy_pair = False
     particle_entry_lines = set()
     particle_entry_glow = False
+    particle_entry_reading_glow = False
     symbol_entry_glow = False
     repeated_particle_pair = False
     mixed_particle_pair = False
@@ -333,10 +335,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         ruby_decorations = {kind for reading in readings
                                             for kind in ruby_decoration_kinds(reading.target.style)}
                         body_glow = uses_authored_decoration(look, 'glow')
-                        if ('shadow' in ruby_decorations or ('glow' in ruby_decorations and not body_glow)
-                                or (body_glow and (paired or (with_flame and not note_exit)))):
+                        reading_glow = 'glow' in ruby_decorations
+                        glow_allowed = not paired and (not with_flame or note_exit)
+                        if 'shadow' in ruby_decorations or ((body_glow or reading_glow) and not glow_allowed):
                             raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
                         particle_entry_glow |= body_glow
+                        particle_entry_reading_glow |= reading_glow and not body_glow
                         symbol_entry_glow |= body_glow and entry in RUBY_SYMBOL_ENTRIES
                         particle_entry_lines.add(index)
                         repeated_particle_pair |= paired and entry == leave
@@ -355,13 +359,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     and ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
                          or (leave == 'spin_flip' and source['exit_duration_ms'] > 0))):
                 spin_lines.add(index)
-            drip_active = ((entry == 'char_drip' and leave == 'none' and source['entry_duration_ms'] > 0)
-                           or (leave == 'char_drip' and entry == 'none' and source['exit_duration_ms'] > 0))
+            dripping_in = entry == 'char_drip' and source['entry_duration_ms'] > 0
+            dripping_out = leave == 'char_drip' and source['exit_duration_ms'] > 0
+            drip_active = ((dripping_in and (leave == 'none' or dripping_out))
+                           or (dripping_out and entry == 'none'))
             if drip_active:
                 reading_decorations = {kind for reading in geometry.ruby.lines[index].rubies
                                        for kind in ruby_decoration_kinds(reading.target.style)}
                 if 'shadow' not in reading_decorations:
                     drip_lines.add(index)
+                    paired_drips |= dripping_in and dripping_out
                     drip_glow |= 'glow' in reading_decorations or uses_authored_decoration(look, 'glow')
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
@@ -693,6 +700,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 ir['required_features'].append(f'p07_ruby_character_{phase}_spin')
         if drip_lines:
             ir['required_features'].append('p07_ruby_character_drip')
+        if paired_drips:
+            ir['required_features'].append('p07_ruby_character_drip_pair')
         if drip_glow:
             ir['required_features'].append('p07_ruby_character_drip_glow')
         if translation_lines:
@@ -721,6 +730,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_particle_entry')
         if particle_entry_glow:
             ir['required_features'].append('p07_ruby_particle_entry_glow')
+        if particle_entry_reading_glow:
+            ir['required_features'].append('p07_ruby_particle_entry_reading_glow')
         if symbol_entry_glow:
             ir['required_features'].append('p07_ruby_symbol_entry_glow')
         if repeated_particle_pair:

@@ -392,7 +392,7 @@ def test_title_bitmap_guides_use_before_image_at_every_time(binary, tmp_path, ta
 
             title = ir_for(binary, (track, style))['skia_titles'][0]['source']
             process._send({'cmd': 'configure', 'ir': title})
-            with pytest.raises(NativeRendererError, match='整行前置'):
+            with pytest.raises(NativeRendererError, match='横排位置或独立装饰'):
                 process._expect_ok(process._read_until_event('configured'))
             replay, _ = collect(process, [500], generation=2)
             assert np.array_equal(replay[0], frames[1])

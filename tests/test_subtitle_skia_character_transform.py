@@ -92,7 +92,7 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
 
 
 @pytest.mark.parametrize('case', ['scanline', 'rtl',
-                                  'reverse', 'vertical', 'ruby', 'roles', 'guide', 'no_wipe'])
+                                  'reverse', 'vertical', 'roles', 'guide', 'no_wipe'])
 def test_unverified_combinations_are_rejected(binary, project, case):
     track, style = transform_source(project)
     if case == 'scanline': style = band(style)
@@ -100,15 +100,13 @@ def test_unverified_combinations_are_rejected(binary, project, case):
     elif case == 'reverse': track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
     elif case == 'vertical':
         track, style = vertical_ruby_source(project); track = replace(track, rubies=[])
-    elif case == 'ruby':
-        track, style = vertical_ruby_source(project); style = replace(style, vertical=False)
     elif case == 'roles':
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
         track = replace(track, lines=[replace(track.lines[0], chars=[
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
     elif case == 'guide': track, style = guide_source(project)
     elif case == 'no_wipe': style = replace(style, karaoke_anim='no_wipe')
-    if case in {'vertical', 'ruby', 'guide'}:
+    if case in {'vertical', 'guide'}:
         style = replace(style, entry_anim='char_drip', entry_lead_ms=600)
     with pytest.raises(ValueError, match='逐字滴落/翻转'):
         ir_for(binary, (track, style))

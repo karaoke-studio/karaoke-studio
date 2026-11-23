@@ -352,12 +352,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
         const bool dripGlow = features.contains("p07_ruby_character_drip_glow")
             && glowPaints == GlowPaintSupport::Solid;
+        const bool dripEntry = line.entryAnimation == "char_drip" && line.entryDurationMs > 0;
+        const bool dripExit = line.exitAnimation == "char_drip" && line.exitDurationMs > 0;
         const bool dripComposition = transformedRuby && !usesDecoration("shadow")
             && (dripGlow || !usesDecoration("glow"))
             && line.bursts.empty()
             && features.contains("p07_ruby_character_drip")
-            && ((line.entryAnimation == "char_drip" && line.entryDurationMs > 0 && line.exitAnimation == "none")
-                || (line.exitAnimation == "char_drip" && line.exitDurationMs > 0 && line.entryAnimation == "none"));
+            && ((dripEntry && line.exitAnimation == "none") || (dripExit && line.entryAnimation == "none")
+                || (dripEntry && dripExit && features.contains("p07_ruby_character_drip_pair")));
         const bool warpComposition = spinComposition || dripComposition;
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
@@ -386,20 +388,23 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && scene::allowsSkiaRubyParticleTransition(entryParticleKind, exitParticleKind, features);
         const bool symbolEntry = line.entryAnimation == "sparkle" || line.entryAnimation == "ripple"
             || line.entryAnimation == "note";
-        const bool particleEntryGlow = particleComposition && features.contains("p07_ruby_particle_entry_glow")
+        const bool particleGlowAllowed = particleComposition
             && (line.exitAnimation == "none" || petalNotePair)
-            && (!symbolEntry || features.contains("p07_ruby_symbol_entry_glow"))
-            && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow")
             && (petalNotePair || !features.contains("p07_ruby_petal_entry_flame_singing"))
             && (symbolEntry || line.entryAnimation == "heart" || scene::isSkiaFallingParticle(entryParticleKind));
-        const auto supportsParticleEntryDecoration = [particleEntryGlow](const auto& kind) {
-            return kind == "none" || (particleEntryGlow && kind == "glow");
+        const bool particleEntryGlow = particleGlowAllowed && features.contains("p07_ruby_particle_entry_glow")
+            && (!symbolEntry || features.contains("p07_ruby_symbol_entry_glow"))
+            && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow");
+        const bool readingEntryGlow = particleEntryGlow
+            || (particleGlowAllowed && features.contains("p07_ruby_particle_entry_reading_glow"));
+        const auto supportsParticleEntryDecoration = [](const auto& kind, bool glow) {
+            return kind == "none" || (glow && kind == "glow");
         };
         if (particleComposition && features.contains("p07_ruby_particle_entry")
-            && (!supportsParticleEntryDecoration(style.decorationKindForState(false))
-                || !supportsParticleEntryDecoration(style.decorationKindForState(true))
-                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(false))
-                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(true))))
+            && (!supportsParticleEntryDecoration(style.decorationKindForState(false), particleEntryGlow)
+                || !supportsParticleEntryDecoration(style.decorationKindForState(true), particleEntryGlow)
+                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(false), readingEntryGlow)
+                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(true), readingEntryGlow)))
             throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         const bool fadeComposition = (fadeEntry || fadeExit)

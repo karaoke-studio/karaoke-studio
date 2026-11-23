@@ -545,11 +545,33 @@ def test_ruby_assembly_pair_owns_both_phases_and_replays(binary, reading, target
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
 
 
-def test_ruby_particle_entry_rejects_ruby_only_glow(binary, reading):
-    track, style = reading
-    style = replace(style, entry_anim='sparkle', exit_anim='none', ruby_decoration_kind='glow')
-    with pytest.raises(ValueError, match='粒子入场暂不支持阴影或光晕'):
-        upper_ir(binary, (track, style), 1)
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_particle_entry_uses_independent_reading_glow(binary, reading, target):
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = glowing_ruby(reading, 'independent')
+    style = replace(style, entry_anim='sparkle', entry_lead_ms=600, exit_anim='none')
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_particle_entry_reading_glow'
+    assert feature in ir['required_features']
+    assert 'p07_ruby_particle_entry_glow' not in ir['required_features']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
+                                             ruby_decoration_kind_before='none')), 1)
+    start = ir['track']['lines'][0]['display_start_ms']
+    times = [start + 180, start + 420, start + 600]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        glowing, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='粒子入场暂不支持阴影或光晕'):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+        configure(process, plain)
+        bare, _ = collect(process, times, generation=3)
+    assert np.array_equal(glowing, replay[::-1])
+    for before, after in zip(bare, glowing, strict=True):
+        assert np.any((before[..., 3] == 0) & (after[..., 3] > 16))
 
 
 def render_ruby_transition_frames(binary, case, times, *, extra_tracks=None, dpr=1):
@@ -580,6 +602,53 @@ def assert_ruby_transition_gpu_parity(binary, case, times, *, extra_tracks=None,
 
     images = render_ruby_transition_frames(binary, case, times, extra_tracks=extra_tracks, dpr=dpr)
     assert_glow_parity(times, *images, case.case_id, check_p00_edges=True)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_ruby_drip_entry_and_exit_share_the_reading_anchor(binary, reading, target):
+    track, style = reading
+    style = replace(style, entry_anim='char_drip', exit_anim='char_drip',
+                    entry_lead_ms=600, exit_fade_ms=600)
+    ir = upper_ir(binary, (track, style), 1)
+    feature = 'p07_ruby_character_drip_pair'
+    assert feature in ir['required_features']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove(feature)
+    line = ir['track']['lines'][0]
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start + 180, start + 600, end - 450]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert np.array_equal(frames, replay[::-1])
+    weights = np.stack(frames)[..., 3].sum(axis=2)
+    centers = (weights * np.arange(weights.shape[1])).sum(axis=1) / weights.sum(axis=1)
+    assert centers[0] < centers[1] < centers[2]
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['reading_glow', 'drip_pair'])
+def test_ruby_transition_combinations_match_actual_d2d_gpu(binary, reading, effect):
+    from types import SimpleNamespace
+    from test_subtitle_skia_static_glow import glowing_ruby
+
+    track, style = reading
+    if effect == 'reading_glow':
+        track, style = glowing_ruby(reading, 'independent')
+        style = replace(style, entry_anim='sparkle', exit_anim='none')
+    else:
+        style = replace(style, entry_anim='char_drip', exit_anim='char_drip')
+    style = replace(style, entry_lead_ms=600, exit_fade_ms=600)
+    line = upper_ir(binary, (track, style), 1)['track']['lines'][0]
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start + 180, start + 420, start + 600]
+    if effect == 'drip_pair':
+        times.extend([end - 450, end - 250])
+    case = SimpleNamespace(track=track, style=style, case_id=effect)
+    assert_ruby_transition_gpu_parity(binary, case, times)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

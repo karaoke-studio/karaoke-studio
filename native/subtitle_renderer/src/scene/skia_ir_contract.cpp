@@ -228,6 +228,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_character_exit_spin",
         "p07_ruby_character_entry_spin",
         "p07_ruby_character_drip",
+        "p07_ruby_character_drip_pair",
         "p07_ruby_character_drip_glow",
         "p07_ruby_character_translation",
         "p07_ruby_character_affine_exit",
@@ -242,6 +243,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_same_energy_pair",
         "p07_ruby_particle_entry",
         "p07_ruby_particle_entry_glow",
+        "p07_ruby_particle_entry_reading_glow",
         "p07_ruby_symbol_entry_glow",
         "p07_ruby_particle_entry_exit",
         "p07_ruby_mixed_particle_entry_exit",
@@ -343,6 +345,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 无装饰粒子出入场缺少粒子能力");
     if (features.contains("p07_ruby_particle_entry_glow") && !features.contains("p07_ruby_particle_entry"))
         throw BackendError("Skia 上注音粒子入场光晕缺少粒子入场能力");
+    if (features.contains("p07_ruby_particle_entry_reading_glow")
+        && (!features.contains("p07_ruby_particle_entry") || !features.contains("p06_ruby_glow")))
+        throw BackendError("Skia 粒子入场的独立上注音光晕缺少对应能力");
     if (features.contains("p07_ruby_symbol_entry_glow") && !features.contains("p07_ruby_particle_entry_glow"))
         throw BackendError("Skia 星光、涟漪或音符入场缺少光晕能力");
     if (features.contains("p06_reverse_decoration") && (!features.contains("p05_reverse_wipe")
@@ -899,6 +904,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_ruby_character_drip")
             || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
         throw BackendError("Skia 上注音逐字滴落光晕缺少对应能力");
+    if (features.contains("p07_ruby_character_drip_pair") && !features.contains("p07_ruby_character_drip"))
+        throw BackendError("Skia 上注音双向逐字滴落缺少对应能力");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
     const bool verticalParticles = hasSkiaVerticalParticleProfile(features);
     if (verticalParticles
