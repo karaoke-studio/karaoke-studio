@@ -30,6 +30,25 @@ def twinkle_source(project, kind='plain'):
     return track, replace(style, sing_fx='twinkle', fx_particle_color='#0000FF', fx_particle_color2=color2)
 
 
+def test_reverse_utopia_particles_keep_their_clock_after_seek(binary, project):
+    track, style = twinkle_source(project, 'two_colors')
+    track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    style = replace(style, reverse_karaoke_anim='utopia')
+    ir = ir_for(binary, (track, style))
+    plain = ir_for(binary, (track, replace(style, reverse_karaoke_anim='none')))
+    source, = ir['track']['lines']
+    assert source['fx_bursts'] == plain['track']['lines'][0]['fx_bursts']
+    times = [160, 450, 750, 1100, 1820, 2200]
+    gpu, raster = render_skia(binary, ir, times)
+    with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
+        configure(process, ir)
+        replay, _ = collect(process, times[::-1])
+    assert np.array_equal(gpu, replay[::-1])
+    assert np.count_nonzero(blue_coverage(gpu[3]) > 35) > 30
+    for time, a, b in zip(times, gpu, raster, strict=True):
+        assert_particle_region(a, b, ('reverse_utopia_seek', time))
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('reverse', [False, True], ids=['forward', 'reverse'])
 def test_plain_utopia_particles_match_actual_d2d_gpu(binary, project, reverse):
