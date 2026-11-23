@@ -201,7 +201,8 @@ def write_body_gradient_bounds(ir, plan):
                   and animations != {'none'}
                   and ordinary_line_animation(source) and modes <= {'solid', 'gradient_vertical'}
                   and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
-        unannotated_singing = (not upper_ruby and not annotated and animations == {'none'}
+        unannotated_singing = (not (look.vertical or look.right_to_left or upper_ruby or annotated)
+                               and animations == {'none'}
                                and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'stroke_flash'))
                                and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         singing = (source.get('karaoke_anim') == 'utopia'
@@ -209,7 +210,7 @@ def write_body_gradient_bounds(ir, plan):
                    and not source.get('zoom_pulse'))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or (look.vertical and not static_vertical)
-                or (directional and not (static_directional or static_vertical))
+                or (directional and not (static_directional or static_vertical or (singing and unannotated_singing)))
                 or (not (faded_band or palette_band or moving or paint_fade or paint_scanline) and (animations != {'none'}
                                                   or source.get('scanline') or source.get('fx_bursts')))
                 or source.get('stroke_flash')

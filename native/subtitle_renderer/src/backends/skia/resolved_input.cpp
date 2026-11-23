@@ -486,7 +486,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
             && ((style.strokeWidth == 0 && style.stroke2Width == 0) || reverseSingingOutline);
         const bool unannotatedSingingPaint = features.contains("p06_unannotated_singing_paints")
-            && singingScale && !annotated && !style.vertical && !style.rightToLeft && !line.wipeReverse
+            && singingScale && !annotated && !style.vertical && !style.rightToLeft
+            && (!line.wipeReverse || reverseHorizontalSinging)
             && !hasInlineRoles && !vectorGuides && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
@@ -1051,7 +1052,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || (style.vertical && !verticalPaints)
-                || ((style.rightToLeft || line.wipeReverse) && !(directionalPaints || verticalPaints))
+                || ((style.rightToLeft || line.wipeReverse)
+                    && !(directionalPaints || verticalPaints || unannotatedSingingPaint))
                 || (utopia && !singingMainPaint)
                 || (!movingGradient && !unscaledPaintFade && !unscaledPaintScanline
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"

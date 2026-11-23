@@ -88,13 +88,16 @@ CASES = ('body', 'mixed', 'outlines', 'missing')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_plain_utopia_body_paints_match_actual_d2d_gpu(binary, project, images):
+@pytest.mark.parametrize('reverse', [False, True], ids=['forward', 'reverse'])
+def test_plain_utopia_body_paints_match_actual_d2d_gpu(binary, project, images, reverse):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, base = image_source(project, images, 'mixed')
-    style = replace(base, karaoke_anim='utopia')
+    if reverse:
+        track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    style = replace(base, karaoke_anim='utopia', reverse_karaoke_anim='utopia')
     times, dpr = (175, 250, 450, 750, 1100, 1400, 1750, 2200), 3
     colors = style.karaoke_colors
     solid = replace(style, karaoke_colors=replace(colors,
@@ -112,7 +115,7 @@ def test_plain_utopia_body_paints_match_actual_d2d_gpu(binary, project, images):
     feature = 'p06_unannotated_singing_paints'
     assert feature in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, 'plain_utopia_body_paints', check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('plain_utopia_body_paints', reverse), check_p00_edges=True)
     ir['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         with pytest.raises(NativeRendererError):
