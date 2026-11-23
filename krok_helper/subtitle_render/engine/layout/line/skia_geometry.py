@@ -12,7 +12,7 @@ class LocalLineGeometry:
     layout_width: float
 
 
-def local_line_geometry(measured, style, *, char_gaps=None):
+def local_line_geometry(measured, style, *, char_gaps=None, letter_spacings=None):
     cursor = 0
     cells, ink_boxes = [], []
     lefts = None
@@ -34,7 +34,8 @@ def local_line_geometry(measured, style, *, char_gaps=None):
                       'wipe_left': x + ink[0] - wipe_pad if visible else cursor,
                       'wipe_right': x + ink[2] + wipe_pad if visible else cursor + width})
         if width > 0:
-            cursor += (max(width + style.letter_spacing_px, 0)
+            spacing = style.letter_spacing_px if letter_spacings is None else letter_spacings[i]
+            cursor += (max(width + spacing, 0)
                        if lefts is None and i + 1 < len(measured.cells) else width)
     if style.right_to_left:
         # D2D prepares each unmirrored glyph in logical order, then moves its

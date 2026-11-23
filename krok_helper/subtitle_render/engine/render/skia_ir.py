@@ -289,7 +289,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
     return ir
 
 
-def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
+def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None, **kwargs):
     if style.vertical:
         track = use_vertical_line_styles(track)
         if style.lower_ruby_enabled or style.right_to_left:
@@ -308,7 +308,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             validate_vertical_source(source)
         nonlocal animated_bitmap_guides, role_vector_guides
         role_vector_guides = validate_vector_guides(source, source_style)
-        animated_bitmap_guides = validate_bitmap_guides(source, static_title=adjust_position is not None)
+        animated_bitmap_guides = validate_bitmap_guides(source, static_title=title_geometry is not None)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -498,10 +498,11 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 lines.append(line)
                 continue
             position = geometry.position(item, kwargs['width'], kwargs['height'])
-            if adjust_position is not None:
-                position = adjust_position(geometry.locals[index], item, measured, kwargs['width'], kwargs['height'])
-            cells = positioned_cells(geometry.locals[index], position)
-            ends, _ = line_endpoints(geometry.locals[index].cells, measured.lines[item.track_index],
+            local = geometry.locals[index]
+            if title_geometry is not None:
+                local, position = title_geometry(local, item, measured, kwargs['width'], kwargs['height'])
+            cells = positioned_cells(local, position)
+            ends, _ = line_endpoints(local.cells, measured.lines[item.track_index],
                                      dpr=kwargs.get('dpr', 1), reverse=item.line.wipe_reverse,
                                      right_to_left=item.layout_style.right_to_left)
             for cell, end in zip(cells, ends, strict=True):
@@ -549,7 +550,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'] += ['p06_ruby_solid_outline', 'p06_vertical_ruby_outline']
         ir['required_features'].extend(f'p06_ruby_{kind}' for kind in ('shadow', 'glow')
                                        if vertical_ruby.get(f'ruby_{kind}_schema'))
-    secondary_outline = declare_outline_layers(ir, plan, title=adjust_position is not None)
+    secondary_outline = declare_outline_layers(ir, plan, title=title_geometry is not None)
     vector_guide_lines = [item for item in plan.lines if any(
         char.vector_glyph is not None and not guide_symbol_is_bitmap(char.vector_glyph)
         for char in item.render_line.chars)]
@@ -948,7 +949,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
             ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks)
         ir['required_features'].append('p07_character_transform')
-    if adjust_position is None and uses_inline_bitmap_guides(plan.lines):
+    if title_geometry is None and uses_inline_bitmap_guides(plan.lines):
         ir['required_features'].append('p08_inline_bitmap_guides')
     write_body_gradient_bounds(ir, plan)
     write_scanline_schema(ir, track, style)
@@ -1101,8 +1102,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             declare_vertical_scanline_viewport(ir)
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(plan.lines, ir)
-    declare_bitmap_guides(plan.lines, ir, static_title=adjust_position is not None)
+    declare_bitmap_guides(plan.lines, ir, static_title=title_geometry is not None)
     if animated_bitmap_guides:
-        ir['required_features'].append('p08_animated_title_guides' if adjust_position is not None
+        ir['required_features'].append('p08_animated_title_guides' if title_geometry is not None
                                        else 'p08_animated_bitmap_guides')
     return ir

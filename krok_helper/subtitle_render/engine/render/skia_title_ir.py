@@ -6,14 +6,19 @@ from ...domain.models import GuideSymbol, Style, SubtitleStyleScheme, TimingChar
 from ...domain.paint import KaraokeColorState, KaraokeColors
 from ...serialization.paint import paint_fill_from_dict
 from ...serialization.timing import guide_symbol_from_dict
+from ..layout.line.skia_geometry import local_line_geometry
 from ..layout.line.skia_placement import LinePosition
 
 
-def _title_position(local, item, measured, width, height, *, title, row_count):
+def _title_geometry(local, item, measured, width, height, *, title, row_count):
     # Titles use the maximum fractional char box of their actual font slots.
     # The ordinary N3 lyric lanes use the base font box with integer descent.
     style = item.layout_style
     line = measured.lines[item.track_index]
+    roles = title['role_styles']
+    spacings = [roles.get(char.role_label, title)['letter_spacing_px'] for char in item.render_line.chars]
+    if any(spacing != style.letter_spacing_px for spacing in spacings):
+        local = local_line_geometry(line, style, letter_spacings=spacings)
     ascent = descent = 0
     for cell, run, metrics, edge in zip(line.cells, line.run_indices, line.slot_metrics, line.edge_sizes, strict=True):
         if cell.get('bitmap_guide'):
@@ -42,7 +47,7 @@ def _title_position(local, item, measured, width, height, *, title, row_count):
         x = width - style.horizontal_margin_px - half_edge - local.layout_width
     else:
         x = (width - local.layout_width) / 2
-    return LinePosition(x + row_offset, top + ascent + step * row)
+    return local, LinePosition(x + row_offset, top + ascent + step * row)
 
 
 def _title_color(title):
@@ -69,9 +74,9 @@ def title_style(title):
     if bitmaps and any(paint['decoration_kind'] == 'shadow' and paint['shadow']['mode'] != 'solid'
                        for paint in paints):
         return None
-    if roles and any(paint['letter_spacing_px'] != title['letter_spacing_px']
-                     or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
-                     for paint in (title, *roles.values())):
+    if title['font_family_latin'] is not None and any(
+        paint['font_family_latin'] is None for paint in roles.values()
+    ):
         return None
     anchor = title['anchor']
     horizontal = anchor.rsplit('_', 1)[-1]
@@ -172,8 +177,8 @@ def build_title_sources(titles, build_source, **kwargs):
         if len(rows) > 32:
             raise ValueError('Skia 单个标题最多支持 32 行')
         lines = list(_title_lines(title, rows))
-        position = partial(_title_position, title=title, row_count=len(rows))
-        source = build_source(TimingTrack(lines=lines), style, adjust_position=position,
+        geometry = partial(_title_geometry, title=title, row_count=len(rows))
+        source = build_source(TimingTrack(lines=lines), style, title_geometry=geometry,
                               **{**kwargs, 'roll_shift_ms': 0})
         sources.append({'windows': windows, 'source': source})
         if len(sources) > 16:

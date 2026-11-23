@@ -234,6 +234,29 @@ def test_title_roles_match_actual_d2d_gpu(binary, outlined):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_without_layout_uses_each_roles_letter_spacing(binary):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = role_title()
+    title = replace(style.title_overlays[0], letter_spacing_px=6)
+    base = replace(style, title_overlays=[title])
+    role = replace(base.custom_style_schemes['accent'], letter_spacing_px=-11)
+    spaced = replace(base, custom_style_schemes={'accent': role})
+    origin_steps = []
+    for look in (base, spaced):
+        source = ir_for(binary, (track, look))['skia_titles'][0]['source']
+        cells = source['skia_layout']['lines'][0]['cells']
+        origin_steps.append(np.diff([cell['origin_x'] for cell in cells]))
+    # The title's retained role has zero default spacing and the K cell has room to contract.
+    assert origin_steps[1] - origin_steps[0] == pytest.approx([0, -11, 0])
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=spaced, case_id='title_role_spacing'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('decoration', ['shadow', 'glow'])
 def test_title_role_decoration_matches_actual_d2d_gpu(binary, decoration):
     from types import SimpleNamespace
