@@ -15,7 +15,7 @@ std::uint32_t argb(const RgbaColor& c) {
 
 bool supportsSignalAnimation(const TextLine& line) {
     const auto supported = [](const std::string& animation, bool entry) {
-        return animation == "none" || animation == "fade" || animation == "rise"
+        return animation == "none" || animation == "fade" || animation == "rise" || animation == "noise"
             || animation == (entry ? "slide_in" : "slide_out")
             || animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
     };

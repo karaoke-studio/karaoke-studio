@@ -81,7 +81,7 @@ def test_noise_with_glowing_ruby_preserves_wipe_and_previous_scene(binary, readi
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('dpr,content', [(1, 'plain'), (1.5, 'plain'), (1, 'guide'), (1, 'role')])
+@pytest.mark.parametrize('dpr,content', [(1, 'plain'), (1.5, 'plain'), (1, 'guide'), (1, 'role'), (1, 'signal')])
 def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr, content):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -97,6 +97,10 @@ def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr, content):
         line = replace(line, chars=chars)
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
             font_family=style.font_family, font_size_px=60, karaoke_colors=colors('#FF00FF', '#00BBFF'))})
+    elif content == 'signal':
+        style = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square', lit_number=1,
+                        lit_size=24, lit_offset_y=-35, lit_fill_color='#FF00FF',
+                        lit_stroke_width=0, lit_edge_brightness_pct=0, lit_shadow=False)
     track = replace(track, lines=[line])
     times = TIMES if content == 'plain' else [0, 159, 650, 2650, 3000]
     with NativeRendererProcess() as process:
@@ -104,6 +108,9 @@ def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr, content):
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
     shape = (round(360*dpr), round(640*dpr), 4)
     reference = [np.frombuffer(p, np.uint8).reshape(shape) for p in raw]
+    if content == 'signal':
+        steady = reference[times.index(650)]
+        assert np.count_nonzero(np.all(steady[..., :3] == [255, 0, 255], axis=-1) & (steady[..., 3] > 250)) > 400
     ir = ir_for(binary, (track, style), dpr=dpr)
     results = []
     for target in ('gpu', 'raster'):
