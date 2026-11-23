@@ -66,7 +66,7 @@ def title_style(title):
                    for paint in paints)
     if textured and (bitmaps or any(paint['decoration_kind'] != 'none' for paint in paints)):
         return None
-    if bitmaps and (roles or any(paint['decoration_kind'] != 'none' for paint in paints)):
+    if bitmaps and any(paint['decoration_kind'] != 'none' for paint in paints):
         return None
     if roles and any(paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
@@ -124,6 +124,7 @@ def _title_guide(payload):
         return GuideSymbol(kind='bitmap', count=payload['count'], prefix_timing='anchored',
                            bitmap_before_path=payload['before_path'], bitmap_after_path=payload['after_path'],
                            bitmap_fix_size=payload['fix_size'], bitmap_zoom_percent=payload['zoom_percent'],
+                           bitmap_no_decor=payload['no_decor'],
                            bitmap_margin_left_px=payload['margin_left_px'],
                            bitmap_margin_right_px=payload['margin_right_px'],
                            bitmap_margin_bottom_px=payload['margin_bottom_px'])

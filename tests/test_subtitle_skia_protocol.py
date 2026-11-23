@@ -548,6 +548,31 @@ def test_title_bitmap_guides_match_actual_d2d_gpu(binary, tmp_path, inline, outl
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_bitmap_guides_use_role_geometry(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = bitmap_guide_title(tmp_path, inline=True)
+    title = style.title_overlays[0]
+    guide = replace(title.guide_symbols[0], bitmap_fix_size=False, bitmap_zoom_percent=75,
+                    bitmap_no_decor=True)
+    role_paint = KaraokeColorState(text=PaintFill(color='#CC16AD'))
+    role = SubtitleStyleScheme(font_family=style.font_family, font_size_px=68,
+                               karaoke_colors=KaraokeColors(before=role_paint, after=role_paint))
+    title = replace(title, guide_symbols={0: replace(guide, role_labels=('accent',))},
+                    inline_guide_symbols={(0, 2): guide}, char_role_labels=[[None, 'accent', None, None]])
+    style = replace(style, title_overlays=[title], custom_style_schemes={'accent': role})
+    source = ir_for(binary, (track, style))['skia_titles'][0]['source']
+    cells = source['skia_layout']['lines'][0]['cells']
+    assert source['track']['lines'][0]['chars'][0]['role_label'] == 'accent'
+    assert cells[0]['metrics']['advance'] < cells[3]['metrics']['advance']
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_bitmap_guide_role'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def mixed_guide_title(tmp_path):
     track, style = bitmap_guide_title(tmp_path)
     _, vector = vector_guide_title()

@@ -100,15 +100,13 @@ def validate_bitmap_guides(track, *, static_title=False):
         cells = [c for c in rendered.chars if guide_symbol_is_bitmap(c.vector_glyph)]
         if not cells:
             continue
-        inline = not static_title and _needs_inline_bitmap_profile(line, cells)
         images = [cell.vector_glyph for cell in cells]
         paths = {path for image in images for path in (image.bitmap_before_path, image.bitmap_after_path) if path}
         for path in sorted(paths):
             animated |= QImageReader(path).imageCount() > 1
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
-        if ((line.wipe_reverse and static_title)
-                or (not inline and any(c.role_label is not None for c in cells))):
+        if line.wipe_reverse and static_title:
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
     return animated
 

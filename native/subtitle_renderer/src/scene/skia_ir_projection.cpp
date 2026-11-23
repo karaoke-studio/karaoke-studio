@@ -674,7 +674,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
             if (cell.bitmapGuide) {
-                const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
+                const bool needsInline = !staticTitle && (sawBitmapText || &cellStyle != &resolved);
                 if (hasLowerReading
                     && ((cfg.rightToLeft && (!rtlBitmapUpperRuby || !features.contains("p05_rtl_lower_ruby")))
                         || source.wipeReverse || !guideRubyAnimation
