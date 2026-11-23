@@ -40,8 +40,8 @@ from .skia_line_animation_ir import (
 )
 from .skia_singing_ir import vertical_singing_lines, write_utopia_pivots
 from .skia_scanline_ir import (
-    declare_vertical_scanline_viewport, scanline_features, suppress_inactive_scanline_bands, transformed_cell_band,
-    write_scanline_schema,
+    declare_vertical_scanline_viewport, reverse_singing_scale, scanline_features,
+    suppress_inactive_scanline_bands, transformed_cell_band, write_scanline_schema,
 )
 from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
@@ -327,12 +327,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     geometry.set_lanes(plan.lines)
     reverse_bitmap_lines = set()
     mixed_reverse_bitmap_lines = False
+    reverse_bitmap_singing = False
     for item in plan.lines:
         if item.layout_style.vertical or not (item.line.wipe_reverse and has_bitmap_guides((item.render_line,))):
             continue
         source = ir['track']['lines'][item.track_index]
         avatar_only = is_undecorated_bitmap_line(item.render_line)
-        modes = {'none', 'utopia'} if avatar_only else {'none'}
+        singing = (not avatar_only and not track.rubies and reverse_singing_scale(source, item.layout_style)
+                   and all(c.vector_glyph is None or (guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)
+                           for c in item.render_line.chars))
+        modes = {'none', 'utopia'} if avatar_only or singing else {'none'}
         if ({source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                 or source.get('karaoke_anim') not in modes
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
@@ -344,6 +348,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             reverse_bitmap_lines.add(item.track_index)
         else:
             mixed_reverse_bitmap_lines = True
+            reverse_bitmap_singing |= singing
     spin_lines = set()
     drip_lines = set()
     paired_drips = False
@@ -977,6 +982,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if role_vector_guides:
         ir['required_features'].append('p05_role_vector_guides')
     transitions = fade_lines | character_warp_lines | composed_geometry_lines | utopia_entry_lines | utopia_exit_lines
+    if reverse_bitmap_singing:
+        ir['required_features'].append('p08_reverse_bitmap_singing')
     write_utopia_pivots(ir, plan, measured, transitions,
                        particle_band_tracks, vertical_singing)
     if role_line_fade:

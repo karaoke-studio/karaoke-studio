@@ -565,8 +565,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.entryAnimation == "none" && source.exitAnimation == "none"
             && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && std::ranges::all_of(source.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
+        const bool reverseBitmapSinging = source.karaokeAnimation == "utopia" && features.contains("p08_reverse_bitmap_singing")
+            && std::ranges::all_of(source.chars, [](const auto& cell) {
+                return !cell.vectorGlyph && (!cell.bitmapGuide || cell.bitmapGuide->noDecor);
+            });
         const bool reverseMixedBitmaps = source.wipeReverse && features.contains("p08_mixed_reverse_bitmap_guides")
-            && !cfg.vertical && !cfg.rightToLeft && source.karaokeAnimation == "none"
+            && !cfg.vertical && !cfg.rightToLeft && (source.karaokeAnimation == "none" || reverseBitmapSinging)
             && source.entryAnimation == "none" && source.exitAnimation == "none" && !source.scanlineEnabled
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         bool sawLyrics = false;

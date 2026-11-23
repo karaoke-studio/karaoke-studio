@@ -97,6 +97,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
         "p08_mixed_reverse_bitmap_guides",
+        "p08_reverse_bitmap_singing",
         "p08_rtl_bitmap_guides",
         "p08_bitmap_guide_shadow",
         "p08_bitmap_guide_gradient_shadow",
@@ -773,6 +774,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 位图与矢量导唱符混用需要正向横排普通正文");
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
     const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
+    const bool reverseBitmapSinging = features.contains("p08_reverse_bitmap_singing");
+    if (reverseBitmapSinging && (!mixedReverseBitmapGuides || !features.contains("p07_horizontal_reverse_singing")))
+        throw BackendError("Skia 反向图片导唱符缺少正文唱字或布局能力声明");
     const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
     const bool verticalBitmapGuides = features.contains("p08_vertical_bitmap_guides");
     const bool verticalBitmapDecoration = features.contains("p08_vertical_bitmap_decoration");
@@ -853,6 +857,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature))
                 && !(reverseBitmapGuides && reverseAllowed.contains(feature))
                 && !(mixedReverseBitmapGuides && mixedReverseAllowed.contains(feature))
+                && !(reverseBitmapSinging && (feature == QJsonValue("p08_reverse_bitmap_singing")
+                    || feature == QJsonValue("p07_horizontal_reverse_singing")))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
                 && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))
                 && !(verticalBitmapGuides && (feature == QJsonValue("p08_vertical_bitmap_guides")

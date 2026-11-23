@@ -1,5 +1,6 @@
 """Publish Skia singing-scale and Utopia composition capabilities."""
 
+from ..guide.semantics import guide_symbol_is_bitmap
 from ..layout.line.skia_geometry import write_horizontal_pivots
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import is_noise_animation, ordinary_line_animation
@@ -61,7 +62,9 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         inline_roles = any(c.role_label is not None for c in item.render_line.chars)
         reverse_scale = (not annotated and not inline_roles and 'p05_resolved_ruby' not in ir['required_features']
                          and reverse_singing_scale(source, style)
-                         and all(c.vector_glyph is None for c in item.render_line.chars))
+                         and all(c.vector_glyph is None or ('p08_reverse_bitmap_singing' in ir['required_features']
+                             and guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)
+                                 for c in item.render_line.chars))
         static_role_scale = animations == {'none'} and not (
             source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
         faded_role_scale = ('p07_inline_role_faded_scanline' in ir['required_features']
