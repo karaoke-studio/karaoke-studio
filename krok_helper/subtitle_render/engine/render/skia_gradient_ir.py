@@ -149,6 +149,7 @@ def write_body_gradient_bounds(ir, plan):
     directional_solid_outline = False
     vertical_paints = False
     unannotated_singing_paints = False
+    unannotated_zoom_paints = False
     independent_ruby_fill = False
     upper_ruby = 'p05_upper_ruby' in ir['required_features']
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
@@ -205,9 +206,10 @@ def write_body_gradient_bounds(ir, plan):
                                and animations == {'none'}
                                and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'stroke_flash'))
                                and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
+        zoom_paints = bool(source.get('zoom_pulse')) and unannotated_singing and not directional
         singing = (source.get('karaoke_anim') == 'utopia'
                    and (annotated or faded_band or palette_band or moving or unannotated_singing)
-                   and not source.get('zoom_pulse'))
+                   and (not source.get('zoom_pulse') or zoom_paints))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or (look.vertical and not static_vertical)
                 or (directional and not (static_directional or static_vertical or (singing and unannotated_singing)))
@@ -224,6 +226,7 @@ def write_body_gradient_bounds(ir, plan):
         ruby_paint |= annotated or (moving and upper_ruby)
         singing_paint |= singing and (annotated or moving)
         unannotated_singing_paints |= singing and unannotated_singing
+        unannotated_zoom_paints |= singing and zoom_paints
         faded_scanline_gradient |= faded_band
         palette_scanline_gradient |= palette_band
         animated_singing_gradient |= moving
@@ -257,6 +260,7 @@ def write_body_gradient_bounds(ir, plan):
         (images, 'p06_image_fill'), (ruby_paint, 'p06_ruby_main_paint'),
         (singing_paint, 'p06_utopia_main_paint'),
         (unannotated_singing_paints, 'p06_unannotated_singing_paints'),
+        (unannotated_zoom_paints, 'p06_unannotated_zoom_paints'),
         (ruby_gradient, 'p06_ruby_fill_gradient'),
         (ruby_image, 'p06_ruby_fill_image'),
         (faded_scanline_gradient, 'p06_faded_scanline_gradient_fill'),

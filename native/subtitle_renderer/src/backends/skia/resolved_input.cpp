@@ -492,7 +492,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && singingScale && !annotated && !style.vertical && !style.rightToLeft
             && (!line.wipeReverse || reverseHorizontalSinging)
             && !hasInlineRoles && !vectorGuides && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && (!line.zoomPulseEnabled || (!line.wipeReverse && features.contains("p06_unannotated_zoom_paints")))
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
@@ -718,9 +719,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     const auto opaque = [](const ::subtitle::skia::SolidOutline& stroke) {
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
                     };
-                    const bool paintedSinging = singingScale && !transforms && !line.zoomPulseEnabled
-                        && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill || unannotatedSingingPaint
-                            || (roleSinging && roleBodyPaints));
+                    const bool paintedSinging = singingScale && !transforms
+                        && (unannotatedSingingPaint || (!line.zoomPulseEnabled
+                            && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill
+                                || (roleSinging && roleBodyPaints))));
                     const bool translucentOutline = !utopia && !geometry && !annotated && !hasInlineRoles
                         && features.contains("p07_translucent_character_outline");
                     const bool reverseProtectedOutline = reverseHorizontalSinging && reverseSingingOutline

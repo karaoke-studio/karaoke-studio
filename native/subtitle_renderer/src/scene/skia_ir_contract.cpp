@@ -150,6 +150,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_main_paint",
         "p06_utopia_main_paint",
         "p06_unannotated_singing_paints",
+        "p06_unannotated_zoom_paints",
         "p06_ruby_fill_gradient",
         "p06_faded_scanline_gradient_fill",
         "p06_ruby_fill_image",
@@ -501,6 +502,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         || (!features.contains("p06_body_gradient") && !features.contains("p06_image_fill"))
         || features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 正文唱字画笔缺少填充或唱字放大能力");
+    if (features.contains("p06_unannotated_zoom_paints") && !features.contains("p06_unannotated_singing_paints"))
+        throw BackendError("Skia 正文弹跳缩放画笔缺少唱字画笔能力");
     if (features.contains("p06_vertical_body_paints") && (!features.contains("p05_vertical_solid")
         || (!features.contains("p06_body_gradient") && !features.contains("p06_image_fill"))))
         throw BackendError("Skia 竖排正文画笔缺少竖排布局或填充能力");

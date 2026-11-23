@@ -88,16 +88,17 @@ CASES = ('body', 'mixed', 'outlines', 'missing')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('reverse', [False, True], ids=['forward', 'reverse'])
-def test_plain_utopia_body_paints_match_actual_d2d_gpu(binary, project, images, reverse):
+@pytest.mark.parametrize('case', ['forward', 'reverse', 'zoom'])
+def test_plain_singing_body_paints_match_actual_d2d_gpu(binary, project, images, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, base = image_source(project, images, 'mixed')
-    if reverse:
+    if case == 'reverse':
         track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
-    style = replace(base, karaoke_anim='utopia', reverse_karaoke_anim='utopia')
+    style = replace(base, karaoke_anim='zoom_pulse' if case == 'zoom' else 'utopia',
+                    reverse_karaoke_anim='utopia', zoom_pulse_peak_pct=150)
     times, dpr = (175, 250, 450, 750, 1100, 1400, 1750, 2200), 3
     colors = style.karaoke_colors
     solid = replace(style, karaoke_colors=replace(colors,
@@ -112,10 +113,10 @@ def test_plain_utopia_body_paints_match_actual_d2d_gpu(binary, project, images, 
     for control in refs[1:]:
         assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
-    feature = 'p06_unannotated_singing_paints'
+    feature = 'p06_unannotated_zoom_paints' if case == 'zoom' else 'p06_unannotated_singing_paints'
     assert feature in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, ('plain_utopia_body_paints', reverse), check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('plain_singing_body_paints', case), check_p00_edges=True)
     ir['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         with pytest.raises(NativeRendererError):
