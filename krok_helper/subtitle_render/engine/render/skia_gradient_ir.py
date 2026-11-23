@@ -184,9 +184,9 @@ def write_body_gradient_bounds(ir, plan):
             continue
         particle_band = ('p07_faded_scanline_singing_particles' in ir['required_features']
                          and faded_band_singing_particles(source, look) and look.scanline_mode in {'default', 'color'})
-        prefix_band = ('p07_faded_scanline_prefix_guides' in ir['required_features']
+        vector_band = ('p07_faded_scanline_prefix_guides' in ir['required_features']
                        and (fixed_faded_utopia_band(source, look) or particle_band))
-        faded_band = (prefix_band or particle_band) and modes <= {'solid', 'gradient_vertical'}
+        faded_band = (vector_band or particle_band) and modes <= {'solid', 'gradient_vertical'}
         paint_fade = ('fade' in animations and animations <= {'none', 'fade'}
                       and source.get('karaoke_anim') == 'none' and not (annotated or upper_ruby)
                       and not (source.get('scanline') or source.get('fx_bursts') or source.get('zoom_pulse')))
@@ -220,7 +220,7 @@ def write_body_gradient_bounds(ir, plan):
                 or (look.lower_ruby_enabled and not (particle_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or any(c.role_label is not None or (c.vector_glyph is not None
-                       and (not (moving or prefix_band) or guide_symbol_is_bitmap(c.vector_glyph)))
+                       and (not (moving or vector_band) or guide_symbol_is_bitmap(c.vector_glyph)))
                        for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint |= annotated or (moving and upper_ruby)

@@ -557,7 +557,7 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
 
 
 @pytest.mark.parametrize('effect', ['gradient', 'scanline', 'gradient_glow', 'scanline_particles', 'scanline_snow'])
-def test_faded_gradient_with_leading_replacement_guide(binary, project, effect):
+def test_faded_vector_guides_with_gradients_and_scanline(binary, project, effect):
     from test_subtitle_skia_outline_ruby import outlined
 
     track, style = guide_source(project, effect='utopia')
@@ -610,10 +610,6 @@ def test_faded_gradient_with_leading_replacement_guide(binary, project, effect):
     assert frames[0][..., 3].any() and not np.array_equal(frames[1], frames[2])
     assert np.array_equal(frames[0], frames[-1])
     inline = replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])
-    if effect in {'scanline', 'scanline_particles', 'scanline_snow'}:
-        with pytest.raises(ValueError, match='扫字线'):
-            ir_for(binary, (inline, style))
-        return
 
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity

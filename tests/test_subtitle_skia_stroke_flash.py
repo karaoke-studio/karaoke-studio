@@ -10,6 +10,7 @@ import pytest
 from test_subtitle_skia_line_fade import (
     application, binary, project, ir_for, collect, configure, selection, premultiplied,
 )
+from test_subtitle_skia_lower_geometry import prepared_source, source as lower_source
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_secondary_outline import two_outlines
@@ -75,6 +76,29 @@ def test_invalid_flash_ir_preserves_scene(binary, project, mutation):
             configure(process, bad)
         after, _ = collect(process, [240], generation=2)
     assert np.array_equal(before, after)
+
+
+def test_stroke_flash_composes_below_lower_readings(binary, lower_source):
+    from test_subtitle_skia_lower_product import ir_for as lower_ir
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, resolve = lower_source
+    style = replace(style, karaoke_stroke_flash=True)
+    ir = lower_ir(binary, (track, style, resolve))
+    assert {'p07_composed_stroke_flash', 'p05_lower_ruby'} <= set(ir['required_features'])
+    times = (199, 220, 350, 490, 720, 1000)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=900, height=600, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert white_coverage(gpu[1]).max() > white_coverage(gpu[2]).max() > white_coverage(gpu[3]).max() == 0
+    assert_glow_parity(times, reference, gpu, raster, 'flash_below_lower_readings', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('cell_kind', ['vector_guide', 'role'])

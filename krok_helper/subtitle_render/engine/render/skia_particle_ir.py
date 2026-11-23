@@ -1,5 +1,5 @@
 """Canonical anchors and capabilities for the singing-particle planner."""
-from ..guide.skia_vector import vector_guides_form_prefix
+from ..guide.semantics import guide_symbol_is_bitmap
 from ..layout.line.skia_geometry import write_horizontal_pivots
 from ..style.style_semantics import uses_authored_decoration
 from .skia_line_animation_ir import ordinary_line_animation
@@ -188,8 +188,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                            and 'p07_ruby_petal_entry_scanline' in ir['required_features'])
         faded_band = faded_band_singing_particles(source, look)
         chars = item.render_line.chars
-        prefix_guides = (faded_band and 'p07_faded_scanline_prefix_guides' in ir['required_features']
-                         and vector_guides_form_prefix(chars))
+        faded_vector_guides = (faded_band and 'p07_faded_scanline_prefix_guides' in ir['required_features']
+                               and any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
+                                       for c in chars))
         singing_under_shape = (annotated and band and (not animated or petal_with_band) and look.scanline_shape != 'band'
                                and 'p07_shaped_scanline_singing_particles' in ir['required_features'])
         singing_under_band = (not look.vertical and annotated and band
@@ -243,7 +244,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (not (annotated or vertical_particles or faded_band or outlined_energy
                          or outlined_singing or unscaled_outline) and outlined)
                 or (not static_sprite_paint and any(
-                    c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars))):
+                    c.role_label is not None or (c.vector_glyph is not None and not faded_vector_guides) for c in chars))):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         horizontal_line_motion |= unscaled_motion
         plain_scaled_singing |= plain_scale

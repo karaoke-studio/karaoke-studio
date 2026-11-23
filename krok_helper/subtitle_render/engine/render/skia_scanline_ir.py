@@ -2,8 +2,7 @@
 
 from dataclasses import replace
 
-from ..guide.semantics import render_line_with_guide_symbols
-from ..guide.skia_vector import vector_guides_form_prefix
+from ..guide.semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
 from ..layout.line.style import style_for_line
 from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
 from .elements.horizontal.scanline import scanline_role_fill
@@ -72,7 +71,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
     unscaled_line_motion = faded_band_particles = False
-    inline_role_fade = prefix_guide_fade = False
+    inline_role_fade = vector_guide_fade = False
     static_cell_scanline = False
     transform_band = False
     utopia_entry_bands = False
@@ -197,8 +196,9 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                                  or uses_authored_decoration(look, 'glow')))
         fixed_fade = fixed_faded_utopia_band(line, look)
         role_fade = inline_roles and fixed_fade
-        prefix_fade = (vector_guides and not inline_roles and vector_guides_form_prefix(chars)
-                       and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'})))
+        vector_fade = (not inline_roles
+                       and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'}))
+                       and any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars))
         fixed_shape = shape and look.scanline_mode == 'color' and look.scanline_shape in {'image', 'flame'}
         static_cells = ((inline_roles or vector_guides) and ordinary and (look.scanline_shape == 'band' or fixed_shape)
                         and look.scanline_mode != 'role' and line.get('karaoke_anim') == 'none'
@@ -226,7 +226,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                          or (bursts and not role_particles)))
                 or (has_readings and not (ordinary or motion or particle_entry))
                 or (inline_roles and not (role_fade or static_cells))
-                or (vector_guides and not (prefix_fade or static_cells))):
+                or (vector_guides and not (vector_fade or static_cells))):
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
         rtl_band |= rtl_scanline
         shadow_band |= static_shadow_band
@@ -242,7 +242,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         line_motion |= motion and utopia
         faded_band_particles |= faded_band
         inline_role_fade |= role_fade
-        prefix_guide_fade |= prefix_fade
+        vector_guide_fade |= vector_fade
         unscaled_line_motion |= motion and not utopia
         lower_readings = lower_readings or lower_band
         moving_lower_readings |= lower_band and motion
@@ -280,7 +280,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_scanline_character_transform')
     if utopia_entry_bands:
         features.append('p07_scanline_utopia_entry')
-    if prefix_guide_fade:
+    if vector_guide_fade:
         features.append('p07_faded_scanline_prefix_guides')
     if vertical_band:
         features.append('p07_vertical_scanline_band')

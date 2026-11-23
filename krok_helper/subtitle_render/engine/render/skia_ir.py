@@ -131,36 +131,41 @@ def _composes_character_fade(source, item, *, entering=True, other_animations=()
             and all(char.role_label is None and char.vector_glyph is None for char in item.render_line.chars))
 
 
-def _validate_stroke_flash(track, style, lines):
+def _validate_stroke_flash(plan, lines, ruby):
     composed = False
-    for source, line in zip(track.lines, lines, strict=True):
+    for index, item in enumerate(plan.lines):
+        line = lines[item.track_index]
         if not line.get('stroke_flash'):
             continue
-        look = style_for_line(style, source)
-        if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
+        look = item.layout_style
+        if (look.vertical or look.right_to_left or item.line.wipe_reverse
                 or not ordinary_line_animation(line)
                 or line.get('karaoke_anim') not in {'none', 'utopia', 'no_wipe'}
                 or line.get('fx_bursts') or uses_authored_decoration(look, 'shadow')):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
-        composed = (composed or bool(track.rubies) or uses_authored_decoration(look, 'glow')
+        readings = ruby.lines[index].rubies if ruby is not None else ()
+        composed = (composed or bool(readings) or uses_authored_decoration(look, 'glow')
                     or line.get('karaoke_anim') != 'none' or line.get('scanline'))
     return composed
 
 
-def _validate_noise_transition(track, style, lines):
+def _validate_noise_transition(plan, lines, ruby):
     composed = False
-    for source, line in zip(track.lines, lines, strict=True):
+    for index, item in enumerate(plan.lines):
+        line = lines[item.track_index]
         entry, exit_ = line.get('entry_anim'), line.get('exit_anim')
         if 'noise' not in (entry, exit_):
             continue
-        look = style_for_line(style, source)
-        if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
+        look = item.layout_style
+        readings = ruby.lines[index].rubies if ruby is not None else ()
+        if (look.vertical or look.right_to_left or item.line.wipe_reverse
+                or any(group.target.lower for group in readings)
                 or entry not in {'noise', 'none'} or exit_ not in {'noise', 'none'}
-                or line.get('karaoke_anim') not in {'none', 'utopia'} or (line.get('zoom_pulse') and not track.rubies)
+                or line.get('karaoke_anim') not in {'none', 'utopia'} or (line.get('zoom_pulse') and not readings)
                 or line.get('scanline') or line.get('stroke_flash') or line.get('fx_bursts')
                 or uses_authored_decoration(look, 'shadow')):
             raise ValueError('Skia 噪声出入场当前仅支持正向横排实色正文')
-        composed = (composed or bool(track.rubies) or line.get('karaoke_anim') == 'utopia'
+        composed = (composed or bool(readings) or line.get('karaoke_anim') == 'utopia'
                     or uses_authored_decoration(look, 'glow'))
     return composed
 
@@ -693,11 +698,11 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if vertical_ruby is not None:
             ir['required_features'].append('p06_vertical_ruby_decoration')
     if any(line.get('stroke_flash') for line in ir['track']['lines']):
-        if _validate_stroke_flash(track, style, ir['track']['lines']):
+        if _validate_stroke_flash(plan, ir['track']['lines'], geometry.ruby):
             ir['required_features'].append('p07_composed_stroke_flash')
         ir['required_features'].append('p07_stroke_flash')
     if any('noise' in (line.get('entry_anim'), line.get('exit_anim')) for line in ir['track']['lines']):
-        if _validate_noise_transition(track, style, ir['track']['lines']):
+        if _validate_noise_transition(plan, ir['track']['lines'], geometry.ruby):
             ir['required_features'].append('p07_noise_composition')
         ir['required_features'].append('p07_noise_transition')
     if style.vertical:

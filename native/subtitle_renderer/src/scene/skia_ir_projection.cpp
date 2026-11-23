@@ -276,7 +276,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
         const bool composedNoise = features.contains("p07_noise_composition");
         if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
-                || ((!cfg.rubies.empty() || features.contains("p05_resolved_ruby") || singingScale) && !composedNoise)
+                || hasLowerReading || ((!rubyGroups.isEmpty() || singingScale) && !composedNoise)
                 || source.scanlineEnabled || (source.zoomPulseEnabled && !features.contains("p07_ruby_zoom_noise"))
                 || (source.entryAnimation != "none" && source.entryAnimation != "noise")
                 || (source.exitAnimation != "none" && source.exitAnimation != "noise")
@@ -287,8 +287,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             cfg.vertical ? "p07_vertical_zoom_scanline" : "p07_composed_scanline");
         if (source.strokeFlashEnabled
             && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
-                || (!composedFlash && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")
-                    || source.karaokeAnimation == "utopia"))
+                || (!composedFlash && (!rubyGroups.isEmpty() || source.karaokeAnimation == "utopia"))
                 || (source.scanlineEnabled && !composedScanline)
                 || (source.zoomPulseEnabled && !features.contains("p07_zoom_pulse_decoration"))
                 || !plainLineAnimation(source.entryAnimation, true) || !plainLineAnimation(source.exitAnimation, false)
@@ -563,7 +562,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
             && (guideWholeLineAnimation || styledCellTransform);
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
-        const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
+        const bool vectorFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool fixedShape = scanlineShape && resolved.scanlineMode == "color"
             && (resolved.scanlineShape == "image" || resolved.scanlineShape == "flame");
         const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
@@ -571,7 +570,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.karaokeAnimation == "none"
             && (resolved.scanlineShape == "band" || fixedShape) && resolved.scanlineMode != "role"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
-        const bool prefixGuideParticles = prefixFadedScanline
+        const bool fadedGuideParticles = vectorFadedScanline
             && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool staticCellParticles = staticScanline && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
@@ -613,7 +612,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !cfg.vertical && !cfg.rightToLeft && (source.karaokeAnimation == "none" || reverseBitmapSinging)
             && source.entryAnimation == "none" && source.exitAnimation == "none" && !source.scanlineEnabled
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
-        bool sawLyrics = false;
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
             if (cfg.vertical && std::ranges::any_of(cell.text.toUcs4(), [](char32_t scalar) {
@@ -641,11 +639,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (source.scanlineEnabled && ((cell.vectorGlyph && !((prefixFadedScanline && !sawLyrics) || staticScanlineCells))
+            if (source.scanlineEnabled && ((cell.vectorGlyph && !(vectorFadedScanline || staticScanlineCells))
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && !staticCellParticles
-                && ((cell.vectorGlyph && !prefixGuideParticles) || &cellStyle != &resolved))
+                && ((cell.vectorGlyph && !fadedGuideParticles) || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved)
@@ -684,7 +682,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }
-            sawLyrics = sawLyrics || !cell.vectorGlyph;
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;
             if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
                 || !cell.resolvedEndMs)

@@ -11,7 +11,9 @@ from test_subtitle_skia_line_fade import (
     application, binary, project, ir_for, collect, configure, selection, premultiplied,
 )
 from test_subtitle_skia_character_transform import transform_source
+from test_subtitle_skia_lower_geometry import prepared_source, source as lower_source
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_ir
+from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -78,6 +80,39 @@ def test_noise_with_glowing_ruby_preserves_wipe_and_previous_scene(binary, readi
         (tmp_path / 'ruby-noise-layout.json').write_text(json.dumps({
             'features': noise['required_features'], 'line': noise['skia_layout']['lines'][0],
         }, sort_keys=True), encoding='utf-8')
+
+
+def test_noise_and_lower_reading_stay_on_their_own_rows(binary, lower_source):
+    from test_subtitle_skia_lower_product import ir_for as lower_ir
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, resolve = lower_source
+    first, = track.lines
+    shift = 4000
+    animated = replace(first, track_line_index=1, break_before='page',
+                       chars=[replace(char, text='字', start_ms=char.start_ms + shift) for char in first.chars],
+                       end_ms=first.end_ms + shift, display_start_override_ms=shift - 600,
+                       display_end_override_ms=first.end_ms + shift + 600,
+                       animation_override=LineAnimationOverride(entry_anim='noise', entry_duration_ms=600,
+                                                               karaoke_anim='utopia'))
+    track = replace(track, lines=[first, animated])
+    ir = lower_ir(binary, (track, style, resolve))
+    assert 'p07_noise_composition' in ir['required_features']
+    assert any(group.get('lower') for group in ir['skia_layout']['lines'][0]['ruby_groups'])
+    assert not ir['skia_layout']['lines'][1]['ruby_groups']
+    times = (500, 1000, 3560, 3850, 4200, 4700)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=900, height=600, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert 0 < gpu[2][..., 3].sum() < gpu[4][..., 3].sum()
+    assert_glow_parity(times, reference, gpu, raster, 'separate_noise_and_lower_reading')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

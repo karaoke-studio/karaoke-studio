@@ -478,8 +478,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (ir.contains("skia_extra_sources") || features.contains("p08_multiple_sources")
         || ir.contains("skia_titles") || features.contains("p08_solid_title"))
         throw BackendError("Skia: 场景配置缺少规范布局或包含嵌套来源");
-    if (features.contains("p07_noise_composition")
-        && (!features.contains("p07_noise_transition") || features.contains("p05_lower_ruby")))
+    if (features.contains("p07_noise_composition") && !features.contains("p07_noise_transition"))
         throw BackendError("Skia 噪声出入场组合缺少对应布局能力");
     if (features.contains("p08_vertical_viewport")
         && (!features.contains("p08_viewport") || !features.contains("p05_vertical_solid")
@@ -777,7 +776,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_faded_scanline_prefix_guides")
         && (!features.contains("p05_vector_guide_composition") || !features.contains("p07_scanline_line_animation")
             || !features.contains("p07_line_fade")))
-        throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
+        throw BackendError("Skia 矢量导唱符扫字线缺少淡化或导唱符布局能力声明");
     const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides");
     const bool mixedGuideKinds = features.contains("p08_mixed_guide_kinds");
     if (mixedGuideKinds && (!features.contains("p08_bitmap_guides") || !features.contains("p05_vector_guides")))
@@ -1321,8 +1320,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_singing_scale")
             || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))
         throw BackendError("Skia Utopia 整行出入场缺少唱字或整行动画能力声明");
-    if (features.contains("p07_composed_stroke_flash")
-        && (!features.contains("p07_stroke_flash") || features.contains("p05_lower_ruby")))
+    if (features.contains("p07_composed_stroke_flash") && !features.contains("p07_stroke_flash"))
         throw BackendError("Skia 描边闪光组合缺少对应布局能力");
     const bool lowerNoWipeDecoration = features.contains("p07_lower_ruby_no_wipe_decoration");
     if (lowerNoWipeDecoration && (!features.contains("p07_no_wipe") || !features.contains("p05_lower_ruby")

@@ -175,7 +175,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool fixedFadedScanline = fadedUtopiaScanline && (style.scanlineMode == "default" || style.scanlineMode == "color");
         const bool roleFadedScanline = fixedFadedScanline && line.bursts.empty()
             && features.contains("p07_inline_role_faded_scanline");
-        const bool prefixFadedScanline = fixedFadedScanline
+        const bool vectorFadedScanline = fixedFadedScanline
             && (line.bursts.empty() || features.contains("p07_faded_scanline_singing_particles"))
             && features.contains("p07_faded_scanline_prefix_guides");
         const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
@@ -194,7 +194,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
             && ordinaryLineAnimation;
         if (gradientGlowWithoutTexturedRoles && !(brightenedScanlineGradient
-                || animatedGuideGradients || (prefixFadedScanline && features.contains("p06_faded_scanline_gradient_fill")))
+                || animatedGuideGradients || (vectorFadedScanline && features.contains("p06_faded_scanline_gradient_fill")))
             && (style.vertical || style.rightToLeft || line.wipeReverse
             || line.karaokeAnimation != "none" || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || (line.entryAnimation != "none" && line.entryAnimation != "fade")
@@ -433,7 +433,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
         const bool fadedScanlineParticles = features.contains("p07_faded_scanline_singing_particles")
             && !line.bursts.empty() && fadedUtopiaScanline;
-        const bool fadedScanlineGradientFill = fixedFadedScanline && (fadedScanlineParticles || prefixFadedScanline)
+        const bool fadedScanlineGradientFill = fixedFadedScanline && (fadedScanlineParticles || vectorFadedScanline)
             && features.contains("p06_faded_scanline_gradient_fill");
         const bool rubyZoomLineAnimation = annotated && features.contains("p07_ruby_zoom_line_animation")
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && !hasInlineRoles && !vectorGuides
@@ -455,7 +455,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (line.scanlineEnabled && !features.contains("p07_scanline_static_cells")) {
             if (hasInlineRoles && !roleFadedScanline)
                 throw BackendError("Skia 行内角色扫字线缺少对应布局能力");
-            if (vectorGuides && !prefixFadedScanline)
+            if (vectorGuides && !vectorFadedScanline)
                 throw BackendError("Skia 矢量导唱符扫字线缺少对应布局能力");
         }
         const bool reverseRoleSinging = hasInlineRoles && roleSinging && !line.scanlineEnabled
