@@ -389,6 +389,42 @@ def test_lower_scanline_matches_actual_gpu(binary, application, tmp_path, karaok
     assert_ruby_transition_gpu_parity(binary, case, (600, 1450, 1750, 2050, 2600, 3175, 3575, 4125, 4400, 4550))
 
 
+def test_reverse_flame_scanline_coexists_with_readings_on_another_row(binary, source):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, resolve = source
+    first, = track.lines
+    shift = 4000
+    second = replace(first, track_line_index=1, wipe_reverse=True,
+                     chars=[replace(char, start_ms=char.start_ms + shift) for char in first.chars],
+                     end_ms=first.end_ms + shift, display_start_override_ms=shift,
+                     display_end_override_ms=first.end_ms + shift + 600)
+    track = replace(track, lines=[first, second])
+    style = replace(style, scanline_enabled=True, scanline_forward_enabled=False, scanline_reverse_enabled=True,
+                    scanline_mode='default', scanline_shape='flame', scanline_width_px=25)
+    times = (500, 950, 4500, 5080, 5740)
+    active = ir_for(binary, (track, style, resolve))
+    base = ir_for(binary, (track, replace(style, scanline_enabled=False), resolve))
+    first_final, second_final = active['skia_layout']['lines']
+    assert any(group.get('lower') for group in first_final['ruby_groups']) and not second_final['ruby_groups']
+    assert 'p07_reverse_procedural_scanline' in active['required_features']
+    assert 'p07_ruby_scanline' not in active['required_features']
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=900, height=600, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
+    gpu, raster = render_skia(binary, active, times)
+    assert_glow_parity(times, reference, gpu, raster, 'separate_reverse_flame_and_readings', check_p00_edges=True)
+    still, _ = render_skia(binary, base, times)
+    assert np.array_equal(gpu[:2], still[:2])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(gpu[2:], still[2:], strict=True))
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('karaoke,entry,exit_,mode,shadow,dpr', [
     (karaoke, entry, exit_, mode, shadow, 1)

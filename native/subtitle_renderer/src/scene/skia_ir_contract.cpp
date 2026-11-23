@@ -1059,7 +1059,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 整行出入场扫字线缺少高亮带或 Utopia 行动画能力声明");
     if (features.contains("p07_scanline_utopia_entry")
         && (!features.contains("p07_scanline_band") || !features.contains("p07_utopia_transition")
-            || !features.contains("p07_singing_scale") || features.contains("p05_resolved_ruby")
+            || !features.contains("p07_singing_scale")
             || scanlineVersion < 5))
         throw BackendError("Skia Utopia 入场缺少高亮带或逐字入场能力声明");
     if (features.contains("p07_scanline_unscaled_line_animation")
@@ -1095,8 +1095,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !(features.contains("p05_inline_roles") || features.contains("p05_vector_guides"))))
         throw BackendError("Skia 扫字线缺少行内角色或矢量导唱符布局");
     if (features.contains("p07_ruby_scanline")
-        && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")
-            || (features.contains("p05_lower_ruby") && !features.contains("p07_lower_ruby_scanline"))))
+        && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 注音扫字线缺少上注音或扫字线能力声明");
     if (features.contains("p07_lower_ruby_scanline")
         && (!features.contains("p07_ruby_scanline") || !features.contains("p05_lower_ruby") || scanlineVersion < 3))

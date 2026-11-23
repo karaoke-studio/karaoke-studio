@@ -565,7 +565,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                  std::max(style.stroke2Width, 0.f) * .5f + .5f,
                                  std::min(style.scanlineGlowRadius, halfWidth),
                                  style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse,
-                                 features.contains("p07_ruby_scanline") && !(style.vertical && line.wipeReverse),
+                                 annotated && features.contains("p07_ruby_scanline") && !(style.vertical && line.wipeReverse),
                                  style.vertical};
             if (features.contains("p07_scanline_shape") && style.scanlineShape != "band") {
                 int lastCharEnd = line.endMs;

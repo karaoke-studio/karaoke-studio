@@ -1,5 +1,7 @@
 """Resolve Skia scanline capabilities and the serialized shape and band versions."""
 
+from dataclasses import replace
+
 from ..guide.semantics import render_line_with_guide_symbols
 from ..guide.skia_vector import vector_guides_form_prefix
 from ..layout.line.style import style_for_line
@@ -66,7 +68,7 @@ def reverse_singing_scale(line, style, *, allow_outline=False, allow_glow=False,
                                             and style.scanline_mode in {'default', 'color'})))
 
 
-def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks):
+def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks, ruby_layout):
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
     unscaled_line_motion = faded_band_particles = False
@@ -119,6 +121,11 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             reverse_vertical_palette |= palette and source.wipe_reverse
             singing_vertical_palette |= palette and singing
             continue
+        readings = ruby_layout.lines[index].rubies if ruby_layout is not None else ()
+        has_readings = bool(readings)
+        has_lower = any(group.target.lower for group in readings)
+        if look.lower_ruby_enabled != has_lower:
+            look = replace(look, lower_ruby_enabled=has_lower)
         role_fill = scanline_role_fill(look)
         role_motion = (look.scanline_mode == 'role' and look.scanline_shape == 'band'
                        and (role_fill is None or role_fill.mode == 'solid')
@@ -127,25 +134,25 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         procedural = (ordinary and look.scanline_shape in {'flame', 'bubble'} and not (
             look.lower_ruby_enabled or bursts or line.get('karaoke_anim') != 'none'
             or line.get('zoom_pulse') or line.get('stroke_flash')))
-        reverse_procedural = procedural and source.wipe_reverse and not (look.right_to_left or track.rubies)
+        reverse_procedural = procedural and source.wipe_reverse and not (look.right_to_left or has_readings)
         if procedural and (not source.wipe_reverse or reverse_procedural):
             colors = effective_karaoke_colors(look)
             palette_shape = (look.scanline_mode == 'default'
-                             or (look.scanline_mode == 'role' and not track.rubies
+                             or (look.scanline_mode == 'role' and not has_readings
                                  and role_fill is not None and role_fill.mode == 'solid')
                              or (look.scanline_mode in {'follow_before', 'follow_after', 'brighten'}
                                  and colors.before.text.mode == colors.after.text.mode == 'solid'))
         shape_style = (palette_shape or (look.scanline_shape in {'flame', 'bubble', 'image'}
                                          and look.scanline_mode == 'color'))
         basic_image = (look.scanline_shape == 'image' and ordinary and not (
-            track.rubies or look.lower_ruby_enabled or bursts or look.right_to_left
+            has_readings or bursts or look.right_to_left
             or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')))
         image_follows_palette = (basic_image and not look.scanline_image_color_layers
                                  and look.scanline_mode in {'default', 'brighten', 'follow_before', 'follow_after'})
         image_reverse = basic_image and source.wipe_reverse and (look.scanline_mode == 'color' or image_follows_palette)
         shape_style |= image_follows_palette
         image_during_transition = particle_entry and look.scanline_shape == 'image'
-        shape_with_singing = (shape_style and (ordinary or image_during_transition) and bool(track.rubies) and bool(bursts)
+        shape_with_singing = (shape_style and (ordinary or image_during_transition) and has_readings and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
         zoom_shape = (ordinary and look.scanline_shape == 'flame' and look.scanline_mode == 'color'
                       and line.get('karaoke_anim') == 'utopia' and line.get('zoom_pulse')
@@ -161,9 +168,9 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                   and not (line.get('zoom_pulse') or line.get('stroke_flash'))
                   and (not bursts or faded_band))
         shape = solid_shape and (ordinary or motion or image_during_transition)
-        entering_utopia = not track.rubies and utopia_entry_band(line, look)
+        entering_utopia = not has_readings and utopia_entry_band(line, look)
         utopia_entry_bands |= entering_utopia
-        reverse_singing = not track.rubies and reverse_singing_scale(line, look)
+        reverse_singing = not has_readings and reverse_singing_scale(line, look)
         utopia = (line.get('karaoke_anim') == 'utopia'
                   and (reverse_singing or not source.wipe_reverse and (ordinary or motion or particle_entry or entering_utopia)))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
@@ -171,9 +178,9 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         lower_band = (look.lower_ruby_enabled and (ordinary or motion) and look.scanline_shape == 'band'
                       and look.scanline_mode != 'role' and not (source.wipe_reverse or with_zoom_or_flash)
                       and (not bursts or lower_particles))
-        role_composition = look.scanline_mode == 'role' and (bool(track.rubies) or uses_authored_decoration(look, 'glow'))
+        role_composition = look.scanline_mode == 'role' and (has_readings or uses_authored_decoration(look, 'glow'))
         role_particles = (look.scanline_mode == 'role' and look.scanline_shape == 'band'
-                          and bool(track.rubies) and ordinary and bool(bursts)
+                          and has_readings and ordinary and bool(bursts)
                           and line.get('karaoke_anim') == 'none' and not look.right_to_left and not source.wipe_reverse
                           and not (line.get('zoom_pulse') or line.get('stroke_flash') or look.lower_ruby_enabled)
                           and (role_fill is None or role_fill.mode == 'solid')
@@ -182,10 +189,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         inline_roles = any(c.role_label is not None for c in chars)
         vector_guides = any(c.vector_glyph is not None for c in chars)
         transform_band |= (transformed_cell_band(line, look)
-                           and not (track.rubies or inline_roles or vector_guides))
+                           and not (has_readings or inline_roles or vector_guides))
         rtl_scanline = (look.right_to_left and ordinary and look.scanline_shape == 'band'
                         and look.scanline_mode in {'color', 'default', 'brighten', 'follow_before', 'follow_after'}
-                        and line.get('karaoke_anim') == 'none' and not track.rubies and not look.lower_ruby_enabled
+                        and line.get('karaoke_anim') == 'none' and not has_readings
                         and not (inline_roles or vector_guides or bursts or with_zoom_or_flash
                                  or uses_authored_decoration(look, 'glow')))
         fixed_fade = fixed_faded_utopia_band(line, look)
@@ -196,7 +203,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         static_cells = ((inline_roles or vector_guides) and ordinary and (look.scanline_shape == 'band' or fixed_shape)
                         and look.scanline_mode != 'role' and line.get('karaoke_anim') == 'none'
                         and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
-                                 or track.rubies or with_zoom_or_flash or bursts))
+                                 or has_readings or with_zoom_or_flash or bursts))
         body_shadow = uses_authored_decoration(look, 'shadow')
         role_scaled = (look.scanline_mode == 'role' and look.scanline_shape == 'band' and utopia and ordinary
                        and (role_fill is None or role_fill.mode == 'solid')
@@ -217,7 +224,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                 or (role_composition and not role_scaled
                     and (not (ordinary or (motion and role_motion)) or utopia or source.wipe_reverse
                          or (bursts and not role_particles)))
-                or (track.rubies and not (ordinary or motion or particle_entry))
+                or (has_readings and not (ordinary or motion or particle_entry))
                 or (inline_roles and not (role_fade or static_cells))
                 or (vector_guides and not (prefix_fade or static_cells))):
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
@@ -226,7 +233,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         static_cell_scanline |= static_cells
         role_gradient |= (role_fill is not None
                           and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
-                          and ordinary and not (track.rubies or bursts or with_zoom_or_flash or utopia or inline_roles))
+                          and ordinary and not (has_readings or bursts or with_zoom_or_flash or utopia or inline_roles))
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
         role_line_motion |= motion and role_motion

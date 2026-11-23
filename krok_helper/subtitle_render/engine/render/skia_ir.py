@@ -586,7 +586,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         fade_lines = entry_fade_lines | exit_fade_lines
     if any(line.get('scanline') for line in ir['track']['lines']):
         ir['required_features'] += scanline_features(
-            track, style, ir['track']['lines'], particle_band_tracks, vertical_singing)
+            track, style, ir['track']['lines'], particle_band_tracks, vertical_singing, geometry.ruby)
         if vertical_ruby is not None:
             ir['required_features'].append('p07_ruby_scanline')
     decorations = [kind for kind in ('shadow', 'glow') if any(
@@ -824,7 +824,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_zoom_line_animation')
         if zoom_noise:
             ir['required_features'].append('p07_ruby_zoom_noise')
-        if 'p07_scanline_band' in ir['required_features']:
+        if any(source.get('scanline') and final.get('ruby_groups') for source, final in
+               zip(ir['track']['lines'], ir['skia_layout']['lines'], strict=True)):
             ir['required_features'].append('p07_ruby_scanline')
         if markers:
             ir['required_features'].append('p05_ruby_markers')

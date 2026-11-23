@@ -295,7 +295,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (source.karaokeAnimation == "no_wipe" && !features.contains("p07_no_wipe_decoration"))
                 || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
-        const bool rubyScanline = features.contains("p07_ruby_scanline");
+        const bool rubyScanline = !rubyGroups.isEmpty() && features.contains("p07_ruby_scanline");
         const bool roleScanlineParticles = features.contains("p07_role_scanline_particles") && rubyScanline
             && !cfg.vertical && !cfg.rightToLeft && resolved.scanlineMode == "role" && resolved.scanlineShape == "band"
             && resolved.scanlineRolePaint.mode == "solid" && !source.zoomPulseEnabled
@@ -315,7 +315,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
         const bool roleSingingScanline = features.contains("p07_role_scanline_singing") && utopiaSinging
             && staticScanline && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
-            && !features.contains("p05_lower_ruby") && !source.strokeFlashEnabled && source.fxBursts.empty()
+            && !hasLowerReading && !source.strokeFlashEnabled && source.fxBursts.empty()
             && resolved.scanlineMode == "role" && resolved.scanlineShape == "band";
         const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool particleScanlineImage = noteExit && source.entryAnimation == "petal"
@@ -324,22 +324,22 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (staticScanline || particleScanlineImage)
             && std::ranges::none_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
         const bool shapePalette = features.contains("p07_scanline_shape_palette") && staticScanline
-            && !cfg.vertical && !cfg.rightToLeft && !features.contains("p05_lower_ruby")
+            && !cfg.vertical && !cfg.rightToLeft && !hasLowerReading
             && (!rubyScanline || resolved.scanlineMode != "role")
             && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && (resolved.scanlineShape == "bubble" || resolved.scanlineShape == "flame");
-        const bool basicImage = staticScanline && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
-            && !features.contains("p05_resolved_ruby") && source.karaokeAnimation == "none" && source.fxBursts.empty()
+        const bool basicImage = staticScanline && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty()
+            && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && resolved.scanlineShape == "image";
         const bool originalImagePalette = basicImage && features.contains("p07_original_scanline_image_palette")
             && resolved.scanlineImageColorLayers.isEmpty() && resolved.scanlineMode != "role";
         const bool reverseImage = basicImage && features.contains("p07_reverse_scanline_image");
         const bool reverseProceduralShape = features.contains("p07_reverse_procedural_scanline")
-            && staticScanline && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
-            && !features.contains("p05_resolved_ruby") && source.karaokeAnimation == "none" && source.fxBursts.empty()
+            && staticScanline && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty()
+            && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
         const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging && staticScanline
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !features.contains("p05_lower_ruby")
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !hasLowerReading
             && resolved.scanlineShape == "flame" && resolved.scanlineMode == "color" && source.fxBursts.empty();
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
@@ -368,12 +368,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (resolved.scanlineShape == "band" || particleScanlineImage) && resolved.scanlineMode == "color"
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.fxBursts.empty();
         const bool utopiaEntryScanline = features.contains("p07_scanline_utopia_entry") && utopiaSinging
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && rubyGroups.isEmpty()
             && source.entryAnimation == "utopia" && source.exitAnimation == "none"
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty()
             && resolved.scanlineShape == "band" && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color");
         const bool reverseSingingScanline = features.contains("p07_horizontal_reverse_singing") && utopiaSinging
-            && source.wipeReverse && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && staticScanline
+            && source.wipeReverse && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty() && staticScanline
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && resolved.scanlineShape == "band" && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color");
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
@@ -408,7 +408,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 && (features.contains("p07_vertical_scanline_singing_particles")
                     || features.contains("p07_vertical_scanline_particles"))));
         const bool rtlBand = cfg.rightToLeft && features.contains("p07_rtl_scanline_band")
-            && !cfg.vertical && staticScanline && cfg.rubies.empty() && !features.contains("p05_resolved_ruby")
+            && !cfg.vertical && staticScanline && rubyGroups.isEmpty()
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && source.fxBursts.empty();
@@ -423,8 +423,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     && (!composedScanline || (source.wipeReverse && !cfg.vertical)
                         || (resolved.scanlineMode == "role" && !roleSingingScanline)))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
-                || (features.contains("p05_lower_ruby") && !lowerScanline)
-                || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
+                || (hasLowerReading && !lowerScanline)
+                || (!rubyScanline && !rubyGroups.isEmpty())
                 || (rubyScanline && ((source.wipeReverse && !mixedVerticalScanline)
                     || (resolved.scanlineMode == "role" && !(roleLayers || roleSingingScanline))
                     || !(staticScanline || movingScanline || particleScanline)
@@ -567,8 +567,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool fixedShape = scanlineShape && resolved.scanlineMode == "color"
             && (resolved.scanlineShape == "image" || resolved.scanlineShape == "flame");
         const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
-            && !features.contains("p05_lower_ruby") && source.karaokeAnimation == "none"
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && rubyGroups.isEmpty()
+            && source.karaokeAnimation == "none"
             && (resolved.scanlineShape == "band" || fixedShape) && resolved.scanlineMode != "role"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool prefixGuideParticles = prefixFadedScanline
