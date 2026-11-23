@@ -162,8 +162,7 @@ def write_body_gradient_bounds(ir, plan):
                          and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash'))
                          and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
-        static_vertical = (static_paints and look.vertical and not (look.dual_line_layout or item.line.wipe_reverse
-                           or outlined or 'gradient_horizontal' in modes))
+        static_vertical = static_paints and look.vertical and not outlined
         directional_solid_outline |= (static_directional and outlined and modes == {'solid'}
                                       and all(c.role_label is None and c.vector_glyph is None
                                               for c in item.render_line.chars))
@@ -204,7 +203,8 @@ def write_body_gradient_bounds(ir, plan):
         singing = (source.get('karaoke_anim') == 'utopia' and (annotated or faded_band or palette_band or moving)
                    and not source.get('zoom_pulse'))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
-                or (look.vertical and not static_vertical) or (directional and not static_directional)
+                or (look.vertical and not static_vertical)
+                or (directional and not (static_directional or static_vertical))
                 or (not (faded_band or palette_band or moving or paint_fade or paint_scanline) and (animations != {'none'}
                                                   or source.get('scanline') or source.get('fx_bursts')))
                 or source.get('stroke_flash')
