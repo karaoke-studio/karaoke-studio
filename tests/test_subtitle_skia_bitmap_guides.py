@@ -339,7 +339,8 @@ def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, proj
 
 
 @GPU
-def test_vector_and_bitmap_guides_share_a_line_like_actual_d2d_gpu(binary, project, tmp_path):
+@pytest.mark.parametrize('rtl_reading', [False, True])
+def test_vector_and_bitmap_guides_share_a_line_like_actual_d2d_gpu(binary, project, tmp_path, rtl_reading):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
@@ -347,8 +348,15 @@ def test_vector_and_bitmap_guides_share_a_line_like_actual_d2d_gpu(binary, proje
 
     bitmaps, style = rtl_bitmap_guide(project, tmp_path)
     line = replace(bitmaps.lines[0], guide_symbol=SQUARE)
-    track = replace(bitmaps, lines=[line])
-    style = replace(style, right_to_left=False)
+    rubies = []
+    if rtl_reading:
+        rubies.append(RubyAnnotation(line.chars[1].text, '字', target_line_index=0,
+                                     target_char_start=1, target_char_end=2,
+                                     pos_start_ms=line.chars[1].start_ms, pos_end_ms=line.chars[2].start_ms))
+    track = replace(bitmaps, lines=[line], rubies=rubies)
+    style = replace(style, right_to_left=rtl_reading, ruby_font_family=style.font_family, ruby_font_size_px=24,
+                    ruby_gap_px=8, ruby_colors_follow_main=False,
+                    ruby_karaoke_colors=colors('#FF5544FF', '#FFFF8C21'))
     times, dpr = (250, 450, 750, 1100, 1550), 3
     refs = []
     for source in (track, replace(track, lines=[replace(line, guide_symbol=None)]),
@@ -361,6 +369,7 @@ def test_vector_and_bitmap_guides_share_a_line_like_actual_d2d_gpu(binary, proje
         assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p08_mixed_guide_kinds' in ir['required_features']
+    assert bool(ir['skia_layout']['lines'][0].get('ruby_groups')) == rtl_reading
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'mixed_guide_kinds', check_p00_edges=True)
 
@@ -521,6 +530,41 @@ def test_rtl_bitmap_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp
     assert_glow_parity(times, refs[0], gpu, raster, ('rtl_bitmap_guide', decoration), check_p00_edges=True)
     gpu, raster = render_skia(binary, ir_for(binary, (plain, style), dpr=dpr), times)
     assert_glow_parity(times, refs[1], gpu, raster, ('rtl_bitmap_guide_no_decor', decoration), check_p00_edges=True)
+
+
+def test_rtl_bitmap_decoration_is_local_to_the_guide_row(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = shadowed_bitmap_guide(project, tmp_path)
+    first, = track.lines
+    first = replace(first, track_line_index=0)
+    shift = 3000
+    second = replace(first, track_line_index=1, display_start_override_ms=shift,
+                     display_end_override_ms=shift + 2200, end_ms=first.end_ms + shift,
+                     chars=[replace(char, start_ms=char.start_ms + shift) for char in first.chars],
+                     guide_symbol=replace(first.guide_symbol, bitmap_no_decor=True))
+    reading = RubyAnnotation(second.chars[1].text, '字', target_line_index=1,
+                             target_char_start=1, target_char_end=2,
+                             pos_start_ms=second.chars[1].start_ms, pos_end_ms=second.chars[2].start_ms)
+    track = replace(track, lines=[first, second], rubies=[reading])
+    style = replace(style, right_to_left=True, ruby_font_family=style.font_family, ruby_font_size_px=24,
+                    ruby_gap_px=8, ruby_colors_follow_main=False,
+                    ruby_karaoke_colors=colors('#FF5544FF', '#FFFF8C21'))
+    times, dpr = (450, 1100, 3450, 4100), 3
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert {'p08_rtl_bitmap_upper_ruby', 'p08_rtl_bitmap_guide_decoration'} <= set(ir['required_features'])
+    assert [bool(row['ruby_groups']) for row in ir['skia_layout']['lines']] == [False, True]
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_decoration_local', check_p00_edges=True)
 
 
 def gradient_glowing_bitmap_guide(project, tmp_path):

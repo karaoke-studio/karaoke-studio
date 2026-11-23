@@ -101,10 +101,7 @@ def validate_vector_guides(track, style):
         if labels:
             if appearance.vertical or line.wipe_reverse or appearance.right_to_left:
                 raise ValueError('Skia 角色导唱符需要正向横排')
-            if effective_karaoke_animation(appearance) == 'utopia':
-                if not vector_guides_form_prefix(chars):
-                    raise ValueError('Skia 角色导唱符的 Utopia 唱字目前需要前置替换符')
-                role_guides = True
+            role_guides |= effective_karaoke_animation(appearance) == 'utopia'
     return role_guides
 
 
@@ -156,8 +153,9 @@ def compose_vector_guides(plan_lines, ir):
         has_shadow = uses_authored_decoration(look, 'shadow')
         has_glow = uses_authored_decoration(look, 'glow')
         singing = source.get('karaoke_anim') == 'utopia'
+        plain_effects = not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
         ordinary = (source.get('karaoke_anim') == 'none'
-                    and not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts')))
+                    and plain_effects)
         whole_line = ordinary and ordinary_line_animation(source)
         stationary = ordinary and source.get('entry_anim') == source.get('exit_anim') == 'none'
         forward = not (look.vertical or look.right_to_left or line.wipe_reverse)
@@ -181,6 +179,8 @@ def compose_vector_guides(plan_lines, ir):
                 required.add('p07_horizontal_shadow_line_animation')
             continue
         if vector_guides_form_prefix(chars):
+            continue
+        if singing and forward and plain_effects and {source.get('entry_anim'), source.get('exit_anim')} <= {'none', 'fade'}:
             continue
         if (upper_reading or lower_reading) and forward and whole_line:
             required.add('p05_inline_vector_guide_ruby')

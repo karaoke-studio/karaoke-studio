@@ -601,13 +601,13 @@ def test_p00_prefix_guide_with_utopia_ruby_outlines_and_glow_matches_actual_gpu(
 
 
 @GPU
-@pytest.mark.parametrize('appearance', ['japanese', 'latin-outline', 'guide-role', 'guide-shadow'])
+@pytest.mark.parametrize('appearance', ['japanese', 'latin-outline', 'guide-role', 'guide-shadow', 'inline-guide-role'])
 def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tmp_path, appearance):
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     case, track = p00_guide(tmp_path, count=3)
     line = track.lines[0]
-    guide_role = appearance in {'guide-role', 'guide-shadow'}
+    guide_role = appearance in {'guide-role', 'guide-shadow', 'inline-guide-role'}
     latin_outline = appearance in {'latin-outline', 'guide-role'}
     if latin_outline:
         line = replace(line, chars=[*line.chars[:3], replace(line.chars[3], text='A'), *line.chars[4:]])
@@ -623,6 +623,10 @@ def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tm
                                    font_family=style.font_family, font_family_latin=style.font_family_latin,
                                    karaoke_colors=colors)
         line = replace(track.lines[0], guide_symbol=replace(guide, role_labels=('lead',) * 3))
+        if appearance == 'inline-guide-role':
+            chars = list(line.chars)
+            chars[1] = replace(chars[1], role_label='lead')
+            line = replace(line, chars=chars, guide_symbol=None, inline_guide_symbols={1: guide})
         track = replace(track, lines=[line])
         style = replace(style, custom_style_schemes={'lead': role})
         if appearance == 'guide-shadow':
@@ -635,7 +639,8 @@ def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tm
             track = replace(track, lines=[line, plain])
     ir = ir_for(binary, (track, style))
     assert 'p05_vector_guide_composition' in ir['required_features']
-    assert sum('vector_glyph_id' in cell for cell in ir['track']['lines'][0]['chars']) == 3
+    assert sum('vector_glyph_id' in cell for cell in ir['track']['lines'][0]['chars']) == (
+        1 if appearance == 'inline-guide-role' else 3)
     assert ('p05_role_vector_guides' in ir['required_features']) == guide_role
     times = (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500)
     if appearance == 'guide-shadow':

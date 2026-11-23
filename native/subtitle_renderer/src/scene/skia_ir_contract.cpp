@@ -770,8 +770,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p05_vector_guide_composition") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 行内矢量导唱符缺少布局或描边能力声明");
     if (roleVectorGuides && (!features.contains("p05_vector_guide_composition")
-        || !features.contains("p07_role_singing_scale") || !features.contains("p07_role_line_fade")))
-        throw BackendError("Skia 角色前置导唱符缺少角色唱字或整行淡化能力声明");
+        || !features.contains("p07_role_singing_scale")))
+        throw BackendError("Skia 角色矢量导唱符缺少角色唱字能力声明");
     if (features.contains("p05_vector_guide_composition") && !features.contains("p05_vector_guides"))
         throw BackendError("Skia 导唱符组合缺少导唱符能力");
     if (features.contains("p07_faded_scanline_prefix_guides")
@@ -780,10 +780,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
     const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides");
     const bool mixedGuideKinds = features.contains("p08_mixed_guide_kinds");
-    if (mixedGuideKinds && (!features.contains("p08_bitmap_guides") || !features.contains("p05_vector_guides")
-        || features.contains("p05_vector_guide_composition") || features.contains("p05_horizontal_rtl")
-        || features.contains("p05_vertical_solid") || features.contains("p05_reverse_wipe")))
-        throw BackendError("Skia 位图与矢量导唱符混用需要正向横排普通正文");
+    if (mixedGuideKinds && (!features.contains("p08_bitmap_guides") || !features.contains("p05_vector_guides")))
+        throw BackendError("Skia 位图与矢量导唱符混用缺少对应布局能力");
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
     const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
     const bool reverseBitmapSinging = features.contains("p08_reverse_bitmap_singing");
@@ -826,8 +824,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 右至左图片导唱符上注音缺少对应布局能力");
     if (rtlBitmapSinging && (!rtlBitmapUpperRuby || !features.contains("p07_rtl_ruby_singing_scale")))
         throw BackendError("Skia 右至左图片导唱符唱字缺少对应上注音和缩放能力");
-    if (rtlBitmapDecoration && (!rtlBitmapGuides || (features.contains("p05_resolved_ruby") && !rtlBitmapSinging)))
-        throw BackendError("Skia 右至左图片导唱符装饰缺少布局能力或包含注音");
+    if (rtlBitmapDecoration && !rtlBitmapGuides)
+        throw BackendError("Skia 右至左图片导唱符装饰缺少布局能力");
     const bool bitmapGuideShadow = features.contains("p08_bitmap_guide_shadow");
     const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
     const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");

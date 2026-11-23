@@ -154,36 +154,36 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                 break
     if 'p05_horizontal_rtl' in features:
         features.append('p08_rtl_bitmap_guides')
-        rtl_guides = [item for item in plan_lines if item.layout_style.right_to_left
-                      and has_bitmap_guides((item.render_line,))]
-        decorated = {item.track_index for item in rtl_guides if any(
-            uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow')) or any(
-                guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
-                for cell in item.render_line.chars)}
-        rtl_upper = bool(rtl_guides) and 'p05_horizontal_rtl_ruby' in features
-        rtl_singing = False
-        if decorated or rtl_upper:
-            for item in rtl_guides:
-                if not rtl_upper and item.track_index not in decorated:
-                    continue
-                source = ir['track']['lines'][item.track_index]
-                singing = (rtl_upper and 'p07_rtl_ruby_singing_scale' in features
-                           and source.get('karaoke_anim') == 'utopia'
-                           and not uses_authored_decoration(item.layout_style, 'shadow'))
-                if (item.line.wipe_reverse or (source.get('karaoke_anim') != 'none' and not singing)
-                        or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-                        or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                        or any(cell.role_label is not None for cell in item.render_line.chars)):
-                    raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要实色普通走字或静态 Utopia')
-                if rtl_upper and item.track_index in decorated and not singing:
-                    raise ValueError('Skia 右至左图片导唱符与上注音的独立装饰当前支持 Utopia 光晕')
-                rtl_singing |= singing
-        if decorated:
-            features.append('p08_rtl_bitmap_guide_decoration')
-        if rtl_upper:
-            features.append('p08_rtl_bitmap_upper_ruby')
-        if rtl_singing:
-            features.append('p08_rtl_bitmap_singing')
+        rtl_requirements = set()
+        for item, final in zip(plan_lines, ir['skia_layout']['lines'], strict=True):
+            if not item.layout_style.right_to_left or not has_bitmap_guides((item.render_line,)):
+                continue
+            has_reading = bool(final.get('ruby_groups'))
+            decorates_bitmap = any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
+                                   for cell in item.render_line.chars)
+            # The static RTL profile carries the lyric paint as well as the guide paint.
+            body_decoration = not has_reading and any(
+                uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow'))
+            if not (has_reading or decorates_bitmap or body_decoration):
+                continue
+            source = ir['track']['lines'][item.track_index]
+            singing = (has_reading and 'p07_rtl_ruby_singing_scale' in features
+                       and source.get('karaoke_anim') == 'utopia'
+                       and not uses_authored_decoration(item.layout_style, 'shadow'))
+            if (item.line.wipe_reverse or (source.get('karaoke_anim') != 'none' and not singing)
+                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                    or any(cell.role_label is not None for cell in item.render_line.chars)):
+                raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要实色普通走字或静态 Utopia')
+            if has_reading and decorates_bitmap and not singing:
+                raise ValueError('Skia 右至左图片导唱符与注音的独立装饰当前支持 Utopia 光晕')
+            if decorates_bitmap or body_decoration:
+                rtl_requirements.add('p08_rtl_bitmap_guide_decoration')
+            if has_reading:
+                rtl_requirements.add('p08_rtl_bitmap_upper_ruby')
+            if singing:
+                rtl_requirements.add('p08_rtl_bitmap_singing')
+        features.extend(sorted(rtl_requirements))
     if 'p05_lower_ruby' in features:
         for item, final in zip(plan_lines, ir['skia_layout']['lines'], strict=True):
             if (not has_bitmap_guides((item.render_line,))

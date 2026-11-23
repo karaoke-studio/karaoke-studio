@@ -559,11 +559,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && ((!features.contains("p06_static_shadow") && !features.contains("p06_static_glow"))
                 || features.contains("p06_vertical_vector_guide_decoration"));
-        const bool roleVectorGuides = composedGuide && features.contains("p05_role_vector_guides")
+        const bool singingGuide = composedGuide && !cfg.vertical && !cfg.rightToLeft
             && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
             && (source.entryAnimation == "none" || source.entryAnimation == "fade")
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");
+        const bool roleVectorGuides = singingGuide && features.contains("p05_role_vector_guides");
         const bool unscaledRoleVectorGuide = features.contains("p05_inline_roles")
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
             && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
@@ -593,10 +594,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (source.karaokeAnimation == "none" || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
-            && (cfg.rubies.empty() || rtlBitmapUpperRuby);
+            && (rubyGroups.isEmpty() || rtlBitmapUpperRuby);
         const bool rtlBitmapDecoration = rtlBitmap && features.contains("p08_rtl_bitmap_guide_decoration")
             && staticScanline && !source.wipeReverse && !source.scanlineEnabled
-            && ((cfg.rubies.empty() && source.karaokeAnimation == "none") || rtlBitmapSinging)
+            && ((rubyGroups.isEmpty() && source.karaokeAnimation == "none") || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
             && staticScanline && !source.scanlineEnabled
@@ -629,7 +630,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 竖排单元包含控制字符或无效码点");
             if (cell.vectorGlyph && vectorGuideShadow && !wholeLineGuideShadow)
                 throw BackendError("Skia 矢量导唱符阴影需要正向横排与整行出入场");
-            if (composedGuide && sawLyrics && cell.vectorGlyph && !(outlinedInlineGuide || wholeLineGuideShadow || inlineGuideRuby))
+            if (composedGuide && sawLyrics && cell.vectorGlyph
+                && !(outlinedInlineGuide || wholeLineGuideShadow || inlineGuideRuby || singingGuide))
                 throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
             sawLyrics = sawLyrics || !cell.vectorGlyph;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
