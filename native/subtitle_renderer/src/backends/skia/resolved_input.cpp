@@ -439,10 +439,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     && (line.entryAnimation == "none" || line.entryAnimation == "fade")
                     && (line.exitAnimation == "none" || line.exitAnimation == "fade")))
             && !line.strokeFlashEnabled && line.bursts.empty();
-        if (line.scanlineEnabled && hasInlineRoles && !roleFadedScanline)
-            throw BackendError("Skia 行内角色扫字线需要正向横排和整行淡化");
-        if (line.scanlineEnabled && vectorGuides && !prefixFadedScanline)
-            throw BackendError("Skia 前置导唱符扫字线需要正向横排和整行淡化");
+        if (line.scanlineEnabled && !features.contains("p07_scanline_static_cells")) {
+            if (hasInlineRoles && !roleFadedScanline)
+                throw BackendError("Skia 行内角色扫字线缺少对应布局能力");
+            if (vectorGuides && !prefixFadedScanline)
+                throw BackendError("Skia 矢量导唱符扫字线缺少对应布局能力");
+        }
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit

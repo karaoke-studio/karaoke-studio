@@ -189,6 +189,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_character_exit_fade",
         "p07_scanline_band",
         "p07_scanline_shadow",
+        "p07_scanline_static_cells",
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
         "p07_vertical_mixed_scanline",
@@ -964,6 +965,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_scanline_shadow")
         && (!features.contains("p07_scanline_band") || !features.contains("p06_static_shadow") || scanlineVersion < 3))
         throw BackendError("Skia 扫字线阴影缺少对应协议");
+    if (features.contains("p07_scanline_static_cells")
+        && (!features.contains("p07_scanline_band") || scanlineVersion < 3
+            || !(features.contains("p05_inline_roles") || features.contains("p05_vector_guides"))))
+        throw BackendError("Skia 扫字线缺少行内角色或矢量导唱符布局");
     if (features.contains("p07_ruby_scanline")
         && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")
             || (features.contains("p05_lower_ruby") && !features.contains("p07_lower_ruby_scanline"))))

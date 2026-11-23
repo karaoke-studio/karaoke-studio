@@ -169,7 +169,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 
 
 @pytest.mark.parametrize('case', ['vertical_shape',
-                                  'ruby_role_utopia', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
+                                  'ruby_role_utopia', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
@@ -179,17 +179,61 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     elif case == 'ruby_role_utopia':
         track, style = vertical_ruby_source(project)
         style = replace(band(replace(style, vertical=False)), scanline_mode='role', karaoke_anim='utopia')
-    elif case == 'roles':
-        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
-        track = replace(track, lines=[replace(track.lines[0], chars=[
-            replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
-    elif case == 'guide': track, style = guide_source(project); style = band(style)
     elif case == 'zoom_role': style = replace(style, karaoke_anim='zoom_pulse', scanline_mode='role')
     elif case == 'utopia_entry': style = replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600)
     elif case == 'utopia_reverse': track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
     else: style = replace(style, karaoke_anim='no_wipe')
     with pytest.raises(ValueError, match='扫字线|Utopia'):
         ir_for(binary, (track, style))
+
+
+def static_guide_and_role_band(project):
+    track, style = guide_source(project, kind='replacement')
+    line, = track.lines
+    chars = list(line.chars)
+    chars[1] = replace(chars[1], role_label='lead')
+    role = SubtitleStyleScheme(font_size_px=70, karaoke_colors=colors('#FFFF0040', '#FF00C070'))
+    return replace(track, lines=[replace(line, chars=chars)]), replace(
+        band(style), custom_style_schemes={'lead': role})
+
+
+def test_static_cell_band_requires_its_capability(binary, project):
+    ir = ir_for(binary, static_guide_and_role_band(project))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_static_cells')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [400, 750])
+        with pytest.raises(NativeRendererError, match='扫字线'):
+            configure(process, bad)
+        replay, _ = collect(process, [750, 400], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_static_cell_band_matches_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = static_guide_and_role_band(project)
+    ir = ir_for(binary, (track, style))
+    times = (290, 400, 520, 680, 750, 850, 1100, 1850)
+    references = []
+    for look in (style, replace(style, scanline_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = references
+    cells = ir['skia_layout']['lines'][0]['cells']
+    for cell in cells[:2]:  # The replacement guide and the role cell have independent paint.
+        left, _, right, _ = cell['metrics']['ink']
+        columns = slice(round(cell['origin_x'] + left) + 1, round(cell['origin_x'] + right) - 1)
+        assert any(np.count_nonzero(a[:, columns] != b[:, columns]) > 100
+                   for a, b in zip(reference, bare, strict=True))
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'static_scanline_cells', check_p00_edges=True)
 
 
 def directional_scanline_image(project, tmp_path, reverse):

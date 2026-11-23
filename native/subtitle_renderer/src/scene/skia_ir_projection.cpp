@@ -488,6 +488,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
+        const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
+            && !features.contains("p05_lower_ruby") && source.karaokeAnimation == "none"
+            && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool prefixGuideParticles = prefixFadedScanline
             && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
@@ -530,8 +535,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (staticBand && (cell.vectorGlyph || cell.bitmapGuide || &cellStyle != &resolved))
                 throw BackendError("Skia 行背景带暂不支持导唱符或行内角色");
-            if (source.scanlineEnabled && ((cell.vectorGlyph && !prefixFadedScanline)
-                || (&cellStyle != &resolved && !roleFadedScanline)))
+            if (source.scanlineEnabled && ((cell.vectorGlyph && !(prefixFadedScanline || staticScanlineCells))
+                || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (source.strokeFlashEnabled && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字描边闪光暂不支持导唱符或行内角色");
