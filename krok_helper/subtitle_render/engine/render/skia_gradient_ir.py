@@ -103,15 +103,24 @@ def write_body_gradient_bounds(ir, plan):
     features = ir['required_features']
     layout = ir['skia_layout']
     glow_paints = _gradient_glow_paints(layout, plan) if glow_features.intersection(features) else set()
-    if 'p06_static_shadow' in features and any(
+    if 'p06_static_shadow' in features:
+        body_modes = set().union(*(
             _decoration_paints(effective_karaoke_colors(item.layout_style),
-                               *_body_decoration_kinds(item.layout_style), 'shadow') & _GRADIENTS
-            for item in plan.lines):
-        features.append('p06_body_gradient_shadow')
-    if 'p06_ruby_shadow' in features and any(
-            _decoration_paints(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look), 'shadow') & _GRADIENTS
-            for look in _upper_reading_styles(layout, plan)):
-        features.append('p06_ruby_gradient_shadow')
+                               *_body_decoration_kinds(item.layout_style), 'shadow') for item in plan.lines
+        ))
+        if body_modes & _GRADIENTS:
+            features.append('p06_body_gradient_shadow')
+        if 'image' in body_modes:
+            features.append('p06_body_image_shadow')
+    if 'p06_ruby_shadow' in features:
+        ruby_modes = set().union(*(
+            _decoration_paints(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look), 'shadow')
+            for look in _upper_reading_styles(layout, plan)
+        ))
+        if ruby_modes & _GRADIENTS:
+            features.append('p06_ruby_gradient_shadow')
+        if 'image' in ruby_modes:
+            features.append('p06_ruby_image_shadow')
     if _declare_role_body_paints(ir, plan):
         if _has_textured_upper_ruby(ir['skia_layout'], plan):
             ir['required_features'].append('p06_ruby_role_paints')

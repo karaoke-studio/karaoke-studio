@@ -43,7 +43,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
         if (kind == "none") return true;
         if (kind == "shadow")
-            return caps.staticShadow && supportsSkiaShadowPaint(paint, caps.bodyShadowGradients)
+            return caps.staticShadow && (supportsSkiaShadowPaint(paint, caps.bodyShadowGradients)
+                    || (paint.mode == "image" && caps.bodyShadowImages))
                 && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
         // Ganesh's pinned blur image filter clamps larger sigmas.
         const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;

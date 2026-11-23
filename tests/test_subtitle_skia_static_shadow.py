@@ -318,6 +318,55 @@ def gradient_shadow_source(reading):
     )
 
 
+def image_shadow_source(reading, tmp_path):
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+
+    track, style = shaded_ruby(reading, False, True)
+    tile = write_png(tmp_path / 'shadow.png', pattern('transparent'))
+    body = style.karaoke_colors
+    ruby = style.ruby_karaoke_colors
+    style = replace(style, decoration_before_sync=True, shadow_offset_x=20, shadow_offset_y=11,
+                    ruby_shadow_offset_x=-20, ruby_shadow_offset_y=-9,
+                    karaoke_colors=replace(body, before=replace(body.before, shadow=image_paint(tile, 137))),
+                    ruby_karaoke_colors=replace(ruby, after=replace(ruby.after, shadow=image_paint(tile, 103))))
+    return track, style, (replace(style, karaoke_colors=body), replace(style, ruby_karaoke_colors=ruby))
+
+
+def test_image_shadows_require_corresponding_capabilities(binary, reading, tmp_path):
+    track, style, _ = image_shadow_source(reading, tmp_path)
+    ir = upper_ir(binary, (track, style), 1)
+    times = [450, 1100, 2300]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, times)
+        for feature in ('p06_body_image_shadow', 'p06_ruby_image_shadow'):
+            forged = copy.deepcopy(ir)
+            forged['required_features'].remove(feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, forged)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in before) and np.array_equal(before, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_image_shadows_match_actual_d2d_gpu(binary, reading, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, controls = image_shadow_source(reading, tmp_path)
+    times, dpr = (275, 450, 550, 900, 1150, 1550, 2300), 3
+    refs = []
+    for look in (style, *controls):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'image_shadows', check_p00_edges=True)
+
+
 def test_gradient_shadows_require_corresponding_capabilities(binary, reading):
     track, style, _ = gradient_shadow_source(reading)
     ir = upper_ir(binary, (track, style), 1)

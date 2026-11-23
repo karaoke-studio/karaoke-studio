@@ -90,6 +90,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool inlineAvatars = features.contains("p08_inline_bitmap_guides");
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
     const bool bodyShadowGradients = features.contains("p06_body_gradient_shadow");
+    const bool bodyShadowImages = features.contains("p06_body_image_shadow");
     validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
         .outlineGradients = outlineGradients, .imageFills = imageFills,
         .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow"),
@@ -102,7 +103,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
         .roleStaticShadow = roleVectorGuides && features.contains("p06_static_shadow"),
-        .roleStaticGlow = roleStaticGlow, .bodyShadowGradients = bodyShadowGradients, .glowPaints = glowPaints});
+        .roleStaticGlow = roleStaticGlow, .bodyShadowGradients = bodyShadowGradients,
+        .bodyShadowImages = bodyShadowImages, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
     const bool scriptStylesOnly = projected.charStyles.empty()
         && (latinSecondaryOutline || (latinPrimaryOutline && features.contains("p05_vector_guide_composition")
@@ -791,11 +793,17 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.shadow = skiaStaticShadow(style);
         const auto prepareShadow = [&](auto& state, const PaintStyle& paint, bool after) {
             if (!state.enabled || paint.mode == "solid") return;
-            if (!bodyShadowGradients || style.vertical || style.rightToLeft || line.wipeReverse
+            const bool imagePaint = paint.mode == "image";
+            if (!(imagePaint ? bodyShadowImages : bodyShadowGradients) || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.karaokeAnimation != "none" || line.entryAnimation != "none" || line.exitAnimation != "none"
                 || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-                || hasInlineRoles || vectorGuides || (hasBitmapGuide && (!bitmapGuideGradientShadow || staticTitle)))
-                throw BackendError("Skia 正文渐变阴影暂只支持静态正向横排");
+                || hasInlineRoles || vectorGuides || (hasBitmapGuide && (imagePaint || !bitmapGuideGradientShadow || staticTitle)))
+                throw BackendError("Skia 正文渐变或图片阴影暂只支持静态正向横排");
+            if (imagePaint) {
+                state.image = imageCache.fill(paint, projected.layoutReferenceScale);
+                state.color = argb(paint.color);
+                return;
+            }
             if (!hasVisibleGradientStops(paint)) return;
             auto ink = rolePaintBounds->line;
             if (hasBitmapGuide && ink.isEmpty()) throw BackendError("Skia 图片导唱符渐变阴影需要同一行存在正文");

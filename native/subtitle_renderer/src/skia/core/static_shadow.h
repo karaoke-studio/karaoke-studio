@@ -2,12 +2,14 @@
 
 #include "wipe_front.h"
 #include "character_transform.h"
+#include "image_fill.h"
 #include "solid_outline.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkShader.h"
 #include <cstdint>
 #include <span>
+#include <utility>
 
 namespace subtitle::skia {
 struct ShadowState {
@@ -15,8 +17,9 @@ struct ShadowState {
     float x = 0, y = 0;
     std::uint32_t color = 0;
     sk_sp<SkShader> shader;
+    ImageFill image;
 
-    bool visible() const { return enabled && (x != 0 || y != 0) && (shader || (color >> 24)); }
+    bool visible() const { return enabled && (x != 0 || y != 0) && (shader || image || (color >> 24)); }
 };
 
 struct StaticShadow {
@@ -61,8 +64,9 @@ struct StaticShadow {
             canvas.translate(state.x, state.y);
             SkPaint brush;
             brush.setAntiAlias(true);
-            brush.setShader(state.shader);
-            brush.setColor(state.shader ? SK_ColorWHITE : state.color);
+            auto shader = state.image ? state.image.shaderAt(canvas.getTotalMatrix()) : state.shader;
+            brush.setColor(shader ? SK_ColorWHITE : state.color);
+            brush.setShader(std::move(shader));
             if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
             for (const auto& cell : cells) {
                 if (cell.outerOutline) canvas.drawPath(cell.outerOutline->path, brush);

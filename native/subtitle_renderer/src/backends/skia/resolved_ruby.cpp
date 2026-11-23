@@ -245,6 +245,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowShadowGradient = features.contains("p06_ruby_gradient_shadow")
         && roleBounds && !vertical && !rtl && !line.wipeReverse && staticLine && line.karaokeAnimation == "none"
         && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+    const bool allowShadowImage = features.contains("p06_ruby_image_shadow")
+        && !vertical && !rtl && !line.wipeReverse && staticLine && line.karaokeAnimation == "none"
+        && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool zoom = !vertical && line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
@@ -341,10 +344,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             if (lower || kind == "none" || kind == "glow") return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
-            if (!allowShadow || kind != "shadow" || !supportsSkiaShadowPaint(decor, allowShadowGradient)
+            const bool imagePaint = decor.mode == "image";
+            if (!allowShadow || kind != "shadow"
+                || !(imagePaint ? allowShadowImage : supportsSkiaShadowPaint(decor, allowShadowGradient))
                 || !std::isfinite(x) || !std::isfinite(y))
                 throw BackendError("Skia 上注音阴影缺少对应布局或画笔能力");
-            return {true, x, y, decor.mode == "solid" ? argb(decor.color) : 0u};
+            ::subtitle::skia::ShadowState state{true, x, y, (imagePaint || decor.mode == "solid") ? argb(decor.color) : 0u};
+            if (imagePaint) state.image = imageCache.fill(decor, scene.layoutReferenceScale);
+            return state;
         };
         ::subtitle::skia::StaticShadow shadow{
             shadowState(false), shadowState(true), paint.rubyStrokeWidth, paint.rubyStroke2Width};
