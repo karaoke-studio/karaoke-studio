@@ -517,20 +517,24 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         const bool composedGuide = features.contains("p05_vector_guide_composition");
+        const bool guideWholeLineAnimation = plainLineAnimation(source.entryAnimation, true)
+            && plainLineAnimation(source.exitAnimation, false);
+        const bool guideRubyAnimation = staticScanline
+            || (features.contains("p07_ruby_line_animation") && guideWholeLineAnimation);
         const bool inlineGuideRuby = features.contains("p05_inline_vector_guide_ruby")
-            && staticScanline && !source.scanlineEnabled && source.karaokeAnimation == "none"
+            && guideRubyAnimation && !source.scanlineEnabled && source.karaokeAnimation == "none"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow");
         const bool wholeLineGuideShadow = vectorGuideShadow && (staticScanline
             || (features.contains("p07_horizontal_shadow_line_animation")
-                && plainLineAnimation(source.entryAnimation, true) && plainLineAnimation(source.exitAnimation, false)))
+                && guideWholeLineAnimation))
             && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled
             && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
             && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !cfg.vertical
             && source.karaokeAnimation == "none"
-            && plainLineAnimation(source.entryAnimation, true) && plainLineAnimation(source.exitAnimation, false)
+            && guideWholeLineAnimation
             && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
@@ -649,10 +653,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 逐字变换暂不支持该导唱符或行内角色样式");
             // Ruby and outlines use their own composition profile.
             if (cell.vectorGlyph && features.contains("p05_vector_guide_lower_ruby")
-                && (cfg.vertical || cfg.rightToLeft || source.wipeReverse || !staticScanline
+                && (cfg.vertical || cfg.rightToLeft || source.wipeReverse || !guideRubyAnimation
                     || source.karaokeAnimation != "none" || &cellStyle != &resolved
                     || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                throw BackendError("Skia 矢量导唱符与下方注音需要静态正向横排");
+                throw BackendError("Skia 矢量导唱符与下方注音需要正向横排与整行出入场");
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !roleVectorGuides)

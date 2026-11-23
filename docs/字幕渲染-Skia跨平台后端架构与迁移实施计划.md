@@ -1049,6 +1049,8 @@ macOS [双架构复验](https://github.com/karaoke-studio/karaoke-studio/actions
 
 正向横排矢量导唱符阴影复用整行出入场合成，去掉只允许静止行的条件。用有前置及行内导唱符的固定场景检查非零 600 毫秒淡入，三后端对照通过。Windows 17 项专项通过。
 
+矢量导唱符与注音共用既有整行合成。前置导唱符和下方注音、行内导唱符和上方注音分别复验静态及实际 600 毫秒淡入，Windows 三后端 4 项通过。此前至 `7bfbb624` 的 WSL 针对性回归在 X11、Wayland 各通过 22 项，Windows 和 WSL 原生 CTest 各通过 3 项。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）

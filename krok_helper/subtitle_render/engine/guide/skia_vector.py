@@ -161,8 +161,8 @@ def compose_vector_guides(plan_lines, ir):
         if look.vertical and (has_shadow or has_glow):
             required.add('p06_vertical_vector_guide_decoration')
         if lower_reading:
-            if not (forward and stationary):
-                raise ValueError('Skia 矢量导唱符与下方注音需要静态正向横排')
+            if not (forward and whole_line):
+                raise ValueError('Skia 矢量导唱符与下方注音需要正向横排与整行出入场')
             required.add('p05_vector_guide_lower_ruby')
         if has_shadow and not (look.vertical or upper_reading or 'p05_role_vector_guides' in features):
             if not (forward and whole_line) or any(c.role_label is not None for c in chars):
@@ -173,7 +173,7 @@ def compose_vector_guides(plan_lines, ir):
             continue
         if vector_guides_form_prefix(chars):
             continue
-        if upper_reading and not lower_reading and forward and stationary:
+        if upper_reading and not lower_reading and forward and whole_line:
             required.add('p05_inline_vector_guide_ruby')
         elif (has_outline_profile and whole_line and not look.vertical
               and not (upper_reading or lower_reading or has_glow or has_shadow)):
