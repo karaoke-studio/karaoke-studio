@@ -127,7 +127,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             || !bandImageSupported
             || (tintedBand == band.tint.isEmpty())
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
-            || !bandLayersSupported || band.edgeKind != "none" || blurBand != hasBlurBand
+            || !bandLayersSupported || blurBand != hasBlurBand
             || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")
                 || band.stroke.sizePx > 512)))))
         throw BackendError("Skia 行背景带的素材、布局或画笔声明无效");

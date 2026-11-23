@@ -60,6 +60,32 @@ def line_band_fit_settings(fit):
                 line_band_cap_left_px=5, line_band_cap_right_px=9)
 
 
+def test_saved_line_band_edge_fields_keep_current_layers(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = motion_project(project, two_lanes=True)
+    current = replace(style, line_band_enabled=True, line_band_image=str(static_band_image(tmp_path)),
+                      line_band_stroke_enabled=True, line_band_stroke_color='#FFBA44',
+                      line_band_stroke_size_px=3, line_band_pad_top_px=16)
+    saved = replace(current, line_band_edge_kind='shadow', line_band_edge_color='#2200EE',
+                    line_band_edge_size_px=12, line_band_edge_offset_x_px=25)
+    times = (450, 750, 1400, 2250)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, saved), dpr=1.5), times)
+    expected = render_skia(binary, ir_for(binary, (track, current), dpr=1.5), times)
+    assert any(frame.any() for frame in gpu)
+    assert np.array_equal(gpu, expected[0]) and np.array_equal(raster, expected[1])
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, saved, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    assert_glow_parity(times, reference, gpu, raster, 'saved_line_band_edges', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('fit', BAND_FITS)
 def test_static_line_bands_stay_below_active_rows_and_follow_line_motion(binary, project, tmp_path, target, fit):

@@ -58,7 +58,6 @@ def write_line_band(ir, style, prepared, *, width, height):
     ruby = geometry.ruby
     if ((not preset and preset_id is not None)
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
-            or style.line_band_edge_kind != 'none'
             or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})):
         raise ValueError('Skia 行背景带的预设、填充或描边配置无效')
     if preset and not material:
