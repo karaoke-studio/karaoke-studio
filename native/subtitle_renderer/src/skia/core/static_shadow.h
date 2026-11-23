@@ -43,14 +43,21 @@ struct StaticShadow {
     template <class Cell>
     void drawAt(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
                 float edge, bool complete, float beforePad, bool vertical = false, bool reverse = false,
-                float opacity = 1.f) const {
+                float opacity = 1.f, float* previousReadingOffset = nullptr) const {
         const auto paint = [&](bool sung, const SkRect* clip) {
             const auto& state = sung ? after : before;
+            float clipOffset = 0;
+            if (previousReadingOffset && state.enabled && (state.x != 0 || state.y != 0)) {
+                // Horizontal reading clips are pushed under the preceding
+                // shadow transform before applying this phase's offset.
+                clipOffset = *previousReadingOffset - (sung ? state.x : 0.f);
+                *previousReadingOffset = state.x;
+            }
             if (!state.visible()) return;
             SkAutoCanvasRestore restore(&canvas, true);
             // The front clips the silhouette in the line's coordinates
             // before the shadow's own translation is applied.
-            if (clip) canvas.clipRect(*clip, SkClipOp::kIntersect, true);
+            if (clip) canvas.clipRect(clip->makeOffset(clipOffset, 0.f), SkClipOp::kIntersect, true);
             canvas.translate(state.x, state.y);
             SkPaint brush;
             brush.setAntiAlias(true);

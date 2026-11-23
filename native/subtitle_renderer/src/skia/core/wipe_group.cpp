@@ -216,13 +216,15 @@ void PreparedWipeGroup::compositeTransformedGlow(SkCanvas& canvas, const Prepare
     }
 }
 
-void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX) const {
-    if (!shadow_.visible() || bounds_.isEmpty()) return;
+void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale,
+                                   float originX, float& previousReadingOffset) const {
+    if ((!shadow_.before.enabled && !shadow_.after.enabled) || bounds_.isEmpty()) return;
     const float edge = frontAt(timeMs, wipeStart());
     const bool complete = lineWipeComplete(cells_, timeMs);
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
     if (!scale.active) {
-        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_, rightToLeft_);
+        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_, rightToLeft_,
+                       1.f, vertical_ || rightToLeft_ || noWipe_ ? nullptr : &previousReadingOffset);
         return;
     }
     shadow_.drawAnimated(canvas, cells_, bounds_, edge, complete, pad, [&](std::size_t index) {

@@ -537,8 +537,6 @@ def lower_gradient_shadow_style(style):
     colors = lower['ruby_karaoke_colors']
     return replace(style, lower_ruby_style={
         **lower, 'ruby_decoration_kind_before': 'shadow', 'ruby_horizontal_gradient_with_main': False,
-        'ruby_shadow_before_offset_x': lower['ruby_shadow_offset_x'],
-        'ruby_shadow_before_offset_y': lower['ruby_shadow_offset_y'],
         'ruby_karaoke_colors': {
             'before': {**colors['before'], 'shadow': {'mode': 'gradient_horizontal',
                                                       'start_color': '#9EFA4040', 'end_color': '#E02030E0'}},
@@ -567,12 +565,18 @@ def test_lower_gradient_shadow_rejects_forged_paint_without_replacing_scene(bina
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_lower_gradient_shadow_matches_actual_d2d_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'gradient'])
+def test_lower_shadow_offsets_match_actual_d2d_gpu(binary, application, tmp_path, gradient):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     case = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
-    style = lower_gradient_shadow_style(replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none'))
+    style = replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    if gradient:
+        style = lower_gradient_shadow_style(style)
+    else:
+        style = lower_shadow_style(style, 'after')
+        style = replace(style, lower_ruby_style={**style.lower_ruby_style, 'ruby_decoration_kind_before': 'shadow'})
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), (1550, 2600, 4110, 4280))
 
 

@@ -594,8 +594,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft,
                          titleOpacity, line.noWipe);
     }
+    float previousReadingShadowOffset = 0.f;
     for (const auto& group : line.rubyGroups)
-        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin);
+        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin, previousReadingShadowOffset);
     if (line.hasOuterOutline)
         drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
     if (line.hasOutline)

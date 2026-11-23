@@ -18,7 +18,7 @@ public:
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
               const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {},
               std::optional<float> entryScale = {}) const;
-    void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX) const;
+    void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX, float& previousReadingOffset) const;
     void drawUtopiaExit(SkCanvas&, int timeMs, int followingDone, const UtopiaTransition&,
                         float originX, float viewportHeight) const;
     void drawGlowSource(SkCanvas&, const PreparedGlow&, int timeMs, bool after,
