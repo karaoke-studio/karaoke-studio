@@ -243,6 +243,37 @@ def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
 
 
 @GPU
+def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, project, tmp_path):
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = rtl_bitmap_guide(project, tmp_path)
+    line = replace(track.lines[0], inline_guide_symbols={})
+    reading = RubyAnnotation(line.chars[1].text, '字', target_line_index=0,
+                             target_char_start=1, target_char_end=2,
+                             pos_start_ms=line.chars[1].start_ms, pos_end_ms=line.chars[2].start_ms)
+    track = replace(track, lines=[line], rubies=[reading])
+    style = replace(style, ruby_font_family=style.font_family, ruby_font_size_px=24, ruby_gap_px=8,
+                    ruby_colors_follow_main=False, ruby_karaoke_colors=colors('#FF5544FF', '#FFFF8C21'))
+    times, dpr = (250, 450, 750, 1100, 1550, 1950), 3
+    refs = []
+    for source in (track, replace(track, rubies=[]), replace(track, lines=[replace(line, guide_symbol=None)])):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 70
+                   for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p08_rtl_bitmap_upper_ruby' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'rtl_bitmap_upper_ruby', check_p00_edges=True)
+
+
+@GPU
 def test_vector_and_bitmap_guides_share_a_line_like_actual_d2d_gpu(binary, project, tmp_path):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia

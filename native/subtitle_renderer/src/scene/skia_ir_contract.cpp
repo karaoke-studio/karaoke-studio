@@ -102,6 +102,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_reverse_bitmap_singing",
         "p08_rtl_bitmap_guides",
         "p08_rtl_bitmap_guide_decoration",
+        "p08_rtl_bitmap_upper_ruby",
         "p08_bitmap_guide_shadow",
         "p08_bitmap_guide_gradient_shadow",
         "p08_bitmap_guide_gradient_glow",
@@ -837,6 +838,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (rtlBitmapGuides && (!features.contains("p08_bitmap_guides") || !features.contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左图片导唱符缺少方向或布局能力声明");
     const bool rtlBitmapDecoration = features.contains("p08_rtl_bitmap_guide_decoration");
+    const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby");
+    if (rtlBitmapUpperRuby && (!rtlBitmapGuides || !features.contains("p05_horizontal_rtl_ruby")
+        || !features.contains("p05_upper_ruby") || features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 右至左图片导唱符上注音缺少对应布局能力");
     if (rtlBitmapDecoration && (!rtlBitmapGuides || features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 右至左图片导唱符装饰缺少布局能力或包含注音");
     const bool bitmapGuideShadow = features.contains("p08_bitmap_guide_shadow");
@@ -885,6 +890,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
         };
         static const QJsonArray shadowAllowed{"p08_bitmap_guide_shadow", "p06_static_shadow", "p06_ruby_shadow"};
+        static const QJsonArray rtlUpperRubyAllowed{
+            "p08_rtl_bitmap_upper_ruby", "p05_horizontal_rtl_ruby", "p05_rtl_ruby_without_body_stroke"};
         static const QJsonArray verticalBitmapDecorAllowed{
             "p08_vertical_bitmap_decoration", "p06_static_shadow", "p06_ruby_shadow",
             "p06_vertical_shadow", "p06_vertical_glow", "p06_vertical_ruby_decoration",
@@ -903,6 +910,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(reverseBitmapSinging && (feature == QJsonValue("p08_reverse_bitmap_singing")
                     || feature == QJsonValue("p07_horizontal_reverse_singing")))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
+                && !(rtlBitmapUpperRuby && rtlUpperRubyAllowed.contains(feature))
                 && !(rtlBitmapDecoration && (feature == QJsonValue("p08_rtl_bitmap_guide_decoration")
                     || feature == QJsonValue("p06_static_shadow")))
                 && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))

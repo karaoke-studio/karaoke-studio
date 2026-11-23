@@ -560,8 +560,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
+        const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby")
+            && staticScanline && !source.scanlineEnabled && !source.wipeReverse && source.karaokeAnimation == "none"
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
-            && cfg.rubies.empty();
+            && (cfg.rubies.empty() || rtlBitmapUpperRuby);
         const bool rtlBitmapDecoration = rtlBitmap && features.contains("p08_rtl_bitmap_guide_decoration")
             && staticScanline && !source.wipeReverse && !source.scanlineEnabled && source.karaokeAnimation == "none"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
