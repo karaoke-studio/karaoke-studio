@@ -881,7 +881,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (!(imagePaint ? bodyShadowImages : bodyShadowGradients) || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.karaokeAnimation != "none" || !(staticShadowLine || (inlineShadow && roleShadowMotion))
                 || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-                || (hasInlineRoles && !inlineShadow) || vectorGuides
+                || (hasInlineRoles && !inlineShadow)
                 || (hasBitmapGuide && (staticTitle || !(imagePaint ? bitmapGuideImageShadow : bitmapGuideGradientShadow))))
                 throw BackendError("Skia 正文渐变或图片阴影暂只支持静态正向横排");
             if (imagePaint) {

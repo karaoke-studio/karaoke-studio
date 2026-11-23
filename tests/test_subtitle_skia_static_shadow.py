@@ -491,6 +491,36 @@ def test_multitrack_image_shadows_match_actual_d2d_gpu(binary, reading, tmp_path
     assert_glow_parity(times, refs[0], gpu, raster, 'multitrack_image_shadows', check_p00_edges=True)
 
 
+def test_vector_guide_uses_body_gradient_and_image_shadows(binary, project, tmp_path):
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import CURVES
+
+    track, style = shadow_source(project, 'transparent')
+    line, = track.lines
+    track = replace(track, lines=[replace(line, inline_guide_symbols={1: CURVES})])
+    tile = write_png(tmp_path / 'guide-shadow.png', pattern('transparent'))
+    ramp = PaintFill(mode='gradient_horizontal', start_color='#A044AA40', end_color='#C0406080')
+    palette = style.karaoke_colors
+    style = replace(style, karaoke_colors=replace(
+        palette, before=replace(palette.before, shadow=ramp),
+        after=replace(palette.after, shadow=image_paint(tile, 137))))
+    times, dpr = (250, 550, 900, 1150, 1550), 3
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert {'p06_body_gradient_shadow', 'p06_body_image_shadow', 'p05_vector_guide_composition'} <= set(
+        ir['required_features'])
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'vector_guide_painted_shadows', check_p00_edges=True)
+
+
 def test_gradient_shadows_require_corresponding_capabilities(binary, reading):
     track, style, _ = gradient_shadow_source(reading)
     ir = upper_ir(binary, (track, style), 1)
