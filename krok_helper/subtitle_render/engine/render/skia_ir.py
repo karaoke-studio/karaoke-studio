@@ -511,6 +511,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p05_vertical_columns_ruby')
         if any(len(line['ruby_groups']) > 1 for line in lines):
             ir['required_features'].append('p05_vertical_ruby_groups')
+        overlapping = [ir['track']['lines'][item.track_index]
+                       for item, line in zip(plan.lines, lines, strict=True) if line.get('vertical_overlapping_ruby')]
+        if overlapping:
+            if (any(vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('solid_outline', 'glow', 'shadow'))
+                    or any(source.get('karaoke_anim') != 'none'
+                           or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                           or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                           for source in overlapping)):
+                raise ValueError('Skia 竖排重叠注音需要静态实色和普通走字')
+            ir['required_features'].append('p05_vertical_overlapping_ruby')
         if vertical_ruby.get('vertical_ruby_shift_schema'):
             ir['required_features'].append('p05_vertical_shifted_ruby')
         if vertical_ruby.get('vertical_ruby_rotation_schema'):

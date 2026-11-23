@@ -1119,18 +1119,48 @@ def test_vertical_roles_and_lower_reading_match_actual_d2d_gpu(binary, project):
     assert_glow_parity(times, reference, gpu, raster, 'vertical_inline_roles', check_p00_edges=True)
 
 
-@pytest.mark.parametrize('change', ['emoji_cluster', 'overlap_groups'])
-def test_unproven_vertical_ruby_stays_gated(binary, project, change):
-    reading = '👩‍💻' if change == 'emoji_cluster' else '字'
-    extra = None
-    span = (0, 1)
-    if change == 'overlap_groups':
-        span = (0, 2)
-        other, _ = vertical_ruby_source(project, span=(1, 3))
-        extra = other.rubies
-    track, style = vertical_ruby_source(project, reading=reading, span=span, extra=extra)
+def test_unproven_vertical_ruby_stays_gated(binary, project):
+    track, style = vertical_ruby_source(project, reading='👩‍💻')
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+@GPU
+def test_vertical_overlapping_readings_match_actual_d2d_gpu(binary, project):
+    from PyQt6.QtGui import QFontDatabase
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    if 'Meiryo' not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
+    later, _ = vertical_ruby_source(project, span=(1, 3), reading='かな', family='Meiryo')
+    earlier, style = vertical_ruby_source(project, span=(0, 2), reading='字字', family='Meiryo')
+    track = replace(earlier, rubies=later.rubies + earlier.rubies)
+    style = replace(style, karaoke_colors=colors('#00000000', '#00000000'))
+    times, dpr = (250, 425, 650, 825, 1075, 1400, 1800), 3
+    refs = []
+    for readings in (track.rubies, track.rubies[:1], track.rubies[1:]):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False,
+                                       track=replace(track, rubies=readings), width=640, height=360, dpr=dpr,
+                                       realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero((a[..., 3] > 127) & (b[..., 3] == 0)) > 80
+                   for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p05_vertical_overlapping_ruby' in ir['required_features']
+    first, second = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert (first['style_cell'], first['span_end_cell']) == (1, 3)
+    assert (second['style_cell'], second['span_end_cell']) == (0, 2)
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'vertical_overlapping_ruby', check_p00_edges=True)
+    ir['required_features'].remove('p05_vertical_overlapping_ruby')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError, match='竖排重叠注音'):
+            configure(process, ir)
 
 
 def test_vertical_reading_latin_and_middle_dot_require_their_capability(binary, project, kana):

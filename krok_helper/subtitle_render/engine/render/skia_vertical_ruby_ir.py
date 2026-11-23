@@ -1,6 +1,5 @@
 """Final vertical ruby positions and clips over the shared upper-reading clocks."""
 import hashlib
-import math
 
 from ..layout.line.skia_vertical import (
     vertical_cells, vertical_glyph_rotates, vertical_glyph_shift, vertical_line_box,
@@ -72,7 +71,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
             if curve is not None:
                 cell['wipe_points'] = wipe_points_to_ir(curve)
         column, top, height_per_cell, _ = vertical_line_box(item, main, len(cells), width, height, allowance)
-        ruby_groups, previous_bottom = [], -math.inf
+        ruby_groups = []
         for target, clock, reading_index in groups:
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
@@ -84,9 +83,6 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
             units = _reading_units(ruby.readings[reading_index], clock, ruby_column, top + first * height_per_cell,
                                    (end - first) * height_per_cell, len(measured.runs),
                                    target.style.ruby_font_size_px, wipe_pad, singing_scale=singing_scale)
-            if min(unit['wipe_top'] for unit in units) < previous_bottom:
-                raise ValueError('Skia 竖排同列注音的墨迹范围不能重叠')
-            previous_bottom = max(unit['wipe_bottom'] for unit in units)
             group = {'style_cell': first, 'units': units}
             if outlines:
                 group['outlines'] = outlines
@@ -94,7 +90,15 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
             if len(groups) > 1:
                 group['span_end_cell'] = end
             ruby_groups.append(group)
-        final = {'cells': cells, 'text_flow': 'vertical', 'ruby_groups': ruby_groups}
+        ordered = sorted(ruby_groups, key=lambda group: group['style_cell'])
+        overlaps = any(
+            previous['span_end_cell'] > current['style_cell']
+            or max(unit['wipe_bottom'] for unit in previous['units'])
+                > min(unit['wipe_top'] for unit in current['units'])
+            for previous, current in zip(ordered, ordered[1:]))
+        final = {'cells': cells, 'text_flow': 'vertical', 'ruby_groups': ruby_groups if overlaps else ordered}
+        if overlaps:
+            final['vertical_overlapping_ruby'] = True
         if style.dual_line_layout:
             final['vertical_lane'] = item.lane
         lines.append(final)

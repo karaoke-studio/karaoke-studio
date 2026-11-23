@@ -287,6 +287,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool allowVerticalOutlines = features.contains("p06_vertical_ruby_outline");
     const auto rubyGroups = source.value("ruby_groups").toArray();
     const bool multipleVertical = vertical && rubyGroups.size() > 1;
+    const bool overlapping = source.contains("vertical_overlapping_ruby");
+    if (overlapping && (!source.value("vertical_overlapping_ruby").isBool()
+        || !source.value("vertical_overlapping_ruby").toBool()
+        || !multipleVertical || !features.contains("p05_vertical_overlapping_ruby")
+        || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled
+        || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
+        throw BackendError("Skia 竖排重叠注音缺少布局能力或走字模式无效");
     if (multipleVertical && allowVerticalOutlines && !features.contains("p06_vertical_ruby_group_paint"))
         throw BackendError("Skia 竖排描边暂不支持同列多组注音");
     int previousSpanEnd = 0;
@@ -333,7 +340,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音整字放大轴心与布局不一致");
         const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
-        if (object.contains("span_end_cell") != multipleVertical || (multipleVertical && index < previousSpanEnd))
+        if (object.contains("span_end_cell") != multipleVertical
+            || (multipleVertical && !overlapping && index < previousSpanEnd))
             throw BackendError("Skia 竖排同列注音的正文范围无效");
         if (multipleVertical)
             previousSpanEnd = integer(object.value("span_end_cell"), index + 1, int(line.chars.size()));
@@ -642,7 +650,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             }
             cells.push_back(std::move(glyph));
         }
-        if (multipleVertical && inkTop < previousInkBottom)
+        if (multipleVertical && !overlapping && inkTop < previousInkBottom)
             throw BackendError("Skia 竖排同列注音的墨迹范围重叠");
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;

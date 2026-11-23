@@ -76,6 +76,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_vertical_ruby_outline",
         "p06_vertical_ruby_group_paint",
         "p05_vertical_ruby_groups",
+        "p05_vertical_overlapping_ruby",
         "p05_vertical_columns_ruby",
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
@@ -569,6 +570,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     }
     if (features.contains("p05_vertical_ruby_groups") && !features.contains("p05_vertical_ruby"))
         throw BackendError("Skia 竖排多组注音缺少基础布局能力");
+    if (features.contains("p05_vertical_overlapping_ruby")
+        && (!features.contains("p05_vertical_ruby_groups")
+            || features.contains("p06_ruby_solid_outline") || features.contains("p06_ruby_glow")
+            || features.contains("p06_ruby_shadow")))
+        throw BackendError("Skia 竖排重叠注音需要静态实色和普通走字");
     const bool verticalRuby = features.contains("p05_vertical_ruby");
     if (features.contains("p05_vertical_ruby_extended_units") && !verticalRuby)
         throw BackendError("Skia 竖排注音扩展字符缺少竖排读音布局能力");

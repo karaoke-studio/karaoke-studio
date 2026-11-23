@@ -39,16 +39,13 @@ def prepare_vertical_readings(track, style, styles, measured, *, dpr, resolve_fo
     for index, (line, rendered, look) in enumerate(zip(track.lines, rendered_lines, styles, strict=True)):
         intervals = measured.snapshot.resolve_intervals(rendered, style)
         prefix = len(rendered.chars) - len(line.chars)
-        targets = sorted(upper_ruby_targets(track, index, line, look, intervals[prefix:], annotation_indices),
-                         key=lambda target: min(target.indices))
+        # Authored order owns the clocks when two readings cover the same cell.
+        targets = upper_ruby_targets(track, index, line, look, intervals[prefix:], annotation_indices)
         if prefix:
             targets = [replace(target, indices=tuple(i + prefix for i in target.indices)) for target in targets]
         timing = prepare_ruby_target_timing(rendered, targets, look.ruby_main_progress_mode)
-        groups, previous_end = [], 0
+        groups = []
         for target, clock in zip(targets, timing.readings, strict=True):
-            if min(target.indices) < previous_end:
-                raise ValueError('Skia 竖排同列注音的正文范围不能重叠')
-            previous_end = max(target.indices) + 1
             glyph_units = clock.glyph_units
             if (not glyph_units
                     or any(not (upright_vertical_text(unit) or vertical_glyph_shift(unit) or vertical_glyph_rotates(unit)
