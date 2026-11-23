@@ -182,7 +182,7 @@ def compose_vector_guides(plan_lines, ir):
             continue
         if vector_guides_form_prefix(chars):
             continue
-        if upper_reading and not lower_reading and forward and whole_line:
+        if (upper_reading or lower_reading) and forward and whole_line:
             required.add('p05_inline_vector_guide_ruby')
         elif (has_outline_profile and (whole_line or cell_transform) and not look.vertical
               and not (upper_reading or lower_reading or has_glow or has_shadow)):

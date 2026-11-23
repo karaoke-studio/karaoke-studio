@@ -224,8 +224,8 @@ def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application
 
 
 @GPU
-@pytest.mark.parametrize('entry', ['none', 'fade'])
-def test_inline_vector_guide_and_upper_reading_match_actual_d2d_gpu(binary, application, tmp_path, entry):
+@pytest.mark.parametrize('entry,lower', [('none', False), ('fade', False), ('fade', True)])
+def test_inline_vector_guide_and_readings_match_actual_d2d_gpu(binary, application, tmp_path, entry, lower):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
@@ -233,7 +233,7 @@ def test_inline_vector_guide_and_upper_reading_match_actual_d2d_gpu(binary, appl
     base = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'lower_ruby')
     line, = base.track.lines
     track = replace(base.track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])
-    style = replace(base.style, lower_ruby_enabled=False, entry_anim=entry, exit_anim='none', karaoke_anim='none')
+    style = replace(base.style, lower_ruby_enabled=lower, entry_anim=entry, exit_anim='none', karaoke_anim='none')
     times = (1150, 1550, 2600, 3600, 4110, 4280)
     if entry == 'fade':
         style = replace(style, decoration_kind='none', ruby_decoration_kind='none')
@@ -248,6 +248,7 @@ def test_inline_vector_guide_and_upper_reading_match_actual_d2d_gpu(binary, appl
         assert any(a != b for a, b in zip(references[0], control, strict=True))
     ir = ir_for(binary, (track, style))
     assert 'p05_inline_vector_guide_ruby' in ir['required_features']
+    assert any(group.get('lower') for group in ir['skia_layout']['lines'][0]['ruby_groups']) == lower
     if entry == 'fade':
         assert ir['track']['lines'][0]['entry_duration_ms'] == 600
     assert_ruby_transition_gpu_parity(binary, replace(base, track=track, style=style), times)

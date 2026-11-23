@@ -760,10 +760,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 矢量导唱符阴影缺少正向横排布局或画笔能力声明");
     const bool lowerVectorGuides = features.contains("p05_vector_guide_lower_ruby");
     if (features.contains("p05_inline_vector_guide_ruby")
-        && (!features.contains("p05_vector_guide_composition") || !features.contains("p05_upper_ruby")
-            || features.contains("p05_lower_ruby") || features.contains("p05_vertical_solid")
-            || features.contains("p05_horizontal_rtl") || features.contains("p05_reverse_wipe")))
-        throw BackendError("Skia 行内矢量导唱符缺少对应上注音布局能力");
+        && (!features.contains("p05_vector_guide_composition")
+            || !(features.contains("p05_upper_ruby") || lowerVectorGuides)))
+        throw BackendError("Skia 行内矢量导唱符缺少对应注音布局能力");
     if (lowerVectorGuides != (features.contains("p05_vector_guides") && features.contains("p05_lower_ruby"))
         || (lowerVectorGuides && !features.contains("p05_vector_guide_composition")))
         throw BackendError("Skia 矢量导唱符与下方注音缺少组合能力声明");
