@@ -105,20 +105,48 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'ruby', 'role'])
-def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
-    track, style = guide_source(project, 'inline' if change == 'ruby' else 'prefix')
+def test_missing_bitmap_guide_image_is_explicit(binary, project):
+    track, style = guide_source(project)
     line = track.lines[0]
-    if change == 'bitmap':
-        track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, kind='bitmap', path_commands=(),
-                                                                         bitmap_before_path='missing.png'))])
-    elif change == 'ruby':
-        track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=600, pos_end_ms=900, target_line_index=0,
-                                                      target_char_start=1, target_char_end=2)])
-    elif change == 'role':
-        track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, role_labels=('lead',)))])
-    with pytest.raises(ValueError):
+    bitmap = replace(SQUARE, kind='bitmap', path_commands=(), bitmap_before_path='missing.png')
+    track = replace(track, lines=[replace(line, guide_symbol=bitmap)])
+    with pytest.raises(ValueError, match='无法读取图片'):
         ir_for(binary, (track, style))
+
+
+def missing_vector_guide_role(project):
+    track, style = guide_source(project)
+    line, = track.lines
+    unresolved = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, role_labels=('missing',)))])
+    return track, unresolved, style
+
+
+def test_missing_vector_guide_role_preserves_authored_label(binary, project):
+    track, unresolved, style = missing_vector_guide_role(project)
+    base = ir_for(binary, (track, style))
+    ir = ir_for(binary, (unresolved, style))
+    assert 'p05_role_vector_guides' not in ir['required_features']
+    assert ir['skia_layout']['lines'] == base['skia_layout']['lines']
+    assert unresolved.lines[0].guide_symbol.role_labels == ('missing',)
+
+
+@GPU
+def test_missing_vector_guide_role_falls_back_like_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, unresolved, style = missing_vector_guide_role(project)
+    times = (250, 450, 750, 1550)
+    references = []
+    for source in (track, unresolved):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    assert np.array_equal(*references)
+    gpu, raster = render_skia(binary, ir_for(binary, (unresolved, style)), times)
+    assert_glow_parity(times, references[0], gpu, raster, 'missing_vector_guide_role', check_p00_edges=True)
 
 
 @GPU
@@ -141,6 +169,30 @@ def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application
     ir = ir_for(binary, (case.track, case.style))
     assert 'p05_vector_guide_lower_ruby' in ir['required_features']
     assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@GPU
+def test_inline_vector_guide_and_upper_reading_match_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'lower_ruby')
+    line, = base.track.lines
+    track = replace(base.track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])
+    style = replace(base.style, lower_ruby_enabled=False, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    times = (1150, 1550, 2600, 3600, 4110, 4280)
+    references = []
+    for source in (track, replace(track, rubies=[]), base.track):
+        with NativeRendererProcess() as process:
+            _, frames = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                          realization_enabled=False)
+        references.append(frames)
+    for control in references[1:]:
+        assert any(a != b for a, b in zip(references[0], control, strict=True))
+    ir = ir_for(binary, (track, style))
+    assert 'p05_inline_vector_guide_ruby' in ir['required_features']
+    assert_ruby_transition_gpu_parity(binary, replace(base, track=track, style=style), times)
 
 
 @GPU

@@ -24,7 +24,9 @@ from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 from .skia_vertical_ruby_ir import vertical_ruby_layout
-from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
+from krok_helper.subtitle_render.engine.guide.skia_vector import (
+    compose_vector_guides, project_vector_guide_roles, validate_vector_guides,
+)
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import (
     declare_bitmap_guides, has_bitmap_guides, is_undecorated_bitmap_line, uses_inline_bitmap_guides,
     validate_bitmap_guides,
@@ -313,6 +315,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
 
     ir = build_render_ir(track, style, layout_plan_builder=build_plan,
                          serialize_source_baselines=False, vertical_scanline_particles=True, **kwargs)
+    project_vector_guide_roles(ir, prepared[0].plan.lines)
     suppress_inactive_scanline_bands(ir, prepared[0].plan)
     vertical_singing = vertical_singing_lines(ir, prepared[0].plan) if style.vertical else set()
     vertical_ruby = None

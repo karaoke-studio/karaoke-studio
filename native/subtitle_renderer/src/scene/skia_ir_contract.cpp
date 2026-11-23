@@ -85,6 +85,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_role_vector_guides",
         "p05_vector_guide_composition",
         "p05_vector_guide_lower_ruby",
+        "p05_inline_vector_guide_ruby",
         "p06_inline_vector_guide_outline",
         "p06_vector_guide_shadow",
         "p08_bitmap_guides",
@@ -689,6 +690,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         || features.contains("p05_horizontal_rtl") || features.contains("p05_reverse_wipe")))
         throw BackendError("Skia 矢量导唱符阴影缺少正向横排布局或画笔能力声明");
     const bool lowerVectorGuides = features.contains("p05_vector_guide_lower_ruby");
+    if (features.contains("p05_inline_vector_guide_ruby")
+        && (!features.contains("p05_vector_guide_composition") || !features.contains("p05_upper_ruby")
+            || features.contains("p05_lower_ruby") || features.contains("p05_vertical_solid")
+            || features.contains("p05_horizontal_rtl") || features.contains("p05_reverse_wipe")))
+        throw BackendError("Skia 行内矢量导唱符缺少对应上注音布局能力");
     if (lowerVectorGuides != (features.contains("p05_vector_guides") && features.contains("p05_lower_ruby"))
         || (lowerVectorGuides && !features.contains("p05_vector_guide_composition")))
         throw BackendError("Skia 矢量导唱符与下方注音缺少组合能力声明");
@@ -705,6 +711,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
             "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
             "p05_upper_ruby", "p05_vector_guides", "p05_vector_guide_composition",
+            "p05_inline_vector_guide_ruby",
             "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
             "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale", "p06_inline_vector_guide_outline"};

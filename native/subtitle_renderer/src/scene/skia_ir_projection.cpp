@@ -510,6 +510,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         const bool composedGuide = features.contains("p05_vector_guide_composition");
+        const bool inlineGuideRuby = features.contains("p05_inline_vector_guide_ruby")
+            && staticScanline && !source.scanlineEnabled && source.karaokeAnimation == "none"
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow");
         const bool staticVectorGuideShadow = vectorGuideShadow && staticScanline && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled
@@ -575,7 +578,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 竖排单元包含控制字符或无效码点");
             if (cell.vectorGlyph && vectorGuideShadow && !staticVectorGuideShadow)
                 throw BackendError("Skia 矢量导唱符阴影需要静态正向横排");
-            if (composedGuide && sawLyrics && cell.vectorGlyph && !(outlinedInlineGuide || staticVectorGuideShadow))
+            if (composedGuide && sawLyrics && cell.vectorGlyph && !(outlinedInlineGuide || staticVectorGuideShadow || inlineGuideRuby))
                 throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
             sawLyrics = sawLyrics || !cell.vectorGlyph;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)

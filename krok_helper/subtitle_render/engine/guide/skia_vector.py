@@ -94,13 +94,25 @@ def validate_vector_guides(track, style):
         appearance = style_for_line(style, line)
         if any(guide_symbol_is_bitmap(c.vector_glyph) or not c.vector_glyph.path_commands for c in cells):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
-        labels = {c.role_label for c in cells if c.role_label is not None}
+        labels = {c.role_label for c in cells if c.role_label in appearance.custom_style_schemes}
         if labels:
-            if (appearance.vertical or line.wipe_reverse or appearance.right_to_left or not vector_guides_form_prefix(chars)
-                    or not labels <= appearance.custom_style_schemes.keys()):
+            if appearance.vertical or line.wipe_reverse or appearance.right_to_left or not vector_guides_form_prefix(chars):
                 raise ValueError('Skia 角色导唱符需要正向前置替换符和匹配的角色样式')
             role_guides = True
     return role_guides
+
+
+def project_vector_guide_roles(ir, plan_lines):
+    """Use the line's paint and font slot for an unresolved guide label."""
+    from .semantics import guide_symbol_is_bitmap
+
+    for item in plan_lines:
+        styles = item.layout_style.custom_style_schemes
+        source = ir['track']['lines'][item.track_index]
+        for cell, payload in zip(item.render_line.chars, source['chars'], strict=True):
+            if (cell.vector_glyph is not None and not guide_symbol_is_bitmap(cell.vector_glyph)
+                    and cell.role_label not in styles):
+                payload.pop('role_label', None)
 
 
 # Verified with a line-level prefix guide: Utopia singing, upper ruby, solid
@@ -161,6 +173,8 @@ def compose_vector_guides(track, ir):
     faded_scanline = 'p07_faded_scanline_prefix_guides' in features
     vertical_guides = 'p05_vertical_vector_guides' in features
     lower_reading = 'p05_lower_ruby' in features
+    inline_ruby = ('p05_upper_ruby' in features and not lower_reading and not vertical_guides
+                   and not {'p05_horizontal_rtl', 'p05_reverse_wipe'}.intersection(features))
     line_motion = 'p07_utopia_line_animation' in features
     shadow_features = {'p06_static_shadow', 'p06_vector_guide_shadow'}
     static_shadow = ('p06_static_shadow' in features and not track.rubies
@@ -171,6 +185,7 @@ def compose_vector_guides(track, ir):
                        and not (track.rubies or 'p05_resolved_ruby' in features or 'p07_singing_scale' in features
                                 or 'p06_static_glow' in features))
     has_inline_outlines = False
+    has_inline_ruby = False
     for line, source in zip(track.lines, ir['track']['lines'], strict=True):
         chars = render_line_with_guide_symbols(line).chars
         if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
@@ -190,6 +205,11 @@ def compose_vector_guides(track, ir):
         if (lower_reading or animated_gradient or faded_scanline or line_motion or vertical_guides) and vector_guides_form_prefix(chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
+            if inline_ruby and ({source.get('entry_anim'), source.get('exit_anim')} == {'none'}
+                                and source.get('karaoke_anim') == 'none'
+                                and not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
+                has_inline_ruby = True
+                continue
             if not inline_outlines:
                 raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
             has_inline_outlines = True
@@ -221,6 +241,8 @@ def compose_vector_guides(track, ir):
         features.append('p06_vector_guide_shadow')
     if has_inline_outlines:
         features.append('p06_inline_vector_guide_outline')
+    if has_inline_ruby:
+        features.append('p05_inline_vector_guide_ruby')
 
 
 def vector_guide_metrics(glyph, size, font_metrics, glyph_id):
