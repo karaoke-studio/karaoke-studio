@@ -41,7 +41,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool lowerReadingDecoration = !line.rubyGlows[1].empty()
         || (line.hasRubyShadow && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.lower(); }));
     const bool ltrDecorationWithoutScale = !line.singingScale.active
-        && (line.shadow.visible() || line.hasRubyShadow || line.scanline.enabled);
+        && (line.shadow.visible() || !line.cellShadows.empty() || line.hasRubyShadow || line.scanline.enabled);
     const bool plainGlowOpacity = line.animation.quantizeOpacity && (!line.glow.empty() || line.hasRubyGlow());
     const bool particleTransitionOpacity = line.characterGeometry.active() && !line.particles.empty();
     const bool fixedOpacity = plainGlowOpacity || particleTransitionOpacity || (!line.vertical && (line.wipeRightToLeft

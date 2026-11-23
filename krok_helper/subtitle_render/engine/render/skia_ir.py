@@ -589,16 +589,20 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if role_shadow_lines and 'shadow' not in decorations:
         decorations.append('shadow')
     if role_shadow_lines and not role_vector_guides:
+        role_shadow_motion = False
         for item in role_shadow_lines:
             look = item.layout_style
             source = ir['track']['lines'][item.track_index]
             if (look.vertical or look.right_to_left or item.line.wipe_reverse or track.rubies or look.lower_ruby_enabled
                     or source.get('karaoke_anim') != 'none'
-                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                     or any(char.vector_glyph is not None for char in item.render_line.chars)):
-                raise ValueError('Skia 行内角色阴影当前需要静态正向横排普通走字')
+                raise ValueError('Skia 行内角色阴影当前需要正向横排普通走字及基础出入场')
+            role_shadow_motion |= {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
         ir['required_features'].append('p06_role_static_shadow')
+        if role_shadow_motion:
+            ir['required_features'].append('p07_role_shadow_line_animation')
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
     if decorations and not (style.vertical or style.right_to_left):
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse

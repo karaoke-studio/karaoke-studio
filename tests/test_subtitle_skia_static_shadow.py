@@ -25,8 +25,8 @@ _LINE_MOTIONS = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('textured', [False, True], ids=['solid', 'textured'])
-def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, textured):
+@pytest.mark.parametrize('case', ['solid', 'textured', 'motion'])
+def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_reverse import source
     from test_subtitle_skia_roles import colors
@@ -38,7 +38,7 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, tex
     track = replace(track, lines=[replace(line, chars=chars, wipe_reverse=False)])
     palette = colors('#FFF4E7C0', '#FF177FDC')
     before, after = PaintFill(color='#A044AA40'), PaintFill(color='#D0E040FF')
-    if textured:
+    if case != 'solid':
         from test_subtitle_skia_image_fills import image_paint, pattern, write_png
 
         tile = write_png(tmp_path / 'role-shadow.png', pattern('transparent'))
@@ -51,6 +51,9 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, tex
                                shadow_offset_x=12, shadow_offset_y=13)
     style = replace(style, decoration_kind='none', custom_style_schemes={'lead': role})
     times, dpr = (250, 450, 725, 1050, 1375, 1600, 2100), 3
+    if case == 'motion':
+        style = replace(style, entry_anim='rise', entry_lead_ms=320, exit_anim='fade', exit_fade_ms=600)
+        times = (35, 95, 180, 450, 725, 1850, 2450, 2850, 2999)
     refs = []
     for appearance in (role, replace(role, decoration_kind='none')):
         with NativeRendererProcess() as process:
@@ -60,11 +63,19 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, tex
         refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
     assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
                for a, b in zip(*refs, strict=True))
+    if case == 'motion':
+        static = replace(style, entry_anim='none', exit_anim='none')
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, static, (35, 2850), force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        assert all(np.count_nonzero(a != np.frombuffer(b, np.uint8).reshape(a.shape)) > 100
+                   for a, b in zip((refs[0][0], refs[0][-2]), raw, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
-    feature = 'p06_role_shadow_paints' if textured else 'p06_role_static_shadow'
+    feature = {'solid': 'p06_role_static_shadow', 'textured': 'p06_role_shadow_paints',
+               'motion': 'p07_role_shadow_line_animation'}[case]
     assert feature in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, 'inline_role_shadows', check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('inline_role_shadows', case), check_p00_edges=True)
     ir['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         with pytest.raises(NativeRendererError):
