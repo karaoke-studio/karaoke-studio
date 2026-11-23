@@ -134,7 +134,8 @@ def compose_vector_guides(plan_lines, ir):
     # These capabilities describe the IR version. The check below uses the
     # line's actual paint, geometry and timing to decide whether it needs them.
     required = set()
-    lower_reading = 'p05_lower_ruby' in features
+    if 'p05_lower_ruby' in features:
+        required.update(('p05_vector_guide_composition', 'p05_vector_guide_lower_ruby'))
     has_outline_profile = 'p06_primary_solid_outline' in features
     for item, final in zip(plan_lines, ir['skia_layout']['lines'], strict=True):
         chars = item.render_line.chars
@@ -144,7 +145,9 @@ def compose_vector_guides(plan_lines, ir):
         look = item.layout_style
         line = item.line
         source = ir['track']['lines'][item.track_index]
-        upper_reading = bool(final.get('ruby_groups'))
+        readings = final.get('ruby_groups', ())
+        upper_reading = any(not group.get('lower') for group in readings)
+        lower_reading = any(group.get('lower') for group in readings)
         has_shadow = uses_authored_decoration(look, 'shadow')
         has_glow = uses_authored_decoration(look, 'glow')
         singing = source.get('karaoke_anim') == 'utopia'
@@ -165,7 +168,6 @@ def compose_vector_guides(plan_lines, ir):
         if lower_reading:
             if not (forward and whole_line):
                 raise ValueError('Skia 矢量导唱符与下方注音需要正向横排与整行出入场')
-            required.add('p05_vector_guide_lower_ruby')
         if has_shadow and not (look.vertical or upper_reading or 'p05_role_vector_guides' in features):
             if not (forward and whole_line) or any(c.role_label is not None for c in chars):
                 raise ValueError('Skia 矢量导唱符阴影需要正向横排与整行出入场')

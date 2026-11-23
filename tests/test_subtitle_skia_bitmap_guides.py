@@ -785,15 +785,19 @@ def test_mixed_reverse_bitmap_guide_keeps_scene_after_missing_capability(binary,
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
 
 
-def test_reverse_bitmap_guide_coexists_with_a_separate_lower_reading(binary, lower_source, tmp_path):
+@pytest.mark.parametrize('guide_kind', ['bitmap', 'vector'])
+def test_reverse_guide_coexists_with_a_separate_lower_reading(binary, lower_source, tmp_path, guide_kind):
     from test_subtitle_skia_lower_product import ir_for as lower_ir
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
 
     track, style, resolve = lower_source
     original, = track.lines
     guided, style = bitmap_lower_reading(track, style, image(tmp_path / 'guide.png', color='#30FF80'))
     avatar, = guided.lines
+    if guide_kind == 'vector':
+        avatar = replace(avatar, guide_symbol=SQUARE)
     shift = 4000
     avatar = replace(avatar, track_line_index=1, wipe_reverse=True,
                      chars=[replace(char, start_ms=char.start_ms + shift) for char in avatar.chars],
@@ -804,7 +808,9 @@ def test_reverse_bitmap_guide_coexists_with_a_separate_lower_reading(binary, low
     ir = lower_ir(binary, (track, style, resolve))
     reading_row, avatar_row = ir['skia_layout']['lines']
     assert any(group.get('lower') for group in reading_row['ruby_groups'])
-    assert avatar_row['ruby_groups'] == [] and avatar_row['cells'][0]['metrics']['bitmap_guide']
+    assert avatar_row['ruby_groups'] == []
+    key = 'bitmap_guide' if guide_kind == 'bitmap' else 'vector_glyph_id'
+    assert avatar_row['cells'][0]['metrics'][key]
     reference = None
     if sys.platform == 'win32':
         from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -814,7 +820,11 @@ def test_reverse_bitmap_guide_coexists_with_a_separate_lower_reading(binary, low
                                        width=900, height=600, realization_enabled=False)
         reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, reference, gpu, raster, 'separate_bitmap_and_lower_reading', check_p00_edges=True)
+    assert_glow_parity(times, reference, gpu, raster, ('separate_guide_and_lower_reading', guide_kind),
+                       check_p00_edges=True)
+    if guide_kind == 'vector':
+        assert all(frame[..., 3].any() for frame in gpu[2:])
+        return
     for frames in (gpu, raster):
         icon = [np.count_nonzero(np.all(frame[..., :3] == [48, 255, 128], axis=-1) & (frame[..., 3] > 240))
                 for frame in frames]
