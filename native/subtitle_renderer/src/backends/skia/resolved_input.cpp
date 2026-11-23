@@ -746,7 +746,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             ? &*projected.litDecorStyle : firstVisiblePaint;
         const auto* volumePaint = style.volumeAppearanceMode == "role" && projected.volumeDecorStyle
             ? &*projected.volumeDecorStyle : firstVisiblePaint;
-        prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache, lampPaint);
+        const SignalPaintContext signalPaintContext{imageCache, glyphs.dpr, projected.layoutReferenceScale};
+        prepared.shapeSignal = resolveShapeSignal(source, line, style, signalPaintContext, lampPaint);
         SkRect volumeTextInk = SkRect::MakeEmpty();
         std::optional<int> leftmostVolumeRole;
         if (style.volumeEnabled && line.volumeHead && style.volumeAppearanceMode != "custom") {
@@ -762,7 +763,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 if (leftmostVolumeRole) volumeTextInk = domains.forRole(*leftmostVolumeRole);
             }
         }
-        prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr, volumePaint, volumeTextInk);
+        prepared.volumeSignal = resolveVolumeSignal(source, line, style, signalPaintContext, volumePaint, volumeTextInk);
         const auto volumeBandLeft = line.signalBandJoin && prepared.volumeSignal && leftmostVolumeRole
             ? std::optional(prepared.volumeSignal->bars.front().rect.rect().left()) : std::nullopt;
         const int timingOffset = cells.isEmpty() ? 0

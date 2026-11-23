@@ -15,7 +15,7 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 
 std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
-    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, SkiaImageFillCache& images,
+    const QJsonObject& source, const TextLine& line, const TextStyle& style, const SignalPaintContext& context,
     const TextStyle* decorStyle
 ) {
     const auto anchor = source.value("shape_signal_anchor");
@@ -42,6 +42,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     if (style.litStyle == "square") shape = Shape::Square;
     if (style.litStyle == "rounded") shape = Shape::Rounded;
     if (style.litStyle == "image") shape = Shape::Image;
+    const auto dpr = context.dpr;
     Signal signal{
         shapeSignalClock(line.startMs, style),
         SkPoint::Make(float(xy[0].toDouble() * dpr) + style.litOffsetX,
@@ -50,7 +51,8 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         geometry.size, geometry.size * 1.5f + geometry.tracking,
         style.litStrokeWidth, style.litStrokeSoften, style.litOpacity,
         std::min(style.litEdgeBrightness * .55f, 1.f), argb(style.litFill), argb(style.litStroke), style.litShadow,
-        shape == Shape::Image ? images.staticImage(style.litImagePath, style.litImageModifiedMs, style.litImageSize) : nullptr,
+        shape == Shape::Image
+            ? context.images.staticImage(style.litImagePath, style.litImageModifiedMs, style.litImageSize) : nullptr,
     };
     signal.path = ::subtitle::skia::signalPath(style.litStyle, signal.size);
     if (style.litAppearanceMode == "custom") return signal;
@@ -70,7 +72,10 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         return shader;
     };
     if (!signal.image) {
-        decoration.unitGradients.fill = gradient(palette.afterFillPaint, "Skia 指示灯当前支持实色或渐变填充");
+        if (palette.afterFillPaint.mode == "image")
+            decoration.fillImage = context.images.fill(palette.afterFillPaint, context.layoutScale);
+        else
+            decoration.unitGradients.fill = gradient(palette.afterFillPaint, "Skia 指示灯填充画笔不受支持");
         if (signal.strokeWidth > 0 && SkColorGetA(signal.stroke))
             decoration.unitGradients.stroke = gradient(palette.afterStrokePaint, "Skia 指示灯当前支持实色或渐变描边");
         if (decoration.outerWidth > 0 && SkColorGetA(decoration.outerStroke))
@@ -96,7 +101,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
         for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
     }
-    if (signal.path && !decoration.unitGradients.empty()) {
+    if (signal.path && (!decoration.unitGradients.empty() || decoration.fillImage)) {
         const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
         if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
             throw BackendError("Skia 矢量指示灯渐变缺少有效的基线");
@@ -107,8 +112,8 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
 }
 
 std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
-    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, const TextStyle* decorStyle,
-    const SkRect& firstRoleInk
+    const QJsonObject& source, const TextLine& line, const TextStyle& style, const SignalPaintContext& context,
+    const TextStyle* decorStyle, const SkRect& firstRoleInk
 ) {
     const auto anchor = source.value("volume_signal_anchor");
     const bool enabled = style.volumeEnabled || (style.litEnabled && style.litStyle == "volume");
@@ -152,7 +157,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (!supportedBrush(fill))
+            if (!supportedBrush(fill) && fill.mode != "image")
                 throw BackendError("Skia 未支持音量柱当前填充画笔");
             if ((signal.strokeWidth > 0 && !supportedBrush(stroke))
                 || (signal.outerWidth > 0 && !supportedBrush(outer)))
@@ -177,6 +182,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         }
         glow.outlineWidth = signal.strokeWidth + signal.outerWidth;
     }
+    const auto dpr = context.dpr;
     signal.textOriginX = float(xy[0].toDouble() * dpr);
     signal.groupRight = signal.textOriginX + style.volumeOffsetX;
     signal.groupLeft = signal.groupRight - geometry.groupWidth;
@@ -204,7 +210,9 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         GlowGradients glowGradients;
         for (const bool after : {false, true}) {
             auto& brush = signal.palette[after];
-            brush.fillGradient = gradient(after ? palette.afterFillPaint : palette.beforeFillPaint);
+            const auto& fill = after ? palette.afterFillPaint : palette.beforeFillPaint;
+            if (fill.mode == "image") brush.fillImage = context.images.fill(fill, context.layoutScale);
+            else brush.fillGradient = gradient(fill);
             if (signal.strokeWidth > 0)
                 brush.strokeGradient = gradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint);
             if (signal.outerWidth > 0)

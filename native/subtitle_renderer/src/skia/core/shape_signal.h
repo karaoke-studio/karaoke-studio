@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../effects/signal_state.h"
+#include "image_fill.h"
 #include "signal_paths.h"
 #include "static_glow.h"
 #include "include/core/SkColor.h"
@@ -25,6 +26,7 @@ struct ShapeSignal {
         float shadowX = 0, shadowY = 0;
         std::vector<PreparedGlow> glow;
         GradientBrushes unitGradients;
+        ImageFill fillImage;
         SkPoint glyphPaintOrigin = SkPoint::Make(0, 0);
     };
     krok::subtitle::native::ShapeSignalClock clock;
@@ -39,6 +41,6 @@ struct ShapeSignal {
     std::optional<SignalPath> path;
 
     SkPath outline() const;
-    void draw(SkCanvas& canvas, int time, const SignalTransition&, float entryOpacity = 1.f) const;
+    void draw(SkCanvas& canvas, int time, const SignalTransition&, SkPoint paintShift, float entryOpacity = 1.f) const;
 };
 }

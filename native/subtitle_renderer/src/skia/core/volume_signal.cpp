@@ -19,7 +19,7 @@ void VolumeSignal::drawTransitionHalo(SkCanvas& canvas, int time, const SignalTr
     }
 }
 
-void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition) const {
+void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition, SkPoint paintShift) const {
     const auto state = krok::subtitle::native::volumeSignalState(clock, time);
     if (!state.visible || state.opacity <= 0 || opacity <= 0) return;
     SkAutoCanvasRestore flashLayer(&canvas, false);
@@ -51,6 +51,11 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
     }
     SkPaint paint;
     paint.setAntiAlias(true);
+    const auto fillShader = [&](const Palette& look) {
+        return look.fillImage ? look.fillImage.shaderAt(SkMatrix::Translate(paintShift.x(), paintShift.y()))
+                              : look.fillGradient;
+    };
+    const std::array fills{fillShader(palette[0]), fillShader(palette[1])};
     const auto column = [&](int index, bool filled) {
         const auto pose = poseAt(index);
         const float columnOpacity = opacity * pose.opacity;
@@ -79,7 +84,7 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
             draw(rect, color.fill, 0);
         }
         if (strokeWidth > 0) draw(rect, color.stroke, strokeWidth, color.strokeGradient);
-        if (decorated) draw(rect, color.fill, 0, color.fillGradient);
+        if (decorated) draw(rect, color.fill, 0, fills[filled]);
     };
     for (int index = state.activeIndex + 1; index < clock.count; ++index) column(index, false);
     for (int index = 0; index <= state.activeIndex; ++index) column(index, true);

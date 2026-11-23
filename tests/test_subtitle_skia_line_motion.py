@@ -1958,6 +1958,57 @@ def _assert_signal_decoration_gradient(binary, project, signal, decoration):
         assert len(np.unique(g[shaded])) > 12
 
 
+@pytest.mark.parametrize('signal,entry', [('lamp', 'char_drip'), ('volume', 'slide_in')])
+def test_signal_image_fill_follows_the_authored_brush_transform(binary, project, tmp_path, signal, entry):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    line, = track.lines
+    shift = 1000
+    track = replace(track, lines=[replace(
+        line, chars=[replace(char, start_ms=char.start_ms + shift) for char in line.chars],
+        end_ms=line.end_ms + shift, display_start_override_ms=0, display_end_override_ms=3400)])
+    fill = image_paint(write_png(tmp_path / 'signal-fill.png', pattern('opaque')), scale=110)
+    neutral = colors('#BBBBBB', '#BBBBBB')
+    palette = SubtitleStyleScheme(font_size_px=50, karaoke_colors=replace(
+        neutral, before=replace(neutral.before, text=fill), after=replace(neutral.after, text=fill)))
+    style = replace(style, karaoke_colors=neutral, entry_anim=entry, entry_lead_ms=600, exit_anim='none',
+                    custom_style_schemes={'textured-signal': palette})
+    if signal == 'lamp':
+        style = replace(style, lit_enabled=True, lit_style='square', lit_appearance_mode='role',
+                        lit_role_name='textured-signal', lit_size=30, lit_number=3, lit_offset_y=-35,
+                        lit_edge_brightness_pct=0, signals_duration_ms=5000, lit_time_offset_ms=5000,
+                        lit_transition_mode='none')
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='role', volume_role_name='textured-signal',
+                        volume_size=52, volume_column_count=3, volume_flash_times=0)
+    times, dpr = (180, 360, 650), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, ('textured_signal', signal), check_p00_edges=True)
+    for frames in (gpu, raster):
+        assert all(np.count_nonzero((frame[..., 3] > 30) & (frame[..., 0] != frame[..., 1])) > 100 for frame in frames)
+    comparisons = [(gpu, raster)] if reference is None else [(reference, gpu), (gpu, raster)]
+    for expected, actual in comparisons:
+        for a, b in zip(expected, actual, strict=True):
+            colored = (a[..., 0] != a[..., 1]) | (b[..., 0] != b[..., 1])
+            peak = min(a[..., 3][colored].max(), b[..., 3][colored].max())
+            interior = colored & (a[..., 3] >= peak - 2) & (b[..., 3] >= peak - 2)
+            diff = abs(premultiplied(a[interior]) - premultiplied(b[interior]))
+            assert diff.size and diff.mean() <= 5 and np.percentile(diff, 95) <= 24
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source

@@ -38,6 +38,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
     const auto placement = line.translationAt(tMs);
+    const auto paintShift = SkPoint::Make(animation.dx + placement.x(), animation.dy + placement.y());
     const SignalTransition signalTransition{line.characterFade, line.characterGeometry, line.singingScale,
                                             line.utopiaTransition, line.characterMotionCenter, line.startMs, line.endMs,
                                             line.volumeSignal ? line.volumeSignal->singingStartMs : 0};
@@ -47,7 +48,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         SkAutoCanvasRestore restore(&canvas, true);
         canvas.translate(entry.dx, entry.dy);
         canvas.translate(placement.x(), placement.y());
-        line.shapeSignal->draw(canvas, tMs, signalTransition, entry.opacity);
+        line.shapeSignal->draw(canvas, tMs, signalTransition, paintShift, entry.opacity);
     };
     const bool reverseDecoration = line.rubyGroups.empty() && (!line.glow.empty() || line.shadow.visible());
     const bool rtlRubyWithoutScale = !line.rubyGroups.empty() && !line.singingScale.active;
@@ -756,13 +757,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 line.scanline.shape.draw(canvas, tMs, *front, line.bodyInk, line.rubyInkTop);
         }
     }
-    if (line.volumeSignal) line.volumeSignal->draw(canvas, tMs, signalTransition);
+    if (line.volumeSignal) line.volumeSignal->draw(canvas, tMs, signalTransition, paintShift);
     if (decoratedLamp) {
         // Decorated lamps have their own countdown and share only the line's entry pose.
         restore.restore();
         drawDecoratedLamp();
     } else if (line.shapeSignal) {
-        line.shapeSignal->draw(canvas, tMs, signalTransition);
+        line.shapeSignal->draw(canvas, tMs, signalTransition, paintShift);
     }
 }
 }

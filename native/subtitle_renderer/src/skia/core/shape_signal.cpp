@@ -18,7 +18,8 @@ SkPath ShapeSignal::outline() const {
     return SkPath::Oval(bounds);
 }
 
-void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition, float entryOpacity) const {
+void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition, SkPoint paintShift,
+                       float entryOpacity) const {
     const auto state = krok::subtitle::native::shapeSignalState(clock, time);
     const float signalOpacity = opacity * entryOpacity;
     if (!state.visible || state.activeIndex < 0 || signalOpacity <= 0) return;
@@ -67,6 +68,11 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         };
         const auto& unit = decoration->unitGradients;
         gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke), fit(unit.shadow), fit(unit.glow)};
+    }
+    auto fillShader = gradients.fill;
+    if (decoration && decoration->fillImage) {
+        const auto base = path ? decoration->glyphPaintOrigin : SkPoint::Make(0, 0);
+        fillShader = decoration->fillImage.shaderAt(SkMatrix::Translate(base.x() + paintShift.x(), base.y() + paintShift.y()));
     }
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
@@ -143,7 +149,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         if (strokeWidth > 0 && SkColorGetA(stroke) > 0)
             drawShape(box, stroke, strokeWidth, gradients.stroke);
         if (decoration)
-            drawShape(box, fill, 0, gradients.fill);
+            drawShape(box, fill, 0, fillShader);
         if (highlight > 0 && (decoration || shape != Shape::Image)) {
             paint.setShader(nullptr);
             paint.setColor(SK_ColorWHITE);
