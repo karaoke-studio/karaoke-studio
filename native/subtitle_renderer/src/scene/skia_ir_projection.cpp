@@ -660,10 +660,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 逐字变换暂不支持该导唱符或行内角色样式");
             // Ruby and outlines use their own composition profile.
             if (cell.vectorGlyph && hasLowerReading
-                && (cfg.vertical || cfg.rightToLeft || source.wipeReverse || !guideRubyAnimation
+                && (cfg.vertical || (cfg.rightToLeft && !features.contains("p05_rtl_lower_ruby"))
+                    || source.wipeReverse || !guideRubyAnimation
                     || source.karaokeAnimation != "none" || &cellStyle != &resolved
                     || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                throw BackendError("Skia 矢量导唱符与下方注音需要正向横排与整行出入场");
+                throw BackendError("Skia 矢量导唱符与下方注音的行布局或动画尚未支持");
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !roleVectorGuides)

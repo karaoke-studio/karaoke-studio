@@ -192,8 +192,8 @@ def test_missing_vector_guide_role_falls_back_like_actual_d2d_gpu(binary, projec
 
 
 @GPU
-@pytest.mark.parametrize('entry', ['none', 'fade'])
-def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application, tmp_path, entry):
+@pytest.mark.parametrize('entry,rtl', [('none', False), ('fade', False), ('none', True)])
+def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application, tmp_path, entry, rtl):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
@@ -201,6 +201,9 @@ def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application
     base = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'lower_ruby')
     track = replace(base.track, lines=[replace(line, guide_symbol=SQUARE) for line in base.track.lines])
     style = replace(base.style, entry_anim=entry, exit_anim='none', karaoke_anim='none')
+    if rtl:
+        style = replace(style, right_to_left=True, decoration_kind='none', decoration_kind_before='none',
+                        ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     times = (1000, 1550, 2600, 4110, 4280)
     if entry == 'fade':
         style = replace(style, decoration_kind='none', ruby_decoration_kind='none')
