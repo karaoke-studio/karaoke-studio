@@ -548,6 +548,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         bool sawLyrics = false;
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
+            if (cfg.vertical && std::ranges::any_of(cell.text.toUcs4(), [](char32_t scalar) {
+                    const auto category = QChar::category(scalar);
+                    return category == QChar::Other_Control || category == QChar::Other_Surrogate;
+                }))
+                throw BackendError("Skia 竖排单元包含控制字符或无效码点");
             if (composedGuide && sawLyrics && cell.vectorGlyph && !outlinedInlineGuide)
                 throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
             sawLyrics = sawLyrics || !cell.vectorGlyph;

@@ -8,12 +8,12 @@ margin-only placement. Japanese punctuation and small kana may have a separate
 glyph transform. The vertical wipe always follows the original cell box.
 """
 from dataclasses import replace
+import unicodedata
 
 from krok_helper.subtitle_render.domain.timing import TimingTrack, remap_track_role_labels
-from krok_helper.subtitle_render.engine.text.font_slots import is_n3_latin_text
 
 VERTICAL_GUIDE_LAYOUT_FEATURES = frozenset({
-    'p05_vertical_solid', 'p05_vertical_japanese_glyphs', 'p05_vertical_columns',
+    'p05_vertical_solid', 'p05_vertical_japanese_glyphs', 'p05_vertical_text_cells', 'p05_vertical_columns',
     'p05_reverse_wipe', 'p05_reverse_overlap',
     'p06_vertical_outline', 'p06_vertical_columns_outline', 'p06_vertical_reverse_outline',
     'p05_vertical_ruby', 'p05_vertical_ruby_groups', 'p05_vertical_ruby_extended_units', 'p05_ruby_units',
@@ -25,17 +25,25 @@ _SMALL_KANA = frozenset('ぁぃぅぇぉっゃゅょゎァィゥェォッャュ�
 _CORNER_PUNCTUATION = frozenset('、。')
 _ROTATED_PUNCTUATION = frozenset('「」『』ー〜')
 _TRANSFORMED_GLYPHS = _SMALL_KANA | _CORNER_PUNCTUATION | _ROTATED_PUNCTUATION
+_BODY_CORNER_PUNCTUATION = frozenset('，．')
+_BODY_ROTATED_PUNCTUATION = _ROTATED_PUNCTUATION | frozenset('←→‐‑‒–—―～〈〉《》【】〔〕（）［］｛｝ｰ<>()[]{}')
 _BLANK_CELLS = frozenset(('', ' ', '\u3000'))
 
 
 def _extended_text(text):
-    return text in _BLANK_CELLS or (len(text) == 1 and is_n3_latin_text(text))
+    return text in _BLANK_CELLS or (len(text) == 1 and (
+        '0' <= text <= '9' or 'A' <= text <= 'Z' or 'a' <= text <= 'z'
+        or 'À' <= text <= 'Ö' or 'Ø' <= text <= 'ö' or 'ø' <= text <= 'ÿ'))
 
 
 def _supported_text(text):
     if _extended_text(text):
         return True
     return upright_vertical_text(text) or text in _TRANSFORMED_GLYPHS
+
+
+def vertical_text_cells(track):
+    return any(not _supported_text(char.text) for line in track.lines for char in line.chars)
 
 
 def upright_vertical_text(text):
@@ -72,8 +80,8 @@ def validate_vertical_style(style):
 def validate_vertical_source(track):
     for line in track.lines:
         for char in line.chars:
-            if not _supported_text(char.text):
-                raise ValueError('Skia 竖排单元包含未验证字符或多码点')
+            if any(unicodedata.category(scalar) in {'Cc', 'Cs'} for scalar in char.text):
+                raise ValueError('Skia 竖排单元包含控制字符或无效码点')
 
 
 def use_vertical_line_styles(track: TimingTrack) -> TimingTrack:
@@ -125,7 +133,7 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0, si
     for index, cell in enumerate(local.cells):
         # The glyph keeps its offset from its own horizontal cell-box centre.
         text = item.render_line.chars[index].text
-        offset = vertical_glyph_shift(text)
+        offset = 0.28 if text in _BODY_CORNER_PUNCTUATION else vertical_glyph_shift(text)
         x = column + measured.offsets[index] - measured.widths[index] / 2 + size * offset
         ink = cell['metrics']['ink']
         cell_top = top + index * cell_height
@@ -140,7 +148,7 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0, si
                       'wipe_top': baseline + ink[1] if bitmap else cell_top,
                       'wipe_bottom': baseline + ink[3] if bitmap else cell_top + cell_height,
                       'wipe_end_position': 1.0}
-        if vertical_glyph_rotates(text):
+        if text in _BODY_ROTATED_PUNCTUATION:
             positioned['rotation_pivot_x'] = column
         if singing_scale:
             positioned.update(layout_left=column, layout_right=column, pivot_y=cell_top + cell_height / 2)

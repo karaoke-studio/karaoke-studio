@@ -48,6 +48,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_horizontal_rtl_cells",
         "p05_vertical_solid",
         "p05_vertical_japanese_glyphs",
+        "p05_vertical_text_cells",
         "p05_vertical_ruby",
         "p05_vertical_ruby_extended_units",
         "p05_vertical_columns",
@@ -537,6 +538,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p05_vertical_solid")
             || !style.value("vertical").toBool()))
         throw BackendError("Skia 竖排日文字形布局版本无效");
+    if (features.contains("p05_vertical_text_cells") && !features.contains("p05_vertical_solid"))
+        throw BackendError("Skia 竖排文本单元缺少固定列布局能力声明");
     if (features.contains("p05_vertical_ruby")) {
         const double version = layout.value("vertical_ruby_schema").toDouble(-1);
         if ((version != 1 && version != 2)
@@ -656,7 +659,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool rtlVectorGuides = features.contains("p05_rtl_vector_guides");
     const bool verticalVectorGuides = features.contains("p05_vertical_vector_guides");
     static const QJsonArray verticalGuideLayout{
-        "p05_vertical_solid", "p05_vertical_japanese_glyphs", "p05_vertical_columns",
+        "p05_vertical_solid", "p05_vertical_japanese_glyphs", "p05_vertical_text_cells", "p05_vertical_columns",
         "p05_reverse_wipe", "p05_reverse_overlap",
         "p06_vertical_outline", "p06_vertical_columns_outline", "p06_vertical_reverse_outline",
         "p05_vertical_ruby", "p05_vertical_ruby_groups", "p05_vertical_ruby_extended_units", "p05_ruby_units",

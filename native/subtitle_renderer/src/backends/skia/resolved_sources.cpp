@@ -75,7 +75,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p08_line_band_blur", "p08_line_band_animated_decoration"
     };
     static const QJsonArray verticalAllowed{
-        "p05_vertical_solid", "p05_vertical_columns", "p05_vertical_japanese_glyphs",
+        "p05_vertical_solid", "p05_vertical_columns", "p05_vertical_japanese_glyphs", "p05_vertical_text_cells",
         "p05_vertical_ruby", "p05_vertical_ruby_groups", "p05_vertical_shifted_ruby", "p05_vertical_rotated_ruby",
         "p05_vertical_reverse_ruby_track", "p05_vertical_columns_ruby",
         "p06_vertical_outline", "p06_vertical_ruby_outline", "p06_vertical_columns_outline",

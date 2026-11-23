@@ -60,14 +60,12 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'rtl',
-                                    'dual_alt_grid', 'offset'])
+@pytest.mark.parametrize('change', ['control', 'rtl', 'dual_alt_grid', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
-    texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project)
     line = track.lines[0]
-    if change in texts:
-        track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text=texts[change]), *line.chars[1:]])])
+    if change == 'control':
+        track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text='\x01'), *line.chars[1:]])])
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'dual_alt_grid':
         track = replace(track, lines=[replace(line, layout_index=1)])
@@ -76,6 +74,39 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     elif change == 'offset': style = replace(style, line_offsets_x=[12])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def test_vertical_multiscalar_cell_preserves_clock(binary, project):
+    track, style = vertical_source(project, texts=['字字', 'A', '한', '字'])
+    ir = ir_for(binary, (track, style))
+    assert 'p05_vertical_text_cells' in ir['required_features']
+    cells = ir['skia_layout']['lines'][0]['cells']
+    assert len(cells[0]['metrics']['glyphs']) == 2
+    assert len(cells) == len(ir['track']['lines'][0]['resolved_intervals']) == 4
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p05_vertical_text_cells')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [600, 950])
+        with pytest.raises(NativeRendererError, match='竖排单元'):
+            configure(process, bad)
+        after, _ = collect(process, [950, 600], generation=2)
+    assert all(frame.any() for frame in before) and np.array_equal(before, after[::-1])
+
+
+@GPU
+def test_vertical_punctuation_and_multiscalar_cell_match_actual_d2d_gpu(binary, project):
+    from PyQt6.QtGui import QFontDatabase
+
+    family = 'Meiryo'
+    if family not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D typography reference')
+    track, style = vertical_source(project, texts=['→', '，', '字字', 'θ'], position='center')
+    style = replace(style, font_family=family, font_family_latin=family)
+    ir = ir_for(binary, (track, style))
+    cells = ir['skia_layout']['lines'][0]['cells']
+    assert 'rotation_pivot_x' in cells[0] and 'rotation_pivot_x' not in cells[1]
+    assert_gpu_parity(binary, track, style, 1.5, 'vertical_punctuation_multiscalar')
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

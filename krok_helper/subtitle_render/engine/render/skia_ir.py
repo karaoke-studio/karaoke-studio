@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells, write_horizontal_pivots
 from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
     use_vertical_line_styles, validate_vertical_source, validate_vertical_style, vertical_cells,
-    vertical_japanese_glyphs, vertical_solid_schema)
+    vertical_japanese_glyphs, vertical_solid_schema, vertical_text_cells)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors, style_for_role_in_layout, uses_authored_decoration,
@@ -649,6 +649,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     if style.vertical:
         ir['required_features'].append('p05_vertical_solid')
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)
+        if vertical_text_cells(track):
+            ir['required_features'].append('p05_vertical_text_cells')
         if vertical_japanese_glyphs(track):
             ir['required_features'].append('p05_vertical_japanese_glyphs')
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
