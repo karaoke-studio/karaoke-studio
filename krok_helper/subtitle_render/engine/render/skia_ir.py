@@ -13,7 +13,8 @@ from krok_helper.subtitle_render.engine.layout.display.section_edges import sect
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positioned_cells, write_horizontal_pivots
 from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
-    validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs, vertical_solid_schema)
+    use_vertical_line_styles, validate_vertical_source, validate_vertical_style, vertical_cells,
+    vertical_japanese_glyphs, vertical_solid_schema)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors, style_for_role_in_layout, uses_authored_decoration,
@@ -254,6 +255,10 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
 
 
 def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
+    if style.vertical:
+        track = use_vertical_line_styles(track)
+        if style.lower_ruby_enabled:
+            style = replace(style, lower_ruby_enabled=False)
     prepared = []
     animated_bitmap_guides = False
     role_vector_guides = False

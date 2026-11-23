@@ -60,11 +60,11 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'rtl',
-                                    'dual_ruby_zoom_flame', 'dual_alt_grid', 'lower', 'offset'])
+@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'rtl',
+                                    'dual_ruby_zoom_flame', 'dual_alt_grid', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
-    track, style = vertical_source(project, 'roles' if change == 'role' else 'plain')
+    track, style = vertical_source(project)
     line = track.lines[0]
     if change in texts:
         track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text=texts[change]), *line.chars[1:]])])
@@ -77,7 +77,6 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
         track = replace(track, lines=[replace(line, layout_index=1)])
         style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
                         layouts=[LyricsLayout(line_gap_px=style.line_gap_px + 8)])
-    elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     elif change == 'offset': style = replace(style, line_offsets_x=[12])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
@@ -924,8 +923,57 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['emoji_cluster', 'overlap_groups',
-                                    'reverse_utopia_flame', 'lower', 'role'])
+def vertical_role_source(project):
+    track, style = vertical_source(project, 'roles', position='center')
+    return track, replace(style, stroke_width_px=3)
+
+
+def test_vertical_roles_and_lower_reading_leave_the_original_track_unchanged(binary, project):
+    track, style = vertical_role_source(project)
+    style = replace(style, lower_ruby_enabled=True)
+    ir = ir_for(binary, (track, style))
+    assert track.lines[0].chars[1].role_label == 'lead' and style.lower_ruby_enabled
+    assert 'p05_lower_ruby' not in ir['required_features']
+    assert all('role_label' not in c for c in ir['track']['lines'][0]['chars'])
+    line, = track.lines
+    bare = replace(track, lines=[replace(line, chars=[replace(c, role_label=None) for c in line.chars])])
+    control = ir_for(binary, (bare, replace(style, lower_ruby_enabled=False)))
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 750, 1350])
+        configure(process, control)
+        replay, _ = collect(process, [1350, 750, 450], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+def test_vertical_roles_and_lower_reading_match_actual_d2d_gpu(binary, project):
+    from PyQt6.QtGui import QFontDatabase
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    if 'Meiryo' not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
+    track, role_style = vertical_role_source(project)
+    annotated, style = vertical_ruby_source(project, span=(0, 2), reading='かな', position='center', family='Meiryo')
+    track = replace(track, rubies=annotated.rubies)
+    style = replace(style, custom_style_schemes=role_style.custom_style_schemes)
+    times = (299, 450, 750, 899, 1150, 1600, 1900)
+    refs = []
+    roles_and_lower = replace(style, lower_ruby_enabled=True)
+    for look in (roles_and_lower, replace(style, custom_style_schemes={})):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = refs
+    assert np.array_equal(reference, bare)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, roles_and_lower)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'vertical_inline_roles', check_p00_edges=True)
+
+
+@pytest.mark.parametrize('change', ['emoji_cluster', 'overlap_groups', 'reverse_utopia_flame'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     reading = '👩‍💻' if change == 'emoji_cluster' else '字'
     extra = None
@@ -938,12 +986,6 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     if change == 'reverse_utopia_flame':
         track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
         style = replace(style, reverse_karaoke_anim='utopia_scanline', scanline_shape='flame')
-    elif change == 'lower':
-        style = replace(style, lower_ruby_enabled=True)
-    elif change == 'role':
-        track, style = vertical_ruby_source(project)
-        track = replace(track, lines=[replace(track.lines[0], chars=[track.lines[0].chars[0],
-                        replace(track.lines[0].chars[1], role_label='lead'), *track.lines[0].chars[2:]])])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
 

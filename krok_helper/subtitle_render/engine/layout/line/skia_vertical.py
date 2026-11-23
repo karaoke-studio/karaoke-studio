@@ -7,6 +7,9 @@ its horizontal cell-box offset around the column centre and sits on
 margin-only placement. Japanese punctuation and small kana may have a separate
 glyph transform. The vertical wipe always follows the original cell box.
 """
+from dataclasses import replace
+
+from krok_helper.subtitle_render.domain.timing import TimingTrack, remap_track_role_labels
 from krok_helper.subtitle_render.engine.text.font_slots import is_n3_latin_text
 
 VERTICAL_GUIDE_LAYOUT_FEATURES = frozenset({
@@ -69,8 +72,21 @@ def validate_vertical_style(style):
 def validate_vertical_source(track):
     for line in track.lines:
         for char in line.chars:
-            if not _supported_text(char.text) or char.role_label is not None:
-                raise ValueError('Skia 竖排单元包含未验证字符、多码点或行内角色')
+            if not _supported_text(char.text):
+                raise ValueError('Skia 竖排单元包含未验证字符或多码点')
+
+
+def use_vertical_line_styles(track: TimingTrack) -> TimingTrack:
+    labels = track.role_options
+    if not labels:
+        return track
+    # Vertical captions use the resolved line style. The authored role
+    # assignments stay in the source track for switching back to horizontal.
+    lines = [replace(line, chars=[replace(char) for char in line.chars],
+                     inline_guide_symbols=dict(line.inline_guide_symbols)) for line in track.lines]
+    projected = replace(track, lines=lines)
+    remap_track_role_labels(projected, dict.fromkeys(labels))
+    return projected
 
 
 def validate_vertical_columns(style, line_styles):
