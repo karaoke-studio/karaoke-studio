@@ -33,6 +33,35 @@ def vertical_source(project, kind='plain', *, reverse=False, effect='none', text
     return replace(track, lines=[line]), replace(style, vertical=True, right_to_left=False, line_y_position=position)
 
 
+@GPU
+def test_vertical_body_paints_match_actual_d2d_gpu(binary, project, tmp_path):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base = vertical_source(project, position='center')
+    colors = base.karaoke_colors
+    gradient = PaintFill(mode='gradient_vertical', start_color='#FFE12D20', end_color='#FF285BDE')
+    tile = write_png(tmp_path / 'vertical-fill.png', pattern('transparent'))
+    style = replace(base, karaoke_colors=replace(colors,
+        before=replace(colors.before, text=gradient), after=replace(colors.after, text=image_paint(tile, 137))))
+    times, dpr = (175, 350, 550, 750, 1100, 1550, 2200), 3
+    refs = []
+    for look in (style, base):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    assert np.count_nonzero(refs[0][0] != refs[1][0]) > 100
+    assert np.count_nonzero(refs[0][-1] != refs[1][-1]) > 100
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p06_vertical_body_paints' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'vertical_body_paints', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('reverse', [False, True])
 def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, tmp_path):
     track, style = vertical_source(project, reverse=reverse)

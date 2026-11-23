@@ -975,11 +975,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
-        const bool staticDirectional = !style.vertical
-            && style.rightToLeft != line.wipeReverse && !hasDecoration && !hasBitmapGuide && !vectorGuides
+        const bool staticPaintStack = !hasDecoration && !hasBitmapGuide && !vectorGuides
             && !anyReadings && !hasInlineRoles && line.karaokeAnimation == "none" && line.entryAnimation == "none"
             && line.exitAnimation == "none" && !line.zoomPulseEnabled && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
+        const bool staticDirectional = staticPaintStack && !style.vertical && style.rightToLeft != line.wipeReverse;
+        const bool verticalPaints = staticPaintStack && style.vertical && !line.wipeReverse && !style.dualLineLayout
+            && !primaryOutline && !secondaryOutline && features.contains("p06_vertical_body_paints")
+            && !anyLayer([](const PaintStyle& paint) { return paint.mode == "gradient_horizontal"; });
         const bool directionalPaints = staticDirectional && features.contains("p06_directional_body_paints");
         const bool directionalOutlines = directionalPaints
             || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));
@@ -1026,7 +1029,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 && !line.zoomPulseEnabled && line.bursts.empty() && prepared.rubyGroups.empty();
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
-                || style.vertical || ((style.rightToLeft || line.wipeReverse) && !directionalPaints)
+                || (style.vertical && !verticalPaints) || ((style.rightToLeft || line.wipeReverse) && !directionalPaints)
                 || (utopia && !singingMainPaint)
                 || (!movingGradient && !unscaledPaintFade && !unscaledPaintScanline
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"
@@ -1049,6 +1052,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 const auto ink = SkRect::MakeLTRB(float(rect[0].toDouble() * glyphs.dpr), float(rect[1].toDouble() * glyphs.dpr),
                                                  float(rect[2].toDouble() * glyphs.dpr), float(rect[3].toDouble() * glyphs.dpr));
                 if (ink.isEmpty()) throw BackendError("Skia 正文渐变的绘制范围为空");
+                if (verticalPaints && (std::abs(ink.top() - prepared.cells.front().top) > 1e-3f
+                    || std::abs(ink.bottom() - prepared.cells.back().bottom) > 1e-3f))
+                    throw BackendError("Skia 竖排画笔范围与列框不一致");
                 // Every layer shares the line's visual pad at the layout reference scale.
                 const float pad = ::subtitle::skia::outlineVisualPad(style.strokeWidth, style.stroke2Width,
                                                                     projected.layoutReferenceScale);
