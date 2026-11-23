@@ -24,8 +24,8 @@ bool hasFadedScanlineSingingParticles(const protocol::RenderConfig& cfg, const p
 }
 
 void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::TimingLine& source,
-                          const protocol::ResolvedStyle& style, int offset, int version, const QJsonArray& features,
-                          RenderScene& scene, TextLine& line) {
+                          const protocol::ResolvedStyle& style, int offset, int version, bool annotated,
+                          const QJsonArray& features, RenderScene& scene, TextLine& line) {
     if (source.fxBursts.empty()) return;
     const auto animationKind = [version](const QString& animation, bool entry) {
         if (isSkiaEnergyTransition(animation) && version < 11) return QString{};
@@ -36,7 +36,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto exit = animationKind(source.exitAnimation, false);
     const bool animated = !entry.isEmpty() || !exit.isEmpty();
     const bool fadedBand = hasFadedScanlineSingingParticles(cfg, source, style, features);
-    const bool rubyParticles = version >= 12 && !cfg.rubies.empty();
+    const bool rubyParticles = version >= 12 && annotated;
     const bool noteExit = exit == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
     const bool petalWithImage = noteExit && entry == "petal" && style.scanlineShape == "image"
         && features.contains("p07_ruby_petal_scanline_image");
@@ -55,7 +55,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit, features);
     const bool plainScale = features.contains("p07_plain_scaled_singing_particles")
-        && cfg.rubies.empty() && !cfg.vertical && !cfg.rightToLeft
+        && !annotated && !cfg.vertical && !cfg.rightToLeft
         && (!source.wipeReverse || features.contains("p07_reverse_singing_particles"))
         && source.karaokeAnimation == "utopia" && source.entryAnimation == "none" && source.exitAnimation == "none"
         && (!source.zoomPulseEnabled || (!source.wipeReverse && features.contains("p07_plain_zoom_singing_particles")))
@@ -66,7 +66,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
     const bool outlinedPlainScale = plainScale && !source.wipeReverse && !source.zoomPulseEnabled
         && features.contains("p07_horizontal_outlined_singing_particles");
-    const bool staticForwardSinging = !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
+    const bool staticForwardSinging = !cfg.vertical && !cfg.rightToLeft && !annotated
         && !source.wipeReverse && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled
         && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none";
     const bool outlinedUnscaled = staticForwardSinging && features.contains("p07_unscaled_outlined_singing_particles")
@@ -108,7 +108,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && !source.strokeFlashEnabled && !source.zoomPulseEnabled
         && (!source.scanlineEnabled || (version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"));
     const bool rtlSinging = features.contains("p07_rtl_singing_particles") && cfg.rightToLeft
-        && !cfg.vertical && cfg.rubies.empty() && !source.wipeReverse && !source.scanlineEnabled
+        && !cfg.vertical && !annotated && !source.wipeReverse && !source.scanlineEnabled
         && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none"
         && !source.strokeFlashEnabled && !source.zoomPulseEnabled
         && protocol::decorationKindForState(style, false) == "none"
@@ -147,7 +147,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             || (source.exitAnimation != "none" && exit.isEmpty())))
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)
-        || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
+        || (annotated && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
         || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines && !outlinedPlainScale && !outlinedUnscaled
             && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))

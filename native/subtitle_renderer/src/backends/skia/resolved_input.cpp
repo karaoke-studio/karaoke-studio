@@ -429,7 +429,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
-        const bool rubyParticles = layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
+        const bool rubyParticles = annotated && layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
         const bool fadedScanlineParticles = features.contains("p07_faded_scanline_singing_particles")
             && !line.bursts.empty() && fadedUtopiaScanline;
         const bool fadedScanlineGradientFill = fixedFadedScanline && (fadedScanlineParticles || vectorFadedScanline)

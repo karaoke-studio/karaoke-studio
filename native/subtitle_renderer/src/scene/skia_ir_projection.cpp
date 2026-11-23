@@ -515,7 +515,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const int offset = cfg.timingOffsetMs + source.sourceOffsetMs;
         line.startMs = source.chars.empty() ? 0 : source.chars.front().startMs + offset;
         line.endMs = source.endMs + offset;
-        projectSkiaParticles(cfg, source, resolved, offset, twinkleVersion, features, out, line);
+        projectSkiaParticles(cfg, source, resolved, offset, twinkleVersion, !rubyGroups.isEmpty(), features, out, line);
         if ((!source.displayStartMs || !source.displayEndMs) && !source.chars.empty())
             throw BackendError("Skia P04: Python-resolved display window is required");
         line.displayWindows.push_back({source.displayStartMs.value_or(0) + offset, source.displayEndMs.value_or(0) + offset, 0, 0});
@@ -682,7 +682,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || (cfg.rightToLeft && (!rtlBitmap || (!cell.bitmapGuide->noDecor
                         && (!rtlBitmapDecoration || &cellStyle != &resolved))))
                     || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps || verticalBitmap))
-                    || (reverseMixedBitmaps && &cellStyle != &resolved)
+                    || (reverseMixedBitmaps && reverseBitmapSinging && &cellStyle != &resolved)
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }

@@ -1022,6 +1022,37 @@ def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_
     assert_glow_parity(times, reference, gpu, raster, ('mixed_reverse_bitmap_guide', entry), check_p00_edges=True)
 
 
+def test_reverse_inline_bitmap_uses_its_role_size(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = rtl_bitmap_guide(project, tmp_path)
+    line, = track.lines
+    chars = [replace(char, role_label='avatar') if i == 2 else char for i, char in enumerate(line.chars)]
+    icon = replace(line.inline_guide_symbols[2], bitmap_fix_size=False)
+    track = replace(track, lines=[replace(line, chars=chars, guide_symbol=None,
+                                         inline_guide_symbols={2: icon}, wipe_reverse=True)])
+    style = replace(style, right_to_left=False, custom_style_schemes={
+        'avatar': SubtitleStyleScheme(font_size_px=60)})
+    times = (250, 450, 750, 1100, 1550)
+    ir = ir_for(binary, (track, style))
+    assert {'p08_inline_bitmap_guides', 'p08_mixed_reverse_bitmap_guides', 'p05_inline_roles'} <= set(
+        ir['required_features'])
+    cell = ir['skia_layout']['lines'][0]['cells'][2]
+    left, top, right, bottom = cell['metrics']['ink']
+    assert bottom - top == 60 and right - left == 80
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'reverse_inline_bitmap_role_size', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_bitmap_guide_out_of_order_seek_is_deterministic(binary, project, tmp_path, target):
     case, track = p00_guide(tmp_path, family=project[1].font_family)

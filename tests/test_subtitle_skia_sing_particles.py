@@ -11,11 +11,13 @@ import pytest
 from test_subtitle_skia_line_fade import (
     application, binary, project, ir_for, collect, configure, selection, premultiplied,
 )
+from test_subtitle_skia_lower_geometry import prepared_source, source as lower_source
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_roles import colors
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_source, upper_ir, render_skia
 from krok_helper.subtitle_render.domain.paint import PaintFill
+from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
@@ -47,6 +49,39 @@ def test_reverse_utopia_particles_keep_their_clock_after_seek(binary, project):
     assert np.count_nonzero(blue_coverage(gpu[3]) > 35) > 30
     for time, a, b in zip(times, gpu, raster, strict=True):
         assert_particle_region(a, b, ('reverse_utopia_seek', time))
+
+
+def test_utopia_particles_and_lower_readings_stay_on_their_own_rows(binary, lower_source):
+    from test_subtitle_skia_lower_product import ir_for as lower_ir
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, resolve = lower_source
+    first, = track.lines
+    shift = 4000
+    second = replace(first, track_line_index=1, break_before='page',
+                     chars=[replace(char, text='字', start_ms=char.start_ms + shift) for char in first.chars],
+                     end_ms=first.end_ms + shift, display_start_override_ms=shift - 300,
+                     display_end_override_ms=first.end_ms + shift + 400,
+                     animation_override=LineAnimationOverride(karaoke_anim='utopia', sing_fx='twinkle'))
+    track = replace(track, lines=[first, second])
+    style = replace(style, fx_particle_color='#0000FF', fx_particle_color2='#00FFFF')
+    ir = lower_ir(binary, (track, style, resolve))
+    assert {'p07_plain_scaled_singing_particles', 'p05_lower_ruby'} <= set(ir['required_features'])
+    assert any(group.get('lower') for group in ir['skia_layout']['lines'][0]['ruby_groups'])
+    assert not ir['skia_layout']['lines'][1]['ruby_groups']
+    assert not ir['track']['lines'][0]['fx_bursts'] and ir['track']['lines'][1]['fx_bursts']
+    times = (500, 1000, 4199, 4300, 4750, 5300)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=900, height=600, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert not np.any(blue_coverage(gpu[0])) and np.count_nonzero(blue_coverage(gpu[3]) > 35) > 30
+    assert_glow_parity(times, reference, gpu, raster, 'separate_utopia_particles_and_lower', check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

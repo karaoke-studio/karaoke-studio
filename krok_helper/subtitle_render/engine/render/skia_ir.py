@@ -348,7 +348,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         if (not ordinary_line_animation(source)
                 or source.get('karaoke_anim') not in modes
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                or (not avatar_only and (item.layout_style.right_to_left or _inline_role_labels(item)))):
+                or (not avatar_only and (item.layout_style.right_to_left
+                    or (singing and _inline_role_labels(item))))):
             raise ValueError('Skia 反向头像行当前仅支持图片走字')
         if avatar_only:
             # Direct2D poses no bitmap glyphs. Retain the resolved clock and skip glyph transforms.
@@ -946,7 +947,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     write_body_gradient_bounds(ir, plan)
     write_scanline_schema(ir, track, style)
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
-        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(track, ir, plan, measured, composed_particle_lines)
+        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(ir, plan, measured, composed_particle_lines)
         ir['required_features'].append('p07_sing_twinkle')
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')

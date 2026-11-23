@@ -119,10 +119,10 @@ def vertical_singing_particle_modes(source):
     return modes if modes <= _VERTICAL_PARTICLE_MODES else set()
 
 
-def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
+def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
-    ruby_scanline = ruby_band_singing = painted_singing = False
+    ruby_particles = ruby_scanline = ruby_band_singing = painted_singing = False
     painted_sprites = sprite_shadows = sprite_line_gradients = sprite_images = False
     painted_ripples = False
     painted_energy = False
@@ -155,7 +155,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         entry, exit_ = source.get('entry_anim'), source.get('exit_anim')
         entry_kind, exit_kind = PARTICLE_TRANSITIONS.get(entry), PARTICLE_TRANSITIONS.get(exit_)
         animated = bool(entry_kind or exit_kind)
-        annotated = bool(track.rubies)
+        readings = final.get('ruby_groups', ())
+        annotated = bool(readings)
+        ruby_particles |= annotated
+        has_lower = any(group.get('lower') for group in readings)
         supported_band = not band or (look.scanline_shape == 'band' and look.scanline_mode != 'role')
         reverse_singing = (item.line.wipe_reverse and not (look.vertical or look.right_to_left or annotated)
                            and supported_band and (entry, exit_) == ('none', 'none')
@@ -238,7 +241,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                     and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not (petal_with_flame or energy_stars))))
-                or (look.lower_ruby_enabled and not (faded_band
+                or (has_lower and not (faded_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or (annotated and animated and index not in composed_lines)
                 or (not (annotated or vertical_particles or faded_band or outlined_energy
@@ -383,4 +386,4 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_energy_transition_line_animation')
     if energy_singing_stars:
         ir['required_features'].append('p07_energy_transition_singing_stars')
-    return 13 if track.rubies else version
+    return 13 if ruby_particles else version

@@ -1149,8 +1149,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 上注音双向逐字滴落缺少对应能力");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
     if (features.contains("p07_plain_scaled_singing_particles")
-        && (!features.contains("p07_sing_twinkle") || !features.contains("p07_singing_scale")
-            || features.contains("p05_resolved_ruby")))
+        && (!features.contains("p07_sing_twinkle") || !features.contains("p07_singing_scale")))
         throw BackendError("Skia 正文唱字放大缺少对应粒子能力");
     if (features.contains("p07_plain_zoom_singing_particles")
         && !features.contains("p07_plain_scaled_singing_particles"))
