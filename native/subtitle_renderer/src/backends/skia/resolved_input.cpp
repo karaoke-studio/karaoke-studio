@@ -868,7 +868,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 return look.beforeDecorPaint.mode == "solid" && look.afterDecorPaint.mode == "solid";
             });
         const bool inlineShadow = roleStaticShadow && hasInlineRoles && (!annotated || roleShadowRuby)
-            && !hasBitmapGuide
+            && (!hasBitmapGuide || staticTitle)
             && !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || roleSingingShadow)
             && (staticShadowLine || roleShadowMotion) && !line.scanlineEnabled

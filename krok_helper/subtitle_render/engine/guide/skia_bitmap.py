@@ -16,7 +16,7 @@ import math
 from PyQt6.QtGui import QImageReader
 
 from ..render.skia_line_animation_ir import ordinary_line_animation
-from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
+from ..style.style_semantics import effective_karaoke_colors, style_for_role_in_layout, uses_authored_decoration
 from .metrics import bitmap_guide_image, vector_glyph_width
 from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
 
@@ -192,10 +192,9 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
                 raise ValueError('Skia 图片导唱符与下方注音的行布局或动画尚未支持')
         features.append('p08_bitmap_lower_ruby')
-    if any(uses_authored_decoration(item.layout_style, 'shadow')
-           and any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
-                   for cell in item.render_line.chars)
-           for item in plan_lines):
+    if any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
+           and uses_authored_decoration(style_for_role_in_layout(item.layout_style, cell.role_label), 'shadow')
+           for item in plan_lines for cell in item.render_line.chars):
         features.append('p08_bitmap_guide_shadow')
         if 'p06_body_gradient_shadow' in features:
             features.append('p08_bitmap_guide_gradient_shadow')

@@ -66,7 +66,8 @@ def title_style(title):
                    for paint in paints)
     if textured and any(paint['decoration_kind'] != 'none' for paint in paints):
         return None
-    if bitmaps and roles and any(paint['decoration_kind'] != 'none' for paint in paints):
+    if bitmaps and any(paint['decoration_kind'] == 'shadow' and paint['shadow']['mode'] != 'solid'
+                       for paint in paints):
         return None
     if roles and any(paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
