@@ -53,11 +53,8 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
                 role_styles[char.role_label] = style_for_role_in_layout(appearance, char.role_label)
             role_style = role_styles[char.role_label]
             if char.vector_glyph is not None:
-                # Bitmaps use the role's main font for their zoom and baseline.
-                if guide_symbol_is_bitmap(char.vector_glyph):
-                    cells.append((instance(role_style), None, role_style))
-                else:
-                    cells.append((main, None, appearance))
+                # Guides use the role's main font box and size, independently of their shape.
+                cells.append((instance(role_style), None, role_style))
                 continue
             appearance_slot = main_script_stroke_style(role_style, char.text)
             selected, stretch = font_style_for_cell(appearance_slot, char.text)

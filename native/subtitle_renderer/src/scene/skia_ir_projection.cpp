@@ -563,6 +563,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
             && (source.entryAnimation == "none" || source.entryAnimation == "fade")
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");
+        const bool unscaledRoleVectorGuide = features.contains("p05_inline_roles")
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+            && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
+            && (guideWholeLineAnimation || styledCellTransform);
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool fixedShape = scanlineShape && resolved.scanlineMode == "color"
@@ -667,7 +671,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 矢量导唱符与下方注音的行布局或动画尚未支持");
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
-                || (&cellStyle != &resolved && !roleVectorGuides)
+                || (&cellStyle != &resolved && !(roleVectorGuides || unscaledRoleVectorGuide))
                 || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");

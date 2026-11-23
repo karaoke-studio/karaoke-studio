@@ -9,6 +9,8 @@ cell's left edge, and advances by the *unrounded* ``size * advance / em``
 from __future__ import annotations
 
 import math
+
+from ...domain.models import effective_karaoke_animation
 from ..render.skia_line_animation_ir import ordinary_line_animation
 from ..style.style_semantics import uses_authored_decoration
 
@@ -97,9 +99,12 @@ def validate_vector_guides(track, style):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
         labels = {c.role_label for c in cells if c.role_label in appearance.custom_style_schemes}
         if labels:
-            if appearance.vertical or line.wipe_reverse or appearance.right_to_left or not vector_guides_form_prefix(chars):
-                raise ValueError('Skia 角色导唱符需要正向前置替换符和匹配的角色样式')
-            role_guides = True
+            if appearance.vertical or line.wipe_reverse or appearance.right_to_left:
+                raise ValueError('Skia 角色导唱符需要正向横排')
+            if effective_karaoke_animation(appearance) == 'utopia':
+                if not vector_guides_form_prefix(chars):
+                    raise ValueError('Skia 角色导唱符的 Utopia 唱字目前需要前置替换符')
+                role_guides = True
     return role_guides
 
 
