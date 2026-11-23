@@ -26,8 +26,9 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
     const float brushOpacity = decoration ? 1.f : signalOpacity;
     SkPaint paint;
     paint.setAntiAlias(true);
-    const auto drawShape = [&](const SkRect& box, SkColor color, float width) {
-        paint.setColor(color);
+    const auto drawShape = [&](const SkRect& box, SkColor color, float width, sk_sp<SkShader> shader = nullptr) {
+        paint.setColor(shader ? SK_ColorWHITE : color);
+        paint.setShader(shader);
         paint.setAlphaf(paint.getAlphaf() * brushOpacity);
         paint.setStyle(width > 0 ? SkPaint::kStroke_Style : SkPaint::kFill_Style);
         paint.setStrokeWidth(width);
@@ -47,12 +48,26 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
             break;
         }
     };
+    const auto boxAt = [&](int index) {
+        const bool active = index == state.activeIndex;
+        return SkRect::MakeXYWH(origin.x() + index * pitch + (active ? state.dx : 0.f),
+                               origin.y() + (active ? state.dy : 0.f), size, size);
+    };
+    sk_sp<SkShader> fillGradient;
+    if (decoration && decoration->unitFillGradient) {
+        // Include every slot so extinguishing a lamp cannot change its neighbours' colors.
+        SkRect bounds = boxAt(0);
+        for (int index = 1; index < clock.count; ++index) bounds.join(boxAt(index));
+        // The existing GPU applies the group brush in the translated coordinates of a vector lamp.
+        if (path) bounds.offset(-decoration->glyphPaintOrigin.x(), -decoration->glyphPaintOrigin.y());
+        fillGradient = decoration->unitFillGradient->makeWithLocalMatrix(
+            SkMatrix::RectToRect(SkRect::MakeWH(1, 1), bounds));
+    }
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
         const bool active = index == state.activeIndex;
-        const float x = origin.x() + index * pitch + (active ? state.dx : 0.f);
-        const float y = origin.y() + (active ? state.dy : 0.f);
-        const auto box = SkRect::MakeXYWH(x, y, size, size);
+        const auto box = boxAt(index);
+        const float x = box.left(), y = box.top();
         auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY(), true);
         const float alpha = pose.opacity * (active ? state.activeOpacity : 1.f);
         if (alpha <= 0) continue;
@@ -110,8 +125,9 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         if (strokeWidth > 0 && SkColorGetA(stroke) > 0)
             drawShape(box, stroke, strokeWidth);
         if (decoration)
-            drawShape(box, fill, 0);
+            drawShape(box, fill, 0, fillGradient);
         if (highlight > 0 && (decoration || shape != Shape::Image)) {
+            paint.setShader(nullptr);
             paint.setColor(SK_ColorWHITE);
             paint.setAlphaf(brushOpacity * highlight);
             paint.setStyle(SkPaint::kFill_Style);

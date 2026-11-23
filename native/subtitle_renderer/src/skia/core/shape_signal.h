@@ -6,6 +6,7 @@
 #include "include/core/SkColor.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPoint.h"
+#include "include/core/SkShader.h"
 #include <optional>
 
 class SkCanvas;
@@ -19,6 +20,8 @@ struct ShapeSignal {
         float outerWidth = 0;
         float shadowX = 0, shadowY = 0;
         std::vector<PreparedGlow> glow;
+        sk_sp<SkShader> unitFillGradient;
+        SkPoint glyphPaintOrigin = SkPoint::Make(0, 0);
     };
     krok::subtitle::native::ShapeSignalClock clock;
     SkPoint origin;

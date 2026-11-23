@@ -69,15 +69,22 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     if (style.litAppearanceMode == "custom") return signal;
     const auto& palette = decorStyle ? *decorStyle : style;
     const auto solid = [](const auto& paint) { return paint.mode == "solid"; };
-    if (!solid(palette.afterFillPaint) || !solid(palette.afterStrokePaint)
+    Signal::Decoration decoration;
+    decoration.unitFillGradient = ::subtitle::skia::lineGradient(palette.afterFillPaint, SkRect::MakeWH(1, 1), 0);
+    if ((!solid(palette.afterFillPaint) && !decoration.unitFillGradient) || !solid(palette.afterStrokePaint)
         || !solid(palette.afterStroke2Paint) || !solid(palette.afterDecorPaint))
-        throw BackendError("Skia 自动指示灯当前仅支持实色装饰");
+        throw BackendError("Skia 自动指示灯当前支持实色或渐变填充、实色描边和装饰");
+    if (signal.path && decoration.unitFillGradient) {
+        const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
+        if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
+            throw BackendError("Skia 矢量指示灯渐变缺少有效的基线");
+        decoration.glyphPaintOrigin = SkPoint::Make(float(xy[0].toDouble() * dpr), float(baseline.toDouble() * dpr));
+    }
     const float ratio = palette.fontSize > 0 ? signal.size / palette.fontSize : 1.f;
     const float maxStroke = std::floor(signal.size * .5f);
     signal.fill = argb(palette.afterFillPaint.color);
     signal.stroke = argb(palette.afterStrokePaint.color);
     signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maxStroke);
-    Signal::Decoration decoration;
     decoration.outerStroke = argb(palette.afterStroke2Paint.color);
     decoration.outerWidth = std::clamp(palette.stroke2Width * ratio, 0.f, maxStroke);
     const auto kind = palette.decorationKindForState(true);

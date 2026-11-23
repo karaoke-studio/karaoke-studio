@@ -1622,6 +1622,49 @@ def test_decorated_signal_zoom_pulses_on_its_own_countdown(binary, project, sign
         assert np.array_equal(gpu[0], still[0])  # The preceding flash interval must not grow a column.
 
 
+@pytest.mark.parametrize('shape', ['square', 'star'])
+def test_decorated_lamp_gradient_keeps_its_group_span(binary, project, shape):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    line, = track.lines
+    shift = 1200
+    track = replace(track, lines=[replace(
+        line, chars=[replace(char, start_ms=char.start_ms + shift) for char in line.chars],
+        end_ms=line.end_ms + shift, display_start_override_ms=0, display_end_override_ms=3700)])
+    color = colors('#FFFFFF', '#FFFFFF')
+    color = replace(color, after=replace(color.after, text=PaintFill(
+        mode='gradient_horizontal', start_color='#FD1906', end_color='#0845FE')))
+    style = replace(style, entry_anim='none', exit_anim='none', lit_enabled=True, lit_style=shape,
+        karaoke_colors=colors('#CCCCCC', '#CCCCCC'),
+        lit_appearance_mode='role', lit_role_name='signal-palette', lit_size=34, lit_number=3,
+        lit_offset_y=-35, lit_edge_brightness_pct=0, lit_stroke_width=0, lit_shadow=False,
+        signals_duration_ms=1500, lit_time_offset_ms=0, lit_transition_mode='none',
+        custom_style_schemes={'signal-palette': SubtitleStyleScheme(font_size_px=50, karaoke_colors=color)})
+    times, dpr = (150, 470, 980), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, 'decorated_lamp_group_gradient', check_p00_edges=True)
+    for frames in (gpu, raster):
+        lamp_pixels = [(frame[..., 3] > 250) & np.any(frame[..., :3] != frame[..., :1], axis=-1)
+                       for frame in frames]
+        ys, xs = np.nonzero(lamp_pixels[-1])
+        assert xs.size > 1000 and np.count_nonzero(lamp_pixels[0]) > xs.size * 2
+        assert np.array_equal(frames[0][ys, xs], frames[-1][ys, xs])
+        assert len(np.unique(frames[-1][ys, xs, 0])) > 24
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source
