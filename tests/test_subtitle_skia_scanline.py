@@ -230,13 +230,21 @@ def test_static_cell_band_requires_its_capability(binary, project):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_static_cell_band_matches_actual_d2d_gpu(binary, project):
+@pytest.mark.parametrize('with_inline_outline', [False, True])
+def test_static_cell_band_matches_actual_d2d_gpu(binary, project, with_inline_outline):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = static_guide_and_role_band(project)
+    if with_inline_outline:
+        line, = track.lines
+        guide = line.guide_symbol
+        chars = [replace(char, role_label=None) for char in line.chars]
+        track = replace(track, lines=[replace(line, chars=chars, guide_symbol=None, inline_guide_symbols={1: guide})])
+        style = replace(style, stroke_width_px=3)
     ir = ir_for(binary, (track, style))
+    assert 'p07_scanline_static_cells' in ir['required_features']
     times = (290, 400, 520, 680, 750, 850, 1100, 1850)
     references = []
     for look in (style, replace(style, scanline_enabled=False)):
@@ -246,7 +254,7 @@ def test_static_cell_band_matches_actual_d2d_gpu(binary, project):
         references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
     reference, bare = references
     cells = ir['skia_layout']['lines'][0]['cells']
-    for cell in cells[:2]:  # The replacement guide and the role cell have independent paint.
+    for cell in cells[:2]:  # Check that the scanline affects the guide and its neighboring lyric.
         left, _, right, _ = cell['metrics']['ink']
         columns = slice(round(cell['origin_x'] + left) + 1, round(cell['origin_x'] + right) - 1)
         assert any(np.count_nonzero(a[:, columns] != b[:, columns]) > 100

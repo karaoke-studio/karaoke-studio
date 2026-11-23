@@ -1015,7 +1015,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     and {source.get('entry_anim'), source.get('exit_anim')} != {'none'} and ordinary_line_animation(source)
                     and not (source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash')
                              or source.get('fx_bursts') or item.line.wipe_reverse or _inline_role_labels(item))
-                    and all(char.vector_glyph is None for char in item.render_line.chars)):
+                    and all(not guide_symbol_is_bitmap(char.vector_glyph) for char in item.render_line.chars)):
                 rubies = geometry.ruby.lines[index].rubies if geometry.ruby is not None else ()
                 kinds = {kind for group in rubies for kind in ruby_decoration_kinds(group.target.style)}
                 kinds.update(kind for kind in ('shadow', 'glow') if uses_authored_decoration(item.layout_style, kind))

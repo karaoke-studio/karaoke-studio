@@ -528,11 +528,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && plainLineAnimation(source.exitAnimation, false);
         const bool guideRubyAnimation = staticScanline
             || (features.contains("p07_ruby_line_animation") && guideWholeLineAnimation);
-        const bool inlineGuideRuby = features.contains("p05_inline_vector_guide_ruby")
-            && !rubyGroups.isEmpty() && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
-            && guideRubyAnimation && !source.scanlineEnabled && source.karaokeAnimation == "none"
-            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
-        const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow");
+        const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow") && rubyGroups.isEmpty()
+            && (protocol::decorationKindForState(resolved, false) == "shadow"
+                || protocol::decorationKindForState(resolved, true) == "shadow");
         const bool wholeLineGuideShadow = vectorGuideShadow && (staticScanline
             || (features.contains("p07_horizontal_shadow_line_animation")
                 && guideWholeLineAnimation))
@@ -547,11 +545,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && simpleTransform(source.entryAnimation) && simpleTransform(source.exitAnimation)
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && !source.scanlineEnabled && source.fxBursts.empty();
-        const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
-            && rubyGroups.isEmpty() && !cfg.vertical
-            && source.karaokeAnimation == "none"
-            && (guideWholeLineAnimation || styledCellTransform)
-            && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
             && staticScanline && !source.scanlineEnabled
@@ -630,10 +623,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 竖排单元包含控制字符或无效码点");
             if (cell.vectorGlyph && vectorGuideShadow && !wholeLineGuideShadow)
                 throw BackendError("Skia 矢量导唱符阴影需要正向横排与整行出入场");
-            if (composedGuide && sawLyrics && cell.vectorGlyph
-                && !(outlinedInlineGuide || wholeLineGuideShadow || inlineGuideRuby || singingGuide))
-                throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
-            sawLyrics = sawLyrics || !cell.vectorGlyph;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
                 throw BackendError("Skia 竖排单元包含尚未支持的行内角色");
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
@@ -652,7 +641,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (source.scanlineEnabled && ((cell.vectorGlyph && !(prefixFadedScanline || staticScanlineCells))
+            if (source.scanlineEnabled && ((cell.vectorGlyph && !((prefixFadedScanline && !sawLyrics) || staticScanlineCells))
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && !staticCellParticles
@@ -675,7 +664,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !(roleVectorGuides || unscaledRoleVectorGuide))
-                || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
+                || ((!rubyGroups.isEmpty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
             if (cell.bitmapGuide) {
@@ -695,6 +684,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }
+            sawLyrics = sawLyrics || !cell.vectorGlyph;
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;
             if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
                 || !cell.resolvedEndMs)

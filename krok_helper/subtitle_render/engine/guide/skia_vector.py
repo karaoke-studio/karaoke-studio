@@ -154,8 +154,7 @@ def compose_vector_guides(plan_lines, ir):
         has_glow = uses_authored_decoration(look, 'glow')
         singing = source.get('karaoke_anim') == 'utopia'
         plain_effects = not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-        ordinary = (source.get('karaoke_anim') == 'none'
-                    and plain_effects)
+        ordinary = source.get('karaoke_anim') == 'none' and plain_effects
         whole_line = ordinary and ordinary_line_animation(source)
         stationary = ordinary and source.get('entry_anim') == source.get('exit_anim') == 'none'
         forward = not (look.vertical or look.right_to_left or line.wipe_reverse)
@@ -180,15 +179,13 @@ def compose_vector_guides(plan_lines, ir):
             continue
         if vector_guides_form_prefix(chars):
             continue
-        if singing and forward and plain_effects and {source.get('entry_anim'), source.get('exit_anim')} <= {'none', 'fade'}:
-            continue
+        # Retain legacy declarations for clients that share an older sidecar.
+        # Drawing itself uses the line's reading, outline and effect layers.
         if (upper_reading or lower_reading) and forward and whole_line:
             required.add('p05_inline_vector_guide_ruby')
         elif (has_outline_profile and (whole_line or cell_transform) and not look.vertical
               and not (upper_reading or lower_reading or has_glow or has_shadow)):
             required.add('p06_inline_vector_guide_outline')
-        else:
-            raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
 
     features.extend(sorted(required))
 

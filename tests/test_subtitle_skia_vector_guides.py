@@ -382,14 +382,17 @@ def outlined_inline_guide(project):
     return track, outlined(style, 2)
 
 
-def test_inline_vector_outlines_preserve_scene_after_missing_capability(binary, project):
+def test_inline_vector_outlines_use_the_existing_outline_capability(binary, project):
     ir = ir_for(binary, outlined_inline_guide(project))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_inline_vector_guide_outline')
+    composed = copy.deepcopy(ir)
+    composed['required_features'].remove('p06_inline_vector_guide_outline')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 750, 1100])
-        with pytest.raises(NativeRendererError, match='导唱符'):
+        configure(process, composed)
+        bad = copy.deepcopy(composed)
+        bad['required_features'].remove('p06_primary_solid_outline')
+        with pytest.raises(NativeRendererError, match='描边'):
             configure(process, bad)
         replay, _ = collect(process, [1100, 750, 550], generation=2)
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
@@ -440,6 +443,36 @@ def test_inline_vector_guide_uses_its_own_role_palette(binary, project):
     assert_glow_parity(times, reference, gpu, raster, 'inline_vector_role_palette', check_p00_edges=True)
     for frames in (gpu, raster):
         assert any(np.count_nonzero(np.all(frame[..., :3] == [255, 0, 255], axis=-1)) > 100 for frame in frames)
+
+
+@pytest.mark.parametrize('entry', ['none', 'slide_in'])
+def test_inline_vector_guide_reuses_glow(binary, project, entry):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity, glow_source
+
+    track, style = glow_source(project, 'three_passes')
+    line, = track.lines
+    if entry == 'slide_in':
+        motion = LineAnimationOverride(entry_anim=entry, entry_duration_ms=600)
+        line = replace(line, animation_override=motion,
+                       chars=[replace(char, start_ms=char.start_ms + 600) for char in line.chars],
+                       end_ms=line.end_ms + 600, display_start_override_ms=0)
+    track = replace(track, lines=[replace(line, inline_guide_symbols={1: CURVES})])
+    times, dpr = (200, 450, 750, 1200), 1.5
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert {'p05_vector_guide_composition', 'p06_static_glow'} <= set(ir['required_features'])
+    if entry == 'slide_in':
+        assert 'p07_horizontal_glow_line_animation' in ir['required_features']
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('inline_vector_glow', entry), check_p00_edges=True)
 
 
 def test_rtl_vector_guide_preserves_signal_and_scene(binary, project):
@@ -575,8 +608,28 @@ def test_faded_gradient_with_leading_replacement_guide(binary, project, effect):
             configure(process, invalid)
     assert frames[0][..., 3].any() and not np.array_equal(frames[1], frames[2])
     assert np.array_equal(frames[0], frames[-1])
-    with pytest.raises(ValueError, match='前置导唱符|扫字线'):
-        ir_for(binary, (replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})]), style))
+    inline = replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])
+    if effect in {'scanline', 'scanline_particles', 'scanline_snow'}:
+        with pytest.raises(ValueError, match='扫字线'):
+            ir_for(binary, (inline, style))
+        return
+
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    times = (180, 650, 950, 2300)
+    inline_ir = ir_for(binary, (inline, style))
+    assert inline_ir['track']['lines'][0]['chars'][1].get('vector_glyph_id')
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=inline,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, inline_ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('inline_vector_gradient', effect), check_p00_edges=True)
 
 
 @GPU
