@@ -113,8 +113,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool movingGlow = compositingSpin || compositingDrip;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
-    // Volume bars and vertical particles can extend outside the text paint bounds.
-    const bool dynamicPaint = movingCells || line.volumeSignal || (line.vertical && !line.particles.empty());
+    // Volume bars and particles can extend outside the text paint bounds.
+    const bool dynamicPaint = movingCells || line.volumeSignal || !line.particles.empty();
     if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (dynamicPaint || !line.paintBounds.isEmpty())) {
         const auto* bounds = dynamicPaint ? nullptr : &line.paintBounds;
         // Keep the same bounded destination-format layer at every opacity

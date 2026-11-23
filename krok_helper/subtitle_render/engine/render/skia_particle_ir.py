@@ -118,6 +118,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     moving_vertical_band_particles = False
     outlined_vertical_particles = False
     no_wipe_vertical_particles = False
+    horizontal_line_motion = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -159,14 +160,18 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                               and any(burst['kind'] != 'scanline' for burst in bursts))
         ruby_band_singing = ruby_band_singing or singing_under_band
         scaled_singing = faded_band or (annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
+        unscaled_motion = (not look.vertical and not look.right_to_left and not item.line.wipe_reverse
+                           and not band and not animated and not annotated and not outlined
+                           and source.get('karaoke_anim') == 'none' and not source.get('stroke_flash')
+                           and (entry, exit_) != ('none', 'none') and ordinary_line_animation(source))
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
         if ((look.vertical and not vertical_particles) or look.right_to_left
                 or (item.line.wipe_reverse and not (band or vertical_particles))
                 or (source.get('karaoke_anim') != 'none' and not (scaled_singing or vertical_particles))
-                or (not (vertical_particles or faded_band)
+                or (not (vertical_particles or faded_band or unscaled_motion)
                     and entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
-                or (not (vertical_particles or faded_band)
+                or (not (vertical_particles or faded_band or unscaled_motion)
                     and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not petal_with_flame)))
@@ -176,6 +181,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (not (annotated or vertical_particles or faded_band) and outlined)
                 or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
+        horizontal_line_motion |= unscaled_motion
         for burst in bursts:
             kind = burst['kind']
             has_paint = 'paint_id' in burst
@@ -249,4 +255,6 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_ruby_band_singing_particles')
     if painted_singing:
         ir['required_features'].append('p07_faded_scanline_particle_paint')
+    if horizontal_line_motion:
+        ir['required_features'].append('p07_singing_particle_line_animation')
     return 13 if track.rubies else version

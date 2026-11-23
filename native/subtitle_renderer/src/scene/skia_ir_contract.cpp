@@ -85,6 +85,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
         "p08_rtl_bitmap_guides",
+        "p08_bitmap_guide_shadow",
         "p08_animated_title_guides",
         "p08_animated_bitmap_guides",
         "p08_static_line_band",
@@ -221,6 +222,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_character_transform",
         "p07_translucent_character_outline",
         "p07_sing_twinkle",
+        "p07_singing_particle_line_animation",
         "p07_vertical_sing_twinkle",
         "p07_vertical_sing_shapes",
         "p07_vertical_sing_falling",
@@ -692,6 +694,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 动态图片导唱符缺少图片导唱符布局能力");
     if (rtlBitmapGuides && (!features.contains("p08_bitmap_guides") || !features.contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左图片导唱符缺少方向或布局能力声明");
+    const bool bitmapGuideShadow = features.contains("p08_bitmap_guide_shadow");
+    if (bitmapGuideShadow && !features.contains("p08_bitmap_guides"))
+        throw BackendError("Skia 图片导唱符阴影缺少布局能力声明");
     if (features.contains("p08_bitmap_guides")) {
         // Verified line-prefix image guides with Utopia, upper ruby, solid outlines and glow only.
         static const QJsonArray allowed{
@@ -720,12 +725,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p08_rtl_bitmap_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
         };
+        static const QJsonArray shadowAllowed{"p08_bitmap_guide_shadow", "p06_static_shadow", "p06_ruby_shadow"};
         if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
             throw BackendError("Skia 图片导唱符布局版本无效");
         for (const auto& feature : features)
             if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature))
                 && !(reverseBitmapGuides && reverseAllowed.contains(feature))
-                && !(rtlBitmapGuides && rtlAllowed.contains(feature)))
+                && !(rtlBitmapGuides && rtlAllowed.contains(feature))
+                && !(bitmapGuideShadow && shadowAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
     }
     if (features.contains("p07_line_fade")
@@ -972,6 +979,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_vertical_singing_particle_line_animation")
         && (!verticalParticles || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))
         throw BackendError("Skia 竖排唱字粒子缺少整行出入场能力");
+    if (features.contains("p07_singing_particle_line_animation")
+        && (!features.contains("p07_sing_twinkle")
+            || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))
+        throw BackendError("Skia 唱字粒子缺少整行出入场能力");
     const bool verticalBandParticles = features.contains("p07_vertical_scanline_singing_particles")
         || features.contains("p07_vertical_scanline_particles");
     if (verticalBandParticles && (twinkleVersion < 8 || !verticalParticles || !features.contains("p07_vertical_scanline_band")))

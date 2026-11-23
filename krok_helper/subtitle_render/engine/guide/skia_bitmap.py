@@ -15,6 +15,7 @@ import math
 
 from PyQt6.QtGui import QImageReader
 
+from ..style.style_semantics import uses_authored_decoration
 from .metrics import bitmap_guide_image, vector_glyph_width
 from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
 
@@ -113,9 +114,6 @@ def validate_bitmap_guides(track, style, *, static_title=False):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
         if appearance.right_to_left and (track.rubies or any(not image.bitmap_no_decor for image in images)):
             raise ValueError('Skia 右至左图片导唱符当前仅支持无图片装饰的正文')
-        if not inline and (appearance.decoration_kind == 'shadow' or (
-                not appearance.decoration_before_sync and appearance.decoration_kind_before == 'shadow')):
-            raise ValueError('Skia 图片导唱符暂不支持阴影装饰')
     return animated
 
 
@@ -166,5 +164,11 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     if 'p05_horizontal_rtl' in features:
         features.append('p08_rtl_bitmap_guides')
         allowed |= RTL_BITMAP_GUIDE_FEATURES
+    if any(uses_authored_decoration(item.layout_style, 'shadow')
+           and any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
+                   for cell in item.render_line.chars)
+           for item in plan_lines):
+        features.append('p08_bitmap_guide_shadow')
+        allowed |= {'p08_bitmap_guide_shadow', 'p06_static_shadow', 'p06_ruby_shadow'}
     if not set(features) <= allowed:
         raise ValueError('Skia 图片导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')

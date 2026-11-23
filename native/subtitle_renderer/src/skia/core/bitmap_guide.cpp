@@ -12,7 +12,8 @@
 namespace subtitle::skia {
 PreparedBitmapGuide::PreparedBitmapGuide(const BitmapGuide& guide, std::size_t& remainingHaloBytes)
     : before_(guide.before), after_(guide.after), box_(guide.box), clipPad_(guide.clipPad),
-      useLineFront_(guide.useLineFront), animations_(guide.animations), animationAnchorMs_(guide.animationAnchorMs) {
+      useLineFront_(guide.useLineFront), animations_(guide.animations), animationAnchorMs_(guide.animationAnchorMs),
+      shadow_(guide.shadow) {
     if (!box_.isFinite() || box_.isEmpty() || !std::isfinite(clipPad_) || clipPad_ < 0
         || (!before_ && !after_))
         throw std::runtime_error("Skia 图片导唱符的图片或绘制框无效");
@@ -81,6 +82,14 @@ void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity, int 
     }
     if (!image || opacity <= 0) return;
     const SkSamplingOptions linear(SkFilterMode::kLinear, SkMipmapMode::kNone);
+    const auto imageRect = SkRect::MakeIWH(image->width(), image->height());
+    if (const auto& shadow = shadow_[after]; shadow.visible()) {
+        SkPaint paint;
+        paint.setAlphaf(opacity);
+        paint.setColorFilter(SkColorFilters::Blend(shadow.color, SkBlendMode::kSrcIn));
+        canvas.drawImageRect(image, imageRect, box_.makeOffset(shadow.x, shadow.y), linear, &paint,
+                             SkCanvas::kStrict_SrcRectConstraint);
+    }
     const float scaleX = box_.width() / std::max(float(image->width()), 1.f);
     const float scaleY = box_.height() / std::max(float(image->height()), 1.f);
     const auto& halos = halos_[after];
@@ -101,7 +110,7 @@ void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity, int 
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setAlphaf(opacity);
-    canvas.drawImageRect(image, SkRect::MakeIWH(image->width(), image->height()), box_, linear, &paint,
+    canvas.drawImageRect(image, imageRect, box_, linear, &paint,
                          SkCanvas::kStrict_SrcRectConstraint);
 }
 }

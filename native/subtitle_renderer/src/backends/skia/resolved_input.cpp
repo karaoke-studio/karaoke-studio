@@ -598,7 +598,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 ? resolvedBitmapGuideCell(cell, *bitmap, imageCache, paint, glyphs.dpr, line.chars[clock].startMs,
                                           line.chars[clock].endMs, beforeColor, afterColor, wipePad,
                                           staticTitle ? features.contains("p08_animated_title_guides")
-                                                      : features.contains("p08_animated_bitmap_guides"))
+                                                      : features.contains("p08_animated_bitmap_guides"),
+                                          features.contains("p08_bitmap_guide_shadow"))
                 : vector
                 ? glyphs.vectorCell(cell, *vector, glyphId.toString(), paint.fontSize / glyphs.dpr, line.chars[clock].startMs,
                                     line.chars[clock].endMs, beforeColor, afterColor, wipePad)

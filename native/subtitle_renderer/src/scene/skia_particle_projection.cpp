@@ -85,13 +85,20 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (source.karaokeAnimation == "none" || verticalScale || verticalNoWipe)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
+    const bool horizontalMotion = features.contains("p07_singing_particle_line_animation")
+        && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !source.scanlineEnabled
+        && !source.strokeFlashEnabled && !animated && !rubyParticles && source.karaokeAnimation == "none"
+        && (source.entryAnimation == "none" || source.entryAnimation == "fade"
+            || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")
+        && (source.exitAnimation == "none" || source.exitAnimation == "fade"
+            || source.exitAnimation == "slide_out" || source.exitAnimation == "rise");
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft
         || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles)
-        || (!verticalParticles && !fadedBand && ((source.entryAnimation != "none" && entry.isEmpty())
+        || (!verticalParticles && !fadedBand && !horizontalMotion && ((source.entryAnimation != "none" && entry.isEmpty())
             || (source.exitAnimation != "none" && exit.isEmpty())))
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)

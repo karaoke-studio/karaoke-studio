@@ -8,6 +8,7 @@ import pytest
 from PyQt6.QtGui import QColor, QImage
 
 from test_subtitle_skia_rtl_flow import application, binary, collect, configure, ir_for, project, selection
+from test_subtitle_skia_roles import colors
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation
@@ -101,7 +102,7 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse', 'shadow',
+@pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse',
                                     'lower', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
@@ -109,7 +110,6 @@ def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_p
     if change == 'vertical': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse': line = replace(line, wipe_reverse=True)
-    elif change == 'shadow': style = replace(style, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
     elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     else:
         line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
@@ -242,6 +242,54 @@ def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
     reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
     gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
     assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_guide', check_p00_edges=True)
+
+
+def shadowed_bitmap_guide(project, tmp_path):
+    track, style = rtl_bitmap_guide(project, tmp_path)
+    line, = track.lines
+    track = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=False),
+                                          inline_guide_symbols={})])
+    palette = colors('#FFB2FF', '#90CAFB')
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#DDF72839')),
+                      after=replace(palette.after, shadow=PaintFill(color='#DDBF28F7')))
+    return track, replace(style, right_to_left=False, decoration_before_sync=True, decoration_kind='shadow',
+                          karaoke_colors=palette, shadow_offset_x=9, shadow_offset_y=14)
+
+
+def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project, tmp_path):
+    ir = ir_for(binary, shadowed_bitmap_guide(project, tmp_path))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p08_bitmap_guide_shadow')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        output, _ = collect(process, [450, 900])
+        with pytest.raises(NativeRendererError, match='图片导唱符'):
+            configure(process, bad)
+        replay, _ = collect(process, [900, 450], generation=2)
+    assert np.array_equal(output, replay[::-1])
+
+
+@GPU
+def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = shadowed_bitmap_guide(project, tmp_path)
+    line, = track.lines
+    plain = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=True))])
+    times = (250, 450, 750, 1100, 1550)
+    refs = []
+    for source in (track, plain):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, no_guide_shadow = refs
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 40
+               for a, b in zip(reference, no_guide_shadow, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_shadow', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

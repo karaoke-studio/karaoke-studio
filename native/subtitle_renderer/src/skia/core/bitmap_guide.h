@@ -3,6 +3,7 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkRect.h"
 #include "static_glow.h"
+#include "static_shadow.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,7 @@ struct BitmapGuide {
     std::array<std::shared_ptr<const BitmapGuideAnimation>, 2> animations;
     int animationAnchorMs = 0; // Looping media time measured from the source's guide anchor.
     bool useLineFront = false;
+    std::array<ShadowState, 2> shadow;
 };
 
 class PreparedBitmapGuide {
@@ -57,5 +59,6 @@ private:
     std::array<std::vector<std::vector<Halo>>, 2> halos_;
     std::array<std::shared_ptr<const BitmapGuideAnimation>, 2> animations_;
     int animationAnchorMs_;
+    std::array<ShadowState, 2> shadow_;
 };
 }

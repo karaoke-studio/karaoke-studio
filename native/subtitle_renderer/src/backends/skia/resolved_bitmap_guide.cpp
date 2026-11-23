@@ -21,9 +21,12 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
 ::subtitle::skia::ResolvedCell resolvedBitmapGuideCell(const QJsonObject& cell, const BitmapGuide& guide,
                                                      SkiaImageFillCache& images, const TextStyle& style, double dpr,
                                                      int start, int end, std::uint32_t before, std::uint32_t after,
-                                                     double wipePad, bool allowAnimation) {
+                                                     double wipePad, bool allowAnimation, bool allowShadow) {
     if (!guide.noDecor && (style.beforeDecorPaint.mode != "solid" || style.afterDecorPaint.mode != "solid"))
         throw BackendError("Skia 图片导唱符光晕仅支持实色装饰");
+    const auto shadow = guide.noDecor ? ::subtitle::skia::StaticShadow{} : skiaStaticShadow(style);
+    if (shadow.visible() && !allowShadow)
+        throw BackendError("Skia 图片导唱符阴影缺少对应能力");
     const auto animated = [](const std::wstring& path) {
         return !path.empty() && QImageReader(QString::fromStdWString(path)).imageCount() > 1;
     };
@@ -78,7 +81,7 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
                          float((x + ink[2]) * dpr), float((y + ink[3]) * dpr)),
         skiaStaticGlow(style), !guide.noDecor,
         std::max(style.strokeWidth + style.stroke2Width, 2.f) + 4.f, std::move(animations), guide.animAnchorMs,
-        std::abs(double(guide.marginBottom)) >= contentH};
+        std::abs(double(guide.marginBottom)) >= contentH, {shadow.before, shadow.after}};
     return out;
 }
 }

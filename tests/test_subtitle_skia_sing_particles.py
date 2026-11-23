@@ -229,12 +229,60 @@ def test_singing_twinkle_projects_existing_bursts_and_replays_tail(binary, proje
 
 
 @pytest.mark.parametrize('changes', [{'entry_anim':'lightning', 'entry_lead_ms':750},
-                                     {'exit_anim':'flame', 'exit_fade_ms':750},
-                                     {'entry_anim':'rise', 'entry_lead_ms':400}])
+                                     {'exit_anim':'flame', 'exit_fade_ms':750}])
 def test_unverified_particle_styles_are_rejected(binary, project, changes):
     track, style = twinkle_source(project)
     with pytest.raises(ValueError, match='唱字'):
         ir_for(binary, (track, replace(style, **changes)))
+
+
+def moving_twinkle_source(project):
+    track, style = twinkle_source(project)
+    line, = track.lines
+    line = replace(line, display_start_override_ms=0, display_end_override_ms=2400)
+    style = replace(style, entry_anim='rise', entry_lead_ms=600, exit_anim='slide_out', exit_fade_ms=800)
+    return replace(track, lines=[line]), style
+
+
+def test_singing_particles_keep_clocks_under_line_motion(binary, project):
+    track, style = moving_twinkle_source(project)
+    ir = ir_for(binary, (track, style))
+    feature = 'p07_singing_particle_line_animation'
+    assert feature in ir['required_features']
+    baseline = ir_for(binary, (track, replace(style, entry_anim='none', exit_anim='none')))
+    line, = ir['track']['lines']
+    assert line['fx_bursts'] == baseline['track']['lines'][0]['fx_bursts']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    times = (320, 550, 1800, 2060)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='唱字粒子'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_singing_particles_under_line_motion_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = moving_twinkle_source(project)
+    times = (320, 550, 750, 1600, 1760, 1920, 2060)
+    frames = []
+    for look in (style, replace(style, sing_fx='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        frames.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = frames
+    assert any(np.count_nonzero(active != plain) > 40 for active, plain in zip(reference[:2], bare[:2], strict=True))
+    assert any(np.count_nonzero(active != plain) > 40 for active, plain in zip(reference[4:], bare[4:], strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'singing_particles_under_line_motion', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'feature', 'sprite', 'pivot', 'box', 'anchor', 'timing', 'legacy_classic', 'speed'])

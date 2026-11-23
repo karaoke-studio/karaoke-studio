@@ -12,5 +12,6 @@ class SkiaImageFillCache;
 ::subtitle::skia::ResolvedCell resolvedBitmapGuideCell(const QJsonObject& cell, const BitmapGuide&,
                                                      SkiaImageFillCache&, const TextStyle&, double dpr,
                                                      int startMs, int endMs, std::uint32_t before,
-                                                     std::uint32_t after, double wipePad, bool animatedTitle);
+                                                     std::uint32_t after, double wipePad, bool allowAnimation,
+                                                     bool allowShadow);
 }
