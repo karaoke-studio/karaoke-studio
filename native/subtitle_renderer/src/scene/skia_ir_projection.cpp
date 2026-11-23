@@ -89,7 +89,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides")
         || features.contains("p08_mixed_reverse_bitmap_guides");
     const bool directionalOutlines = features.contains("p06_directional_body_paints")
-        || features.contains("p06_directional_solid_outline");
+        || features.contains("p06_directional_solid_outline") || features.contains("p07_reverse_singing_outline");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
             || (cfg.rightToLeft && !(rtlRuby || directionalOutlines)) || (cfg.dualLineLayout && !multiLaneOutline)

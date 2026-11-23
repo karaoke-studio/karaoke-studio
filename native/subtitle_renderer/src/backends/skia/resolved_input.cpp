@@ -472,12 +472,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     && look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid"
                     && look.decorationKindForState(false) == "none" && look.decorationKindForState(true) == "none";
             });
+        const bool reverseSingingOutline = features.contains("p07_reverse_singing_outline")
+            && line.wipeReverse && !hasInlineRoles && !line.scanlineEnabled
+            && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
         const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
             && !style.vertical && !style.rightToLeft && !annotated && (!hasInlineRoles || reverseRoleSinging)
             && !vectorGuides
             && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
-            && style.strokeWidth == 0 && style.stroke2Width == 0;
+            && ((style.strokeWidth == 0 && style.stroke2Width == 0) || reverseSingingOutline);
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !(verticalSinging || reverseHorizontalSinging))
@@ -704,7 +707,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                             || (roleSinging && roleBodyPaints));
                     const bool translucentOutline = !utopia && !geometry && !annotated && !hasInlineRoles
                         && features.contains("p07_translucent_character_outline");
-                    if (!paintedSinging && !translucentOutline
+                    const bool reverseProtectedOutline = reverseHorizontalSinging && reverseSingingOutline
+                        && singingScale && !transforms;
+                    if (!paintedSinging && !translucentOutline && !reverseProtectedOutline
                         && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
                         || (glyph.outerOutline && !opaque(*glyph.outerOutline))))
                         throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");
@@ -978,7 +983,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));
         if (!style.vertical && (primaryOutline || secondaryOutline)
             && ((line.wipeReverse && !(reverseHorizontalDecoration || reverseBitmapLine || mixedReverseBitmaps
-                                      || directionalOutlines))
+                                      || directionalOutlines || (reverseHorizontalSinging && reverseSingingOutline)))
                 || (style.rightToLeft && !(rtlRuby || directionalOutlines))))
             throw BackendError("Skia 横排反向或右至左走字的描边缺少对应能力");
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
