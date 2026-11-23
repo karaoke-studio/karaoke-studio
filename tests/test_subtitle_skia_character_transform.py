@@ -90,12 +90,10 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
     assert np.array_equal(frames, expected)
 
 
-@pytest.mark.parametrize('case', ['rtl', 'reverse', 'roles', 'guide'])
+@pytest.mark.parametrize('case', ['roles', 'guide'])
 def test_unverified_combinations_are_rejected(binary, project, case):
     track, style = transform_source(project)
-    if case == 'rtl': style = replace(style, right_to_left=True)
-    elif case == 'reverse': track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
-    elif case == 'roles':
+    if case == 'roles':
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
         track = replace(track, lines=[replace(track.lines[0], chars=[
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
@@ -230,6 +228,51 @@ def singing_overlap(project, effect, handoff=False):
     if handoff:
         chars[0] = replace(chars[0], pause_release_ms=140)
     return replace(track, lines=[replace(line, chars=chars, end_ms=1200)]), style
+
+
+def directional_transform_source(project, direction, effect):
+    track, style = singing_overlap(project, effect)
+    if direction == 'reverse':
+        track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
+    else:
+        style = replace(style, right_to_left=True)
+    return track, style
+
+
+def test_directional_character_transform_requires_capability(binary, project):
+    ir = ir_for(binary, directional_transform_source(project, 'reverse', 'spin_flip'))
+    forged = copy.deepcopy(ir)
+    forged['required_features'].remove('p07_directional_character_transform')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [125, 400])
+        with pytest.raises(NativeRendererError, match='逐字滴落/翻转'):
+            configure(process, forged)
+        replay, _ = collect(process, [400, 125], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction,effect', [('reverse', 'spin_flip'), ('rtl', 'char_drip')])
+def test_directional_character_transform_matches_actual_d2d_gpu(binary, project, direction, effect):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = directional_transform_source(project, direction, effect)
+    times, dpr = (100, 125, 159, 200, 260, 400, 700, 1200), 3
+    draws = []
+    for look in (style, replace(style, entry_anim='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        draws.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    reference, control = draws
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:4], control[:4], strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p07_directional_character_transform' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, direction, check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

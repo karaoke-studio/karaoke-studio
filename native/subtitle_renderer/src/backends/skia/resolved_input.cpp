@@ -762,7 +762,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 && simpleBodyTransform && line.karaokeAnimation == "none"
                 && style.scanlineShape == "band" && (style.scanlineMode == "default" || style.scanlineMode == "color");
             const bool wholeCellTransform = simpleBodyTransform && features.contains("p07_no_wipe_character_transform");
-            if (style.vertical || style.rightToLeft || line.wipeReverse || (prepared.noWipe && !wholeCellTransform)
+            const bool directionalTransform = simpleBodyTransform && features.contains("p07_directional_character_transform")
+                && line.karaokeAnimation == "none" && !line.scanlineEnabled
+                && style.strokeWidth == 0 && style.stroke2Width == 0
+                && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none";
+            if (style.vertical || ((style.rightToLeft || line.wipeReverse) && !directionalTransform)
+                || (prepared.noWipe && !wholeCellTransform)
                 || (line.scanlineEnabled && !(petalScanline || transformBand)))
                 throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
         }

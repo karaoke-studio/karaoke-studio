@@ -177,6 +177,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
     translucent_outlines = False
     energy_outlines = False
     whole_cell_transform = False
+    directional_transform = False
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
         animations = {source.get('entry_anim'), source.get('exit_anim')}
@@ -192,7 +193,12 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         line, look = track.lines[item.track_index], item.layout_style
         whole_cell = (source.get('karaoke_anim') == 'no_wipe' and not track.rubies
                       and animations <= {'char_drip', 'spin_flip', 'none'})
-        if (look.vertical or look.right_to_left or line.wipe_reverse
+        directional = ((look.right_to_left or line.wipe_reverse) and not track.rubies
+                       and source.get('karaoke_anim') == 'none' and animations <= {'char_drip', 'spin_flip', 'none'}
+                       and not (look.stroke_width_px or (look.stroke2_enabled and look.stroke2_width_px)
+                                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                                or any(uses_authored_decoration(look, kind) for kind in ('glow', 'shadow'))))
+        if (look.vertical or ((look.right_to_left or line.wipe_reverse) and not directional)
                 or (index not in character_warp_lines and index not in composed_geometry_lines
                     and ((source.get('karaoke_anim') != 'none' and not whole_cell) or track.rubies))
                 or (source.get('scanline') and item.track_index not in particle_band_tracks
@@ -205,6 +211,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         if not (entry or exit_):
             continue
         whole_cell_transform |= whole_cell
+        directional_transform |= directional
         outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
         if geometry and outlined and index not in composed_geometry_lines:
             if not track.rubies and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
@@ -229,6 +236,8 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         ir['required_features'].append('p07_energy_transition_outlines')
     if whole_cell_transform:
         ir['required_features'].append('p07_no_wipe_character_transform')
+    if directional_transform:
+        ir['required_features'].append('p07_directional_character_transform')
     return version
 
 

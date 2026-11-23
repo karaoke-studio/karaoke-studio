@@ -247,7 +247,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             : useCellProgress ? rawProgress(cell)
             : transformedWipeRatio(cell.wipePoints, cell.adjustedWipeEnd, wipeStart(cell), wipeEnd(cell), tMs);
         const float origin = utopia && !line.rubyGroups.empty()
-            ? line.rubySingingOrigin : line.cells.front().pivot.layoutLeft;
+            ? line.rubySingingOrigin : std::min(line.cells.front().pivot.layoutLeft, line.cells.back().pivot.layoutLeft);
         return transformedWipeEdge(origin, transform.matrix.mapPoint({cell.pivot.inkLeft, 0}).x(),
             transform.matrix.mapPoint({cell.pivot.inkRight, 0}).x(), ratio, cell.pivot.wipePad, line.wipeRightToLeft);
     };
