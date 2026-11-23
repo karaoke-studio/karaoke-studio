@@ -77,8 +77,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     // Fixed-cell columns. Readings require a separately versioned feature.
     if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft
         || (!cfg.rubies.empty() && !features.contains("p05_vertical_ruby"))
-        || (cfg.dualLineLayout && !features.contains("p05_vertical_columns"))
-        || std::any_of(cfg.lineOffsetsX.begin(), cfg.lineOffsetsX.end(), [](int v) { return v != 0; })))
+        || (cfg.dualLineLayout && !features.contains("p05_vertical_columns"))))
         throw BackendError("Skia 竖排列布局或能力声明无效");
     // Upper and lower annotations over solid main outlines need their own capability.
     const bool outlineRuby = features.contains("p06_outline_ruby");
@@ -438,6 +437,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         style.leadInMs = cfg.lineLeadInMs;
         style.tailMs = cfg.lineTailMs;
         applyLineLayout(style, source.layout, source.lane, source.centerOverride, source.pageLineCount, cfg.dpr);
+        if (cfg.vertical && style.laneOffsetX != 0 && !features.contains("p05_vertical_column_offsets"))
+            throw BackendError("Skia 竖排列偏移缺少对应布局能力声明");
         style.layoutOffsetX += float(source.layoutOffsetX * cfg.dpr);
         style.layoutOffsetY += float(source.layoutOffsetY * cfg.dpr);
         if (source.karaokeAnimation == "no_wipe"

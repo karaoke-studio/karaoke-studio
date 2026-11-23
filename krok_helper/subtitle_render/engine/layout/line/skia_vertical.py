@@ -11,9 +11,11 @@ from dataclasses import replace
 import unicodedata
 
 from krok_helper.subtitle_render.domain.timing import TimingTrack, remap_track_role_labels
+from .alignment import lane_offset_x
 
 VERTICAL_GUIDE_LAYOUT_FEATURES = frozenset({
     'p05_vertical_solid', 'p05_vertical_japanese_glyphs', 'p05_vertical_text_cells', 'p05_vertical_columns',
+    'p05_vertical_column_offsets',
     'p05_reverse_wipe', 'p05_reverse_overlap',
     'p06_vertical_outline', 'p06_vertical_columns_outline', 'p06_vertical_reverse_outline',
     'p05_vertical_ruby', 'p05_vertical_ruby_groups', 'p05_vertical_ruby_extended_units', 'p05_ruby_units',
@@ -73,8 +75,8 @@ def vertical_solid_schema(track):
 
 
 def validate_vertical_style(style):
-    if style.right_to_left or any(style.line_offsets_x) or style.lower_ruby_enabled:
-        raise ValueError('Skia 竖排暂不支持右至左单元、独立列偏移或下方注音')
+    if style.right_to_left or style.lower_ruby_enabled:
+        raise ValueError('Skia 竖排布局不能携带横排方向或下方注音')
 
 
 def validate_vertical_source(track):
@@ -116,7 +118,8 @@ def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
     cell_height = max(ascent + descent, 1.0)
     block = cell_height * count
     margin = float(style.line_y_margin_px)
-    column = width - margin - ruby_allowance - size / 2
+    page_count = item.page_line_count if style.dual_line_layout and style.line_horizontal_layout == 'asymmetric' else 0
+    column = width - margin - ruby_allowance - size / 2 + lane_offset_x(style, item.lane, page_count)
     if item.lane:
         column -= item.lane * max(size + float(style.line_gap_px) + ruby_allowance, 1.0)
     top = {'top': margin, 'center': max((height - block) / 2, 0.0),

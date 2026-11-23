@@ -60,20 +60,70 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['control', 'rtl', 'dual_alt_grid', 'offset'])
+@pytest.mark.parametrize('change', ['control', 'dual_alt_grid'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     track, style = vertical_source(project)
     line = track.lines[0]
     if change == 'control':
         track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text='\x01'), *line.chars[1:]])])
-    elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'dual_alt_grid':
         track = replace(track, lines=[replace(line, layout_index=1)])
         style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
                         layouts=[LyricsLayout(line_gap_px=style.line_gap_px + 8)])
-    elif change == 'offset': style = replace(style, line_offsets_x=[12])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def vertical_column_offsets(project):
+    track, style = vertical_source(project, position='bottom')
+    line, = track.lines
+    first = replace(line, track_line_index=0, end_ms=1800, display_end_override_ms=2400)
+    second = replace(first, track_line_index=1, chars=[replace(c, start_ms=c.start_ms + 80) for c in first.chars])
+    track = replace(track, lines=[first, second])
+    style = replace(style, dual_line_layout=True, layout_semantics='n3_1074', line_gap_px=24,
+                    line_alignments=['left', 'right'], line_offsets_x=[12, -9], sync_entry=False)
+    return track, style
+
+
+def test_vertical_column_offsets_use_authored_slots(binary, project):
+    track, style = vertical_column_offsets(project)
+    ir = ir_for(binary, (track, replace(style, right_to_left=True)))
+    control = ir_for(binary, (track, replace(style, line_offsets_x=[0, 0])))
+    assert 'p05_vertical_column_offsets' in ir['required_features']
+    assert not ir['style']['right_to_left'] and 'p05_horizontal_rtl' not in ir['required_features']
+    for with_offset, without in zip(ir['skia_layout']['lines'], control['skia_layout']['lines'], strict=True):
+        assert with_offset['cells'][0]['origin_x'] - without['cells'][0]['origin_x'] == pytest.approx(
+            style.line_offsets_x[with_offset['vertical_lane']])
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p05_vertical_column_offsets')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [600])
+        with pytest.raises(NativeRendererError, match='列偏移'):
+            configure(process, bad)
+        replay, _ = collect(process, [600], generation=2)
+    assert frames[0].any() and np.array_equal(frames, replay)
+
+
+@GPU
+def test_vertical_column_offsets_and_ignored_rtl_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = vertical_column_offsets(project)
+    times = (400, 620, 950, 1200, 1660, 2050)
+    looks = (replace(style, right_to_left=True), style, replace(style, line_offsets_x=[0, 0]))
+    references = []
+    for look in looks:
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in pixels])
+    assert np.array_equal(references[0], references[1])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(references[0], references[2], strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, looks[0])), times)
+    assert_glow_parity(times, references[0], gpu, raster, 'vertical_column_offsets', check_p00_edges=True)
 
 
 def test_vertical_multiscalar_cell_preserves_clock(binary, project):

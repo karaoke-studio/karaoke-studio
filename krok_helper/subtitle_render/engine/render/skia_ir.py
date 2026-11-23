@@ -283,8 +283,8 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
 def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
     if style.vertical:
         track = use_vertical_line_styles(track)
-        if style.lower_ruby_enabled:
-            style = replace(style, lower_ruby_enabled=False)
+        if style.lower_ruby_enabled or style.right_to_left:
+            style = replace(style, lower_ruby_enabled=False, right_to_left=False)
     prepared = []
     animated_bitmap_guides = False
     role_vector_guides = False
@@ -651,6 +651,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['skia_layout']['vertical_solid_schema'] = vertical_solid_schema(track)
         if vertical_text_cells(track):
             ir['required_features'].append('p05_vertical_text_cells')
+        if any(any(item.layout_style.line_offsets_x) for item in plan.lines):
+            ir['required_features'].append('p05_vertical_column_offsets')
         if vertical_japanese_glyphs(track):
             ir['required_features'].append('p05_vertical_japanese_glyphs')
             ir['skia_layout']['vertical_japanese_glyph_schema'] = 1
