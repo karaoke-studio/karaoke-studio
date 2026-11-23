@@ -613,7 +613,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     or (source.get('karaoke_anim') != 'none' and not singing)
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                    or any(char.vector_glyph is not None for char in item.render_line.chars)):
+                    or has_bitmap_guides((item.render_line,))):
                 raise ValueError('Skia 行内角色阴影当前需要正向横排普通走字或静态实色 Utopia 唱字')
             role_shadow_motion |= moving
             role_shadow_singing |= singing

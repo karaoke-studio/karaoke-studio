@@ -870,7 +870,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 return look.beforeDecorPaint.mode == "solid" && look.afterDecorPaint.mode == "solid";
             });
         const bool inlineShadow = roleStaticShadow && hasInlineRoles && (!annotated || roleShadowRuby)
-            && !vectorGuides && !hasBitmapGuide
+            && !hasBitmapGuide
             && !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || roleSingingShadow)
             && (staticShadowLine || roleShadowMotion) && !line.scanlineEnabled
@@ -1070,7 +1070,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.strokeFlashEnabled && !flashGlow)
                 || (hasInlineRoles && !(roleGuideShadow || inlineShadow)) || ((gradient || image) && !paintedDecoration)
                 || (hasGlow && utopia && !singingGlow)
-                || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
+                || (vectorGuides && !inlineShadow && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (!roleBodyPaints && (gradient || image)) {
             const bool unscaledPaintFade = features.contains("p06_unscaled_paint_fade")

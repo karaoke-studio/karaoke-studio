@@ -25,7 +25,7 @@ _LINE_MOTIONS = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case', ['solid', 'textured', 'motion', 'utopia'])
+@pytest.mark.parametrize('case', ['solid', 'textured', 'motion', 'utopia', 'vector_guide'])
 def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_reverse import source
@@ -35,7 +35,12 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, cas
     track, style = source(project)
     line, = track.lines
     chars = [replace(c, role_label='lead') if i in (1, 2) else c for i, c in enumerate(line.chars)]
-    track = replace(track, lines=[replace(line, chars=chars, wipe_reverse=False)])
+    line = replace(line, chars=chars, wipe_reverse=False)
+    if case == 'vector_guide':
+        from test_subtitle_skia_vector_guides import SQUARE
+
+        line = replace(line, inline_guide_symbols={1: SQUARE})
+    track = replace(track, lines=[line])
     palette = colors('#FFF4E7C0', '#FF177FDC')
     before, after = PaintFill(color='#A044AA40'), PaintFill(color='#D0E040FF')
     if case in {'textured', 'motion'}:
@@ -79,7 +84,7 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, cas
         assert any(np.count_nonzero(a != np.frombuffer(b, np.uint8).reshape(a.shape)) > 100
                    for a, b in zip(refs[0], raw, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
-    feature = {'solid': 'p06_role_static_shadow', 'textured': 'p06_role_shadow_paints',
+    feature = {'solid': 'p06_role_static_shadow', 'vector_guide': 'p06_role_static_shadow', 'textured': 'p06_role_shadow_paints',
                'motion': 'p07_role_shadow_line_animation', 'utopia': 'p07_role_singing_shadow'}[case]
     assert feature in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
