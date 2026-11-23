@@ -299,6 +299,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         // The band repaints the posed unit during Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";
+        const bool roleSingingScanline = features.contains("p07_role_scanline_singing") && utopiaSinging
+            && staticScanline && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+            && !features.contains("p05_lower_ruby") && !source.strokeFlashEnabled && source.fxBursts.empty()
+            && resolved.scanlineMode == "role" && resolved.scanlineShape == "band";
         const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool particleScanlineImage = noteExit && source.entryAnimation == "petal"
             && resolved.scanlineShape == "image" && features.contains("p07_ruby_petal_scanline_image");
@@ -384,15 +388,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (cfg.vertical && !verticalBand) || (cfg.rightToLeft && !rtlBand)
                 || (source.wipeReverse && scanlineVersion < 4)
                 || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
-                    && (!composedScanline || (source.wipeReverse && !cfg.vertical) || resolved.scanlineMode == "role"))
+                    && (!composedScanline || (source.wipeReverse && !cfg.vertical)
+                        || (resolved.scanlineMode == "role" && !roleSingingScanline)))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
                 || (features.contains("p05_lower_ruby") && !lowerScanline)
                 || (!rubyScanline && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))
                 || (rubyScanline && ((source.wipeReverse && !mixedVerticalScanline)
-                    || (resolved.scanlineMode == "role" && !roleLayers)
+                    || (resolved.scanlineMode == "role" && !(roleLayers || roleSingingScanline))
                     || !(staticScanline || movingScanline || particleScanline)
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前的布局或高亮组合不受支持");
+        if (source.scanlineEnabled && utopiaSinging && resolved.scanlineMode == "role" && !roleSingingScanline)
+            throw BackendError("Skia 角色扫字线缺少唱字放大能力");
         applyResolvedStyle(style, resolved, cfg.dpr);
         if (source.scanlineEnabled && shapePalette
             && (style.scanlineMode == "follow_before" || style.scanlineMode == "follow_after"

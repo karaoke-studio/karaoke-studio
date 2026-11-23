@@ -223,6 +223,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_composed_scanline",
         "p07_role_scanline_layers",
         "p07_scanline_role_gradient",
+        "p07_role_scanline_singing",
         "p07_scanline_shape_palette",
         "p07_rtl_scanline_band",
         "p07_ruby_scanline",
@@ -990,6 +991,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_role_scanline_layers")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 角色扫字线组合缺少横排高亮带能力声明");
+    if (features.contains("p07_role_scanline_singing")
+        && (!features.contains("p07_scanline_band") || !features.contains("p07_singing_scale") || scanlineVersion < 5))
+        throw BackendError("Skia 角色扫字线缺少唱字放大或扫字线能力声明");
     if (features.contains("p07_scanline_role_gradient")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 渐变扫字线缺少高亮带能力声明");

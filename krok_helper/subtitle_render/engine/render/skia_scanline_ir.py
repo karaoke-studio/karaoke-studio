@@ -57,6 +57,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     lower_singing_particles = False
     role_gradient = False
+    role_singing_band = False
     shaped_palette = False
     rtl_band = False
     reverse_image = original_image_palette = False
@@ -149,6 +150,11 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                         and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                                  or track.rubies or with_zoom_or_flash or bursts))
         body_shadow = uses_authored_decoration(look, 'shadow')
+        role_scaled = (look.scanline_mode == 'role' and look.scanline_shape == 'band' and utopia and ordinary
+                       and (role_fill is None or role_fill.mode == 'solid')
+                       and not (look.right_to_left or look.lower_ruby_enabled or inline_roles or vector_guides
+                                or line.get('stroke_flash') or bursts or body_shadow
+                                or uses_authored_decoration(look, 'glow')))
         static_shadow_band = (body_shadow and ordinary and look.scanline_shape == 'band'
                               and look.scanline_mode in {'default', 'color'} and line.get('karaoke_anim') == 'none'
                               and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
@@ -156,10 +162,12 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                                        or uses_authored_decoration(look, 'glow')))
         if ((look.scanline_shape != 'band' and not shape) or (look.right_to_left and not rtl_scanline)
                 or (line.get('karaoke_anim') != 'none' and not utopia)
-                or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
+                or (with_zoom_or_flash and (not ordinary or source.wipe_reverse
+                                            or (look.scanline_mode == 'role' and not role_scaled)))
                 or (look.lower_ruby_enabled and not lower_band)
                 or (body_shadow and not static_shadow_band)
-                or (role_composition and (not ordinary or utopia or source.wipe_reverse or line.get('fx_bursts')))
+                or (role_composition and not role_scaled
+                    and (not ordinary or utopia or source.wipe_reverse or line.get('fx_bursts')))
                 or (track.rubies and not (ordinary or motion or particle_entry))
                 or (inline_roles and not (role_fade or static_cells))
                 or (vector_guides and not (prefix_fade or static_cells))):
@@ -172,6 +180,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                           and ordinary and not (track.rubies or bursts or with_zoom_or_flash or utopia or inline_roles))
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
+        role_singing_band |= role_scaled
         line_motion |= motion and utopia
         faded_band_particles |= faded_band
         inline_role_fade |= role_fade
@@ -259,6 +268,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_lower_ruby_scanline')
     if role_layers:
         features.append('p07_role_scanline_layers')
+    if role_singing_band:
+        features.append('p07_role_scanline_singing')
     features.append('p07_scanline_band')
     return features
 

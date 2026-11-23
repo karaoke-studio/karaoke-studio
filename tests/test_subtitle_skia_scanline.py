@@ -168,17 +168,12 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['vertical_shape',
-                                  'ruby_role_utopia', 'zoom_role', 'utopia_entry', 'utopia_reverse'])
+@pytest.mark.parametrize('case', ['vertical_shape', 'utopia_entry', 'utopia_reverse'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'vertical_shape':
         track, style = vertical_ruby_source(project)
         style = replace(band(style), scanline_shape='flame')
-    elif case == 'ruby_role_utopia':
-        track, style = vertical_ruby_source(project)
-        style = replace(band(replace(style, vertical=False)), scanline_mode='role', karaoke_anim='utopia')
-    elif case == 'zoom_role': style = replace(style, karaoke_anim='zoom_pulse', scanline_mode='role')
     elif case == 'utopia_entry': style = replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600)
     else: track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
     with pytest.raises(ValueError, match='扫字线|Utopia'):
@@ -523,6 +518,48 @@ def ruby_band_source(reading, softness, utopia=False):
     track, style = upper_source(reading, 2)
     style = replace(band(style, 42), scanline_glow_px=softness, ruby_interval_px=9)
     return track, replace(style, karaoke_anim='utopia') if utopia else style
+
+
+def role_singing_scanline_source(reading, project, zoom):
+    track, style = scanline_source(project) if zoom else ruby_band_source(reading, 6, True)
+    source = SubtitleStyleScheme(karaoke_colors=colors('#AA2240', '#20C0EE'))
+    return track, replace(style, scanline_mode='role', scanline_role_name='highlight',
+                          custom_style_schemes={'highlight': source}, karaoke_anim='zoom_pulse' if zoom else 'utopia')
+
+
+def test_role_singing_scanline_requires_its_capability(binary, reading, project):
+    ir = upper_ir(binary, role_singing_scanline_source(reading, project, False), 1)
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_role_scanline_singing')
+    times = [550, 1100]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='扫字线'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('zoom', [False, True], ids=['utopia_with_ruby', 'zoom_pulse'])
+def test_role_singing_scanline_matches_actual_d2d_gpu(binary, reading, project, zoom):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = role_singing_scanline_source(reading, project, zoom)
+    times = (450, 550, 750, 899, 1100, 1550)
+    refs = []
+    for look in (style, replace(style, scanline_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, control = refs
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, control, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)) if zoom else upper_ir(binary, (track, style), 1), times)
+    assert_glow_parity(times, reference, gpu, raster, 'role_singing_scanline', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
