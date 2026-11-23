@@ -192,8 +192,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         rtl_scanline = (look.right_to_left and ordinary and look.scanline_shape == 'band'
                         and look.scanline_mode in {'color', 'default', 'brighten', 'follow_before', 'follow_after'}
                         and line.get('karaoke_anim') == 'none' and not has_readings
-                        and not (inline_roles or vector_guides or bursts or with_zoom_or_flash
-                                 or uses_authored_decoration(look, 'glow')))
+                        and not (inline_roles or bursts or with_zoom_or_flash or uses_authored_decoration(look, 'glow'))
+                        and not any(guide_symbol_is_bitmap(c.vector_glyph) for c in chars))
         fixed_fade = fixed_faded_utopia_band(line, look)
         role_fade = inline_roles and fixed_fade
         vector_fade = (not inline_roles
@@ -202,7 +202,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         fixed_shape = shape and look.scanline_mode == 'color' and look.scanline_shape in {'image', 'flame'}
         static_cells = ((inline_roles or vector_guides) and ordinary and (look.scanline_shape == 'band' or fixed_shape)
                         and look.scanline_mode != 'role' and line.get('karaoke_anim') == 'none'
-                        and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
+                        and (not look.right_to_left or rtl_scanline)
+                        and not (source.wipe_reverse or look.lower_ruby_enabled
                                  or has_readings or with_zoom_or_flash or bursts))
         body_shadow = uses_authored_decoration(look, 'shadow')
         role_scaled = (look.scanline_mode == 'role' and look.scanline_shape == 'band' and utopia and ordinary

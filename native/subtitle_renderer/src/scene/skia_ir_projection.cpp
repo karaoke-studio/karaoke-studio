@@ -566,7 +566,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool fixedShape = scanlineShape && resolved.scanlineMode == "color"
             && (resolved.scanlineShape == "image" || resolved.scanlineShape == "flame");
         const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && rubyGroups.isEmpty()
+            && !cfg.vertical && (!cfg.rightToLeft || rtlBand) && !source.wipeReverse && rubyGroups.isEmpty()
             && source.karaokeAnimation == "none"
             && (resolved.scanlineShape == "band" || fixedShape) && resolved.scanlineMode != "role"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();

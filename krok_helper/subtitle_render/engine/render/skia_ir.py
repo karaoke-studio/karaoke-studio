@@ -766,7 +766,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                         or karaoke not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
                         or (moving and not ordinary_line_animation(source))
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
-                        or _inline_role_labels(item)
                         or (shadow and karaoke == 'utopia')):
                     raise ValueError('Skia 右至左上注音仅支持普通走字、整字变色或 Utopia 唱字，阴影限前两种')
                 rtl_without_body_stroke |= look.stroke_width_px <= 0

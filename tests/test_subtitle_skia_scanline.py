@@ -15,7 +15,7 @@ from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_rtl_flow import colors, rtl_source
 from test_subtitle_skia_secondary_outline import two_outlines
 from test_subtitle_skia_sing_particles import assert_particle_region, blue_coverage
-from test_subtitle_skia_vector_guides import guide_source
+from test_subtitle_skia_vector_guides import SQUARE, guide_source
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_source, upper_ir, bands
 from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
@@ -356,16 +356,19 @@ def test_rtl_scanline_keeps_the_previous_scene_when_capability_is_missing(binary
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('reverse', [False, True], ids=['normal', 'reverse'])
-def test_rtl_scanline_matches_actual_d2d_gpu(binary, project, reverse):
+@pytest.mark.parametrize('case', ['normal', 'reverse', 'inline_guide'])
+def test_rtl_scanline_matches_actual_d2d_gpu(binary, project, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    track, style = rtl_source(project, reverse=reverse)
+    track, style = rtl_source(project, reverse=case == 'reverse')
     style = band(style)
-    if reverse:
+    if case == 'reverse':
         track, style = reverse_band(track, style)
+    elif case == 'inline_guide':
+        line, = track.lines
+        track = replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])
     times = (450, 550, 750, 1100, 1550)
     frames = []
     for look in (style, replace(style, scanline_enabled=False)):
@@ -375,8 +378,16 @@ def test_rtl_scanline_matches_actual_d2d_gpu(binary, project, reverse):
         frames.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
     reference, bare = frames
     assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, bare, strict=True))
-    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
-    assert_glow_parity(times, reference, gpu, raster, ('rtl_scanline', reverse))
+    ir = ir_for(binary, (track, style))
+    if case == 'inline_guide':
+        assert 'p07_scanline_static_cells' in ir['required_features']
+        guide = ir['skia_layout']['lines'][0]['cells'][1]
+        left, _, right, _ = guide['metrics']['ink']
+        middle = slice(round(guide['origin_x'] + left) + 1, round(guide['origin_x'] + right) - 1)
+        assert any(np.count_nonzero(a[:, middle] != b[:, middle]) > 100
+                   for a, b in zip(reference, bare, strict=True))
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('rtl_scanline', case))
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 7, 'legacy_mode', 'legacy_glow', 'shape', 'reverse',

@@ -267,8 +267,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (line.karaokeAnimation != "none" && !rtlRubySinging && !rtlRubyNoWipe)
             || (!(rtlRubyMotion || rtlRubyUnscaledMotion) && (line.entryAnimation != "none" || line.exitAnimation != "none"))
             || line.zoomPulseEnabled
-            || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-            || hasInlineRoles))
+            || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
             throw BackendError("Skia 右至左上注音缺少对应画笔或动画能力");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle
