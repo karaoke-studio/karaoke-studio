@@ -412,6 +412,21 @@ def test_title_vector_guides_use_prefix_count_and_fixed_frame(binary, target):
     assert all(np.array_equal(frames[0], frames[i]) for i in (1, 2, 4))
 
 
+def test_title_guides_ignore_paints_from_inactive_layers(binary):
+    track, style = vector_guide_title()
+    unused = PaintFill(mode='gradient_vertical', start_color='#FF00FF', end_color='#73FD1F')
+    title = replace(style.title_overlays[0], stroke=unused, stroke2=unused, shadow=unused)
+    decorated = replace(style, title_overlays=[title])
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        times = [400, 500, 1700]
+        process.configure(track, style, width=640, height=360, fps=60)
+        expected, _ = collect(process, times)
+        process.configure(track, decorated, width=640, height=360, fps=60)
+        actual, _ = collect(process, times, generation=2)
+    assert all(frame.any() for frame in expected)
+    assert np.array_equal(expected, actual)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('outlined', [False, True])
 def test_title_vector_guides_match_actual_d2d_gpu(binary, outlined):

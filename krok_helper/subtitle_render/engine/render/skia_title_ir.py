@@ -55,10 +55,14 @@ def _title_color(title):
 def title_style(title):
     roles = title['role_styles']
     paints = (title, *roles.values())
-    if any(paint['shadow']['mode'] != 'solid' and paint['decoration_kind'] != 'shadow' for paint in paints):
+    if any(paint['shadow']['mode'] != 'solid' and paint['decoration_kind'] == 'glow'
+           and paint['glow_radius_px'] > 0 for paint in paints):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
-    textured = any(paint[layer]['mode'] != 'solid' for paint in paints for layer in ('fill', 'stroke', 'stroke2'))
+    textured = any(paint['fill']['mode'] != 'solid'
+                   or (paint['stroke_width_px'] > 0 and paint['stroke']['mode'] != 'solid')
+                   or (paint['stroke2_width_px'] > 0 and paint['stroke2']['mode'] != 'solid')
+                   for paint in paints)
     if textured and (guides or any(paint['decoration_kind'] != 'none' for paint in paints)):
         return None
     bitmap_guides = any(guide['kind'] == 'bitmap' for guide in guides)
