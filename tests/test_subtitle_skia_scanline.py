@@ -894,19 +894,47 @@ def test_base_brighten_zero_and_subpixel_clips(binary, project, kind):
         assert delta[0] == delta[-1] == 0
 
 
-def test_gradient_role_scanline_is_explicitly_rejected(binary, project):
-    track, style = paint_band(project, 'role')
+def gradient_role_band(project, mode, kind='plain'):
+    track, style = paint_band(project, 'role', kind)
     role = style.custom_style_schemes['spotlight']
-    gradient = PaintFill(mode='gradient_horizontal', start_color='#224412', end_color='#DEBB83')
+    gradient = PaintFill(mode=mode, start_color='#52EC36', end_color='#FF95B3')
     paint = replace(role.karaoke_colors, after=replace(role.karaoke_colors.after, text=gradient))
-    bad = replace(style, custom_style_schemes={'spotlight': replace(role, karaoke_colors=paint)})
+    return track, replace(style, custom_style_schemes={'spotlight': replace(role, karaoke_colors=paint)})
+
+
+def test_gradient_role_scanline_uses_role_paint_and_replays(binary, project):
+    track, style = gradient_role_band(project, 'gradient_horizontal')
+    ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_role_gradient')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, ir_for(binary, (track, style)))
+        configure(process, ir)
         before, _ = collect(process, [750])
         with pytest.raises(NativeRendererError, match='角色取色'):
-            configure(process, ir_for(binary, (track, bad)))
+            configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert np.array_equal(before, after)
+    frame, = before
+    green = (frame[..., 1] > 150) & (frame[..., 3] == 255)
+    assert np.unique(frame[green, 0]).size > 3
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('mode,kind', [('gradient_horizontal', 'plain'), ('gradient_vertical', 'outlines'),
+                                      ('split_vertical', 'plain')])
+def test_gradient_role_scanline_matches_actual_d2d_gpu(binary, project, mode, kind):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = gradient_role_band(project, mode, kind)
+    times = (450, 750, 1100, 1500)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, refs, gpu, raster, (mode, kind))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

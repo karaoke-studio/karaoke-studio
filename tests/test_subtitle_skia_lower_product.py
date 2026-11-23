@@ -531,11 +531,10 @@ def test_invalid_lower_contract_keeps_previous_scene(binary, independent, mutati
     assert np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', [{'ruby_decoration_kind': 'shadow', 'ruby_karaoke_colors': {
-        'before': {'shadow': {'mode': 'gradient_horizontal'}}}},
-    {'ruby_karaoke_colors': {'before': {'text': {'mode': 'gradient_horizontal'}}}}])
-def test_unsupported_independent_lower_appearance_is_explicit(binary, independent, change):
+def test_unsupported_independent_lower_appearance_is_explicit(binary, independent):
     track, style, _ = independent
+    change = {'ruby_decoration_kind': 'shadow',
+              'ruby_karaoke_colors': {'before': {'shadow': {'mode': 'gradient_horizontal'}}}}
     style = replace(style, lower_ruby_style={**style.lower_ruby_style, **change})
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         process.configure(independent[0], independent[1], width=900, height=600, fps=60)
@@ -544,6 +543,50 @@ def test_unsupported_independent_lower_appearance_is_explicit(binary, independen
             process.configure(track, style, width=900, height=600, fps=60)
         after, _ = collect(process, [400], generation=2)
     assert np.array_equal(before[0], after[0])
+
+
+def lower_gradient_style(style, shared):
+    return replace(style, lower_ruby_follow_upper=False, lower_ruby_style={
+        'ruby_colors_follow_main': False,
+        'ruby_horizontal_gradient_with_main': shared,
+        'ruby_karaoke_colors': {
+            'before': {'text': {'mode': 'gradient_horizontal', 'start_color': '#0040E8', 'end_color': '#EE6040'}},
+            'after': {'text': {'mode': 'split_vertical', 'start_color': '#FFA010', 'end_color': '#6040FF'}},
+        },
+    })
+
+
+def test_lower_reading_gradient_keeps_existing_scene_after_invalid_paint(binary, independent):
+    track, style, resolve = independent
+    valid = ir_for(binary, (track, lower_gradient_style(style, True), resolve))
+    feature = 'p06_lower_ruby_static_gradient'
+    assert feature in valid['required_features']
+    missing = copy.deepcopy(valid)
+    missing['required_features'].remove(feature)
+    invalid = copy.deepcopy(valid)
+    group = next(group for group in invalid['skia_layout']['lines'][0]['ruby_groups'] if group.get('lower'))
+    group['static_fill_gradient']['before']['stops'][0][0] = -1
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, valid)
+        expected, _ = collect(process, [400, 950])
+        for rejected in (missing, invalid):
+            with pytest.raises(NativeRendererError, match='下方注音渐变'):
+                configure(process, rejected)
+        frames, _ = collect(process, [950, 400], generation=2)
+    assert np.array_equal(expected, frames[::-1])
+    assert all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shared', [False, True], ids=['local', 'body'])
+def test_lower_reading_gradient_matches_actual_d2d_gpu(binary, application, tmp_path, shared):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    style = lower_gradient_style(replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none'), shared)
+    case = replace(case, case_id=f'lower_reading_gradient_{shared}', style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (1550, 2600, 4110, 4280))
 
 
 @pytest.mark.parametrize('gpu,missing_loader', [(True, False),(False, False),(True, True)])

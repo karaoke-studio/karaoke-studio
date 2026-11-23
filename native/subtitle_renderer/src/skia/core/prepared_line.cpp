@@ -635,8 +635,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const auto& cell = line.cells[index];
         const float opacity = states[index].transform.opacity * scanlineAlpha;
         if (opacity <= 0) return;
-        const auto setColor = [&](std::uint32_t before, std::uint32_t after) {
-            paint.setColor(line.scanline.paint.shade(before, after, sung));
+        const auto setPaint = [&](int layer, std::uint32_t before, std::uint32_t after) {
+            const auto& shader = line.scanline.gradients[layer][sung];
+            paint.setShader(shader);
+            paint.setColor(shader ? SK_ColorWHITE : line.scanline.paint.shade(before, after, sung));
             if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
         };
         for (const bool outer : {true, false}) {
@@ -647,11 +649,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 canvas.clipPath(cell.path, SkClipOp::kDifference, true);
                 if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
             }
-            setColor(stroke->before, stroke->after);
+            setPaint(outer ? 0 : 1, stroke->before, stroke->after);
             canvas.drawPath(stroke->path, paint);
         }
-        setColor(cell.before, cell.after);
+        setPaint(2, cell.before, cell.after);
         canvas.drawPath(cell.path, paint);
+        paint.setShader(nullptr);
     });
     if (line.hasStrokeFlash)
         for (std::size_t index = 0; index < line.cells.size(); ++index) {

@@ -375,8 +375,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前的布局或高亮组合不受支持");
         applyResolvedStyle(style, resolved, cfg.dpr);
-        if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid")
-            throw BackendError("Skia 扫字线的角色取色暂仅支持实色");
+        if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid") {
+            const auto& paint = style.scanlineRolePaint.mode;
+            const bool gradient = paint == "gradient_horizontal" || paint == "gradient_vertical" || paint == "split_vertical";
+            if (!features.contains("p07_scanline_role_gradient") || !gradient || !staticScanline
+                || cfg.vertical || rubyScanline || utopiaSinging || source.zoomPulseEnabled
+                || source.strokeFlashEnabled || !source.fxBursts.empty() || resolved.scanlineShape != "band")
+                throw BackendError("Skia 扫字线缺少对应角色取色画笔能力");
+        }
         style.rightToLeft = cfg.rightToLeft;
         style.vertical = cfg.vertical;
         style.layoutSemantics = cfg.layoutSemantics.toStdString();
@@ -459,6 +465,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
+        const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
             && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
             && source.entryAnimation == "none" && source.exitAnimation == "none"
@@ -513,7 +520,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
                     || cfg.rightToLeft || (source.wipeReverse && !reverseBitmapLine)
-                    || (needsInline && (!inlineBitmapGuides || !cell.bitmapGuide->noDecor)))
+                    || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;

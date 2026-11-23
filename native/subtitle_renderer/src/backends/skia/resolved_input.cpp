@@ -668,9 +668,18 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             rubyTransition = RubyTransition::Affine;
         if (rubyUtopiaExit) rubyTransition = RubyTransition::UtopiaExit;
         std::optional<RolePaintBounds> rolePaintBounds;
-        if (roleBodyPaints || gradientGlowWithoutTexturedRoles || features.contains("p06_ruby_horizontal_outline"))
+        const bool gradientScanlineRole = line.scanlineEnabled && style.scanlineMode == "role"
+            && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
+        if (roleBodyPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole
+            || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale);
+        if (gradientScanlineRole && !rolePaintBounds->line.isEmpty()) {
+            const auto& ink = style.scanlineRolePaint.mode == "gradient_horizontal"
+                ? rolePaintBounds->forRole(-1) : rolePaintBounds->line;
+            auto gradient = ::subtitle::skia::lineGradient(style.scanlineRolePaint, ink, rolePaintBounds->outlinePad);
+            for (auto& layers : prepared.scanline.gradients) layers = {gradient, gradient};
+        }
         if (roleBodyPaints) {
             if (source.contains("body_gradient_bounds"))
                 throw BackendError("Skia 角色画笔不能携带整行画笔范围");
@@ -847,10 +856,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
         if (!roleBodyPaints && (gradient || image)) {
+            const bool unscaledPaintFade = features.contains("p06_unscaled_paint_fade")
+                && (line.entryAnimation == "none" || line.entryAnimation == "fade")
+                && (line.exitAnimation == "none" || line.exitAnimation == "fade")
+                && line.karaokeAnimation == "none" && !line.scanlineEnabled && !line.zoomPulseEnabled
+                && line.bursts.empty() && prepared.rubyGroups.empty();
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
-                || (!movingGradient && (line.entryAnimation != "none" || line.exitAnimation != "none"
+                || (!movingGradient && !unscaledPaintFade && (line.entryAnimation != "none" || line.exitAnimation != "none"
                     || line.scanlineEnabled || !line.bursts.empty()))
                 || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint)

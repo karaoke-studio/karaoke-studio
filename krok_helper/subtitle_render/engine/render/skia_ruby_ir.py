@@ -43,6 +43,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     has_lower_glow = False
     has_lower_shadow = False
     has_lower_gradient = False
+    has_static_lower_gradient = False
     inline_bitmaps = uses_inline_bitmap_guides(prepared.plan.lines)
     for line_index, (item, local, timing) in enumerate(zip(prepared.plan.lines, ruby.lines, timings, strict=True)):
         position = geometry.position(item, width, height)
@@ -120,8 +121,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 has_outlines = True
             if group.target.lower:
                 serialized.update(lower=True, source_index=lower_source_indices[group.target.annotation_index])
-                serialized.update(lower_appearance(group.target.style, allow_gradient=lower_gradients))
+                serialized.update(lower_appearance(group.target.style, legacy_vertical_gradient=lower_gradients))
                 has_lower_gradient |= 'fill_gradient' in serialized
+                has_static_lower_gradient |= 'static_fill_gradient' in serialized
                 has_lower_glow = has_lower_glow or 'lower_glow' in serialized
                 has_lower_shadow = has_lower_shadow or 'lower_shadow' in serialized
             else:
@@ -140,6 +142,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             'overlap_schema': 1,
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             **({'lower_ruby_fill_gradient_schema': 1} if has_lower_gradient else {}),
+            **({'lower_ruby_static_gradient_schema': 1} if has_static_lower_gradient else {}),
             **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
             **({'ruby_outline_gradient_schema': 1} if outline_gradients else {}),
             **({'ruby_horizontal_outline_schema': 1} if 'gradient_horizontal' in outline_gradients else {}),

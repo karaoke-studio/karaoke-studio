@@ -102,19 +102,13 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['inline', 'replacement', 'role', 'vertical', 'rtl', 'reverse', 'shadow',
+@pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse', 'shadow',
                                     'lower', 'animated', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
     symbol = line.guide_symbol
-    if change == 'inline':
-        line = replace(line, guide_symbol=None, inline_guide_symbols={1: symbol})
-    elif change == 'replacement':
-        line = replace(line, guide_symbol=replace(symbol, replacement_prefix=(line.chars[0].text,)))
-    elif change == 'role':
-        line = replace(line, guide_symbol=replace(symbol, role_labels=('lead',)))
-    elif change == 'vertical': style = replace(style, vertical=True)
+    if change == 'vertical': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse': line = replace(line, wipe_reverse=True)
     elif change == 'shadow': style = replace(style, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
@@ -129,6 +123,40 @@ def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_p
         line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
         ir_for(binary, (replace(track, lines=[line]), style))
+
+
+def decorated_inline_guide(tmp_path, family=None):
+    case, track = p00_guide(tmp_path, family=family)
+    line, = track.lines
+    guide = replace(line.guide_symbol, count=1)
+    prefix = replace(guide, replacement_prefix=(line.chars[0].text,))
+    line = replace(line, guide_symbol=prefix, inline_guide_symbols={2: guide})
+    return replace(case, track=replace(track, lines=[line]), case_id='decorated_inline_bitmap_guide')
+
+
+def test_decorated_inline_bitmap_guide_keeps_scene_after_missing_capability(binary, project, tmp_path):
+    case = decorated_inline_guide(tmp_path, project[1].font_family)
+    ir = ir_for(binary, (case.track, case.style))
+    feature = 'p08_inline_bitmap_decoration'
+    assert feature in ir['required_features']
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        first, _ = collect(process, [1400, 2600])
+        with pytest.raises(NativeRendererError, match='独立装饰'):
+            configure(process, bad)
+        replay, _ = collect(process, [2600, 1400], generation=2)
+    assert np.array_equal(first, replay[::-1])
+    assert all(frame.any() for frame in first)
+
+
+@GPU
+def test_decorated_inline_bitmap_guide_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = decorated_inline_guide(tmp_path)
+    assert_ruby_transition_gpu_parity(binary, case, (1400, 1700, 2600, 3830))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

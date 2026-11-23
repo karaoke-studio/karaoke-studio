@@ -4,6 +4,7 @@ from ..guide.semantics import render_line_with_guide_symbols
 from ..guide.skia_vector import vector_guides_form_prefix
 from ..layout.line.style import style_for_line
 from ..style.style_semantics import uses_authored_decoration
+from .elements.horizontal.scanline import scanline_role_fill
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 
@@ -31,6 +32,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     shapes = set()
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     lower_singing_particles = False
+    role_gradient = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -96,6 +98,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                 or (track.rubies and not (ordinary or motion or particle_entry))
                 or (inline_roles and not role_fade) or (vector_guides and not prefix_fade)):
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
+        role_fill = scanline_role_fill(look)
+        role_gradient |= (role_fill is not None
+                          and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+                          and ordinary and not (track.rubies or bursts or with_zoom_or_flash or utopia or inline_roles))
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition
         line_motion |= motion and utopia
@@ -112,6 +118,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             moving_shapes = moving_shapes or motion
             shaped_singing = shaped_singing or shape_with_singing
     features = []
+    if role_gradient:
+        features.append('p07_scanline_role_gradient')
     if inline_role_fade:
         features.append('p07_inline_role_faded_scanline')
     if prefix_guide_fade:

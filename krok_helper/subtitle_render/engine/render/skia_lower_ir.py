@@ -22,21 +22,28 @@ def lower_sources(prepared):
     return sources, indices
 
 
-def lower_appearance(style, *, allow_gradient=False):
+def lower_appearance(style, *, legacy_vertical_gradient=False):
     before, after = ruby_decoration_kinds(style)
     colors = effective_ruby_karaoke_colors(style)
     result = {'paint': {'before': list(rgba(colors.before.text.color)),
                         'after': list(rgba(colors.after.text.color))}}
-    gradients = {}
+    gradients, static_gradients = {}, {}
     for phase, palette in (('before', colors.before), ('after', colors.after)):
         fill = palette.text
         if fill.mode == 'solid':
             continue
-        if not allow_gradient or fill.mode != 'gradient_vertical':
-            raise ValueError('Skia 下方注音文字当前仅支持实色或已验证的纵向渐变')
-        gradients[phase] = [[position, list(rgba(color))] for position, color in gradient_stops(fill)]
+        if fill.mode not in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}:
+            raise ValueError('Skia 下方注音文字当前仅支持实色或渐变')
+        stops = [[position, list(rgba(color))] for position, color in gradient_stops(fill)]
+        if legacy_vertical_gradient and fill.mode == 'gradient_vertical':
+            gradients[phase] = stops
+        else:
+            static_gradients[phase] = {'mode': fill.mode, 'stops': stops}
     if gradients:
         result['fill_gradient'] = gradients
+    if static_gradients:
+        result['static_fill_gradient'] = static_gradients
+        result['fill_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     glow, shadow = {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':

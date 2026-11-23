@@ -79,6 +79,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vector_guide_composition",
         "p08_bitmap_guides",
         "p08_inline_bitmap_guides",
+        "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
         "p08_animated_title_guides",
         "p08_static_line_band",
@@ -110,6 +111,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_role_paints",
         "p06_multi_lane_outline",
         "p06_body_gradient",
+        "p06_unscaled_paint_fade",
         "p06_outline_gradient",
         "p06_image_fill",
         "p06_ruby_main_paint",
@@ -198,11 +200,13 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_image",
         "p07_composed_scanline",
         "p07_role_scanline_layers",
+        "p07_scanline_role_gradient",
         "p07_ruby_scanline",
         "p07_lower_ruby_scanline",
         "p07_lower_ruby_scanline_line_animation",
         "p07_lower_ruby_scanline_singing_particles",
         "p06_lower_ruby_fill_gradient",
+        "p06_lower_ruby_static_gradient",
         "p07_ruby_scanline_particles",
         "p07_character_transform",
         "p07_sing_twinkle",
@@ -658,6 +662,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 反向头像缺少图片或走字布局能力声明");
     if (inlineBitmapGuides && !features.contains("p08_bitmap_guides"))
         throw BackendError("Skia 行内头像缺少图片导唱符能力声明");
+    if (features.contains("p08_inline_bitmap_decoration") && !inlineBitmapGuides)
+        throw BackendError("Skia 行内图片装饰缺少行内头像布局能力");
     if (features.contains("p08_bitmap_guides")) {
         // Verified line-prefix image guides with Utopia, upper ruby, solid outlines and glow only.
         static const QJsonArray allowed{
@@ -669,7 +675,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
             "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};
         static const QJsonArray inlineAllowed{
-            "p08_inline_bitmap_guides", "p05_font_fallback", "p05_mixed_fonts",
+            "p08_inline_bitmap_guides", "p08_inline_bitmap_decoration", "p05_font_fallback", "p05_mixed_fonts",
             "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_role_solid_outlines", "p06_multi_lane_outline", "p06_role_body_paints",
             "p06_ruby_role_paints", "p06_role_static_glow", "p06_ruby_role_glow",
@@ -881,6 +887,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_role_scanline_layers")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 角色扫字线组合缺少横排高亮带能力声明");
+    if (features.contains("p07_scanline_role_gradient")
+        && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
+        throw BackendError("Skia 渐变扫字线缺少高亮带能力声明");
     if (features.contains("p07_ruby_scanline")
         && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")
             || (features.contains("p05_lower_ruby") && !features.contains("p07_lower_ruby_scanline"))))
@@ -1040,6 +1049,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_outline_gradient")
         && (!features.contains("p06_body_gradient") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 描边渐变缺少正文渐变或描边能力声明");
+    if (features.contains("p06_unscaled_paint_fade")
+        && (!features.contains("p07_line_fade")
+            || !(features.contains("p06_body_gradient") || features.contains("p06_image_fill"))))
+        throw BackendError("Skia 正文画笔淡化缺少淡化或画笔能力声明");
     if (features.contains("p07_lower_ruby_scanline_singing_particles")
         && (!features.contains("p07_lower_ruby_scanline_line_animation")
             || !features.contains("p07_faded_scanline_singing_particles")))
@@ -1048,6 +1061,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_lower_ruby_scanline_singing_particles")
             || layout.value("lower_ruby_fill_gradient_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音渐变缺少对应布局能力");
+    if (features.contains("p06_lower_ruby_static_gradient")
+        && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_static_gradient_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音渐变缺少版本化布局");
     const bool animatedSingingGradient = features.contains("p06_animated_singing_gradient_fill");
     const bool rubySingingPaint = features.contains("p06_ruby_main_paint") && features.contains("p07_ruby_singing_scale");
     if (features.contains("p06_utopia_main_paint")
@@ -1153,7 +1169,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         };
         static const QJsonArray avatarFeatures{
             "p08_bitmap_guides", "p08_inline_bitmap_guides", "p06_role_outline_gradient", "p06_ruby_outline_gradient",
-            "p06_ruby_horizontal_outline",
+            "p08_inline_bitmap_decoration", "p06_ruby_horizontal_outline",
             "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
         };
         static const QJsonArray roleGuideFeatures{

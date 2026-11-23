@@ -208,15 +208,52 @@ def test_invalid_image_fill_keeps_previous_scene(binary, project, images, mutati
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-@pytest.mark.parametrize('change', ['fade', 'scanline'])
-def test_unverified_image_fill_combinations_are_rejected(binary, project, images, change):
+def test_image_fill_with_scanline_is_explicitly_rejected(binary, project, images):
     track, style = image_source(project, images, 'body')
-    if change == 'fade':
-        style = replace(style, entry_anim='fade', entry_lead_ms=400)
-    else:
-        style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_glow_px=0)
+    style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_glow_px=0)
     with pytest.raises(ValueError, match='Skia'):
         ir_for(binary, (track, style))
+
+
+def fading_paint_source(project, images):
+    track, style = image_source(project, images, 'mixed')
+    return track, replace(style, entry_anim='fade', exit_anim='fade', entry_lead_ms=400, exit_fade_ms=450)
+
+
+def test_image_fill_fade_keeps_existing_scene_after_missing_capability(binary, project, images):
+    ir = ir_for(binary, fading_paint_source(project, images))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_unscaled_paint_fade')
+    line, = ir['track']['lines']
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = [start + 150, end - 150]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='正文渐变'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert np.array_equal(before, replay[::-1])
+    assert all(frame.any() for frame in before)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_image_fill_fade_matches_actual_d2d_gpu(binary, project, images):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = fading_paint_source(project, images)
+    ir = ir_for(binary, (track, style))
+    line, = ir['track']['lines']
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = (start + 80, start + 220, start + 400, end - 200, end - 80)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs, gpu, raster, 'image_fill_fade')
 
 
 def test_old_sidecar_without_image_fills_is_rejected(binary, monkeypatch):

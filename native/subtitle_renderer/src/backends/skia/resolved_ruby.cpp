@@ -92,12 +92,22 @@ std::array<sk_sp<SkShader>, 2> rubyGradients(const std::array<const PaintStyle*,
 bool validPhases(const QJsonObject& layer) {
     return !layer.isEmpty() && layer.size() == int(layer.contains("before")) + int(layer.contains("after"));
 }
-PaintStyle lowerFillGradient(const QJsonObject& gradients, const char* phase) {
+PaintStyle lowerFillGradient(const QJsonObject& legacy, const QJsonObject& authored, const char* phase) {
     PaintStyle fill;
-    if (!gradients.contains(phase)) return fill;
-    const auto stops = gradients.value(phase).toArray();
+    QJsonArray stops;
+    if (authored.contains(phase)) {
+        const auto paint = authored.value(phase).toObject();
+        fill.mode = paint.value("mode").toString().toStdString();
+        if (paint.size() != 2 || !rubyFillGradientMode(fill) || legacy.contains(phase))
+            throw BackendError("Skia 下方注音渐变画笔无效");
+        stops = paint.value("stops").toArray();
+    } else if (legacy.contains(phase)) {
+        fill.mode = "gradient_vertical";
+        stops = legacy.value(phase).toArray();
+    } else {
+        return fill;
+    }
     if (stops.size() < 2 || stops.size() > 4096) throw BackendError("Skia 下方注音渐变色标无效");
-    fill.mode = "gradient_vertical";
     double previous = -1;
     for (const auto& stop : stops) {
         const auto pair = stop.toArray();
@@ -332,8 +342,17 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         if (object.contains("fill_gradient") && (!lower || !lowerScanlineParticles
             || !features.contains("p06_lower_ruby_fill_gradient") || !validPhases(lowerGradients)))
             throw BackendError("Skia 下方注音渐变缺少对应画笔能力");
-        auto lowerBefore = lowerFillGradient(lowerGradients, "before");
-        auto lowerAfter = lowerFillGradient(lowerGradients, "after");
+        const auto staticLowerGradients = object.value("static_fill_gradient").toObject();
+        const auto shareLowerGradient = object.value("fill_gradient_with_main");
+        if (object.contains("static_fill_gradient") && (!lower || !allowLowerDecoration || !staticLine
+            || line.scanlineEnabled || line.karaokeAnimation != "none"
+            || !features.contains("p06_lower_ruby_static_gradient") || !validPhases(staticLowerGradients)
+            || !shareLowerGradient.isBool()))
+            throw BackendError("Skia 下方注音渐变缺少对应布局或画笔能力");
+        if (!object.contains("static_fill_gradient") && object.contains("fill_gradient_with_main"))
+            throw BackendError("Skia 下方注音渐变范围缺少画笔");
+        auto lowerBefore = lowerFillGradient(lowerGradients, staticLowerGradients, "before");
+        auto lowerAfter = lowerFillGradient(lowerGradients, staticLowerGradients, "after");
         const auto& beforeFill = lower ? lowerBefore : paint.rubyBeforeFillPaint;
         const auto& afterFill = lower ? lowerAfter : paint.rubyAfterFillPaint;
         const bool gradientFill = rubyFillGradientMode(beforeFill) || rubyFillGradientMode(afterFill);
@@ -555,9 +574,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             for (const auto& cell : cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
         const auto outlinePad = ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr));
+        const bool shareHorizontalFill = lower ? shareLowerGradient.toBool() : paint.rubyHorizontalGradientWithMain;
+        const auto* sharedFillBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
+            : allowRoleFill ? &roleBounds->forRole(role) : nullptr;
         auto gradients = gradientFill ? rubyGradients({&beforeFill, &afterFill},
-            !lower && paint.rubyHorizontalGradientWithMain, source, ink, outlinePad, glyphs.dpr,
-            allowRoleFill ? &roleBounds->forRole(role) : nullptr)
+            shareHorizontalFill, source, ink, outlinePad, glyphs.dpr, sharedFillBounds)
             : std::array<sk_sp<SkShader>, 2>{};
         std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
         const auto* outlineBounds = allowHorizontalOutline ? &roleBounds->forRole(role) : nullptr;

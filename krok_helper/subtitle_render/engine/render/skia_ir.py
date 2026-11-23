@@ -693,6 +693,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p06_lower_ruby_glow')
         if 'lower_ruby_fill_gradient_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_fill_gradient')
+        if 'lower_ruby_static_gradient_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_static_gradient')
         if 'lower_ruby_shadow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow')
         spin_sources = [ir['track']['lines'][plan.lines[index].track_index] for index in spin_lines]
