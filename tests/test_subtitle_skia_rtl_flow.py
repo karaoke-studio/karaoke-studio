@@ -227,6 +227,40 @@ def test_rtl_upper_reading_without_body_stroke_matches_d2d_gpu(binary, applicati
     assert_ruby_transition_gpu_parity(binary, replace(case, style=style), (1500, 2600, 3400, 3900, 4400, 4501))
 
 
+def test_rtl_reading_and_role_guide_stay_on_their_own_rows(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style = rtl_source(project, 'roles')
+    first, = track.lines
+    first = replace(first, track_line_index=0, inline_guide_symbols={1: SQUARE})
+    shift = 3000
+    second = replace(first, track_line_index=1, inline_guide_symbols={},
+                     chars=[replace(char, role_label=None, start_ms=char.start_ms + shift) for char in first.chars],
+                     end_ms=first.end_ms + shift, display_start_override_ms=shift, display_end_override_ms=shift + 2400)
+    reading = RubyAnnotation(second.chars[1].text, '字', target_line_index=1,
+                             target_char_start=1, target_char_end=2,
+                             pos_start_ms=second.chars[1].start_ms, pos_end_ms=second.chars[2].start_ms)
+    track = replace(track, lines=[first, second], rubies=[reading])
+    style = replace(style, ruby_font_family=style.font_family, ruby_font_size_px=24, ruby_gap_px=8,
+                    ruby_colors_follow_main=False, ruby_karaoke_colors=colors('#FF5544FF', '#FFFF8C21'))
+    times = (250, 750, 1300, 3250, 3750, 4300)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert [bool(row['ruby_groups']) for row in ir['skia_layout']['lines']] == [False, True]
+    assert ir['track']['lines'][0]['chars'][1]['role_label'] == 'lead'
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'rtl_reading_and_role_guide', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('effect', ['none', 'utopia', 'no_wipe'])

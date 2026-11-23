@@ -252,6 +252,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
+        const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
         const bool rtlRuby = style.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
         const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
         const bool rtlRubyNoWipe = rtlRuby && prepared.noWipe && features.contains("p07_rtl_ruby_no_wipe");
@@ -261,16 +262,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
         const bool rtlRubyUnscaledMotion = rtlRuby && !singingScale && ordinaryLineAnimation
             && features.contains("p07_rtl_ruby_unscaled_line_animation");
-        if (rtlRuby && ((style.strokeWidth <= 0 && !features.contains("p05_rtl_ruby_without_body_stroke"))
+        if (rtlRuby && annotated && ((style.strokeWidth <= 0 && !features.contains("p05_rtl_ruby_without_body_stroke"))
             || line.wipeReverse
             || (line.karaokeAnimation != "none" && !rtlRubySinging && !rtlRubyNoWipe)
             || (!(rtlRubyMotion || rtlRubyUnscaledMotion) && (line.entryAnimation != "none" || line.exitAnimation != "none"))
             || line.zoomPulseEnabled
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-            || !projected.charStyles.empty()))
+            || hasInlineRoles))
             throw BackendError("Skia 右至左上注音缺少对应画笔或动画能力");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
-        const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
         const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && !hasInlineRoles && !vectorGuides
             && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"

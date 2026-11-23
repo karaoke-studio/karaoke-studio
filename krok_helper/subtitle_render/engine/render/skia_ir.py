@@ -749,13 +749,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         rtl_motion_without_scale = False
         if style.right_to_left:
             for item, reading in zip(plan.lines, geometry.ruby.lines, strict=True):
+                if not reading.rubies:
+                    continue
                 look = item.layout_style
                 source = ir['track']['lines'][item.track_index]
                 shadow = uses_authored_decoration(look, 'shadow') or any(
                     'shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
                 moving = {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                 karaoke = source.get('karaoke_anim')
-                if look.lower_ruby_enabled and (moving or karaoke != 'none' or any(
+                has_lower = any(group.target.lower for group in reading.rubies)
+                if has_lower and (moving or karaoke != 'none' or any(
                         group.target.lower and set(ruby_decoration_kinds(group.target.style)) != {'none'}
                         for group in reading.rubies)):
                     raise ValueError('Skia 右至左下方注音当前支持静态基础走字')
