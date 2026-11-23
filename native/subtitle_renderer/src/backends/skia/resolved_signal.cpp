@@ -12,6 +12,13 @@ namespace {
 std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
+
+bool usesOnlyWholeLineAnimation(const TextLine& line) {
+    const auto& entry = line.entryAnimation;
+    const auto& exit = line.exitAnimation;
+    return (entry == "none" || entry == "fade" || entry == "slide_in" || entry == "rise")
+        && (exit == "none" || exit == "fade" || exit == "slide_out" || exit == "rise");
+}
 }
 
 std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
@@ -31,11 +38,11 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     if (style.litTransitionMode != "none" && style.litTransitionMode != "fade"
         && style.litTransitionMode != "slide")
         throw BackendError("Skia 指示灯的熄灭过渡模式尚未支持");
-    const auto eligibleLineFade = [&](const std::string& animation) {
-        return animation == "none" || (animation == "fade" && style.litAppearanceMode == "custom");
-    };
-    if (!eligibleLineFade(line.entryAnimation) || !eligibleLineFade(line.exitAnimation))
-        throw BackendError("Skia 尚未接通此指示灯外观的行级出入场变换");
+    if (!usesOnlyWholeLineAnimation(line))
+        throw BackendError("Skia 尚未接通指示灯自身的逐灯出入场变换");
+    // Decorated lamps follow the entry pose outside the whole-line opacity layer.
+    if (style.litAppearanceMode != "custom" && (line.entryAnimation != "none" || line.exitAnimation != "none"))
+        throw BackendError("Skia 尚未接通装饰指示灯的独立入场变换");
     if (std::max({style.litSize, style.litTracking, std::abs(style.litOffsetX),
             std::abs(style.litOffsetY), style.litStrokeWidth, style.litStrokeSoften,
             style.litTransitionDistance}) > 8192.f)
@@ -110,9 +117,8 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             return value.isDouble() && std::isfinite(value.toDouble()) && std::abs(value.toDouble()) <= 1e6;
         }))
         throw BackendError("Skia 音量柱缺少有效的最终锚点");
-    const auto fadeOrNone = [](const std::string& animation) { return animation == "none" || animation == "fade"; };
-    if (!fadeOrNone(line.entryAnimation) || !fadeOrNone(line.exitAnimation))
-        throw BackendError("Skia 音量柱暂不支持字幕出入场组合");
+    if (!usesOnlyWholeLineAnimation(line))
+        throw BackendError("Skia 尚未接通音量柱自身的逐柱出入场变换");
     const auto geometry = volumeSignalGeometry(style);
     if (!std::isfinite(geometry.groupWidth) || geometry.groupWidth > 8192
         || !std::isfinite(geometry.size) || geometry.size > 8192

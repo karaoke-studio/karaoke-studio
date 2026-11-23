@@ -986,24 +986,36 @@ def test_custom_shape_signal_countdown(binary, project, target, shape):
     assert np.array_equal(lamps[0], lamps[-1]) and np.array_equal(lamps[0], replay[0])
 
 
-def test_custom_shape_signal_shares_line_fade(binary, project):
+@pytest.mark.parametrize('signal,entry_anim,exit_anim', [
+    ('lamp', 'fade', 'fade'), ('lamp', 'slide_in', 'rise'), ('volume', 'slide_in', 'rise'),
+])
+def test_custom_signal_shares_line_animation(binary, project, signal, entry_anim, exit_anim):
     track, style = project
     line = track.lines[0]
     line = replace(line, chars=[replace(char, start_ms=char.start_ms + 1000) for char in line.chars],
                    end_ms=line.end_ms + 1000, display_start_override_ms=0, display_end_override_ms=3400)
     track = replace(track, lines=[line])
-    style = replace(style, entry_anim='fade', entry_lead_ms=600, exit_anim='fade', exit_fade_ms=400,
-                    lit_enabled=True, lit_appearance_mode='custom', lit_style='square', lit_number=1,
-                    lit_size=24, lit_offset_y=-36, lit_fill_color='#FF00FF', lit_stroke_width=0,
-                    lit_edge_brightness_pct=0, lit_shadow=False)
+    style = replace(style, entry_anim=entry_anim, entry_lead_ms=600, exit_anim=exit_anim, exit_fade_ms=400)
+    if signal == 'lamp':
+        style = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square', lit_number=1,
+                        lit_size=24, lit_offset_y=-36, lit_fill_color='#FF00FF', lit_stroke_width=0,
+                        lit_edge_brightness_pct=0, lit_shadow=False)
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='custom', volume_column_count=1,
+                        volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF', volume_stroke_width=0,
+                        volume_duration_ms=3400, volume_flash_times=0, volume_time_offset_ms=2200)
     ir = ir_for(binary, (track, style))
     source, = ir['track']['lines']
     assert source['entry_duration_ms'] == 600 and source['exit_duration_ms'] == 400
     times = [250, 650, 3000, 3200]
 
-    def lamp_alpha(frame):
-        lamp = (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245)
-        return np.where(lamp, frame[..., 3], 0)
+    def signal_alpha(frame):
+        magenta = (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245)
+        return np.where(magenta, frame[..., 3], 0)
+
+    def signal_bounds(alpha):
+        pixels = np.argwhere(alpha > alpha.max() // 2)
+        return np.array([pixels.min(axis=0), pixels.max(axis=0)])
 
     results = []
     if sys.platform == 'win32':
@@ -1012,23 +1024,24 @@ def test_custom_shape_signal_shares_line_fade(binary, project):
         with NativeRendererProcess() as process:
             _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
                                        width=640, height=360, realization_enabled=False)
-        results.append([lamp_alpha(np.frombuffer(frame, np.uint8).reshape(360, 640, 4)) for frame in raw])
+        results.append([signal_alpha(np.frombuffer(frame, np.uint8).reshape(360, 640, 4)) for frame in raw])
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-        results.append([lamp_alpha(frame) for frame in frames])
+        results.append([signal_alpha(frame) for frame in frames])
 
-    for lamps in results:
-        entry, full, before_exit, exit = [int(frame.max()) for frame in lamps]
-        assert 0 < entry < full == before_exit and 0 < exit < before_exit
-    for lamps in results[1:]:
-        for time, expected, actual in zip(times, results[0], lamps, strict=True):
+    for frames in results:
+        entering, full, before_exit, leaving = [int(frame.max()) for frame in frames]
+        assert 0 < entering < full == before_exit and 0 < leaving < before_exit
+        if entry_anim == 'slide_in':
+            assert signal_bounds(frames[0])[0, 1] < signal_bounds(frames[1])[0, 1]
+        if exit_anim == 'rise':
+            assert signal_bounds(frames[3])[0, 0] < signal_bounds(frames[2])[0, 0]
+    for frames in results[1:]:
+        for time, expected, actual in zip(times, results[0], frames, strict=True):
             assert abs(int(expected.max()) - int(actual.max())) <= 2, time
-            expected_pixels = np.argwhere(expected > expected.max() // 2)
-            actual_pixels = np.argwhere(actual > actual.max() // 2)
-            assert abs(expected_pixels.min(axis=0) - actual_pixels.min(axis=0)).max() <= 1, time
-            assert abs(expected_pixels.max(axis=0) - actual_pixels.max(axis=0)).max() <= 1, time
+            assert abs(signal_bounds(expected) - signal_bounds(actual)).max() <= 1, time
 
 
 def test_shape_signal_draws_above_line_band(binary, project, tmp_path):
