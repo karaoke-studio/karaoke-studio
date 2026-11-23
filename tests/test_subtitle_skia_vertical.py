@@ -105,16 +105,10 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['control', 'dual_alt_grid'])
-def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
+def test_vertical_control_character_stays_gated(binary, project):
     track, style = vertical_source(project)
     line = track.lines[0]
-    if change == 'control':
-        track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text='\x01'), *line.chars[1:]])])
-    elif change == 'dual_alt_grid':
-        track = replace(track, lines=[replace(line, layout_index=1)])
-        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
-                        layouts=[LyricsLayout(line_gap_px=style.line_gap_px + 8)])
+    track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text='\x01'), *line.chars[1:]])])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
 
@@ -169,6 +163,36 @@ def test_vertical_column_offsets_and_ignored_rtl_match_actual_d2d_gpu(binary, pr
     assert any(np.count_nonzero(a != b) > 100 for a, b in zip(references[0], references[2], strict=True))
     gpu, raster = render_skia(binary, ir_for(binary, (track, looks[0])), times)
     assert_glow_parity(times, references[0], gpu, raster, 'vertical_column_offsets', check_p00_edges=True)
+
+
+@GPU
+def test_vertical_column_layout_margins_and_gaps_match_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = vertical_column_offsets(project)
+    track = replace(track, lines=[replace(line, layout_index=1) for line in track.lines])
+    layout = LyricsLayout(line_y_position=style.line_y_position, line_y_margin_px=style.line_y_margin_px + 24,
+                          line_gap_px=style.line_gap_px + 13, line_alignments=style.line_alignments,
+                          line_offsets_x=style.line_offsets_x)
+    custom, control = replace(style, layouts=[layout]), replace(style, layouts=[])
+    times, dpr = (400, 620, 950, 1200, 1660, 2050), 3
+    refs = []
+    for look in (custom, control):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, custom), dpr=dpr)
+    base = ir_for(binary, (track, control), dpr=dpr)
+    assert {line['vertical_lane'] for line in ir['skia_layout']['lines']} == {0, 1}
+    for line, plain in zip(ir['skia_layout']['lines'], base['skia_layout']['lines'], strict=True):
+        shift = line['cells'][0]['origin_x'] - plain['cells'][0]['origin_x']
+        assert shift == pytest.approx(-24 - 13 * line['vertical_lane'])
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'vertical_column_layout_margins', check_p00_edges=True)
 
 
 def test_vertical_multiscalar_cell_preserves_clock(binary, project):

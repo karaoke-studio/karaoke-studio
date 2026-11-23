@@ -105,9 +105,8 @@ def validate_vertical_columns(style, line_styles):
     for appearance in line_styles:
         if (appearance.vertical != style.vertical or appearance.dual_line_layout != style.dual_line_layout
                 or len(appearance.line_alignments) != len(style.line_alignments)
-                or (appearance.font_size_px, appearance.line_gap_px, appearance.line_y_margin_px)
-                   != (style.font_size_px, style.line_gap_px, style.line_y_margin_px)):
-            raise ValueError('Skia 多列竖排暂需统一的列宽、间距和边距')
+                or appearance.font_size_px != style.font_size_px):
+            raise ValueError('Skia 多列竖排暂需统一的列数和字号')
 
 
 def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
