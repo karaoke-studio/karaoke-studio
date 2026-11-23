@@ -815,7 +815,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool staticShadowLine = line.entryAnimation == "none" && line.exitAnimation == "none";
         const bool roleShadowMotion = !staticShadowLine && ordinaryLineAnimation
             && features.contains("p07_role_shadow_line_animation");
-        const bool inlineShadow = roleStaticShadow && hasInlineRoles && !annotated && !vectorGuides && !hasBitmapGuide
+        const bool roleShadowRuby = staticShadowLine && features.contains("p06_role_shadow_ruby");
+        const bool inlineShadow = roleStaticShadow && hasInlineRoles && (!annotated || roleShadowRuby)
+            && !vectorGuides && !hasBitmapGuide
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && line.karaokeAnimation == "none"
             && (staticShadowLine || roleShadowMotion) && !line.scanlineEnabled
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();

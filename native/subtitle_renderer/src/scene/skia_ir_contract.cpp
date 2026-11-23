@@ -161,6 +161,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_static_shadow",
         "p06_role_static_shadow",
         "p06_role_shadow_paints",
+        "p06_role_shadow_ruby",
         "p06_body_gradient_shadow",
         "p06_body_image_shadow",
         "p06_ruby_shadow",
@@ -466,8 +467,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 竖排视口变换缺少竖排布局或视口能力声明");
     const bool hasStaticShadows = features.contains("p06_static_shadow") || features.contains("p06_ruby_shadow");
     if (features.contains("p06_role_static_shadow") && (!features.contains("p06_static_shadow")
-        || !features.contains("p05_inline_roles") || features.contains("p05_resolved_ruby")))
+        || !features.contains("p05_inline_roles") || (features.contains("p05_resolved_ruby")
+            && !features.contains("p06_role_shadow_ruby"))))
         throw BackendError("Skia 行内角色阴影缺少对应布局或画笔能力");
+    if (features.contains("p06_role_shadow_ruby") && (!features.contains("p06_role_static_shadow")
+        || !features.contains("p05_upper_ruby") || features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 行内角色阴影缺少上注音能力或包含下方注音");
     if (features.contains("p06_role_shadow_paints") && !features.contains("p06_role_static_shadow"))
         throw BackendError("Skia 行内角色纹理阴影缺少装饰能力");
     if (features.contains("p07_role_shadow_line_animation") && (!features.contains("p06_role_static_shadow")

@@ -82,6 +82,35 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, cas
             configure(process, ir)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_role_body_and_reading_shadows_match_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = reading
+    line, = track.lines
+    track = replace(track, lines=[replace(line, chars=[replace(c, role_label='lead') for c in line.chars])])
+    role = SubtitleStyleScheme(decoration_kind='shadow', shadow_offset_x=10, shadow_offset_y=8,
+                               ruby_decoration_kind='shadow', ruby_shadow_offset_x=-12, ruby_shadow_offset_y=-5)
+    style = replace(style, decoration_kind='none', ruby_decoration_kind='none',
+                    custom_style_schemes={'lead': role})
+    times, dpr = (325, 475, 725, 1000, 1450, 1750, 2250), 3
+    refs = []
+    for look in (role, replace(role, decoration_kind='none'), replace(role, ruby_decoration_kind='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, replace(style, custom_style_schemes={'lead': look}), times,
+                                       force_warp=False, track=track, width=640, height=360, dpr=dpr,
+                                       realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 30
+                   for a, b in zip(refs[0], control, strict=True))
+    ir = upper_ir(binary, (track, style), dpr)
+    assert {'p06_role_shadow_ruby', 'p06_ruby_shadow'} <= set(ir['required_features'])
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'role_body_and_reading_shadows', check_p00_edges=True)
+
+
 def animated_shadow_style(style, effect, entry, exit_, body, ruby):
     return replace(style, right_to_left=False, stroke_width_px=4, karaoke_anim=effect, entry_anim=entry,
                    exit_anim=exit_, entry_lead_ms=600, exit_fade_ms=600, decoration_before_sync=False,
