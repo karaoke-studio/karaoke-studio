@@ -115,6 +115,30 @@ def test_noise_and_lower_reading_stay_on_their_own_rows(binary, lower_source):
     assert_glow_parity(times, reference, gpu, raster, 'separate_noise_and_lower_reading')
 
 
+def test_noise_entry_includes_lower_reading(binary, lower_source):
+    from test_subtitle_skia_lower_product import ir_for as lower_ir
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, resolve = lower_source
+    style = replace(style, entry_anim='noise', entry_lead_ms=200)
+    ir = lower_ir(binary, (track, style, resolve))
+    assert {'p07_noise_composition', 'p05_lower_ruby'} <= set(ir['required_features'])
+    times = (45, 115, 200, 450, 750)
+    gpu, raster = render_skia(binary, ir, times)
+    bare, _ = render_skia(binary, lower_ir(binary, (track, replace(style, lower_ruby_enabled=False), resolve)), times)
+    assert any(np.count_nonzero(a != b) > 40 for a, b in zip(gpu[:2], bare[:2], strict=True))
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=900, height=600, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
+    assert_glow_parity(times, reference, gpu, raster, 'noise_entry_with_lower_reading', check_p00_edges=True)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('dpr,content', [(1, 'plain'), (1.5, 'plain'), (1, 'guide'), (1, 'role'), (1, 'signal')])
 def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr, content):

@@ -158,10 +158,13 @@ def _validate_noise_transition(plan, lines, ruby):
             continue
         look = item.layout_style
         readings = ruby.lines[index].rubies if ruby is not None else ()
+        lower_reading = any(group.target.lower for group in readings)
         if (look.vertical or look.right_to_left or item.line.wipe_reverse
-                or any(group.target.lower for group in readings)
                 or entry not in {'noise', 'none'} or exit_ not in {'noise', 'none'}
                 or line.get('karaoke_anim') not in {'none', 'utopia'} or (line.get('zoom_pulse') and not readings)
+                or (lower_reading and (line.get('karaoke_anim') != 'none'
+                    or any(group.target.lower and set(ruby_decoration_kinds(group.target.style)) != {'none'}
+                           for group in readings)))
                 or line.get('scanline') or line.get('stroke_flash') or line.get('fx_bursts')
                 or uses_authored_decoration(look, 'shadow')):
             raise ValueError('Skia 噪声出入场当前仅支持正向横排实色正文')

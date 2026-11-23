@@ -101,8 +101,8 @@ def test_stroke_flash_composes_below_lower_readings(binary, lower_source):
     assert_glow_parity(times, reference, gpu, raster, 'flash_below_lower_readings', check_p00_edges=True)
 
 
-@pytest.mark.parametrize('cell_kind', ['vector_guide', 'role'])
-def test_flash_consumes_existing_cell_outline(binary, project, cell_kind):
+@pytest.mark.parametrize('cell_kind', ['vector_guide', 'role', 'bitmap_guide'])
+def test_flash_consumes_existing_cell_outline(binary, project, tmp_path, cell_kind):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_roles import colors
@@ -113,9 +113,16 @@ def test_flash_consumes_existing_cell_outline(binary, project, cell_kind):
     line, = track.lines
     chars = [replace(char, start_ms=char.start_ms + 500) for char in line.chars]
     line = replace(line, chars=chars, end_ms=line.end_ms + 500)
-    if cell_kind == 'vector_guide':
-        line = replace(line, guide_symbol=SQUARE)
-        clock = chars[0].start_ms - SQUARE.duration_ms
+    if cell_kind in {'vector_guide', 'bitmap_guide'}:
+        guide = SQUARE
+        if cell_kind == 'bitmap_guide':
+            from krok_helper.subtitle_render.domain.timing import GuideSymbol
+            from test_subtitle_skia_bitmap_guides import image
+
+            guide = GuideSymbol(kind='bitmap', bitmap_before_path=image(tmp_path / 'avatar.png'),
+                                bitmap_no_decor=True, duration_ms=SQUARE.duration_ms)
+        line = replace(line, guide_symbol=guide)
+        clock = chars[0].start_ms - guide.duration_ms
     else:
         line = replace(line, chars=[replace(chars[0], role_label='lead'), *chars[1:]])
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
@@ -124,6 +131,8 @@ def test_flash_consumes_existing_cell_outline(binary, project, cell_kind):
         clock = chars[0].start_ms
     track = replace(track, lines=[line])
     times = (clock - 1, clock + 24, clock + 150, clock + 240)
+    if cell_kind == 'bitmap_guide':
+        times += (chars[0].start_ms + 24,)
     controls = replace(style, karaoke_stroke_flash=False)
     results, baseline = [], []
     if sys.platform == 'win32':
@@ -146,7 +155,10 @@ def test_flash_consumes_existing_cell_outline(binary, project, cell_kind):
     ]
     for pulse in pulses:
         peak = [coverage.max() for coverage in pulse]
-        assert peak[0] == peak[3] == 0 and peak[1] > peak[2] > 24
+        if cell_kind == 'bitmap_guide':
+            assert peak[:4] == [0] * 4 and peak[4] > 24
+        else:
+            assert peak[0] == peak[3] == 0 and peak[1] > peak[2] > 24
         for time, expected, actual in zip(times, pulses[0], pulse, strict=True):
             assert within_one_pixel(expected > 24, actual > 24), (cell_kind, time)
             assert abs(expected.max() - actual.max()) <= 3, (cell_kind, time)

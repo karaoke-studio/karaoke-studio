@@ -735,7 +735,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             } else if (cell.contains("layout_left") || cell.contains("layout_right") || cell.contains("pivot_y")) {
                 throw BackendError("Skia 版面单元轴心缺少逐字特效能力声明");
             }
-            if (line.strokeFlashEnabled)
+            if (line.strokeFlashEnabled && !glyph.path.isEmpty())
                 glyph.strokeFlashWidth = ::subtitle::skia::strokeFlashBaseWidth(paint.fontSize, paint.strokeWidth);
             if (!firstVisiblePaint && (!glyph.path.isEmpty() || glyph.bitmap))
                 firstVisiblePaint = &paint;
