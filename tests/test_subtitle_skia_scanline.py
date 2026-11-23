@@ -1646,14 +1646,10 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', [
-    {'scanline_mode': 'role', 'scanline_role_name': '__global__', 'scanline_effect': 'star'},
-    {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
-])
-def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
+def test_unverified_zoom_flame_is_rejected(binary, reading):
     track, style = glow_band_source(reading, 'inherited')
     with pytest.raises(ValueError):
-        upper_ir(binary, (track, replace(style, **change)), 1)
+        upper_ir(binary, (track, replace(style, karaoke_anim='zoom_pulse_scanline', scanline_shape='flame')), 1)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
@@ -1678,6 +1674,27 @@ def test_role_scanline_with_glowing_ruby_fades_like_actual_d2d_gpu(binary, readi
     assert 'p07_role_scanline_line_animation' in upper_ir(binary, (track, style), dpr)['required_features']
     gpu, raster = glow_band_frames(binary, (track, style), dpr, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'role_scanline_fade', check_p00_edges=True)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_role_scanline_particles_with_glowing_ruby_match_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base = glow_band_source(reading, 'inherited')
+    style = replace(base, scanline_mode='role', scanline_role_name='__global__', scanline_effect='star')
+    times, dpr = (450, 550, 899, 1100, 1550, 1900, 2300), 3
+    refs = []
+    for look in (style, replace(style, scanline_effect='none')):
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in pixels])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(*refs, strict=True))
+    ir = upper_ir(binary, (track, style), dpr)
+    assert 'p07_role_scanline_particles' in ir['required_features']
+    gpu, raster = glow_band_frames(binary, (track, style), dpr, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'role_scanline_particles', check_p00_edges=True)
 
 
 def shadow_band_source(reading):

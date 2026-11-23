@@ -889,7 +889,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.karaokeAnimation == "none"
             && ((line.entryAnimation == "none" && line.exitAnimation == "none")
                 || (unscaledScanlineMotion && features.contains("p07_role_scanline_line_animation")))
-            && !line.strokeFlashEnabled && line.bursts.empty();
+            && !line.strokeFlashEnabled && (line.bursts.empty() || features.contains("p07_role_scanline_particles"));
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && layout.value("scanline_band_schema").toDouble(-1) >= 6
             && (style.scanlineMode != "role" || roleScanlineGlow);

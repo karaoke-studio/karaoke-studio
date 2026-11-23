@@ -291,6 +291,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
         const bool rubyScanline = features.contains("p07_ruby_scanline");
+        const bool roleScanlineParticles = features.contains("p07_role_scanline_particles") && rubyScanline
+            && !cfg.vertical && !cfg.rightToLeft && resolved.scanlineMode == "role" && resolved.scanlineShape == "band"
+            && resolved.scanlineRolePaint.mode == "solid" && !source.zoomPulseEnabled
+            && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && std::ranges::all_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
         const bool movingRoleScanline = features.contains("p07_role_scanline_line_animation")
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
             && resolved.scanlineMode == "role" && resolved.scanlineShape == "band"
@@ -299,7 +304,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool roleLayers = features.contains("p07_role_scanline_layers")
             && !source.wipeReverse && source.karaokeAnimation == "none"
             && ((source.entryAnimation == "none" && source.exitAnimation == "none") || movingRoleScanline)
-            && !source.strokeFlashEnabled && source.fxBursts.empty();
+            && !source.strokeFlashEnabled && (source.fxBursts.empty() || roleScanlineParticles);
         // The band repaints the posed unit during Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
         const bool staticScanline = source.entryAnimation == "none" && source.exitAnimation == "none";

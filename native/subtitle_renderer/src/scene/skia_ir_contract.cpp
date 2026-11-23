@@ -240,6 +240,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_composed_scanline",
         "p07_role_scanline_layers",
         "p07_role_scanline_line_animation",
+        "p07_role_scanline_particles",
         "p07_scanline_role_gradient",
         "p07_role_scanline_singing",
         "p07_scanline_shape_palette",
@@ -1068,6 +1069,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_role_scanline_line_animation")
         && !features.contains("p07_scanline_unscaled_line_animation"))
         throw BackendError("Skia 角色扫字线缺少整行出入场能力声明");
+    if (features.contains("p07_role_scanline_particles")
+        && (!features.contains("p07_role_scanline_layers") || !features.contains("p07_ruby_scanline_particles")))
+        throw BackendError("Skia 角色扫字线缺少注音粒子能力声明");
     if (features.contains("p07_role_scanline_singing")
         && (!features.contains("p07_scanline_band") || !features.contains("p07_singing_scale") || scanlineVersion < 5))
         throw BackendError("Skia 角色扫字线缺少唱字放大或扫字线能力声明");
