@@ -479,11 +479,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 return !cell.bitmapGuide || ((cell.bitmapGuide->noDecor || reverseBitmapGlow) && mixedReverseBitmaps
                     && features.contains("p08_reverse_bitmap_singing_outline"));
             });
+        const bool reverseSingingParticles = features.contains("p07_plain_scaled_singing_particles")
+            && features.contains("p07_reverse_singing_particles") && !line.scanlineEnabled
+            && !hasInlineRoles && !reverseSingingOutline;
         const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
             && !style.vertical && !style.rightToLeft && !annotated && (!hasInlineRoles || reverseRoleSinging)
             && !vectorGuides
             && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
+            && !line.strokeFlashEnabled && !line.zoomPulseEnabled && (line.bursts.empty() || reverseSingingParticles)
             && ((style.strokeWidth == 0 && style.stroke2Width == 0) || reverseSingingOutline);
         const bool unannotatedSingingPaint = features.contains("p06_unannotated_singing_paints")
             && singingScale && !annotated && !style.vertical && !style.rightToLeft

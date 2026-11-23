@@ -96,9 +96,14 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
             and plain_or_bitmap
         )
         allow_reverse_glow = reverse_singing_glow(item, source, allow_bitmap=bitmap_glow)
+        allow_reverse_particles = (
+            'p07_plain_scaled_singing_particles' in ir['required_features']
+            and 'p07_reverse_singing_particles' in ir['required_features']
+            and not (inline_roles or source.get('scanline'))
+            and all(c.vector_glyph is None for c in item.render_line.chars))
         reverse_scale = (not annotated and (not inline_roles or reverse_role_scale)
                          and reverse_singing_scale(source, style, allow_outline=allow_reverse_outline,
-                                                   allow_glow=allow_reverse_glow)
+                                                   allow_glow=allow_reverse_glow, allow_particles=allow_reverse_particles)
                          and plain_or_bitmap)
         static_role_scale = animations == {'none'} and not (
             source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))

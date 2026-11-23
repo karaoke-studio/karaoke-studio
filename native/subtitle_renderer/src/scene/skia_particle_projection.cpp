@@ -55,7 +55,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit, features);
     const bool plainScale = features.contains("p07_plain_scaled_singing_particles")
-        && cfg.rubies.empty() && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+        && cfg.rubies.empty() && !cfg.vertical && !cfg.rightToLeft
+        && (!source.wipeReverse || features.contains("p07_reverse_singing_particles"))
         && source.karaokeAnimation == "utopia" && source.entryAnimation == "none" && source.exitAnimation == "none"
         && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.scanlineEnabled
         && protocol::decorationKindForState(style, false) == "none"
@@ -93,7 +94,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
     const bool reverseSinging = source.wipeReverse && !cfg.vertical && !cfg.rightToLeft && !rubyParticles
-        && features.contains("p07_reverse_singing_particles") && source.karaokeAnimation == "none"
+        && features.contains("p07_reverse_singing_particles") && (source.karaokeAnimation == "none" || plainScale)
         && source.entryAnimation == "none" && source.exitAnimation == "none"
         && !source.strokeFlashEnabled && !source.zoomPulseEnabled
         && (!source.scanlineEnabled || (version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"));

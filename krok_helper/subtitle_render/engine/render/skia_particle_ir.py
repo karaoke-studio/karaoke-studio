@@ -173,7 +173,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                               and any(burst['kind'] != 'scanline' for burst in bursts))
         ruby_band_singing = ruby_band_singing or singing_under_band
         plain_scale = (source.get('karaoke_anim') == 'utopia' and (entry, exit_) == ('none', 'none')
-                       and not (annotated or look.vertical or look.right_to_left or item.line.wipe_reverse
+                       and not (annotated or look.vertical or look.right_to_left
                                 or band or outlined or source.get('zoom_pulse') or source.get('stroke_flash')
                                 or any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))))
         scaled_singing = (faded_band or plain_scale
