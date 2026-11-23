@@ -1,6 +1,8 @@
 """Project the line-wide coordinates needed by Skia body and outline gradients and image paints."""
 
-from ..style.style_semantics import effective_karaoke_colors, effective_ruby_karaoke_colors, style_for_role_in_layout
+from ..style.style_semantics import (
+    effective_karaoke_colors, effective_ruby_karaoke_colors, style_for_role_in_layout, uses_authored_decoration,
+)
 from ..guide.semantics import guide_symbol_is_bitmap
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles
@@ -143,6 +145,7 @@ def write_body_gradient_bounds(ir, plan):
     ruby_image = faded_scanline_gradient = animated_singing_gradient = palette_scanline_gradient = False
     unscaled_paint_fade = False
     unscaled_paint_scanline = False
+    directional_paints = False
     independent_ruby_fill = False
     upper_ruby = 'p05_upper_ruby' in ir['required_features']
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
@@ -187,8 +190,14 @@ def write_body_gradient_bounds(ir, plan):
                   and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
         singing = (source.get('karaoke_anim') == 'utopia' and (annotated or faded_band or palette_band or moving)
                    and not source.get('zoom_pulse'))
+        directional = look.right_to_left or item.line.wipe_reverse
+        static_directional = (directional and not (look.right_to_left and item.line.wipe_reverse)
+                              and animations == {'none'} and source.get('karaoke_anim') == 'none'
+                              and not (source.get('scanline') or source.get('fx_bursts') or source.get('zoom_pulse')
+                                       or upper_ruby or annotated
+                                       or any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
-                or look.vertical or look.right_to_left or item.line.wipe_reverse
+                or look.vertical or (directional and not static_directional)
                 or (not (faded_band or palette_band or moving or paint_fade or paint_scanline) and (animations != {'none'}
                                                   or source.get('scanline') or source.get('fx_bursts')))
                 or source.get('stroke_flash')
@@ -206,6 +215,7 @@ def write_body_gradient_bounds(ir, plan):
         animated_singing_gradient |= moving
         unscaled_paint_fade |= paint_fade
         unscaled_paint_scanline |= paint_scanline
+        directional_paints |= static_directional
         if annotated:
             if (faded_band or palette_band or moving) and not ruby_modes <= {'solid', 'gradient_vertical'}:
                 raise ValueError('Skia 整行出入场的上注音填充当前支持实色和纵向渐变')
@@ -236,6 +246,7 @@ def write_body_gradient_bounds(ir, plan):
         (animated_singing_gradient, 'p06_animated_singing_gradient_fill'),
         (unscaled_paint_fade, 'p06_unscaled_paint_fade'),
         (unscaled_paint_scanline, 'p06_unscaled_paint_scanline'),
+        (directional_paints, 'p06_directional_body_paints'),
         (independent_ruby_fill, 'p06_independent_ruby_fill'),
     ):
         if enabled_feature:

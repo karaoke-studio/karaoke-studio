@@ -87,6 +87,35 @@ def image_source(project, images, case):
 CASES = ('body', 'mixed', 'outlines', 'missing')
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction', ['reverse', 'rtl'])
+def test_directional_body_paints_match_actual_d2d_gpu(binary, project, images, direction):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = image_source(project, images, 'mixed')
+    track = replace(track, lines=[replace(line, wipe_reverse=direction == 'reverse') for line in track.lines])
+    style = replace(style, right_to_left=direction == 'rtl')
+    color = style.karaoke_colors
+    plain = replace(style, karaoke_colors=replace(color,
+        before=replace(color.before, text=PaintFill(color='#A0E04418')),
+        after=replace(color.after, text=PaintFill(color='#FF28CB53'))))
+    times, dpr = (175, 250, 450, 750, 1100, 1400, 1750, 2200), 3
+    refs = []
+    for look in (style, plain):
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in pixels])
+    assert np.count_nonzero(refs[0][0] != refs[1][0]) > 100
+    assert np.count_nonzero(refs[0][-1] != refs[1][-1]) > 100
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p06_directional_body_paints' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, ('directional_body_paints', direction), check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_multitrack_paints_keep_independent_domains(binary, project, images, target):
     from test_subtitle_skia_static_glow import assert_glow_parity

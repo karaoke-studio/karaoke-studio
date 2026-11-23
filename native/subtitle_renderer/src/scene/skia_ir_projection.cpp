@@ -88,11 +88,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         && features.contains("p06_reverse_decoration");
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides")
         || features.contains("p08_mixed_reverse_bitmap_guides");
+    const bool directionalPaints = features.contains("p06_directional_body_paints");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
-            || (cfg.rightToLeft && !rtlRuby) || (cfg.dualLineLayout && !multiLaneOutline)
+            || (cfg.rightToLeft && !(rtlRuby || directionalPaints)) || (cfg.dualLineLayout && !multiLaneOutline)
             || (features.contains("p05_reverse_wipe")
-                && !(reverseVerticalOutline || reverseHorizontalOutline || reverseBitmapGuides))
+                && !(reverseVerticalOutline || reverseHorizontalOutline || reverseBitmapGuides || directionalPaints))
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
         throw BackendError("Skia 描边缺少对应布局能力");
     const auto& band = cfg.lineBand;
