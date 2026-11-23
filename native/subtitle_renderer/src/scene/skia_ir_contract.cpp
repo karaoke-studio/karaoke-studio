@@ -82,6 +82,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vector_guide_composition",
         "p06_inline_vector_guide_outline",
         "p08_bitmap_guides",
+        "p08_bitmap_lower_ruby",
         "p08_inline_bitmap_guides",
         "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
@@ -702,6 +703,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
     const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
     const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
+    const bool lowerRubyBitmapGuides = features.contains("p08_bitmap_lower_ruby");
+    if (lowerRubyBitmapGuides != (features.contains("p08_bitmap_guides") && features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 图片导唱符与下方注音缺少组合能力声明");
     if (reverseBitmapGuides && (!inlineBitmapGuides || !features.contains("p05_reverse_overlap")))
         throw BackendError("Skia 反向头像缺少图片或走字布局能力声明");
     if (mixedReverseBitmapGuides && (!features.contains("p08_bitmap_guides") || !features.contains("p05_reverse_overlap")))
@@ -749,6 +753,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
         };
         static const QJsonArray shadowAllowed{"p08_bitmap_guide_shadow", "p06_static_shadow", "p06_ruby_shadow"};
+        static const QJsonArray lowerRubyAllowed{
+            "p08_bitmap_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
+            "p06_lower_ruby_glow", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient", "p06_lower_ruby_static_gradient"
+        };
         if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
             throw BackendError("Skia 图片导唱符布局版本无效");
         for (const auto& feature : features)
@@ -756,6 +764,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(reverseBitmapGuides && reverseAllowed.contains(feature))
                 && !(mixedReverseBitmapGuides && mixedReverseAllowed.contains(feature))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
+                && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))
                 && !(bitmapGuideShadow && shadowAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
     }

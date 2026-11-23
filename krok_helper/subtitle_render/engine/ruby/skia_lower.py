@@ -37,11 +37,12 @@ class PreparedLowerReadings:
     main_identity: str
 
 
-def select_lower_targets(track, style, line_styles, measured):
+def select_lower_targets(track, style, line_styles, measured, *, rendered_lines=None):
     """Select/derive once from canonical intervals, without a font capability."""
     pending, count = [], 0
-    for index, (line, appearance, _main) in enumerate(zip(
-            track.lines, line_styles, measured.lines, strict=True)):
+    rendered_lines = track.lines if rendered_lines is None else rendered_lines
+    for index, (line, rendered, appearance, _main) in enumerate(zip(
+            track.lines, rendered_lines, line_styles, measured.lines, strict=True)):
         if not appearance.lower_ruby_enabled:
             pending.append([])
             continue
@@ -52,13 +53,20 @@ def select_lower_targets(track, style, line_styles, measured):
         options = appearance._lower_romaji_options
         if options is None or len(options) != 4 or any(type(v) is not bool for v in options):
             raise ValueError('Skia 下方注音准备需要已冻结的罗马音选项')
-        intervals = measured.snapshot.resolve_intervals(line, style)
+        intervals = measured.snapshot.resolve_intervals(rendered, style)
         owner = line if line.track_line_index is not None else replace(line, track_line_index=index)
-        authored = active_rubies_for_line(track.rubies, owner, intervals=intervals)
-        derived = lower_rubies_for_line(owner, authored, list(intervals), appearance)
+        prefix = len(rendered.chars) - len(line.chars)
+        authored = active_rubies_for_line(track.rubies, owner, intervals=intervals[prefix:])
+        if prefix:
+            authored = [replace(ruby, target_char_start=ruby.target_char_start + prefix,
+                                target_char_end=ruby.target_char_end + prefix)
+                        if ruby.target_char_start is not None and ruby.target_char_end is not None else ruby
+                        for ruby in authored]
+        rendered = replace(rendered, track_line_index=owner.track_line_index)
+        derived = lower_rubies_for_line(rendered, authored, list(intervals), appearance)
         groups = []
         for ruby in derived:
-            indices = tuple(ruby_target_indices(ruby, owner, intervals))
+            indices = tuple(ruby_target_indices(ruby, rendered, intervals))
             if not indices:
                 raise ValueError('Skia 下方注音缺少有效正文目标')
             effective_style = ruby_script_stroke_style(ruby.render_style, ruby.reading)

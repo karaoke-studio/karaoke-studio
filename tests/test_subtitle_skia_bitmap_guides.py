@@ -5,6 +5,7 @@ import sys
 
 import numpy as np
 import pytest
+from test_subtitle_skia_lower_geometry import prepared_source, source as lower_source
 from PyQt6.QtGui import QColor, QImage
 
 from test_subtitle_skia_rtl_flow import application, binary, collect, configure, ir_for, project, selection
@@ -102,15 +103,13 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse',
-                                    'lower', 'missing'])
+@pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
     if change == 'vertical': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse': line = replace(line, wipe_reverse=True)
-    elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     else:
         line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
@@ -298,6 +297,58 @@ def mixed_reverse_bitmap_guide(project, tmp_path):
     style = replace(style, decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=5,
                     stroke_width_px=3, reverse_karaoke_anim='none')
     return replace(track, lines=[replace(line, wipe_reverse=True)]), style
+
+
+def bitmap_lower_reading(track, style, path):
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+
+    line, = track.lines
+    picture = GuideSymbol(kind='bitmap', bitmap_after_path=path, bitmap_before_path=path,
+                          bitmap_no_decor=True, duration_ms=300, bitmap_margin_right_px=9)
+    return (replace(track, lines=[replace(line, guide_symbol=picture)]),
+            replace(style, right_to_left=False, lower_ruby_enabled=True, entry_anim='none',
+                    exit_anim='none', karaoke_anim='none'))
+
+
+def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path):
+    from test_subtitle_skia_lower_product import ir_for as lower_ir
+
+    track, style, resolve = lower_source
+    track, style = bitmap_lower_reading(track, style, image(tmp_path / 'guide.png'))
+    ir = lower_ir(binary, (track, style, resolve))
+    final, = ir['skia_layout']['lines']
+    assert final['cells'][0]['metrics']['bitmap_guide']
+    assert any(group.get('lower') and group['style_cell'] > 0 for group in final['ruby_groups'])
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p08_bitmap_lower_ruby')
+    times = [400, 950]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='下方注音'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    base = next(c for c in build_cases(tmp_path / 'assets') if c.case_id == 'lower_ruby')
+    track, style = bitmap_lower_reading(base.track, base.style, image(tmp_path / 'guide.png'))
+    case = replace(base, track=track, style=style)
+    times = (1000, 1550, 2600, 4110, 4280)
+    references = []
+    for look in (case.style, replace(case.style, lower_ruby_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=case.track,
+                                       realization_enabled=False)
+        references.append(raw)
+    assert any(a != b for a, b in zip(*references, strict=True))
+    assert_ruby_transition_gpu_parity(binary, case, times)
 
 
 def test_mixed_reverse_bitmap_guide_keeps_scene_after_missing_capability(binary, project, tmp_path):

@@ -556,6 +556,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
             if (cell.bitmapGuide) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
+                if (features.contains("p08_bitmap_lower_ruby")
+                    && (cfg.rightToLeft || source.wipeReverse || !staticScanline
+                        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "utopia")
+                        || source.scanlineEnabled || source.zoomPulseEnabled
+                        || source.strokeFlashEnabled || !source.fxBursts.empty()))
+                    throw BackendError("Skia 图片导唱符与下方注音需要静态正向横排");
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
                     || (cfg.rightToLeft && (!rtlBitmap || !cell.bitmapGuide->noDecor))
                     || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps))

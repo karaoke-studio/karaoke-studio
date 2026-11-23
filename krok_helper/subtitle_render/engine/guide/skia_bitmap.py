@@ -108,7 +108,7 @@ def validate_bitmap_guides(track, style, *, static_title=False):
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
-        if (appearance.vertical or appearance.lower_ruby_enabled
+        if (appearance.vertical
                 or (line.wipe_reverse and (static_title or (track.rubies and not is_undecorated_bitmap_line(rendered))))
                 or (not inline and any(c.role_label is not None for c in cells))):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
@@ -145,6 +145,10 @@ RTL_BITMAP_GUIDE_FEATURES = frozenset({
     'p08_rtl_bitmap_guides', 'p05_horizontal_rtl', 'p05_horizontal_rtl_cells',
     'p05_horizontal_rtl_kana_cells', 'p05_horizontal_rtl_kana_marks',
 })
+LOWER_RUBY_BITMAP_FEATURES = frozenset({
+    'p08_bitmap_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
+    'p06_lower_ruby_glow', 'p06_lower_ruby_shadow', 'p06_lower_ruby_shadow_gradient', 'p06_lower_ruby_static_gradient',
+})
 
 
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
@@ -169,6 +173,18 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     if 'p05_horizontal_rtl' in features:
         features.append('p08_rtl_bitmap_guides')
         allowed |= RTL_BITMAP_GUIDE_FEATURES
+    if 'p05_lower_ruby' in features:
+        for item in plan_lines:
+            if not has_bitmap_guides((item.render_line,)):
+                continue
+            source = ir['track']['lines'][item.track_index]
+            if (item.layout_style.right_to_left or item.line.wipe_reverse
+                    or source.get('karaoke_anim') not in {'none', 'utopia'}
+                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
+                raise ValueError('Skia 图片导唱符与下方注音需要静态正向横排')
+        features.append('p08_bitmap_lower_ruby')
+        allowed |= LOWER_RUBY_BITMAP_FEATURES
     if any(uses_authored_decoration(item.layout_style, 'shadow')
            and any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
                    for cell in item.render_line.chars)

@@ -101,9 +101,9 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
     that table and supply validated segmented clocks before enabling drawing.
     """
     annotation_indices = {id(r): i for i, r in enumerate(track.rubies)}
-    lower = select_lower_targets(track, style, line_styles, measured)
     if rendered_lines is None:
         rendered_lines = track.lines
+    lower = select_lower_targets(track, style, line_styles, measured, rendered_lines=rendered_lines)
     prefix_counts = [len(rendered.chars) - len(authored.chars)
                      for authored, rendered in zip(track.lines, rendered_lines, strict=True)]
     targets, intervals, readings, reference_pairs = [], [], [], []
