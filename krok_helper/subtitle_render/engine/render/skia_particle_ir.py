@@ -164,6 +164,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                            and not band and not animated and not annotated and not outlined
                            and source.get('karaoke_anim') == 'none' and not source.get('stroke_flash')
                            and (entry, exit_) != ('none', 'none') and ordinary_line_animation(source))
+        outlined_energy = ('p07_energy_transition_outlines' in ir['required_features']
+                           and bool({entry, exit_} & ENERGY_TRANSITIONS)
+                           and {entry, exit_} <= ENERGY_TRANSITIONS | {'none'})
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
         if ((look.vertical and not vertical_particles) or look.right_to_left
@@ -178,7 +181,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (look.lower_ruby_enabled and not (faded_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or (annotated and animated and index not in composed_lines)
-                or (not (annotated or vertical_particles or faded_band) and outlined)
+                or (not (annotated or vertical_particles or faded_band or outlined_energy) and outlined)
                 or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         horizontal_line_motion |= unscaled_motion

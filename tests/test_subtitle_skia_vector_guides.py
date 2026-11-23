@@ -105,10 +105,9 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'ruby', 'lower', 'role', 'stroke', 'shadow'])
+@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'ruby', 'lower', 'role', 'shadow'])
 def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
-    # Ruby and outlines are verified only with a line-level prefix guide.
-    track, style = guide_source(project, 'inline' if change in {'ruby', 'stroke'} else 'prefix')
+    track, style = guide_source(project, 'inline' if change == 'ruby' else 'prefix')
     line = track.lines[0]
     if change == 'bitmap':
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, kind='bitmap', path_commands=(),
@@ -122,9 +121,44 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, role_labels=('lead',)))])
     elif change == 'shadow':
         style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
-    else: style = replace(style, stroke_width_px=4)
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def outlined_inline_guide(project):
+    from test_subtitle_skia_outline_ruby import outlined
+
+    track, style = guide_source(project, 'inline', symbol=CURVES)
+    return track, outlined(style, 2)
+
+
+def test_inline_vector_outlines_preserve_scene_after_missing_capability(binary, project):
+    ir = ir_for(binary, outlined_inline_guide(project))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_inline_vector_guide_outline')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 750, 1100])
+        with pytest.raises(NativeRendererError, match='导唱符'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 750, 550], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_inline_vector_outlines_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = outlined_inline_guide(project)
+    times = (450, 550, 750, 1100, 1550)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    body = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, body, gpu, raster, 'inline_vector_outlines', check_p00_edges=True)
 
 
 def test_rtl_vector_guide_preserves_signal_and_scene(binary, project):

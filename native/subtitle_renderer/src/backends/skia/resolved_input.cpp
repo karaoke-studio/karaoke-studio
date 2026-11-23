@@ -483,7 +483,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool geometry = prepared.characterGeometry.active();
         prepared.particleVisibility = {particleEntry ? effects::fallEntryLeadMs(line.entryAnimation) : 0,
                                        particleExit && exitParticleKind != "dissolve"};
-        if (geometry && !geometryComposition && (style.strokeWidth > 0 || style.stroke2Width > 0))
+        const auto energyOrNone = [](std::string_view kind) {
+            return kind == "none" || kind == "flame" || kind == "lightning";
+        };
+        const bool outlinedEnergy = features.contains("p07_energy_transition_outlines") && !annotated
+            && energyOrNone(line.entryAnimation) && energyOrNone(line.exitAnimation)
+            && (particleEntry || particleExit);
+        if (geometry && !geometryComposition && !outlinedEnergy && (style.strokeWidth > 0 || style.stroke2Width > 0))
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
         prepared.rubyGeometryComposition = geometryComposition;
         if (particleEntryGlow) {

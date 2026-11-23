@@ -168,15 +168,13 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['image', 'combined_particles', 'reverse_image', 'vertical_shape',
+@pytest.mark.parametrize('case', ['combined_particles', 'vertical_shape',
                                   'ruby_role_utopia', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
-    if case == 'image': style = replace(style, scanline_shape='image', scanline_mode='follow_after')
-    elif case == 'combined_particles':
+    if case == 'combined_particles':
         track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
-    elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
     elif case == 'vertical_shape':
         track, style = vertical_ruby_source(project)
         style = replace(band(style), scanline_shape='flame')
@@ -194,6 +192,51 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     else: style = replace(style, karaoke_anim='no_wipe')
     with pytest.raises(ValueError, match='扫字线|Utopia'):
         ir_for(binary, (track, style))
+
+
+def directional_scanline_image(project, tmp_path, reverse):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style = paint_band(project, 'color' if reverse else 'follow_after')
+    asset = write_png(tmp_path / 'scanline.png', pattern('transparent'))
+    style = replace(style, scanline_shape='image', scanline_image_path=str(asset),
+                    scanline_image_scale_pct=400, scanline_image_offset_y_px=153)
+    return reverse_band(track, style) if reverse else (track, style)
+
+
+def test_reverse_image_scanline_keeps_the_image_phase_on_seek(binary, project, tmp_path):
+    ir = ir_for(binary, directional_scanline_image(project, tmp_path, True))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_reverse_scanline_image')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 750, 1100])
+        with pytest.raises(NativeRendererError, match='扫字线'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 750, 550], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('reverse', [False, True], ids=['follow-paint', 'reverse'])
+def test_image_scanline_modes_match_actual_d2d_gpu(binary, project, tmp_path, reverse):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = directional_scanline_image(project, tmp_path, reverse)
+    times = (450, 550, 750, 1100, 1550)
+    frames = []
+    for look in (style, replace(style, scanline_shape='band')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        frames.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, no_image = frames
+    assert any(np.count_nonzero((painted[..., 3] > 16) & (band[..., 3] == 0)) > 30
+               for painted, band in zip(reference, no_image, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, ('image_scanline_modes', reverse), check_p00_edges=True)
 
 
 def test_rtl_scanline_keeps_the_previous_scene_when_capability_is_missing(binary, project):

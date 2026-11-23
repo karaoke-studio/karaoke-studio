@@ -155,6 +155,11 @@ def compose_vector_guides(track, features):
     animated_gradient = 'p06_animated_singing_gradient_fill' in features
     faded_scanline = 'p07_faded_scanline_prefix_guides' in features
     line_motion = 'p07_utopia_line_animation' in features
+    inline_outlines = ('p06_primary_solid_outline' in features
+                       and set(features) <= (VECTOR_GUIDE_COMPOSITION_FEATURES | RTL_VECTOR_GUIDE_FEATURES)
+                       and not (track.rubies or 'p05_resolved_ruby' in features or 'p07_singing_scale' in features
+                                or 'p06_static_glow' in features))
+    has_inline_outlines = False
     for line in track.lines:
         chars = render_line_with_guide_symbols(line).chars
         if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
@@ -162,7 +167,9 @@ def compose_vector_guides(track, features):
         if (animated_gradient or faded_scanline or line_motion) and vector_guides_form_prefix(chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
-            raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
+            if not inline_outlines:
+                raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
+            has_inline_outlines = True
     allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
     if 'p05_rtl_vector_guides' in features:
         allowed |= RTL_VECTOR_GUIDE_FEATURES
@@ -179,6 +186,8 @@ def compose_vector_guides(track, features):
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')
+    if has_inline_outlines:
+        features.append('p06_inline_vector_guide_outline')
 
 
 def vector_guide_metrics(glyph, size, font_metrics, glyph_id):

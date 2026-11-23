@@ -85,6 +85,10 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (source.karaokeAnimation == "none" || verticalScale || verticalNoWipe)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
+    const bool energyOutlines = !cfg.vertical && !rubyParticles && version >= 11
+        && features.contains("p07_energy_transition_outlines")
+        && (isSkiaEnergyTransition(entry) || isSkiaEnergyTransition(exit))
+        && (entry.isEmpty() || isSkiaEnergyTransition(entry)) && (exit.isEmpty() || isSkiaEnergyTransition(exit));
     const bool horizontalMotion = features.contains("p07_singing_particle_line_animation")
         && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !source.scanlineEnabled
         && !source.strokeFlashEnabled && !animated && !rubyParticles && source.karaokeAnimation == "none"
@@ -104,7 +108,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
-        || (!rubyParticles && !outlinedVertical && !fadedBand && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
+        || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines
+            && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");

@@ -308,10 +308,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && !features.contains("p05_resolved_ruby")
             && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && (resolved.scanlineShape == "bubble" || resolved.scanlineShape == "flame");
+        const bool basicImage = staticScanline && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
+            && !features.contains("p05_resolved_ruby") && source.karaokeAnimation == "none" && source.fxBursts.empty()
+            && resolved.scanlineShape == "image";
+        const bool originalImagePalette = basicImage && features.contains("p07_original_scanline_image_palette")
+            && resolved.scanlineImageColorLayers.isEmpty() && resolved.scanlineMode != "role";
+        const bool reverseImage = basicImage && features.contains("p07_reverse_scanline_image");
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
-            && (resolved.scanlineMode == "color" || shapePalette) && !source.wipeReverse
+            && (resolved.scanlineMode == "color" || shapePalette || originalImagePalette)
+            && (!source.wipeReverse || reverseImage)
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && (source.fxBursts.empty() || shapedSinging);
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
         const bool movingVerticalSingingScanline = cfg.vertical && utopiaSinging
@@ -469,6 +476,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         const bool composedGuide = features.contains("p05_vector_guide_composition");
+        const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
+            && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !cfg.vertical
+            && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool roleVectorGuides = composedGuide && features.contains("p05_role_vector_guides")
             && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
@@ -492,7 +503,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         bool sawLyrics = false;
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
-            if (composedGuide && sawLyrics && cell.vectorGlyph)
+            if (composedGuide && sawLyrics && cell.vectorGlyph && !outlinedInlineGuide)
                 throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
             sawLyrics = sawLyrics || !cell.vectorGlyph;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)

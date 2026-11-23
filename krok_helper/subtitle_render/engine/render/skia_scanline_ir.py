@@ -35,6 +35,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     role_gradient = False
     shaped_palette = False
     rtl_band = False
+    reverse_image = original_image_palette = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -74,10 +75,18 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                                  and colors.before.text.mode == colors.after.text.mode == 'solid'))
         shape_style = (palette_shape or (look.scanline_shape in {'flame', 'bubble', 'image'}
                                          and look.scanline_mode == 'color'))
+        basic_image = (look.scanline_shape == 'image' and ordinary and not (
+            track.rubies or look.lower_ruby_enabled or bursts or look.right_to_left
+            or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')))
+        image_follows_palette = (basic_image and not look.scanline_image_color_layers
+                                 and look.scanline_mode in {'default', 'brighten', 'follow_before', 'follow_after'})
+        image_reverse = basic_image and source.wipe_reverse and (look.scanline_mode == 'color' or image_follows_palette)
+        shape_style |= image_follows_palette
         image_during_transition = particle_entry and look.scanline_shape == 'image'
         shape_with_singing = (shape_style and (ordinary or image_during_transition) and bool(track.rubies) and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
-        solid_shape = (shape_style and not (source.wipe_reverse or line.get('zoom_pulse') or line.get('stroke_flash'))
+        solid_shape = (shape_style and (not source.wipe_reverse or image_reverse)
+                       and not (line.get('zoom_pulse') or line.get('stroke_flash'))
                        and (not bursts or shape_with_singing))
         faded_band = faded_band_singing_particles(line, look)
         motion = (not ordinary and ordinary_line_animation(line)
@@ -133,6 +142,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         if shape:
             shapes.add(look.scanline_shape)
             shaped_palette |= palette_shape
+            reverse_image |= image_reverse
+            original_image_palette |= image_follows_palette
             particle_scanline_image |= image_during_transition
             moving_shapes = moving_shapes or motion
             shaped_singing = shaped_singing or shape_with_singing
@@ -143,6 +154,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_scanline_shape_palette')
     if rtl_band:
         features.append('p07_rtl_scanline_band')
+    if reverse_image:
+        features.append('p07_reverse_scanline_image')
+    if original_image_palette:
+        features.append('p07_original_scanline_image_palette')
     if inline_role_fade:
         features.append('p07_inline_role_faded_scanline')
     if prefix_guide_fade:

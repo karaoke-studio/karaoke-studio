@@ -168,6 +168,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     version = 3
     translucent_outlines = False
+    energy_outlines = False
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
         animations = {source.get('entry_anim'), source.get('exit_anim')}
@@ -192,9 +193,12 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
         if not (entry or exit_):
             continue
-        if geometry and index not in composed_geometry_lines and (
-                look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)):
-            raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
+        outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
+        if geometry and outlined and index not in composed_geometry_lines:
+            if not track.rubies and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
+                energy_outlines = True
+            else:
+                raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
         if not geometry and not track.rubies and (look.stroke_width_px > 0 or look.stroke2_enabled):
             colors = effective_karaoke_colors(look)
             layers = ['text']
@@ -209,6 +213,8 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         write_horizontal_pivots(cells, metrics)
     if translucent_outlines:
         ir['required_features'].append('p07_translucent_character_outline')
+    if energy_outlines:
+        ir['required_features'].append('p07_energy_transition_outlines')
     return version
 
 

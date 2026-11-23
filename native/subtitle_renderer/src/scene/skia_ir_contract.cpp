@@ -80,6 +80,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_rtl_vector_guides",
         "p05_role_vector_guides",
         "p05_vector_guide_composition",
+        "p06_inline_vector_guide_outline",
         "p08_bitmap_guides",
         "p08_inline_bitmap_guides",
         "p08_inline_bitmap_decoration",
@@ -207,6 +208,8 @@ const QJsonArray& skiaIrProfiles() {
         "p07_shaped_scanline_singing_particles",
         "p07_ruby_band_singing_particles",
         "p07_scanline_image",
+        "p07_reverse_scanline_image",
+        "p07_original_scanline_image_palette",
         "p07_composed_scanline",
         "p07_role_scanline_layers",
         "p07_scanline_role_gradient",
@@ -221,6 +224,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_scanline_particles",
         "p07_character_transform",
         "p07_translucent_character_outline",
+        "p07_energy_transition_outlines",
         "p07_sing_twinkle",
         "p07_singing_particle_line_animation",
         "p07_vertical_sing_twinkle",
@@ -627,6 +631,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (rtlVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左导唱符缺少方向或布局能力声明");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
+    if (features.contains("p06_inline_vector_guide_outline")
+        && (!features.contains("p05_vector_guide_composition") || !features.contains("p06_primary_solid_outline")))
+        throw BackendError("Skia 行内矢量导唱符缺少布局或描边能力声明");
     if (roleVectorGuides && (!features.contains("p05_vector_guide_composition")
         || !features.contains("p07_role_singing_scale") || !features.contains("p07_role_line_fade")))
         throw BackendError("Skia 角色前置导唱符缺少角色唱字或整行淡化能力声明");
@@ -639,7 +646,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_upper_ruby", "p05_vector_guides", "p05_vector_guide_composition",
             "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
-            "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};
+            "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale", "p06_inline_vector_guide_outline"};
         static const QJsonArray animatedGradient{
             "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_body_gradient", "p06_outline_gradient", "p06_ruby_main_paint",
@@ -820,6 +827,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 扫字线形态布局版本无效");
     if (features.contains("p07_scanline_image") && !features.contains("p07_scanline_shape"))
         throw BackendError("Skia 图片扫字线缺少形态能力声明");
+    if (features.contains("p07_reverse_scanline_image")
+        && (!features.contains("p07_scanline_image") || !features.contains("p05_reverse_wipe")))
+        throw BackendError("Skia 反向图片扫字线缺少走字方向或图片能力声明");
+    if (features.contains("p07_original_scanline_image_palette") && !features.contains("p07_scanline_image"))
+        throw BackendError("Skia 原图扫字线缺少图片能力声明");
     if (features.contains("p07_scanline_shape_line_animation")
         && (!features.contains("p07_scanline_shape")
             || !(features.contains("p07_scanline_line_animation")
@@ -955,6 +967,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_character_transform") || transformVersion < 3
             || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 逐字半透明描边缺少逐字变换或描边能力声明");
+    if (features.contains("p07_energy_transition_outlines")
+        && (!features.contains("p07_character_transform") || transformVersion < 8
+            || !features.contains("p07_sing_twinkle") || !features.contains("p06_primary_solid_outline")))
+        throw BackendError("Skia 能量过渡描边缺少逐字变换、粒子或描边能力声明");
     if ((features.contains("p07_ruby_character_entry_spin") || features.contains("p07_ruby_character_exit_spin")
             || features.contains("p07_ruby_character_drip"))
         && (!features.contains("p07_character_transform") || !features.contains("p05_resolved_ruby")))

@@ -292,11 +292,60 @@ def test_invalid_energy_transition_keeps_scene(binary, project, mutation):
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-@pytest.mark.parametrize('changes', [{'sing_fx': 'twinkle'}, {'stroke_width_px': 4}, {'exit_anim': 'fade'}])
+@pytest.mark.parametrize('changes', [{'sing_fx': 'twinkle'}, {'exit_anim': 'fade'}])
 def test_unverified_energy_combinations_are_rejected(binary, project, changes):
     track, style = symbol_source(project, 'flame', 'lightning')
     with pytest.raises(ValueError, match='Skia'):
         ir_for(binary, (track, replace(style, **changes)))
+
+
+def outlined_energy_source(project):
+    from test_subtitle_skia_secondary_outline import two_outlines
+
+    track, style = symbol_source(project, 'flame', 'lightning')
+    _, outlines = two_outlines(project, inner=4, outer=2)
+    return track, replace(style, stroke_width_px=4, stroke2_width_px=2, stroke2_enabled=True,
+                          karaoke_colors=outlines.karaoke_colors)
+
+
+def test_outlined_energy_transition_keeps_scene_after_missing_capability(binary, project):
+    ir = ir_for(binary, outlined_energy_source(project))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_energy_transition_outlines')
+    times = (1100, 1340, 2850)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='粒子|描边'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_outlined_energy_transitions_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = outlined_energy_source(project)
+    ir = ir_for(binary, (track, style))
+    line, = ir['track']['lines']
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = (start + 150, start + 450, 2100, end - 150, end - 20, end + 40)
+    frames = []
+    for look in (style, replace(style, stroke_width_px=0, stroke2_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        frames.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = frames
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:2], bare[:2], strict=True))
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[3:5], bare[3:5], strict=True))
+    gpu, raster = render_skia(binary, ir, times)
+    for time, ref, first, second in zip(times, reference, gpu, raster, strict=True):
+        assert_particle_region(ref, first, ('outlined_energy', time), check_contour=False, coverage=alpha_coverage)
+        assert_particle_region(first, second, ('outlined_energy_raster', time), check_contour=False,
+                               coverage=alpha_coverage)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
