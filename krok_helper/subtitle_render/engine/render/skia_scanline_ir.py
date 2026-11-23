@@ -214,8 +214,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         static_shadow_band = (body_shadow and ordinary and look.scanline_shape == 'band'
                               and look.scanline_mode in {'default', 'color'} and line.get('karaoke_anim') == 'none'
                               and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
-                                       or inline_roles or vector_guides or with_zoom_or_flash or bursts
-                                       or uses_authored_decoration(look, 'glow')))
+                                       or inline_roles or with_zoom_or_flash or bursts or uses_authored_decoration(look, 'glow'))
+                              and not any(guide_symbol_is_bitmap(c.vector_glyph) for c in chars))
         if ((look.scanline_shape != 'band' and not shape) or (look.right_to_left and not rtl_scanline)
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse

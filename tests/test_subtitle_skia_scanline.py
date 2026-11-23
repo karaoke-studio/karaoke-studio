@@ -1809,11 +1809,15 @@ def test_shadow_band_requires_its_capability_and_keeps_scene(binary, reading):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_shadow_band_matches_actual_d2d_gpu(binary, reading):
+@pytest.mark.parametrize('case', ['upper_reading', 'inline_guide'])
+def test_shadow_band_matches_actual_d2d_gpu(binary, reading, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = shadow_band_source(reading)
+    if case == 'inline_guide':
+        line, = track.lines
+        track = replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})], rubies=[])
     times = (450, 899, 1100, 1550, 2300)
     references = []
     for look in (style, replace(style, scanline_enabled=False), replace(style, decoration_kind='none')):
@@ -1826,7 +1830,7 @@ def test_shadow_band_matches_actual_d2d_gpu(binary, reading):
     assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 40
                for a, b in zip(ref, no_body_shadow, strict=True))
     gpu, raster = glow_band_frames(binary, (track, style), 1, times)
-    assert_glow_parity(times, ref, gpu, raster, 'shadow_band', check_p00_edges=True)
+    assert_glow_parity(times, ref, gpu, raster, ('shadow_band', case), check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

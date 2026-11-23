@@ -984,7 +984,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && style.scanlineShape == "band" && (style.scanlineMode == "color" || style.scanlineMode == "default")
             && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
-            && !vectorGuides && !hasInlineRoles && !features.contains("p05_lower_ruby");
+            && !hasInlineRoles && !features.contains("p05_lower_ruby");
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
