@@ -83,6 +83,32 @@ def test_plain_utopia_particles_match_actual_d2d_gpu(binary, project, case):
             configure(process, ir)
 
 
+def test_rtl_singing_particles_follow_resolved_cell_anchors(binary, project):
+    track, style = twinkle_source(project, 'two_colors')
+    style = replace(style, right_to_left=True)
+    times, dpr = (250, 400, 750, 1100, 1500, 1820, 2200), 3
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p07_rtl_singing_particles' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert np.count_nonzero(blue_coverage(gpu[3]) > 35) > 30
+    for time, vulkan, cpu in zip(times, gpu, raster, strict=True):
+        assert_particle_region(vulkan, cpu, ('rtl_singing', time, 'raster'))
+    if sys.platform != 'win32':
+        return
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    refs = []
+    for look in (style, replace(style, sing_fx='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(*refs, strict=True))
+    for time, d2d, vulkan in zip(times, refs[0], gpu, strict=True):
+        assert_particle_region(d2d, vulkan, ('rtl_singing', time))
+        assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
+
+
 RUBY_PARTICLE_TIMES = [150, 450, 550, 899, 950, 1100, 1400, 1700, 2100, 2650, 3200]
 
 

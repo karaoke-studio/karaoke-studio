@@ -99,6 +99,12 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && source.entryAnimation == "none" && source.exitAnimation == "none"
         && !source.strokeFlashEnabled && !source.zoomPulseEnabled
         && (!source.scanlineEnabled || (version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"));
+    const bool rtlSinging = features.contains("p07_rtl_singing_particles") && cfg.rightToLeft
+        && !cfg.vertical && cfg.rubies.empty() && !source.wipeReverse && !source.scanlineEnabled
+        && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none"
+        && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+        && protocol::decorationKindForState(style, false) == "none"
+        && protocol::decorationKindForState(style, true) == "none";
     const bool noWipeSinging = features.contains("p07_no_wipe_singing_particles")
         && source.karaokeAnimation == "no_wipe" && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
         && !rubyParticles && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled
@@ -124,7 +130,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             || source.exitAnimation == "slide_out" || source.exitAnimation == "rise");
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
-    if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft
+    if ((cfg.vertical && !verticalParticles) || (cfg.rightToLeft && !rtlSinging)
         || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles && !reverseSinging)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles && !noWipeSinging)

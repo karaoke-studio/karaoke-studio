@@ -120,6 +120,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     outlined_vertical_particles = False
     no_wipe_vertical_particles = False
     reverse_horizontal_singing = False
+    rtl_horizontal_singing = False
     no_wipe_horizontal_singing = False
     horizontal_line_motion = False
     plain_scaled_singing = False
@@ -148,6 +149,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         vertical_modes = vertical_singing_particle_modes(source) if look.vertical and supported_band else set()
         vertical_particles = bool(vertical_modes)
         outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
+        rtl_singing = (look.right_to_left and not (look.vertical or item.line.wipe_reverse or annotated or band or outlined)
+                       and source.get('karaoke_anim') == 'none' and (entry, exit_) == ('none', 'none')
+                       and not (source.get('stroke_flash') or source.get('zoom_pulse'))
+                       and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         if vertical_particles:
             vertical_modes_used.update(vertical_modes)
             vertical_scaled_particles |= source.get('karaoke_anim') == 'utopia'
@@ -197,7 +202,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                         and ({entry, exit_} <= ENERGY_TRANSITIONS | {'none'} or energy_motion))
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
-        if ((look.vertical and not vertical_particles) or look.right_to_left
+        if ((look.vertical and not vertical_particles) or (look.right_to_left and not rtl_singing)
                 or (item.line.wipe_reverse and not (band or vertical_particles or reverse_singing))
                 or (source.get('karaoke_anim') != 'none' and not (scaled_singing or vertical_particles or no_wipe_singing))
                 or (not (vertical_particles or faded_band or unscaled_motion or energy_motion)
@@ -216,6 +221,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         plain_scaled_singing |= plain_scale
         plain_zoom_singing |= plain_scale and bool(source.get('zoom_pulse'))
         reverse_horizontal_singing |= reverse_singing
+        rtl_horizontal_singing |= rtl_singing
         no_wipe_horizontal_singing |= no_wipe_singing
         energy_line_motion |= energy_motion
         energy_singing_stars |= energy_stars
@@ -302,6 +308,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_plain_zoom_singing_particles')
     if reverse_horizontal_singing:
         ir['required_features'].append('p07_reverse_singing_particles')
+    if rtl_horizontal_singing:
+        ir['required_features'].append('p07_rtl_singing_particles')
     if no_wipe_horizontal_singing:
         ir['required_features'].append('p07_no_wipe_singing_particles')
     if energy_line_motion:
