@@ -11,6 +11,7 @@
 class SkCanvas;
 
 namespace subtitle::skia {
+struct SignalTransition;
 struct ShapeSignal {
     enum class Shape { Circle, Square, Rounded, Image };
     struct Decoration {
@@ -31,6 +32,6 @@ struct ShapeSignal {
     std::optional<SignalPath> path;
 
     SkPath outline() const;
-    void draw(SkCanvas& canvas, int time, float entryOpacity = 1.f) const;
+    void draw(SkCanvas& canvas, int time, const SignalTransition&, float entryOpacity = 1.f) const;
 };
 }

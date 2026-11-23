@@ -1,6 +1,7 @@
 #include "core/prepared_scene.h"
 #include "character_halo.h"
 #include "character_wipe.h"
+#include "signal_transition.h"
 #include "stroke_flash.h"
 #include "wipe_front.h"
 #include "include/core/SkCanvas.h"
@@ -37,13 +38,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
     const auto placement = line.translationAt(tMs);
+    const SignalTransition signalTransition{line.characterFade, line.startMs, line.endMs};
     const bool decoratedLamp = line.shapeSignal && line.shapeSignal->decoration;
     const auto drawDecoratedLamp = [&] {
         const auto entry = line.animation.entryAt(tMs, line.startMs);
         SkAutoCanvasRestore restore(&canvas, true);
         canvas.translate(entry.dx, entry.dy);
         canvas.translate(placement.x(), placement.y());
-        line.shapeSignal->draw(canvas, tMs, entry.opacity);
+        line.shapeSignal->draw(canvas, tMs, signalTransition, entry.opacity);
     };
     const bool reverseDecoration = line.rubyGroups.empty() && (!line.glow.empty() || line.shadow.visible());
     const bool rtlRubyWithoutScale = !line.rubyGroups.empty() && !line.singingScale.active;
@@ -746,13 +748,13 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 line.scanline.shape.draw(canvas, tMs, *front, line.bodyInk, line.rubyInkTop);
         }
     }
-    if (line.volumeSignal) line.volumeSignal->draw(canvas, tMs);
+    if (line.volumeSignal) line.volumeSignal->draw(canvas, tMs, signalTransition);
     if (decoratedLamp) {
         // Decorated lamps have their own countdown and share only the line's entry pose.
         restore.restore();
         drawDecoratedLamp();
     } else if (line.shapeSignal) {
-        line.shapeSignal->draw(canvas, tMs);
+        line.shapeSignal->draw(canvas, tMs, signalTransition);
     }
 }
 }

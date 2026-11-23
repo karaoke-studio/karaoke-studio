@@ -13,11 +13,11 @@ std::uint32_t argb(const RgbaColor& c) {
     return (std::uint32_t(c.alpha) << 24) | (std::uint32_t(c.red) << 16) | (std::uint32_t(c.green) << 8) | c.blue;
 }
 
-bool usesOnlyWholeLineAnimation(const TextLine& line) {
+bool supportsSignalAnimation(const TextLine& line) {
     const auto& entry = line.entryAnimation;
     const auto& exit = line.exitAnimation;
-    return (entry == "none" || entry == "fade" || entry == "slide_in" || entry == "rise")
-        && (exit == "none" || exit == "fade" || exit == "slide_out" || exit == "rise");
+    return (entry == "none" || entry == "fade" || entry == "slide_in" || entry == "rise" || entry == "char_fade")
+        && (exit == "none" || exit == "fade" || exit == "slide_out" || exit == "rise" || exit == "char_fade");
 }
 }
 
@@ -38,7 +38,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     if (style.litTransitionMode != "none" && style.litTransitionMode != "fade"
         && style.litTransitionMode != "slide")
         throw BackendError("Skia 指示灯的熄灭过渡模式尚未支持");
-    if (!usesOnlyWholeLineAnimation(line))
+    if (!supportsSignalAnimation(line))
         throw BackendError("Skia 尚未接通指示灯自身的逐灯出入场变换");
     if (std::max({style.litSize, style.litTracking, std::abs(style.litOffsetX),
             std::abs(style.litOffsetY), style.litStrokeWidth, style.litStrokeSoften,
@@ -112,7 +112,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             return value.isDouble() && std::isfinite(value.toDouble()) && std::abs(value.toDouble()) <= 1e6;
         }))
         throw BackendError("Skia 音量柱缺少有效的最终锚点");
-    if (!usesOnlyWholeLineAnimation(line))
+    if (!supportsSignalAnimation(line))
         throw BackendError("Skia 尚未接通音量柱自身的逐柱出入场变换");
     const auto geometry = volumeSignalGeometry(style);
     if (!std::isfinite(geometry.groupWidth) || geometry.groupWidth > 8192

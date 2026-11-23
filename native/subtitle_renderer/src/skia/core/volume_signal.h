@@ -10,6 +10,7 @@
 class SkCanvas;
 
 namespace subtitle::skia {
+struct SignalTransition;
 struct VolumeSignal {
     struct Palette {
         SkColor fill = 0, stroke = 0, outerStroke = 0, shadow = 0;
@@ -27,6 +28,6 @@ struct VolumeSignal {
     std::array<sk_sp<SkShader>, 2> fillGradients;
     std::vector<Bar> bars;
 
-    void draw(SkCanvas&, int time) const;
+    void draw(SkCanvas&, int time, const SignalTransition&) const;
 };
 }

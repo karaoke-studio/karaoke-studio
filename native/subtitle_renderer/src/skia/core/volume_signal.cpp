@@ -1,35 +1,40 @@
 #include "volume_signal.h"
+#include "signal_transition.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 
 namespace subtitle::skia {
-void VolumeSignal::draw(SkCanvas& canvas, int time) const {
+void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition) const {
     const auto state = krok::subtitle::native::volumeSignalState(clock, time);
     if (!state.visible || state.opacity <= 0 || opacity <= 0) return;
     SkAutoCanvasRestore flashLayer(&canvas, false);
     if (state.opacity < 1) canvas.saveLayerAlphaf(nullptr, state.opacity);
     for (int index = 0; index < clock.count; ++index) {
+        const float columnOpacity = opacity * transition.opacityAt(time, index, clock.count);
+        if (columnOpacity <= 0) continue;
         const bool filled = index <= state.activeIndex;
         for (const auto& layer : bars[index].glow) {
             if (!layer.visible(filled)) continue;
             auto source = layer.createSource(canvas);
             if (!source.surface) continue;
-            layer.drawCell(*source.surface->getCanvas(), 0, filled, std::nullopt, nullptr, opacity);
+            layer.drawCell(*source.surface->getCanvas(), 0, filled, std::nullopt, nullptr, columnOpacity);
             layer.composite(canvas, source);
         }
     }
     SkPaint paint;
     paint.setAntiAlias(true);
-    const auto draw = [&](const SkRRect& rect, SkColor color, float width, sk_sp<SkShader> shader = nullptr) {
-        if (!shader && !SkColorGetA(color)) return;
-        paint.setColor(shader ? SK_ColorWHITE : color);
-        paint.setShader(std::move(shader));
-        paint.setAlphaf(paint.getAlphaf() * opacity);
-        paint.setStyle(width > 0 ? SkPaint::kStroke_Style : SkPaint::kFill_Style);
-        paint.setStrokeWidth(width);
-        canvas.drawRRect(rect, paint);
-    };
     const auto column = [&](int index, bool filled) {
+        const float columnOpacity = opacity * transition.opacityAt(time, index, clock.count);
+        if (columnOpacity <= 0) return;
+        const auto draw = [&](const SkRRect& rect, SkColor color, float width, sk_sp<SkShader> shader = nullptr) {
+            if (!shader && !SkColorGetA(color)) return;
+            paint.setColor(shader ? SK_ColorWHITE : color);
+            paint.setShader(std::move(shader));
+            paint.setAlphaf(paint.getAlphaf() * columnOpacity);
+            paint.setStyle(width > 0 ? SkPaint::kStroke_Style : SkPaint::kFill_Style);
+            paint.setStrokeWidth(width);
+            canvas.drawRRect(rect, paint);
+        };
         const auto& rect = bars[index].rect;
         const auto& color = palette[filled];
         if (decorated) {

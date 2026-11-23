@@ -1,4 +1,5 @@
 #include "shape_signal.h"
+#include "signal_transition.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkSamplingOptions.h"
@@ -16,7 +17,7 @@ SkPath ShapeSignal::outline() const {
     return SkPath::Oval(bounds);
 }
 
-void ShapeSignal::draw(SkCanvas& canvas, int time, float entryOpacity) const {
+void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition, float entryOpacity) const {
     const auto state = krok::subtitle::native::shapeSignalState(clock, time);
     const float signalOpacity = opacity * entryOpacity;
     if (!state.visible || signalOpacity <= 0) return;
@@ -49,16 +50,17 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, float entryOpacity) const {
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
         const bool active = index == state.activeIndex;
-        if (active && state.activeOpacity <= 0) continue;
+        const float alpha = transition.opacityAt(time, index, clock.count, true)
+            * (active ? state.activeOpacity : 1.f);
+        if (alpha <= 0) continue;
         const float x = origin.x() + index * pitch + (active ? state.dx : 0.f);
         const float y = origin.y() + (active ? state.dy : 0.f);
         const auto box = SkRect::MakeXYWH(x, y, size, size);
-        const bool fading = active && state.activeOpacity < 1;
         SkAutoCanvasRestore restore(&canvas, false);
-        if (fading) {
+        if (alpha < 1) {
             const float pad = (strokeWidth + strokeSoften) * .5f + shadowOffset + 2.f;
             const auto bounds = box.makeOutset(pad, pad);
-            canvas.saveLayerAlphaf(decoration ? nullptr : &bounds, state.activeOpacity);
+            canvas.saveLayerAlphaf(decoration ? nullptr : &bounds, alpha);
         }
         if (decoration && !decoration->glow.empty()) {
             SkAutoCanvasRestore local(&canvas, true);
