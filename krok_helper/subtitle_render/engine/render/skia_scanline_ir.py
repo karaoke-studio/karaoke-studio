@@ -54,6 +54,17 @@ def utopia_entry_band(line, style):
                      or any(uses_authored_decoration(style, kind) for kind in ('shadow', 'glow'))))
 
 
+def reverse_singing_scale(line, style):
+    return (line.get('wipe_reverse') and line.get('karaoke_anim') == 'utopia'
+            and {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
+            and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('stroke_flash')
+                     or line.get('fx_bursts') or line.get('zoom_pulse') or style.stroke_width_px
+                     or (style.stroke2_enabled and style.stroke2_width_px)
+                     or any(uses_authored_decoration(style, kind) for kind in ('shadow', 'glow')))
+            and (not line.get('scanline') or (style.scanline_shape == 'band'
+                                            and style.scanline_mode in {'default', 'color'})))
+
+
 def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks):
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
@@ -140,8 +151,9 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         shape = solid_shape and (ordinary or motion or image_during_transition)
         entering_utopia = not track.rubies and utopia_entry_band(line, look)
         utopia_entry_bands |= entering_utopia
-        utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
-                  and (ordinary or motion or particle_entry or entering_utopia))
+        reverse_singing = not track.rubies and reverse_singing_scale(line, look)
+        utopia = (line.get('karaoke_anim') == 'utopia'
+                  and (reverse_singing or not source.wipe_reverse and (ordinary or motion or particle_entry or entering_utopia)))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
         lower_particles = faded_band and look.scanline_mode in {'default', 'color'}
         lower_band = (look.lower_ruby_enabled and (ordinary or motion) and look.scanline_shape == 'band'

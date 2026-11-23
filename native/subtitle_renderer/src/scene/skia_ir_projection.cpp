@@ -350,9 +350,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.entryAnimation == "utopia" && source.exitAnimation == "none"
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty()
             && resolved.scanlineShape == "band" && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color");
+        const bool reverseSingingScanline = features.contains("p07_horizontal_reverse_singing") && utopiaSinging
+            && source.wipeReverse && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && staticScanline
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
+            && resolved.scanlineShape == "band" && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color");
         const bool utopiaScanline = utopiaSinging && scanlineVersion >= 5
             && (!source.zoomPulseEnabled || composedScanline)
-            && (!source.wipeReverse || (cfg.vertical && features.contains("p07_vertical_reverse_scanline_singing")))
+            && (!source.wipeReverse || reverseSingingScanline
+                || (cfg.vertical && features.contains("p07_vertical_reverse_scanline_singing")))
             && (staticScanline || movingScanline || particleScanline || utopiaEntryScanline);
         // Shaped scanlines use a solid palette and the forward line's own front.
         const bool scanlineShape = solidShape && (staticScanline || movingScanline || particleScanlineImage);

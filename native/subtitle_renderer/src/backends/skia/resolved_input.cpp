@@ -452,9 +452,15 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (vectorGuides && !prefixFadedScanline)
                 throw BackendError("Skia 矢量导唱符扫字线缺少对应布局能力");
         }
+        const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
+            && !style.vertical && !style.rightToLeft && !annotated && !hasInlineRoles && !vectorGuides
+            && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
+            && style.strokeWidth == 0 && style.stroke2Width == 0;
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
-            || (line.wipeReverse && !verticalSinging) || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
+            || (line.wipeReverse && !(verticalSinging || reverseHorizontalSinging))
+            || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && !verticalScaledParticles
                 && ((!rubyParticles && !fadedScanlineParticles) || utopiaEntry || utopiaExit || line.zoomPulseEnabled))

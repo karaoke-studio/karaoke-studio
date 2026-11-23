@@ -167,11 +167,43 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-def test_unproven_reverse_utopia_scanline_is_rejected(binary, project):
+def reverse_utopia_scanline_source(project):
     track, style = scanline_source(project)
-    track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
-    with pytest.raises(ValueError, match='扫字线|Utopia'):
-        ir_for(binary, (track, style))
+    return reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
+
+
+def test_reverse_utopia_scanline_requires_its_capability(binary, project):
+    ir = ir_for(binary, reverse_utopia_scanline_source(project))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_horizontal_reverse_singing')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [500, 1050])
+        with pytest.raises(NativeRendererError, match='扫字线|Utopia'):
+            configure(process, bad)
+        replay, _ = collect(process, [1050, 500], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_utopia_scanline_matches_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = reverse_utopia_scanline_source(project)
+    times = (300, 455, 600, 750, 1050, 1400, 1580, 1850)
+    refs = []
+    for look in (style, replace(style, scanline_enabled=False), replace(style, reverse_karaoke_anim='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    expected, *controls = refs
+    for control in controls:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(expected, control, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, expected, gpu, raster, 'reverse_utopia_scanline', check_p00_edges=True)
 
 
 def static_guide_and_role_band(project):
