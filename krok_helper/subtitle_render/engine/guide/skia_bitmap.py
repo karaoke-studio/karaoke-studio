@@ -217,27 +217,37 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
         allowed |= RTL_BITMAP_GUIDE_FEATURES
         rtl_guides = [item for item in plan_lines if item.layout_style.right_to_left
                       and has_bitmap_guides((item.render_line,))]
-        decorated = [item for item in rtl_guides if any(
+        decorated = {item.track_index for item in rtl_guides if any(
             uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow')) or any(
                 guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
-                for cell in item.render_line.chars)]
+                for cell in item.render_line.chars)}
         rtl_upper = bool(rtl_guides) and 'p05_horizontal_rtl_ruby' in features
-        if rtl_upper and decorated:
-            raise ValueError('Skia 右至左图片导唱符与上注音当前需要无独立装饰的图片')
+        rtl_singing = False
         if decorated or rtl_upper:
-            for item in rtl_guides if rtl_upper else decorated:
+            for item in rtl_guides:
+                if not rtl_upper and item.track_index not in decorated:
+                    continue
                 source = ir['track']['lines'][item.track_index]
-                if (item.line.wipe_reverse or source.get('karaoke_anim') != 'none'
+                singing = (rtl_upper and 'p07_rtl_ruby_singing_scale' in features
+                           and source.get('karaoke_anim') == 'utopia'
+                           and not uses_authored_decoration(item.layout_style, 'shadow'))
+                if (item.line.wipe_reverse or (source.get('karaoke_anim') != 'none' and not singing)
                         or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                         or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                         or any(cell.role_label is not None for cell in item.render_line.chars)):
-                    raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要静态实色和普通走字')
+                    raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要实色普通走字或静态 Utopia')
+                if rtl_upper and item.track_index in decorated and not singing:
+                    raise ValueError('Skia 右至左图片导唱符与上注音的独立装饰当前支持 Utopia 光晕')
+                rtl_singing |= singing
         if decorated:
             features.append('p08_rtl_bitmap_guide_decoration')
             allowed |= {'p08_rtl_bitmap_guide_decoration', 'p06_static_shadow'}
         if rtl_upper:
             features.append('p08_rtl_bitmap_upper_ruby')
             allowed |= {'p08_rtl_bitmap_upper_ruby', 'p05_horizontal_rtl_ruby', 'p05_rtl_ruby_without_body_stroke'}
+        if rtl_singing:
+            features.append('p08_rtl_bitmap_singing')
+            allowed |= {'p08_rtl_bitmap_singing', 'p07_rtl_ruby_singing_scale'}
     if 'p05_lower_ruby' in features:
         for item in plan_lines:
             if not has_bitmap_guides((item.render_line,)):

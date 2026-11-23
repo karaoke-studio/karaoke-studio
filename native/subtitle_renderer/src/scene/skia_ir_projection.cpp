@@ -560,13 +560,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
+        const bool rtlBitmapSinging = features.contains("p08_rtl_bitmap_singing") && utopiaSinging
+            && protocol::decorationKindForState(resolved, false) != "shadow"
+            && protocol::decorationKindForState(resolved, true) != "shadow";
         const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby")
-            && staticScanline && !source.scanlineEnabled && !source.wipeReverse && source.karaokeAnimation == "none"
+            && staticScanline && !source.scanlineEnabled && !source.wipeReverse
+            && (source.karaokeAnimation == "none" || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
             && (cfg.rubies.empty() || rtlBitmapUpperRuby);
         const bool rtlBitmapDecoration = rtlBitmap && features.contains("p08_rtl_bitmap_guide_decoration")
-            && staticScanline && !source.wipeReverse && !source.scanlineEnabled && source.karaokeAnimation == "none"
+            && staticScanline && !source.wipeReverse && !source.scanlineEnabled
+            && ((cfg.rubies.empty() && source.karaokeAnimation == "none") || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
             && staticScanline && !source.scanlineEnabled

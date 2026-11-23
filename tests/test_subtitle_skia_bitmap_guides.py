@@ -103,13 +103,10 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['rtl', 'missing'])
-def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
+def test_missing_bitmap_guide_resource_stays_gated(binary, project, tmp_path):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
-    if change == 'rtl': style = replace(style, right_to_left=True)
-    else:
-        line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
+    line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
         ir_for(binary, (replace(track, lines=[line]), style))
 
@@ -361,6 +358,36 @@ def test_reverse_singing_bitmap_guides_keep_outlines_like_actual_d2d_gpu(binary,
     assert not ir['skia_layout']['lines'][0]['ruby_groups']
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'reverse_bitmap_singing_outline', check_p00_edges=True)
+
+
+@GPU
+def test_rtl_singing_bitmap_guide_with_glow_and_ruby_matches_d2d_gpu(binary, application, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case, track = p00_guide(tmp_path, bitmap_no_decor=False)
+    style = replace(case.style, right_to_left=True)
+    line, = track.lines
+    undecorated = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=True))
+    times, dpr = (600, 1320, 1750, 2850, 3800, 4520, 4980), 3
+    refs = []
+    for source, look in (
+        (track, style),
+        (replace(track, lines=[undecorated]), style),
+        (replace(track, rubies=[]), style),
+        (track, replace(style, karaoke_anim='none')),
+    ):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=source,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    for name, control in zip(('bitmap glow', 'upper ruby', 'utopia'), refs[1:], strict=True):
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True)), name
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p08_rtl_bitmap_singing' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'rtl_singing_bitmap_guide', check_p00_edges=True)
 
 
 def shadowed_bitmap_guide(project, tmp_path, *, paint_mode='solid'):

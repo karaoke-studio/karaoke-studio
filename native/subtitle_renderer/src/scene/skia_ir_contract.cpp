@@ -105,6 +105,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_rtl_bitmap_guides",
         "p08_rtl_bitmap_guide_decoration",
         "p08_rtl_bitmap_upper_ruby",
+        "p08_rtl_bitmap_singing",
         "p08_bitmap_guide_shadow",
         "p08_bitmap_guide_gradient_shadow",
         "p08_bitmap_guide_gradient_glow",
@@ -876,10 +877,13 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 右至左图片导唱符缺少方向或布局能力声明");
     const bool rtlBitmapDecoration = features.contains("p08_rtl_bitmap_guide_decoration");
     const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby");
+    const bool rtlBitmapSinging = features.contains("p08_rtl_bitmap_singing");
     if (rtlBitmapUpperRuby && (!rtlBitmapGuides || !features.contains("p05_horizontal_rtl_ruby")
         || !features.contains("p05_upper_ruby") || features.contains("p05_lower_ruby")))
         throw BackendError("Skia 右至左图片导唱符上注音缺少对应布局能力");
-    if (rtlBitmapDecoration && (!rtlBitmapGuides || features.contains("p05_resolved_ruby")))
+    if (rtlBitmapSinging && (!rtlBitmapUpperRuby || !features.contains("p07_rtl_ruby_singing_scale")))
+        throw BackendError("Skia 右至左图片导唱符唱字缺少对应上注音和缩放能力");
+    if (rtlBitmapDecoration && (!rtlBitmapGuides || (features.contains("p05_resolved_ruby") && !rtlBitmapSinging)))
         throw BackendError("Skia 右至左图片导唱符装饰缺少布局能力或包含注音");
     const bool bitmapGuideShadow = features.contains("p08_bitmap_guide_shadow");
     const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
@@ -952,6 +956,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                     || feature == QJsonValue("p07_reverse_singing_glow")))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
                 && !(rtlBitmapUpperRuby && rtlUpperRubyAllowed.contains(feature))
+                && !(rtlBitmapSinging && (feature == QJsonValue("p08_rtl_bitmap_singing")
+                    || feature == QJsonValue("p07_rtl_ruby_singing_scale")))
                 && !(rtlBitmapDecoration && (feature == QJsonValue("p08_rtl_bitmap_guide_decoration")
                     || feature == QJsonValue("p06_static_shadow")))
                 && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))
