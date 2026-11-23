@@ -210,6 +210,8 @@ def write_body_gradient_bounds(ir, plan):
         singing = (source.get('karaoke_anim') == 'utopia'
                    and (annotated or faded_band or palette_band or moving or unannotated_singing)
                    and (not source.get('zoom_pulse') or zoom_paints))
+        ordinary_vector_paint = (not (look.vertical or directional) and source.get('karaoke_anim') == 'none'
+                                 and (animations == {'none'} or paint_fade))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or (look.vertical and not static_vertical)
                 or (directional and not (static_directional or static_vertical or (singing and unannotated_singing)))
@@ -220,7 +222,7 @@ def write_body_gradient_bounds(ir, plan):
                 or (look.lower_ruby_enabled and not (particle_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or any(c.role_label is not None or (c.vector_glyph is not None
-                       and (not (moving or vector_band) or guide_symbol_is_bitmap(c.vector_glyph)))
+                       and (not (ordinary_vector_paint or moving or vector_band) or guide_symbol_is_bitmap(c.vector_glyph)))
                        for c in item.render_line.chars)):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint |= annotated or (moving and upper_ruby)

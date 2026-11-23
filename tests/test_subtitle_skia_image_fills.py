@@ -337,12 +337,18 @@ def test_image_fill_fade_keeps_existing_scene_after_missing_capability(binary, p
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_image_fill_fade_matches_actual_d2d_gpu(binary, project, images):
+@pytest.mark.parametrize('guide', [False, True])
+def test_image_fill_fade_matches_actual_d2d_gpu(binary, project, images, guide):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = fading_paint_source(project, images)
+    if guide:
+        from test_subtitle_skia_vector_guides import CURVES
+
+        line, = track.lines
+        track = replace(track, lines=[replace(line, inline_guide_symbols={1: CURVES})])
     ir = ir_for(binary, (track, style))
     line, = ir['track']['lines']
     start, end = line['display_start_ms'], line['display_end_ms']
@@ -352,7 +358,7 @@ def test_image_fill_fade_matches_actual_d2d_gpu(binary, project, images):
                                    width=640, height=360, realization_enabled=False)
     refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs, gpu, raster, 'image_fill_fade')
+    assert_glow_parity(times, refs, gpu, raster, ('image_fill_fade', guide))
 
 
 def test_old_sidecar_without_image_fills_is_rejected(binary, monkeypatch):
