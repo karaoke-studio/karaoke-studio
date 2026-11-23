@@ -281,7 +281,7 @@ def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary
 
     track, style = transform_source(project, 'spin_flip', 'spin_flip')
     guide = GuideSymbol(kind='bitmap', bitmap_before_path=image(tmp_path / 'fixed.png', color='#30FF80'),
-                        bitmap_no_decor=True, bitmap_fix_size=True, bitmap_margin_bottom_px=18)
+                        bitmap_no_decor=False, bitmap_fix_size=True, bitmap_margin_bottom_px=18)
     line, = track.lines
     track = replace(track, lines=[replace(line, inline_guide_symbols={1: guide})])
     times, dpr = (85, 180, 260, 480, 700, 2580, 2680, 2750), 3
@@ -294,6 +294,7 @@ def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary
                                        width=640, height=360, dpr=dpr, realization_enabled=False)
         reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
     ir = ir_for(binary, (track, style), dpr=dpr)
+    assert ir['track']['lines'][0]['chars'][1]['bitmap_guide']['no_decor'] is False
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_character_opacity', check_p00_edges=True)
     for frames in (gpu, raster):
@@ -532,7 +533,8 @@ def test_rtl_bitmap_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp
     assert_glow_parity(times, refs[1], gpu, raster, ('rtl_bitmap_guide_no_decor', decoration), check_p00_edges=True)
 
 
-def test_rtl_bitmap_decoration_is_local_to_the_guide_row(binary, project, tmp_path):
+@pytest.mark.parametrize('decorated_reading_row', [False, True])
+def test_rtl_bitmap_decoration_and_reading_use_their_own_layers(binary, project, tmp_path, decorated_reading_row):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -543,7 +545,7 @@ def test_rtl_bitmap_decoration_is_local_to_the_guide_row(binary, project, tmp_pa
     second = replace(first, track_line_index=1, display_start_override_ms=shift,
                      display_end_override_ms=shift + 2200, end_ms=first.end_ms + shift,
                      chars=[replace(char, start_ms=char.start_ms + shift) for char in first.chars],
-                     guide_symbol=replace(first.guide_symbol, bitmap_no_decor=True))
+                     guide_symbol=replace(first.guide_symbol, bitmap_no_decor=not decorated_reading_row))
     reading = RubyAnnotation(second.chars[1].text, '字', target_line_index=1,
                              target_char_start=1, target_char_end=2,
                              pos_start_ms=second.chars[1].start_ms, pos_end_ms=second.chars[2].start_ms)
@@ -564,7 +566,8 @@ def test_rtl_bitmap_decoration_is_local_to_the_guide_row(binary, project, tmp_pa
                                        width=640, height=360, dpr=dpr, realization_enabled=False)
         reference = [np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw]
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_decoration_local', check_p00_edges=True)
+    assert_glow_parity(times, reference, gpu, raster, ('rtl_bitmap_decoration_local', decorated_reading_row),
+                       check_p00_edges=True)
 
 
 def test_inline_guide_transform_coexists_with_a_separate_reading(binary, lower_source):

@@ -175,8 +175,6 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                     or any(cell.role_label is not None for cell in item.render_line.chars)):
                 raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要实色普通走字或静态 Utopia')
-            if has_reading and decorates_bitmap and not singing:
-                raise ValueError('Skia 右至左图片导唱符与注音的独立装饰当前支持 Utopia 光晕')
             if decorates_bitmap or body_decoration:
                 rtl_requirements.add('p08_rtl_bitmap_guide_decoration')
             if has_reading:

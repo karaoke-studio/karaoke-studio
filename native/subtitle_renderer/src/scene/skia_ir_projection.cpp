@@ -592,7 +592,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (rubyGroups.isEmpty() || rtlBitmapUpperRuby);
         const bool rtlBitmapDecoration = rtlBitmap && features.contains("p08_rtl_bitmap_guide_decoration")
             && staticScanline && !source.wipeReverse && !source.scanlineEnabled
-            && ((rubyGroups.isEmpty() && source.karaokeAnimation == "none") || rtlBitmapSinging)
+            && (source.karaokeAnimation == "none" || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
             && guideWholeLineAnimation && !source.scanlineEnabled
@@ -650,7 +650,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved)
-                && (!styledCellTransform || (cell.bitmapGuide && !cell.bitmapGuide->noDecor)
+                && (!styledCellTransform
                     || protocol::decorationKindForState(cellStyle, false) != "none"
                     || protocol::decorationKindForState(cellStyle, true) != "none"
                     || cellStyle.baseFill.mode != "solid" || cellStyle.afterFill.mode != "solid"))

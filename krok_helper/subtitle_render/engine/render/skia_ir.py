@@ -209,8 +209,7 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
         styled_cells = any(c.role_label is not None or c.vector_glyph is not None for c in chars)
         directional = (simple and reversed_flow and not styled_cells and not look.stroke_width_px
                        and not (look.stroke2_enabled and look.stroke2_width_px))
-        styled = (simple and styled_cells and not reversed_flow
-                  and all(not guide_symbol_is_bitmap(c.vector_glyph) or c.vector_glyph.bitmap_no_decor for c in chars))
+        styled = simple and styled_cells and not reversed_flow
         if (look.vertical or (reversed_flow and not directional)
                 or (index not in character_warp_lines and index not in composed_geometry_lines
                     and ((source.get('karaoke_anim') != 'none' and not whole_cell) or readings))
