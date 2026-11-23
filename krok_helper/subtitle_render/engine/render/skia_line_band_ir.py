@@ -43,7 +43,7 @@ def _text_bounds(item, local, measured):
 
 
 def write_line_band(ir, style, prepared, *, width, height):
-    if not style.line_band_enabled or not style.line_band_image:
+    if style.vertical or not style.line_band_enabled or not style.line_band_image:
         return
     preset_id = preset_id_for_image(style.line_band_image)
     preset = band_preset(preset_id) if preset_id is not None else None
@@ -59,7 +59,7 @@ def write_line_band(ir, style, prepared, *, width, height):
     ruby = geometry.ruby
     if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
-            or style.vertical or style.right_to_left
+            or style.right_to_left
             or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
             or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})):
         raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')

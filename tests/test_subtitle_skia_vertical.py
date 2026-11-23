@@ -486,6 +486,41 @@ def vertical_inactive_effects(project):
     return track, base, replace(base, entry_anim='char_drip', exit_anim='lightning', karaoke_stroke_flash=True)
 
 
+@pytest.mark.parametrize('option', ['signals', 'band'])
+def test_vertical_inactive_options_keep_the_row_drawable(binary, project, tmp_path, option):
+    from test_subtitle_skia_line_motion import static_band_image
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = vertical_source(project)
+    if option == 'signals':
+        enabled = replace(style, lit_enabled=True, lit_style='square', volume_enabled=True)
+    else:
+        enabled = replace(style, line_band_enabled=True, line_band_image=str(static_band_image(tmp_path)))
+    times = (0, 300, 950)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        samples = []
+        for look in (style, enabled):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, realization_enabled=False)
+            samples.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+        assert np.array_equal(*samples)
+        reference = samples[0]
+    control = ir_for(binary, (track, style))
+    ir = ir_for(binary, (track, enabled))
+    assert not {'p08_static_line_band', 'p08_custom_shape_signal', 'p08_volume_signal'}.intersection(ir['required_features'])
+    assert ir['skia_layout']['lines'] == control['skia_layout']['lines']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('inactive_vertical_option', option), check_p00_edges=True)
+    if reference is None:
+        bare_gpu, bare_raster = render_skia(binary, control, times)
+        assert np.array_equal(gpu, bare_gpu) and np.array_equal(raster, bare_raster)
+
+
 def test_vertical_inactive_effects_preserve_display_windows(binary, project):
     track, base, effects = vertical_inactive_effects(project)
     control = ir_for(binary, (track, base))['track']['lines'][0]

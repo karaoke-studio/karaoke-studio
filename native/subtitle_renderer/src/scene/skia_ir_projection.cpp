@@ -121,10 +121,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         : animatedBand ? webp : isPng(band.imagePath);
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
-    if ((band.enabled && !band.imagePath.isEmpty()) != staticBand
+    const bool bandEnabled = band.enabled && !cfg.vertical && !band.imagePath.isEmpty();
+    if (bandEnabled != staticBand
         || (staticBand && (!bandFitSupported
             || !bandImageSupported
-            || cfg.vertical || cfg.rightToLeft || (tintedBand == band.tint.isEmpty())
+            || cfg.rightToLeft || (tintedBand == band.tint.isEmpty())
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
             || !bandLayersSupported || band.edgeKind != "none" || blurBand != hasBlurBand
             || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")
@@ -445,6 +446,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         }
         style.rightToLeft = cfg.rightToLeft;
         style.vertical = cfg.vertical;
+        if (style.vertical) {
+            style.litEnabled = false;
+            style.volumeEnabled = false;
+        }
         style.layoutSemantics = cfg.layoutSemantics.toStdString();
         style.laneCount = cfg.dualLineLayout ? std::max(int(cfg.lineAlignments.size()), 1) : 1;
         style.dualLineLayout = cfg.dualLineLayout;

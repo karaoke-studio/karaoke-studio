@@ -1051,7 +1051,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].append('p08_reverse_bitmap_guides')
     if mixed_reverse_bitmap_lines:
         ir['required_features'].append('p08_mixed_reverse_bitmap_guides')
-    if any(item.layout_style.lit_enabled and item.layout_style.lit_style != 'volume' for item in plan.lines):
+    if not style.vertical and any(item.layout_style.lit_enabled and item.layout_style.lit_style != 'volume'
+                                  for item in plan.lines):
         ir['required_features'].append('p08_custom_shape_signal')
         if any(item.layout_style.lit_enabled and item.layout_style.lit_style == 'image' for item in plan.lines):
             ir['required_features'].append('p08_custom_image_signal')
@@ -1065,8 +1066,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 position = geometry.position(item, kwargs['width'], kwargs['height'])
                 ascent = float(measured.lines[item.track_index].baseline_metrics['ascent'])
                 final['shape_signal_anchor'] = [position.offset_x, position.baseline_y - ascent]
-    if any(item.layout_style.volume_enabled or (item.layout_style.lit_enabled and item.layout_style.lit_style == 'volume')
-           for item in plan.lines):
+    if not style.vertical and any(item.layout_style.volume_enabled
+                                  or (item.layout_style.lit_enabled and item.layout_style.lit_style == 'volume')
+                                  for item in plan.lines):
         ir['required_features'].append('p08_volume_signal')
         for item, final in zip(plan.lines, ir['skia_layout']['lines'], strict=True):
             if geometry.volume_widths[item.track_index]:
