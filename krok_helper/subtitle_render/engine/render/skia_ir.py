@@ -329,13 +329,16 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     mixed_reverse_bitmap_lines = False
     reverse_bitmap_singing = False
     reverse_bitmap_singing_outline = False
+    reverse_bitmap_singing_glow = False
     for item in plan.lines:
         if item.layout_style.vertical or not (item.line.wipe_reverse and has_bitmap_guides((item.render_line,))):
             continue
         source = ir['track']['lines'][item.track_index]
         avatar_only = is_undecorated_bitmap_line(item.render_line)
-        singing = (not avatar_only and reverse_singing_scale(source, item.layout_style, allow_outline=True)
-                   and all(c.vector_glyph is None or (guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)
+        glow = reverse_singing_glow(item, source, allow_bitmap=True)
+        singing = (not avatar_only and reverse_singing_scale(source, item.layout_style, allow_outline=True, allow_glow=glow)
+                   and all(c.vector_glyph is None or (guide_symbol_is_bitmap(c.vector_glyph)
+                           and (c.vector_glyph.bitmap_no_decor or glow))
                            for c in item.render_line.chars))
         modes = {'none', 'utopia'} if avatar_only or singing else {'none'}
         if ({source.get('entry_anim'), source.get('exit_anim')} != {'none'}
@@ -350,6 +353,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         else:
             mixed_reverse_bitmap_lines = True
             reverse_bitmap_singing |= singing
+            reverse_bitmap_singing_glow |= singing and glow
             look = item.layout_style
             reverse_bitmap_singing_outline |= singing and (
                 look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0))
@@ -625,7 +629,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse
                              and item.track_index not in reverse_bitmap_lines
                              and (not track.rubies or has_bitmap_guides((item.render_line,)))
-                             and not reverse_singing_glow(item, ir['track']['lines'][item.track_index])
+                             and not reverse_singing_glow(item, ir['track']['lines'][item.track_index],
+                                                          allow_bitmap=reverse_bitmap_singing_glow)
                              and any(uses_authored_decoration(item.layout_style, kind) for kind in decorations)]
         for item in decorated_reverse:
             source = ir['track']['lines'][item.track_index]
@@ -1027,6 +1032,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].append('p08_reverse_bitmap_singing')
     if reverse_bitmap_singing_outline:
         ir['required_features'].append('p08_reverse_bitmap_singing_outline')
+    if reverse_bitmap_singing_glow:
+        ir['required_features'].append('p08_reverse_bitmap_singing_glow')
     write_utopia_pivots(ir, plan, measured, transitions,
                        particle_band_tracks, vertical_singing)
     if role_line_fade:

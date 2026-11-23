@@ -472,10 +472,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     && look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid"
                     && look.decorationKindForState(false) == "none" && look.decorationKindForState(true) == "none";
             });
+        const bool reverseBitmapGlow = mixedReverseBitmaps && features.contains("p08_reverse_bitmap_singing_glow");
         const bool reverseSingingOutline = features.contains("p07_reverse_singing_outline")
             && line.wipeReverse && !hasInlineRoles && !line.scanlineEnabled
             && std::ranges::all_of(line.chars, [&](const auto& cell) {
-                return !cell.bitmapGuide || (cell.bitmapGuide->noDecor && mixedReverseBitmaps
+                return !cell.bitmapGuide || ((cell.bitmapGuide->noDecor || reverseBitmapGlow) && mixedReverseBitmaps
                     && features.contains("p08_reverse_bitmap_singing_outline"));
             });
         const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
@@ -1015,7 +1016,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseSingingGlow = singingGlow && reverseHorizontalSinging && hasGlow && !hasShadow
-            && !gradientGlow && !line.scanlineEnabled && !hasInlineRoles && !hasBitmapGuide
+            && !gradientGlow && !line.scanlineEnabled && !hasInlineRoles && (!hasBitmapGuide || reverseBitmapGlow)
             && features.contains("p07_reverse_singing_glow");
         if (hasDecoration
             && ((style.vertical && !verticalDecoration)

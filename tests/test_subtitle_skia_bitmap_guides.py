@@ -103,12 +103,11 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['rtl', 'reverse_utopia', 'missing'])
+@pytest.mark.parametrize('change', ['rtl', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
     if change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'reverse_utopia': line = replace(line, wipe_reverse=True)
     else:
         line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
@@ -324,14 +323,17 @@ def test_reverse_singing_keeps_bitmap_guides_unposed_like_actual_d2d_gpu(binary,
 
 
 @GPU
-def test_reverse_singing_bitmap_guides_keep_outlines_like_actual_d2d_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('glow', [False, True], ids=['outline', 'outline_and_glow'])
+def test_reverse_singing_bitmap_guides_keep_outlines_like_actual_d2d_gpu(binary, application, tmp_path, glow):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    case, track = p00_guide(tmp_path, bitmap_no_decor=True)
+    case, track = p00_guide(tmp_path, bitmap_no_decor=not glow)
     track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
-    style = replace(case.style, decoration_kind='none', decoration_kind_before='none', reverse_karaoke_anim='utopia')
+    style = replace(case.style, reverse_karaoke_anim='utopia')
+    if not glow:
+        style = replace(style, decoration_kind='none', decoration_kind_before='none')
     times, dpr = (600, 1320, 1750, 2850, 3800, 4520, 4980), 3
     refs = []
     for source, look in (
@@ -345,8 +347,17 @@ def test_reverse_singing_bitmap_guides_keep_outlines_like_actual_d2d_gpu(binary,
         refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
     assert np.array_equal(refs[0], refs[1])
     assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], refs[2], strict=True))
+    if glow:
+        line, = track.lines
+        plain = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=True))])
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=plain,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        assert any(np.count_nonzero(a != np.frombuffer(b, np.uint8).reshape(a.shape)) > 100
+                   for a, b in zip(refs[0], raw, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p08_reverse_bitmap_singing_outline' in ir['required_features']
+    assert ('p08_reverse_bitmap_singing_glow' in ir['required_features']) == glow
     assert not ir['skia_layout']['lines'][0]['ruby_groups']
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'reverse_bitmap_singing_outline', check_p00_edges=True)

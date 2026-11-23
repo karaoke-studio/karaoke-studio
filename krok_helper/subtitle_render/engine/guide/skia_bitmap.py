@@ -210,6 +210,8 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
             allowed |= {'p08_reverse_bitmap_singing', 'p07_horizontal_reverse_singing'}
         if 'p08_reverse_bitmap_singing_outline' in features:
             allowed |= {'p08_reverse_bitmap_singing_outline', 'p07_reverse_singing_outline'}
+        if 'p08_reverse_bitmap_singing_glow' in features:
+            allowed |= {'p08_reverse_bitmap_singing_glow', 'p07_reverse_singing_glow'}
     if 'p05_horizontal_rtl' in features:
         features.append('p08_rtl_bitmap_guides')
         allowed |= RTL_BITMAP_GUIDE_FEATURES

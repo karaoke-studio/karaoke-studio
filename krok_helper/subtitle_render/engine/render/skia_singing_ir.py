@@ -13,11 +13,12 @@ def _reverse_role_scale(source, style):
     return reverse_singing_scale(source, style) and colors.before.text.mode == colors.after.text.mode == 'solid'
 
 
-def reverse_singing_glow(item, source):
+def reverse_singing_glow(item, source, *, allow_bitmap=False):
     style = item.layout_style
     if (not uses_authored_decoration(style, 'glow') or source.get('scanline')
             or not reverse_singing_scale(source, style, allow_outline=True, allow_glow=True)
-            or any(c.role_label is not None or c.vector_glyph is not None for c in item.render_line.chars)):
+            or any(c.role_label is not None or (c.vector_glyph is not None
+                   and not (allow_bitmap and guide_symbol_is_bitmap(c.vector_glyph))) for c in item.render_line.chars)):
         return False
     colors = effective_karaoke_colors(style)
     return colors.before.shadow.mode == colors.after.shadow.mode == 'solid'
@@ -84,15 +85,17 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                 and all(c.vector_glyph is None for c in item.render_line.chars)):
             reverse_role_scale = all(_reverse_role_scale(source, style_for_role_in_layout(style, label))
                                      for label in roles)
+        bitmap_glow = 'p08_reverse_bitmap_singing_glow' in ir['required_features']
         plain_or_bitmap = all(c.vector_glyph is None or ('p08_reverse_bitmap_singing' in ir['required_features']
-                              and guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)
+                              and guide_symbol_is_bitmap(c.vector_glyph)
+                              and (c.vector_glyph.bitmap_no_decor or bitmap_glow))
                               for c in item.render_line.chars)
         allow_reverse_outline = (
             (style.stroke_width_px > 0 or (style.stroke2_enabled and style.stroke2_width_px > 0))
             and not (inline_roles or source.get('scanline'))
             and plain_or_bitmap
         )
-        allow_reverse_glow = reverse_singing_glow(item, source)
+        allow_reverse_glow = reverse_singing_glow(item, source, allow_bitmap=bitmap_glow)
         reverse_scale = (not annotated and (not inline_roles or reverse_role_scale)
                          and reverse_singing_scale(source, style, allow_outline=allow_reverse_outline,
                                                    allow_glow=allow_reverse_glow)

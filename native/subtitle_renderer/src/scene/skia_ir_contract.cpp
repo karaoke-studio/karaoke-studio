@@ -101,6 +101,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_mixed_reverse_bitmap_guides",
         "p08_reverse_bitmap_singing",
         "p08_reverse_bitmap_singing_outline",
+        "p08_reverse_bitmap_singing_glow",
         "p08_rtl_bitmap_guides",
         "p08_rtl_bitmap_guide_decoration",
         "p08_rtl_bitmap_upper_ruby",
@@ -838,8 +839,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
     const bool reverseBitmapSinging = features.contains("p08_reverse_bitmap_singing");
     const bool reverseBitmapSingingOutline = features.contains("p08_reverse_bitmap_singing_outline");
+    const bool reverseBitmapSingingGlow = features.contains("p08_reverse_bitmap_singing_glow");
     if (reverseBitmapSingingOutline && (!reverseBitmapSinging || !features.contains("p07_reverse_singing_outline")))
         throw BackendError("Skia 反向图片导唱符缺少对应唱字描边能力");
+    if (reverseBitmapSingingGlow && (!reverseBitmapSinging || !features.contains("p07_reverse_singing_glow")))
+        throw BackendError("Skia 反向图片导唱符缺少对应唱字光晕能力");
     if (reverseBitmapSinging && (!mixedReverseBitmapGuides || !features.contains("p07_horizontal_reverse_singing")))
         throw BackendError("Skia 反向图片导唱符缺少正文唱字或布局能力声明");
     const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
@@ -939,6 +943,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                     || feature == QJsonValue("p07_horizontal_reverse_singing")))
                 && !(reverseBitmapSingingOutline && (feature == QJsonValue("p08_reverse_bitmap_singing_outline")
                     || feature == QJsonValue("p07_reverse_singing_outline")))
+                && !(reverseBitmapSingingGlow && (feature == QJsonValue("p08_reverse_bitmap_singing_glow")
+                    || feature == QJsonValue("p07_reverse_singing_glow")))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
                 && !(rtlBitmapUpperRuby && rtlUpperRubyAllowed.contains(feature))
                 && !(rtlBitmapDecoration && (feature == QJsonValue("p08_rtl_bitmap_guide_decoration")
