@@ -21,10 +21,15 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
 ::subtitle::skia::ResolvedCell resolvedBitmapGuideCell(const QJsonObject& cell, const BitmapGuide& guide,
                                                      SkiaImageFillCache& images, const TextStyle& style, double dpr,
                                                      int start, int end, std::uint32_t before, std::uint32_t after,
-                                                     double wipePad, bool allowAnimation, bool allowShadow) {
-    if (!guide.noDecor && ((style.decorationKindForState(false) == "glow" && style.beforeDecorPaint.mode != "solid")
-        || (style.decorationKindForState(true) == "glow" && style.afterDecorPaint.mode != "solid")))
-        throw BackendError("Skia 图片导唱符光晕仅支持实色装饰");
+                                                     double wipePad, bool allowAnimation, bool allowShadow,
+                                                     bool allowGradientGlow) {
+    const auto supportsGlowPaint = [allowGradientGlow](const PaintStyle& paint) {
+        return paint.mode == "solid" || (allowGradientGlow && !paint.stops.empty()
+            && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical"));
+    };
+    if (!guide.noDecor && ((style.decorationKindForState(false) == "glow" && !supportsGlowPaint(style.beforeDecorPaint))
+        || (style.decorationKindForState(true) == "glow" && !supportsGlowPaint(style.afterDecorPaint))))
+        throw BackendError("Skia 图片导唱符渐变光晕缺少画笔或布局能力声明");
     const auto shadow = guide.noDecor ? ::subtitle::skia::StaticShadow{} : skiaStaticShadow(style);
     if (shadow.visible() && !allowShadow)
         throw BackendError("Skia 图片导唱符阴影缺少对应能力");

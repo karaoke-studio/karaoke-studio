@@ -21,20 +21,21 @@ PreparedBitmapGuide::PreparedBitmapGuide(const BitmapGuide& guide, std::size_t& 
     if (!guide.decorate) return;
     for (const bool after : {false, true}) {
         const auto& state = after ? guide.glow.after : guide.glow.before;
+        const auto& gradient = guide.glowGradients[after];
         if (state.radius <= 0) continue;
         auto& halos = halos_[after];
         if (const auto& animation = animations_[after]) {
             halos.reserve(animation->size());
             for (const auto& frame : *animation)
-                halos.push_back(prepareHalo(*frame.image, state, remainingHaloBytes));
+                halos.push_back(prepareHalo(*frame.image, state, gradient, remainingHaloBytes));
         } else if (const auto& image = after ? after_ : before_) {
-            halos.push_back(prepareHalo(*image, state, remainingHaloBytes));
+            halos.push_back(prepareHalo(*image, state, gradient, remainingHaloBytes));
         }
     }
 }
 
 std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const SkImage& image,
-        const GlowState& state, std::size_t& remainingBytes) const {
+        const GlowState& state, const sk_sp<SkShader>& gradient, std::size_t& remainingBytes) const {
     std::vector<Halo> passes;
     if (state.radius <= 0) return passes;
     const float pixelW = std::max(float(image.width()), 1.f), pixelH = std::max(float(image.height()), 1.f);
@@ -54,6 +55,15 @@ std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const Sk
     if (bytes > remainingBytes) throw std::runtime_error("Skia 图片导唱符光晕超过场景内存预算");
     remainingBytes -= bytes;
     const SkColor tint = SkColorSetA(state.color, 0xff); // The GPU keeps only the RGB of the decoration.
+    const auto imageAtMargin = SkRect::MakeXYWH(float(margin), float(margin), pixelW, pixelH);
+    sk_sp<SkShader> tintedImage;
+    if (gradient) {
+        const auto nativeMapping = SkMatrix::RectToRect(box_, imageAtMargin);
+        auto paint = gradient->makeWithLocalMatrix(nativeMapping);
+        auto mask = image.makeShader(SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions(),
+                                     SkMatrix::Translate(float(margin), float(margin)));
+        tintedImage = SkShaders::Blend(SkBlendMode::kDstIn, std::move(paint), std::move(mask));
+    }
     for (int index = 0; index < count; ++index) {
         const float sigma = std::max(0.f, float(state.radius - index * state.radius / count) / scaleX);
         auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
@@ -61,9 +71,14 @@ std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const Sk
         auto& canvas = *surface->getCanvas();
         canvas.clear(SK_ColorTRANSPARENT);
         SkPaint paint;
-        paint.setColorFilter(SkColorFilters::Blend(tint, SkBlendMode::kSrcIn));
         if (sigma > 0) paint.setImageFilter(SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, nullptr));
-        canvas.drawImage(&image, float(margin), float(margin), SkSamplingOptions(), &paint);
+        if (tintedImage) {
+            paint.setShader(tintedImage);
+            canvas.drawRect(imageAtMargin, paint);
+        } else {
+            paint.setColorFilter(SkColorFilters::Blend(tint, SkBlendMode::kSrcIn));
+            canvas.drawImage(&image, float(margin), float(margin), SkSamplingOptions(), &paint);
+        }
         passes.push_back({surface->makeImageSnapshot(), pad});
         if (!passes.back().image) throw std::runtime_error("Skia 图片导唱符光晕无法取样");
     }

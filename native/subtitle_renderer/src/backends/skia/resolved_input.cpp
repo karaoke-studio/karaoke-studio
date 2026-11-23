@@ -274,6 +274,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             throw BackendError("Skia 右至左上注音缺少对应画笔或动画能力");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
+        const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse && !hasInlineRoles && !vectorGuides
+            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.scanlineEnabled && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool reverseBitmapLine = line.wipeReverse && features.contains("p08_reverse_bitmap_guides")
             && !line.chars.empty()
             && std::ranges::all_of(line.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
@@ -638,7 +642,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                           line.chars[clock].endMs, beforeColor, afterColor, wipePad,
                                           staticTitle ? features.contains("p08_animated_title_guides")
                                                       : features.contains("p08_animated_bitmap_guides"),
-                                          features.contains("p08_bitmap_guide_shadow"))
+                                          features.contains("p08_bitmap_guide_shadow"), bitmapGradientGlow)
                 : vector
                 ? glyphs.vectorCell(cell, *vector, glyphId.toString(), paint.fontSize / glyphs.dpr, line.chars[clock].startMs,
                                     line.chars[clock].endMs, beforeColor, afterColor, wipePad)
@@ -865,7 +869,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (lineGradientGlow || ((roleStaticGlow || ((latinPrimaryOutline || latinSecondaryOutline) && staticGlow))
             && (hasInlineRoles || roleFadedScanline))) {
             resolveRoleGlows(prepared, line, style, projected.charStyles,
-                             gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr);
+                             gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr, bitmapGradientGlow);
             prepared.glow = {};
         }
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;

@@ -13,5 +13,5 @@ class SkiaImageFillCache;
                                                      SkiaImageFillCache&, const TextStyle&, double dpr,
                                                      int startMs, int endMs, std::uint32_t before,
                                                      std::uint32_t after, double wipePad, bool allowAnimation,
-                                                     bool allowShadow);
+                                                     bool allowShadow, bool allowGradientGlow);
 }

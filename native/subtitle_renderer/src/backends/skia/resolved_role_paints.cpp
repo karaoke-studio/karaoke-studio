@@ -99,7 +99,11 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine&
 }
 
 void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
-                      std::span<const TextStyle> styles, const RolePaintBounds* gradientBounds) {
+                      std::span<const TextStyle> styles, const RolePaintBounds* gradientBounds, bool bitmapGradients) {
+    auto horizontalBitmapSpan = SkRect::MakeEmpty();
+    if (bitmapGradients)
+        for (const auto& cell : line.cells)
+            if (cell.bitmap) horizontalBitmapSpan.join(cell.bitmap->box);
     std::map<int, int> groups;
     // The existing GPU composites phase layers in first-use role order.
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
@@ -112,7 +116,11 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
                 ::subtitle::skia::GlowGradients gradients;
                 if (gradientBounds && !gradientBounds->line.isEmpty()) {
                     const auto shader = [&](const PaintStyle& paint) {
-                        const auto& ink = paint.mode == "gradient_horizontal" ? gradientBounds->forRole(role) : gradientBounds->line;
+                        auto ink = paint.mode == "gradient_horizontal" ? gradientBounds->forRole(role) : gradientBounds->line;
+                        if (role < 0 && paint.mode == "gradient_horizontal" && !horizontalBitmapSpan.isEmpty()) {
+                            ink.fLeft = std::min(ink.fLeft, horizontalBitmapSpan.left());
+                            ink.fRight = std::max(ink.fRight, horizontalBitmapSpan.right());
+                        }
                         return ::subtitle::skia::lineGradient(paint, ink, gradientBounds->outlinePad);
                     };
                     if (glow.before.radius > 0) gradients[0] = shader(style.beforeDecorPaint);
@@ -122,8 +130,15 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
                 line.roleGlows.push_back({glow, {}, std::move(gradients)});
             }
         }
-        if (it->second >= 0 && !line.cells[index].path.isEmpty())
-            line.roleGlows[it->second].cells.push_back(index);
+        if (it->second < 0) continue;
+        auto& group = line.roleGlows[it->second];
+        auto& cell = line.cells[index];
+        if (!cell.path.isEmpty()) group.cells.push_back(index);
+        if (bitmapGradients && cell.bitmap && cell.bitmap->decorate) {
+            if (!gradientBounds || gradientBounds->line.isEmpty())
+                throw BackendError("Skia 图片导唱符渐变光晕需要同一行存在正文");
+            cell.bitmap->glowGradients = group.gradients;
+        }
     }
 }
 }

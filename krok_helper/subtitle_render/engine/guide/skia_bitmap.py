@@ -16,7 +16,7 @@ import math
 from PyQt6.QtGui import QImageReader
 
 from ..layout.line.skia_vertical import VERTICAL_GUIDE_LAYOUT_FEATURES
-from ..style.style_semantics import uses_authored_decoration
+from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
 from .metrics import bitmap_guide_image, vector_glyph_width
 from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
 
@@ -158,6 +158,18 @@ VERTICAL_BITMAP_DECORATION_FEATURES = frozenset({
 })
 
 
+def _has_bitmap_gradient_glow(item):
+    style = item.layout_style
+    colors = effective_karaoke_colors(style)
+    before = style.decoration_kind
+    if not style.decoration_before_sync:
+        before = style.decoration_kind_before or before
+    phases = ((before, colors.before), (style.decoration_kind, colors.after))
+    return (any(kind == 'glow' and phase.shadow.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+                for kind, phase in phases)
+            and has_bitmap_guides((item.render_line,)))
+
+
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     """Append p08_bitmap_guides, or reject an unverified combination."""
     if not has_bitmap_guides(item.render_line for item in plan_lines):
@@ -223,5 +235,9 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
         if 'p06_body_image_shadow' in features:
             features.append('p08_bitmap_guide_image_shadow')
             allowed |= {'p08_bitmap_guide_image_shadow', 'p06_body_image_shadow'}
+    if (not static_title and 'p06_gradient_glow' in features
+            and any(_has_bitmap_gradient_glow(item) for item in plan_lines)):
+        features.append('p08_bitmap_guide_gradient_glow')
+        allowed |= {'p08_bitmap_guide_gradient_glow', 'p06_gradient_glow'}
     if not set(features) <= allowed:
         raise ValueError('Skia 图片导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')

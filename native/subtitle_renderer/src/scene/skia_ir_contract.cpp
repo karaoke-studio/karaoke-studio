@@ -102,6 +102,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_rtl_bitmap_guides",
         "p08_bitmap_guide_shadow",
         "p08_bitmap_guide_gradient_shadow",
+        "p08_bitmap_guide_gradient_glow",
         "p08_bitmap_guide_image_shadow",
         "p08_animated_title_guides",
         "p08_animated_bitmap_guides",
@@ -813,6 +814,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool bitmapGuideShadow = features.contains("p08_bitmap_guide_shadow");
     const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
     const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");
+    const bool bitmapGuideGradientGlow = features.contains("p08_bitmap_guide_gradient_glow");
+    if (bitmapGuideGradientGlow && (!features.contains("p08_bitmap_guides")
+        || !features.contains("p06_gradient_glow") || !features.contains("p06_static_glow")))
+        throw BackendError("Skia 图片导唱符渐变光晕缺少画笔或布局能力声明");
     if (bitmapGuideGradientShadow && (!bitmapGuideShadow || !features.contains("p06_body_gradient_shadow")))
         throw BackendError("Skia 图片导唱符渐变阴影缺少画笔或布局能力声明");
     if (bitmapGuideImageShadow && (!bitmapGuideShadow || !features.contains("p06_body_image_shadow")))
@@ -876,6 +881,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(verticalBitmapDecoration && verticalBitmapDecorAllowed.contains(feature))
                 && !(bitmapGuideGradientShadow && (feature == QJsonValue("p08_bitmap_guide_gradient_shadow")
                     || feature == QJsonValue("p06_body_gradient_shadow")))
+                && !(bitmapGuideGradientGlow && (feature == QJsonValue("p08_bitmap_guide_gradient_glow")
+                    || feature == QJsonValue("p06_gradient_glow")))
                 && !(bitmapGuideImageShadow && (feature == QJsonValue("p08_bitmap_guide_image_shadow")
                     || feature == QJsonValue("p06_body_image_shadow")))
                 && !(bitmapGuideShadow && shadowAllowed.contains(feature)))

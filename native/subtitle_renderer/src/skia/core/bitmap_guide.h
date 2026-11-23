@@ -22,7 +22,7 @@ using BitmapGuideAnimation = std::vector<BitmapGuideFrame>;
 // bitmap_guide_schema=1: a line-prefix image guide as the existing GPU draws
 // it. The before/after images are decoded at the platform boundary; the box
 // is final physical geometry. Glow follows the GPU: the image alpha tinted
-// with the state's decoration color, blurred at the image's own resolution
+// with the state's decoration paint, blurred at the image's own resolution
 // (sigma divided by the box scale) once per concentration pass, and drawn
 // with linear sampling over the box before the image itself.
 struct BitmapGuide {
@@ -35,6 +35,7 @@ struct BitmapGuide {
     int animationAnchorMs = 0; // Looping media time measured from the source's guide anchor.
     bool useLineFront = false;
     std::array<ShadowState, 2> shadow;
+    GlowGradients glowGradients{};
 };
 
 class PreparedBitmapGuide {
@@ -51,7 +52,8 @@ private:
         sk_sp<SkImage> image; // Premultiplied tint blurred at native resolution, padded.
         float pad = 0;        // Native padding on each side.
     };
-    std::vector<Halo> prepareHalo(const SkImage&, const GlowState&, std::size_t& remainingBytes) const;
+    std::vector<Halo> prepareHalo(const SkImage&, const GlowState&, const sk_sp<SkShader>& gradient,
+                                  std::size_t& remainingBytes) const;
     sk_sp<SkImage> before_, after_;
     SkRect box_;
     float clipPad_;
