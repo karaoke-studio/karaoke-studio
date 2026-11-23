@@ -156,8 +156,12 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const auto spritePaint = [](const auto& paint) {
         return paint.mode == "solid" || paint.mode == "gradient_vertical";
     };
+    const bool lineGradients = features.contains("p07_singing_sprite_line_gradients");
+    const auto spriteLayerPaint = [&](const auto& paint) {
+        return spritePaint(paint) || (lineGradients && paint.mode == "gradient_horizontal");
+    };
     const auto spriteStroke = [&](double width, const auto& paint) {
-        return width == 0 || (std::isfinite(width) && width > 0 && width <= 2048 && spritePaint(paint));
+        return width == 0 || (std::isfinite(width) && width > 0 && width <= 2048 && spriteLayerPaint(paint));
     };
     for (const auto& fx : source.fxBursts) {
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");
@@ -167,8 +171,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool assemblySprite = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
         const bool fadedPaint = fadedBand && features.contains("p07_faded_scanline_particle_paint")
-            && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0;
-        const bool localPaint = paintedSprites && (star || symbol || falling)
+            && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0 && spritePaint(fx.fill);
+        const bool localPaint = paintedSprites && (star || symbol || falling) && spriteLayerPaint(fx.fill)
             && spriteStroke(fx.strokeWidthPx, fx.stroke) && spriteStroke(fx.stroke2WidthPx, fx.stroke2);
         const bool glow = fx.decorKind == "glow" && std::isfinite(fx.decorRadius)
             && fx.decorRadius >= 0 && fx.decorRadius <= 532
@@ -176,7 +180,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool shadow = localPaint && features.contains("p07_singing_sprite_shadows") && fx.decorKind == "shadow"
             && std::isfinite(fx.decorOffsetX) && std::abs(fx.decorOffsetX) <= 1e5
             && std::isfinite(fx.decorOffsetY) && std::abs(fx.decorOffsetY) <= 1e5;
-        const bool painted = fx.hasPaint && (fadedPaint || localPaint) && spritePaint(fx.fill)
+        const bool painted = fx.hasPaint && (fadedPaint || localPaint)
             && (!fx.hasDecor || ((glow || shadow) && spritePaint(fx.decor)));
         // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
         const bool impact = version >= 11 && animated

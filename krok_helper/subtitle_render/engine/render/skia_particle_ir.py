@@ -48,6 +48,7 @@ _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 's
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
 _PAINTED_SPRITES = {'twinkle', 'twinkle_classic', 'note', 'heart'} | FALLING_PARTICLES
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
+_LINE_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal'}
 
 
 def _transition_layers(kind, entry):
@@ -88,8 +89,9 @@ def faded_band_singing_particles(line, style):
 
 def _supports_singing_particle_paint(paint, *, local_sprite=False):
     decor = paint.get('decor')
-    if paint['fill']['mode'] not in _SPRITE_PAINT_MODES or any(
-            paint[f'{layer}_width_px'] and (not local_sprite or paint[layer]['mode'] not in _SPRITE_PAINT_MODES)
+    modes = _LINE_SPRITE_PAINT_MODES if local_sprite else _SPRITE_PAINT_MODES
+    if paint['fill']['mode'] not in modes or any(
+            paint[f'{layer}_width_px'] and (not local_sprite or paint[layer]['mode'] not in modes)
             for layer in ('stroke', 'stroke2')):
         return False
     kinds = {'glow', 'shadow'} if local_sprite else {'glow'}
@@ -115,7 +117,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = ruby_band_singing = painted_singing = False
-    painted_sprites = sprite_shadows = False
+    painted_sprites = sprite_shadows = sprite_line_gradients = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -249,6 +251,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                         paint, local_sprite=True):
                     painted_sprites = True
                     sprite_shadows |= (paint.get('decor') or {}).get('kind') == 'shadow'
+                    sprite_line_gradients |= paint['fill']['mode'] == 'gradient_horizontal' or any(
+                        paint[f'{layer}_width_px'] and paint[layer]['mode'] == 'gradient_horizontal'
+                        for layer in ('stroke', 'stroke2'))
                 else:
                     raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
             if (kind not in _PARTICLES
@@ -322,6 +327,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_singing_sprite_paints')
     if sprite_shadows:
         ir['required_features'].append('p07_singing_sprite_shadows')
+    if sprite_line_gradients:
+        ir['required_features'].append('p07_singing_sprite_line_gradients')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:

@@ -31,6 +31,10 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
         || (style.vertical && !scene::hasSkiaVerticalParticleProfile(features))
         || (style.rightToLeft && !features.contains("p07_rtl_singing_particles")))
         throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
+    const float lineLeft = prepared.cells.empty() ? 0.f : prepared.cells.front().pivot.layoutLeft;
+    float lineSpan = 1.f;
+    for (const auto& cell : prepared.cells)
+        lineSpan = std::max(lineSpan, cell.pivot.layoutRight - lineLeft);
     for (const auto& burst : line.bursts) {
         const auto sprite = sprites.find(burst.sprite);
         if (sprite == sprites.end() || sprite->second.isEmpty()
@@ -53,7 +57,8 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
             x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
             burst.kind == "ripple" || burst.kind == "shockwave"
                 ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt,
-            burst.hasPaint ? std::optional<::subtitle::skia::ParticlePaint>(burst) : std::nullopt});
+            burst.hasPaint ? std::optional<::subtitle::skia::ParticlePaint>(std::in_place, burst, lineLeft, lineSpan)
+                           : std::nullopt});
     }
 }
 }
