@@ -17,6 +17,7 @@ bool supportsSignalAnimation(const TextLine& line) {
     const auto supported = [](const std::string& animation, bool entry) {
         return animation == "none" || animation == "fade" || animation == "rise" || animation == "noise"
             || animation == (entry ? "slide_in" : "slide_out")
+            || (entry && (animation == "tracking_in" || animation == "wave_in"))
             || animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
     };
     return supported(line.entryAnimation, true) && supported(line.exitAnimation, false);

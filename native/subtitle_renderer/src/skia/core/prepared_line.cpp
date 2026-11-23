@@ -38,7 +38,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
     const auto placement = line.translationAt(tMs);
-    const SignalTransition signalTransition{line.characterFade, line.startMs, line.endMs};
+    const SignalTransition signalTransition{line.characterFade, line.characterGeometry, line.inkCenter,
+                                            line.startMs, line.endMs};
     const bool decoratedLamp = line.shapeSignal && line.shapeSignal->decoration;
     const auto drawDecoratedLamp = [&] {
         const auto entry = line.animation.entryAt(tMs, line.startMs);

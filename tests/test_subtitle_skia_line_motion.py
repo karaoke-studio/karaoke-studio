@@ -1484,6 +1484,7 @@ def test_automatic_signal_uses_first_visible_cell_palette(binary, project, sourc
 
 @pytest.mark.parametrize('signal,entry', [
     ('lamp', 'char_fade'), ('volume', 'char_fade'), ('lamp', 'spin_flip'), ('volume', 'char_drip'),
+    ('lamp', 'tracking_in'), ('volume', 'wave_in'),
 ])
 def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, entry):
     from test_subtitle_skia_outline_ruby import render_skia
@@ -1518,11 +1519,20 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, 
     assert ir['track']['lines'][0]['entry_duration_ms'] == 600
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, reference, gpu, raster, ('signal_unit_entry', signal), check_p00_edges=True)
+
+    def signal_pixels(frame):
+        return (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245) & (frame[..., 3] > 20)
+
     for frames in (gpu, raster):
+        if entry == 'tracking_in':
+            assert np.nonzero(signal_pixels(frames[0]))[1].min() < np.nonzero(signal_pixels(frames[-1]))[1].min()
+            continue
+        if entry == 'wave_in':
+            assert np.nonzero(signal_pixels(frames[0]))[0].max() > np.nonzero(signal_pixels(frames[-1]))[0].max()
+            continue
         widths = []
         for frame in frames:
-            pixels = (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245) & (frame[..., 3] > 20)
-            columns = np.flatnonzero(pixels.any(axis=0))
+            columns = np.flatnonzero(signal_pixels(frame).any(axis=0))
             widths.append(1 + columns[-1] - columns[0])
         assert 0 < widths[0] < widths[1] < widths[2] <= widths[3]
         assert (widths[2] < widths[3]) == (entry == 'spin_flip')

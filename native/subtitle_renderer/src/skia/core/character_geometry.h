@@ -24,9 +24,9 @@ struct CharacterGeometry {
     }
 
     CharacterTransformState at(int time, int displayStart, int displayEnd, int index, int count,
-                               const CharacterPivot& pivot, std::optional<float> lineCenter) const {
+                               const CharacterPivot& pivot, std::optional<float> lineCenter, bool entryOnly = false) const {
         const int leave = exitStart(displayEnd);
-        const bool exiting = exitMs > 0 && time >= leave;
+        const bool exiting = !entryOnly && exitMs > 0 && time >= leave;
         if (!exiting && !inEntryWindow(time, displayStart))
             return {};
         const float x = (pivot.layoutLeft + pivot.layoutRight) * .5f;
