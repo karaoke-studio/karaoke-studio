@@ -229,10 +229,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         } else if (source.contains("line_band_rect")) {
             throw BackendError("Skia 行背景带缺少能力声明");
         }
-        prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache,
-            projected.litDecorStyle ? &*projected.litDecorStyle : nullptr);
-        prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr,
-            projected.volumeDecorStyle ? &*projected.volumeDecorStyle : nullptr);
         prepared.noWipe = line.karaokeAnimation == "no_wipe";
         const float slide = std::max(style.fontSize * .9f, 36.f) * (line.lane == 0 ? -1.f : 1.f);
         const float rise = std::max(style.fontSize * .35f, 18.f);
@@ -616,6 +612,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (!style.vertical)
             for (const auto& window : line.placementWindows)
                 prepared.translations.push_back({window.startMs, window.endMs, window.offsetX, window.offsetY});
+        const TextStyle* firstVisiblePaint = nullptr;
         for (int j = 0; j < cells.size(); ++j) {
             const auto cell = cells[j].toObject();
             const int clock = line.wipeReverse ? cells.size()-1-j : j;
@@ -741,8 +738,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             }
             if (line.strokeFlashEnabled)
                 glyph.strokeFlashWidth = ::subtitle::skia::strokeFlashBaseWidth(paint.fontSize, paint.strokeWidth);
+            if (!firstVisiblePaint && (!glyph.path.isEmpty() || glyph.bitmap))
+                firstVisiblePaint = &paint;
             prepared.cells.push_back(std::move(glyph));
         }
+        const auto* lampPaint = style.litAppearanceMode == "role" && projected.litDecorStyle
+            ? &*projected.litDecorStyle : firstVisiblePaint;
+        const auto* volumePaint = style.volumeAppearanceMode == "role" && projected.volumeDecorStyle
+            ? &*projected.volumeDecorStyle : firstVisiblePaint;
+        prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache, lampPaint);
+        prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr, volumePaint);
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         auto rubyTransition = RubyTransition::None;

@@ -1324,6 +1324,54 @@ def test_volume_signal_seek_and_reconfigure(binary, project, target):
     assert covered[0] < covered[1] < covered[2]
 
 
+@pytest.mark.parametrize('source', ['role_lamp', 'role_volume', 'vector_lamp'])
+def test_automatic_signal_uses_first_visible_cell_palette(binary, project, source):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style = project
+    line, = track.lines
+    chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
+    chars[0] = replace(chars[0], role_label='lead')
+    line = replace(line, chars=chars, end_ms=line.end_ms + 1000, display_start_override_ms=0)
+    if source == 'vector_lamp':
+        line = replace(line, guide_symbol=SQUARE)
+    track = replace(track, lines=[line])
+    palette = SubtitleStyleScheme(font_family=style.font_family, font_size_px=style.font_size_px,
+                                  karaoke_colors=colors('#FF00FF', '#FF00FF'),
+                                  stroke_width_px=0, stroke2_enabled=False, decoration_kind='none')
+    style = replace(style, karaoke_colors=colors('#0045DC', '#0045DC'), custom_style_schemes={'lead': palette})
+    if source.endswith('lamp'):
+        style = replace(style, lit_enabled=True, lit_appearance_mode='auto', lit_style='square',
+                        lit_offset_y=-40, lit_transition_mode='none', lit_edge_brightness_pct=0)
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='auto', volume_column_count=3,
+                        volume_duration_ms=1000, volume_flash_times=0, volume_offset_x=-10)
+    times = (400, 800)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    ir = ir_for(binary, (track, style))
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('first_visible_cell_palette', source), check_p00_edges=True)
+    first = ir['skia_layout']['lines'][0]['cells'][0]
+    left, top, _, _ = first['metrics']['ink']
+    for frame in gpu:
+        expected = [0, 69, 220] if source == 'vector_lamp' else [255, 0, 255]
+        colored = np.all(frame[..., :3] == expected, axis=-1) & (frame[..., 3] > 250)
+        region = (colored[:round(first['baseline_y'] + top) - 3] if source.endswith('lamp')
+                  else colored[:, :round(first['origin_x'] + left) - 3])
+        assert np.count_nonzero(region) > 100
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
     'volume', 'lamp_shape_volume', 'volume_appearance_custom', 'volume_appearance_auto', 'volume_appearance_role',

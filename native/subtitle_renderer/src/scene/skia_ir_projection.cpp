@@ -678,6 +678,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 if (inserted) {
                     TextStyle roleStyle = style;
                     applyResolvedStyle(roleStyle, cellStyle, cfg.dpr);
+                    // Only the line hosts signals. Cells supply geometry and paint.
+                    roleStyle.litEnabled = false;
+                    roleStyle.volumeEnabled = false;
                     out.charStyles.push_back(std::move(roleStyle));
                 }
                 ch.styleIndex = entry->second;

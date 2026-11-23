@@ -23,7 +23,7 @@ bool usesOnlyWholeLineAnimation(const TextLine& line) {
 
 std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, SkiaImageFillCache& images,
-    const TextStyle* role
+    const TextStyle* decorStyle
 ) {
     const auto anchor = source.value("shape_signal_anchor");
     if (!style.litEnabled || style.litStyle == "volume" || !line.litHead) {
@@ -63,11 +63,9 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     };
     signal.path = ::subtitle::skia::signalPath(style.litStyle, signal.size);
     if (style.litAppearanceMode == "custom") return signal;
-    if (line.zoomPulseEnabled || std::ranges::any_of(line.chars, [](const auto& cell) {
-            return cell.styleIndex >= 0 || bool(cell.vectorGlyph);
-        }))
-        throw BackendError("Skia 自动指示灯暂不支持角色字符、导唱符或整字放大");
-    const auto& palette = style.litAppearanceMode == "role" && role ? *role : style;
+    if (line.zoomPulseEnabled)
+        throw BackendError("Skia 装饰指示灯暂不支持逐灯整字放大");
+    const auto& palette = decorStyle ? *decorStyle : style;
     const auto solid = [](const auto& paint) { return paint.mode == "solid"; };
     if (!solid(palette.afterFillPaint) || !solid(palette.afterStrokePaint)
         || !solid(palette.afterStroke2Paint) || !solid(palette.afterDecorPaint))
@@ -100,7 +98,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
 }
 
 std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
-    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, const TextStyle* role
+    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, const TextStyle* decorStyle
 ) {
     const auto anchor = source.value("volume_signal_anchor");
     const bool enabled = style.volumeEnabled || (style.litEnabled && style.litStyle == "volume");
@@ -129,13 +127,11 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                        {argb(style.volumeOverlayFill), argb(style.volumeOverlayStroke)}}};
     const auto& mode = style.volumeAppearanceMode;
     signal.decorated = style.volumeEnabled && (mode == "auto" || mode == "role");
-    const auto& palette = mode == "role" && role ? *role : style;
+    const auto& palette = decorStyle ? *decorStyle : style;
     StaticGlow glow;
     if (signal.decorated) {
-        if (line.zoomPulseEnabled || std::ranges::any_of(line.chars, [](const auto& cell) {
-                return cell.styleIndex >= 0 || bool(cell.vectorGlyph);
-            }))
-            throw BackendError("Skia 自动音量柱暂不支持角色字符、导唱符或整字放大");
+        if (line.zoomPulseEnabled)
+            throw BackendError("Skia 装饰音量柱暂不支持逐柱整字放大");
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
         signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maximum);
