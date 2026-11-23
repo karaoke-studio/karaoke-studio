@@ -573,9 +573,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool fadedGuideParticles = vectorFadedScanline
             && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
-        const bool staticCellParticles = staticScanline && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
-            && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !source.scanlineEnabled
-            && source.karaokeAnimation == "none" && !source.zoomPulseEnabled && !source.strokeFlashEnabled;
+        const bool staticForwardParticles = staticScanline && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+            && rubyGroups.isEmpty() && !source.scanlineEnabled && !source.strokeFlashEnabled;
+        const bool staticCellParticles = staticForwardParticles
+            && source.karaokeAnimation == "none" && !source.zoomPulseEnabled;
+        const bool scaledGuideParticles = staticForwardParticles && singingScale
+            && features.contains("p07_plain_scaled_singing_particles");
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
         const bool rtlBitmapSinging = features.contains("p08_rtl_bitmap_singing") && utopiaSinging
@@ -643,7 +646,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && !staticCellParticles
-                && ((cell.vectorGlyph && !fadedGuideParticles) || &cellStyle != &resolved))
+                && ((cell.vectorGlyph && !(fadedGuideParticles || scaledGuideParticles)) || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved)

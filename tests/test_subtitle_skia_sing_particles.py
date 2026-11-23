@@ -50,13 +50,18 @@ def test_reverse_utopia_particles_keep_their_clock_after_seek(binary, project):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case', ['forward', 'reverse', 'zoom', 'outlined', 'outlined_unscaled'])
+@pytest.mark.parametrize('case', ['forward', 'reverse', 'zoom', 'outlined', 'outlined_unscaled', 'vector_guide'])
 def test_plain_singing_particles_match_actual_d2d_gpu(binary, project, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     track, base = twinkle_source(project, 'two_colors')
     if case == 'reverse':
         track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    elif case == 'vector_guide':
+        from test_subtitle_skia_vector_guides import SQUARE
+
+        line, = track.lines
+        track = replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])
     outlined = case in {'outlined', 'outlined_unscaled'}
     control = base
     if outlined:
