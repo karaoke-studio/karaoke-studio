@@ -103,13 +103,13 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['vertical_utopia', 'rtl', 'reverse', 'missing'])
+@pytest.mark.parametrize('change', ['vertical_utopia', 'rtl', 'reverse_utopia', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
     if change == 'vertical_utopia': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'reverse': line = replace(line, wipe_reverse=True)
+    elif change == 'reverse_utopia': line = replace(line, wipe_reverse=True)
     else:
         line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
@@ -296,7 +296,10 @@ def mixed_reverse_bitmap_guide(project, tmp_path):
     line, = track.lines
     style = replace(style, decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=5,
                     stroke_width_px=3, reverse_karaoke_anim='none')
-    return replace(track, lines=[replace(line, wipe_reverse=True)]), style
+    ruby = RubyAnnotation(line.chars[-1].text, 'A', target_line_index=0,
+                          target_char_start=len(line.chars) - 1, target_char_end=len(line.chars),
+                          pos_start_ms=line.chars[-1].start_ms, pos_end_ms=line.end_ms)
+    return replace(track, lines=[replace(line, wipe_reverse=True)], rubies=[ruby]), style
 
 
 def bitmap_lower_reading(track, style, path):
@@ -399,6 +402,7 @@ def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_pa
 
 def test_mixed_reverse_bitmap_guide_keeps_scene_after_missing_capability(binary, project, tmp_path):
     ir = ir_for(binary, mixed_reverse_bitmap_guide(project, tmp_path))
+    assert ir['track']['rubies'] and ir['skia_layout']['lines'][0]['ruby_groups'] == []
     bad = copy.deepcopy(ir)
     bad['required_features'].remove('p08_mixed_reverse_bitmap_guides')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
@@ -421,13 +425,14 @@ def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_
     line, = track.lines
     forward = replace(track, lines=[replace(line, wipe_reverse=False)])
     refs = []
-    for source in (track, forward):
+    for source in (track, replace(track, rubies=[]), forward):
         with NativeRendererProcess() as process:
             _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
                                        width=640, height=360, realization_enabled=False)
         refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
-    reference, control = refs
-    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, control, strict=True))
+    reference, no_reading, forward_frames = refs
+    assert np.array_equal(reference, no_reading)
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, forward_frames, strict=True))
     gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
     assert_glow_parity(times, reference, gpu, raster, 'mixed_reverse_bitmap_guide', check_p00_edges=True)
 

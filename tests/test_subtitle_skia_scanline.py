@@ -994,6 +994,28 @@ def test_brighten_zero_disables_the_glyph_band_and_keeps_the_flame(binary, proje
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_annotated_flame_scanline_follows_text_palette_on_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = reading
+    base = replace(band(style, 26), scanline_mode='brighten', scanline_brightness_pct=50)
+    flame = replace(base, scanline_shape='flame')
+    times = (450, 550, 899, 1100, 1400, 1900)
+    references = []
+    for look in (flame, base):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    expected, control = references
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
+               for a, b in zip(expected, control, strict=True))
+    gpu, raster = glow_band_frames(binary, (track, flame), 1, times)
+    assert_glow_parity(times, expected, gpu, raster, 'annotated_flame_palette')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('shape,mode,brightness', [
     ('flame', 'brighten', 0), ('flame', 'follow_after', 40), ('bubble', 'default', 50), ('bubble', 'role', 50),
 ])

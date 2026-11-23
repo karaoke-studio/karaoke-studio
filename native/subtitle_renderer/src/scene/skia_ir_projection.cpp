@@ -84,9 +84,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const bool outlineRuby = features.contains("p06_outline_ruby");
     const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
     const bool reverseVerticalOutline = cfg.vertical && features.contains("p06_vertical_reverse_outline");
-    const bool reverseHorizontalOutline = !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
+    const bool reverseHorizontalOutline = !cfg.vertical && !cfg.rightToLeft
         && features.contains("p06_reverse_decoration");
-    const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
+    const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides")
+        || features.contains("p08_mixed_reverse_bitmap_guides");
     if (features.contains("p06_primary_solid_outline")
         && ((cfg.vertical && !features.contains("p06_vertical_outline"))
             || (cfg.rightToLeft && !rtlRuby) || (cfg.dualLineLayout && !multiLaneOutline)
@@ -305,7 +306,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (staticScanline || particleScanlineImage)
             && std::ranges::none_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
         const bool shapePalette = features.contains("p07_scanline_shape_palette") && staticScanline
-            && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && !features.contains("p05_resolved_ruby")
+            && !cfg.vertical && !cfg.rightToLeft && !features.contains("p05_lower_ruby")
+            && (!rubyScanline || resolved.scanlineMode != "role")
             && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && (resolved.scanlineShape == "bubble" || resolved.scanlineShape == "flame");
         const bool basicImage = staticScanline && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
@@ -515,7 +517,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && std::ranges::all_of(source.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
         const bool reverseMixedBitmaps = source.wipeReverse && features.contains("p08_mixed_reverse_bitmap_guides")
-            && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && source.karaokeAnimation == "none"
+            && !cfg.vertical && !cfg.rightToLeft && source.karaokeAnimation == "none"
             && source.entryAnimation == "none" && source.exitAnimation == "none" && !source.scanlineEnabled
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         bool sawLyrics = false;

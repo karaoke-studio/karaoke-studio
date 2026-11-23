@@ -91,11 +91,12 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         role_fill = scanline_role_fill(look)
         palette_shape = False
         if ordinary and look.scanline_shape in {'flame', 'bubble'} and not (
-                track.rubies or look.lower_ruby_enabled or bursts or source.wipe_reverse
+                look.lower_ruby_enabled or bursts or source.wipe_reverse
                 or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')):
             colors = effective_karaoke_colors(look)
             palette_shape = (look.scanline_mode == 'default'
-                             or (look.scanline_mode == 'role' and role_fill is not None and role_fill.mode == 'solid')
+                             or (look.scanline_mode == 'role' and not track.rubies
+                                 and role_fill is not None and role_fill.mode == 'solid')
                              or (look.scanline_mode in {'follow_before', 'follow_after', 'brighten'}
                                  and colors.before.text.mode == colors.after.text.mode == 'solid'))
         shape_style = (palette_shape or (look.scanline_shape in {'flame', 'bubble', 'image'}

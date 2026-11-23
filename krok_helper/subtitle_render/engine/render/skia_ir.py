@@ -538,9 +538,10 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             for item in plan.lines for label in _inline_role_labels(item)):
         decorations.append('shadow')
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
-    if decorations and not (style.vertical or style.right_to_left or track.rubies):
+    if decorations and not (style.vertical or style.right_to_left):
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse
                              and item.track_index not in reverse_bitmap_lines
+                             and (not track.rubies or has_bitmap_guides((item.render_line,)))
                              and any(uses_authored_decoration(item.layout_style, kind) for kind in decorations)]
         for item in decorated_reverse:
             source = ir['track']['lines'][item.track_index]

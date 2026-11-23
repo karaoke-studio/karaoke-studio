@@ -108,7 +108,7 @@ def validate_bitmap_guides(track, style, *, static_title=False):
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
-        if ((line.wipe_reverse and (static_title or (track.rubies and not is_undecorated_bitmap_line(rendered))))
+        if ((line.wipe_reverse and static_title)
                 or (not inline and any(c.role_label is not None for c in cells))):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
         if appearance.right_to_left and (track.rubies or any(not image.bitmap_no_decor for image in images)):
