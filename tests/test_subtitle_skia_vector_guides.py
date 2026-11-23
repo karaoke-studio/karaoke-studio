@@ -105,7 +105,7 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'ruby', 'lower', 'role', 'shadow'])
+@pytest.mark.parametrize('change', ['bitmap', 'ruby', 'role', 'shadow'])
 def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     track, style = guide_source(project, 'inline' if change == 'ruby' else 'prefix')
     line = track.lines[0]
@@ -115,13 +115,34 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     elif change == 'ruby':
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=600, pos_end_ms=900, target_line_index=0,
                                                       target_char_start=1, target_char_end=2)])
-    elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     elif change == 'role':
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, role_labels=('lead',)))])
     elif change == 'shadow':
         style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+@GPU
+def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    base = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'lower_ruby')
+    track = replace(base.track, lines=[replace(line, guide_symbol=SQUARE) for line in base.track.lines])
+    case = replace(base, track=track, style=replace(base.style, entry_anim='none', exit_anim='none', karaoke_anim='none'))
+    times = (1000, 1550, 2600, 4110, 4280)
+    references = []
+    for style in (case.style, replace(case.style, lower_ruby_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, frames = _render_g1_frames(process, style, times, force_warp=False, track=case.track,
+                                          realization_enabled=False)
+        references.append(frames)
+    assert any(with_reading != without for with_reading, without in zip(*references, strict=True))
+    ir = ir_for(binary, (case.track, case.style))
+    assert 'p05_vector_guide_lower_ruby' in ir['required_features']
+    assert_ruby_transition_gpu_parity(binary, case, times)
 
 
 def vertical_vector_guide(project, reverse=False):

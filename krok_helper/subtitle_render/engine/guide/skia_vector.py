@@ -94,8 +94,6 @@ def validate_vector_guides(track, style):
         appearance = style_for_line(style, line)
         if any(guide_symbol_is_bitmap(c.vector_glyph) or not c.vector_glyph.path_commands for c in cells):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
-        if appearance.lower_ruby_enabled:
-            raise ValueError('Skia 导唱符仅支持已验证的横排实色正文子集')
         labels = {c.role_label for c in cells if c.role_label is not None}
         if labels:
             if (appearance.vertical or line.wipe_reverse or appearance.right_to_left or not vector_guides_form_prefix(chars)
@@ -122,6 +120,10 @@ RTL_VECTOR_GUIDE_FEATURES = frozenset({
     'p05_reverse_wipe', 'p05_reverse_overlap',
 })
 VERTICAL_VECTOR_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p05_vertical_vector_guides', 'p07_no_wipe'}
+LOWER_RUBY_VECTOR_GUIDE_FEATURES = frozenset({
+    'p05_vector_guide_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
+    'p06_lower_ruby_glow',
+})
 VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
@@ -149,14 +151,16 @@ def vector_guides_form_prefix(chars):
     return count > 0 and all(guides[:count])
 
 
-def compose_vector_guides(track, features):
+def compose_vector_guides(track, ir):
     """Append p05_vector_guide_composition, or reject an unverified combination."""
     from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
+    features = ir['required_features']
     if 'p05_vector_guides' not in features or not VECTOR_GUIDE_COMPOSITION_TRIGGERS.intersection(features):
         return
     animated_gradient = 'p06_animated_singing_gradient_fill' in features
     faded_scanline = 'p07_faded_scanline_prefix_guides' in features
     vertical_guides = 'p05_vertical_vector_guides' in features
+    lower_reading = 'p05_lower_ruby' in features
     line_motion = 'p07_utopia_line_animation' in features
     inline_outlines = ('p06_primary_solid_outline' in features
                        and set(features) <= (VECTOR_GUIDE_COMPOSITION_FEATURES | RTL_VECTOR_GUIDE_FEATURES
@@ -164,9 +168,16 @@ def compose_vector_guides(track, features):
                        and not (track.rubies or 'p05_resolved_ruby' in features or 'p07_singing_scale' in features
                                 or 'p06_static_glow' in features))
     has_inline_outlines = False
-    for line in track.lines:
+    for line, source in zip(track.lines, ir['track']['lines'], strict=True):
         chars = render_line_with_guide_symbols(line).chars
         if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
+            continue
+        if lower_reading and (vertical_guides or 'p05_rtl_vector_guides' in features or line.wipe_reverse
+                              or source.get('karaoke_anim') != 'none'
+                              or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                              or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
+            raise ValueError('Skia 矢量导唱符与下方注音需要静态正向横排')
+        if lower_reading and vector_guides_form_prefix(chars):
             continue
         if (animated_gradient or faded_scanline or line_motion or vertical_guides) and vector_guides_form_prefix(chars):
             continue
@@ -189,9 +200,13 @@ def compose_vector_guides(track, features):
             allowed |= VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES
     if 'p05_role_vector_guides' in features:
         allowed |= ROLE_VECTOR_GUIDE_FEATURES
+    if lower_reading:
+        allowed |= LOWER_RUBY_VECTOR_GUIDE_FEATURES
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')
+    if lower_reading:
+        features.append('p05_vector_guide_lower_ruby')
     if has_inline_outlines:
         features.append('p06_inline_vector_guide_outline')
 

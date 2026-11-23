@@ -576,6 +576,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 逐字变换暂不支持导唱符或行内角色");
             // Ruby and outlines use their own composition profile.
+            if (cell.vectorGlyph && features.contains("p05_vector_guide_lower_ruby")
+                && (cfg.vertical || cfg.rightToLeft || source.wipeReverse || !staticScanline
+                    || source.karaokeAnimation != "none" || &cellStyle != &resolved
+                    || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled || !source.fxBursts.empty()))
+                throw BackendError("Skia 矢量导唱符与下方注音需要静态正向横排");
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !roleVectorGuides)
