@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 
+from ...domain.models import effective_karaoke_animation, effective_karaoke_scanline
 from ...domain.timing import CHAR_TRANSITION_ANIMS
 
 
@@ -20,6 +21,14 @@ def project_vertical_line_animations(plan):
             overrides.update(exit_anim='none', exit_fade_ms=0)
         if style.karaoke_stroke_flash:
             overrides['karaoke_stroke_flash'] = False
+        if any(cell.vector_glyph is not None for cell in line.render_line.chars):
+            # The vertical guide profiles retain the owning cell's basic clock.
+            if effective_karaoke_animation(style) == 'utopia' or style.karaoke_anim == 'scanline':
+                overrides['karaoke_anim'] = 'none'
+            if effective_karaoke_scanline(style):
+                overrides['scanline_enabled'] = False
+            if style.sing_fx != 'none':
+                overrides['sing_fx'] = 'none'
         lines.append(replace(line, animation_style=replace(style, **overrides)) if overrides else line)
     return replace(plan, lines=tuple(lines))
 

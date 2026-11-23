@@ -103,11 +103,11 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['vertical_utopia', 'rtl', 'reverse_utopia', 'missing'])
+@pytest.mark.parametrize('change', ['vertical_decorated', 'rtl', 'reverse_utopia', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
-    if change == 'vertical_utopia': style = replace(style, vertical=True)
+    if change == 'vertical_decorated': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse_utopia': line = replace(line, wipe_reverse=True)
     else:
@@ -383,6 +383,43 @@ def test_vertical_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_path,
     assert any(np.count_nonzero(frame[..., 1] > 240) > 100 for frame in reference)
     gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
     assert_glow_parity(times, reference, gpu, raster, 'vertical_bitmap_guide', check_p00_edges=True)
+
+
+def vertical_guide_with_inactive_singing_effects(project, tmp_path):
+    track, style = vertical_bitmap_guide(project, tmp_path)
+    effects = replace(style, karaoke_anim='zoom_pulse_scanline', scanline_shape='flame', scanline_enabled=True,
+                      scanline_effect='star', sing_fx='note')
+    return track, style, effects
+
+
+def test_vertical_guide_keeps_its_clock_with_inactive_singing_effects(binary, project, tmp_path):
+    track, style, effects = vertical_guide_with_inactive_singing_effects(project, tmp_path)
+    base = ir_for(binary, (track, style))
+    ir = ir_for(binary, (track, effects))
+    line = ir['track']['lines'][0]
+    assert line['karaoke_anim'] == 'none' and not line['scanline'] and not line['zoom_pulse'] and not line['fx_bursts']
+    assert line['resolved_intervals'] == base['track']['lines'][0]['resolved_intervals']
+    assert ir['skia_layout']['lines'] == base['skia_layout']['lines']
+    assert effects.karaoke_anim == 'zoom_pulse_scanline' and effects.sing_fx == 'note'
+
+
+@GPU
+def test_vertical_guide_ignores_singing_effects_like_actual_d2d_gpu(binary, project, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base, effects = vertical_guide_with_inactive_singing_effects(project, tmp_path)
+    times = (250, 450, 750, 1100, 1550, 1750)
+    refs = []
+    for look in (base, effects):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    assert np.array_equal(*refs)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, effects)), times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'vertical_guide_inactive_singing', check_p00_edges=True)
 
 
 def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path):
