@@ -161,7 +161,6 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
         throw BackendError("Skia 独立组合标记必须是单字体原位字形");
 }
 }
-// The vertical profile accepts only upright CJK/Hangul/full-size kana units.
 std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
         const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
@@ -546,10 +545,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 const auto scalar = scalars.size() == 1 ? scalars.front() : char32_t{};
                 const bool rotated = allowVerticalRotation && verticalRotatedScalar(scalar);
                 const bool shifted = allowVerticalShift && verticalShiftedScalar(scalar);
+                const bool extended = scalars.size() == 1 && features.contains("p05_vertical_ruby_extended_units")
+                    && (scalar == 0x30fb || isLatinText(drawingText.toStdWString()));
                 if (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
                     || (verticalSchema != 1 && verticalSchema != 2)
                     || (verticalSchema == 1 && units.toArray().size() != 1)
-                    || lower || !(verticalUprightScalar(scalar) || shifted || rotated)
+                    || lower || !(verticalUprightScalar(scalar) || shifted || rotated || extended)
                     || cell.contains("rotation_pivot_x") || cell.contains("vertical_rotation_pivot") != rotated
                     || !top.isDouble() || !bottom.isDouble() || !std::isfinite(top.toDouble())
                     || !std::isfinite(bottom.toDouble()) || bottom.toDouble() <= top.toDouble()

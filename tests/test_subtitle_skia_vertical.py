@@ -927,10 +927,10 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['combined_unit', 'middle_dot', 'latin', 'overlap_groups',
+@pytest.mark.parametrize('change', ['combined_unit', 'overlap_groups',
                                     'reverse_utopia_flame', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
-    reading = {'combined_unit': 'か\u309a', 'middle_dot': '・', 'latin': 'A'}.get(change, '字')
+    reading = 'か\u309a' if change == 'combined_unit' else '字'
     extra = None
     span = (0, 1)
     if change == 'overlap_groups':
@@ -949,6 +949,35 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
                         replace(track.lines[0].chars[1], role_label='lead'), *track.lines[0].chars[2:]])])
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def test_vertical_reading_latin_and_middle_dot_require_their_capability(binary, project, kana):
+    source = vertical_ruby_source(project, span=(0, 2), reading='A・', family=kana)
+    ir = ir_for(binary, source)
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p05_vertical_ruby_extended_units')
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    first, second = group['units']
+    assert first['text'] == 'A' and second['text'] == '・'
+    assert first['interval_ms'][1] == second['interval_ms'][0]
+    times = [300, 450, 750, 1100]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='竖排注音'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+def test_vertical_reading_latin_and_middle_dot_match_actual_gpu(binary, project):
+    from PyQt6.QtGui import QFontDatabase
+
+    if 'Meiryo' not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
+    track, style = vertical_ruby_source(project, span=(0, 2), reading='A・', family='Meiryo')
+    assert_gpu_parity(binary, track, style, 1.5, 'vertical_latin_punctuation_reading')
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
