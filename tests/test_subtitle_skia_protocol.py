@@ -573,6 +573,24 @@ def test_title_bitmap_guides_use_role_geometry(binary, tmp_path):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_title_bitmap_guides_use_per_image_decoration(binary, tmp_path, decoration):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = bitmap_guide_title(tmp_path, inline=True)
+    title = style.title_overlays[0]
+    inline = replace(title.inline_guide_symbols[(0, 2)], bitmap_no_decor=True)
+    title = replace(title, decoration_kind=decoration, shadow=PaintFill(color='#E0F51456'),
+                    shadow_offset_x=-10, shadow_offset_y=12, glow_radius_px=7,
+                    inline_guide_symbols={(0, 2): inline})
+    style = replace(style, title_overlays=[title])
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id=f'title_bitmap_{decoration}'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def mixed_guide_title(tmp_path):
     track, style = bitmap_guide_title(tmp_path)
     _, vector = vector_guide_title()
