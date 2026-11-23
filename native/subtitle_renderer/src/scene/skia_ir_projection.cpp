@@ -291,9 +291,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
         const bool rubyScanline = features.contains("p07_ruby_scanline");
+        const bool movingRoleScanline = features.contains("p07_role_scanline_line_animation")
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+            && resolved.scanlineMode == "role" && resolved.scanlineShape == "band"
+            && source.karaokeAnimation == "none" && !source.zoomPulseEnabled
+            && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool roleLayers = features.contains("p07_role_scanline_layers")
             && !source.wipeReverse && source.karaokeAnimation == "none"
-            && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && ((source.entryAnimation == "none" && source.exitAnimation == "none") || movingRoleScanline)
             && !source.strokeFlashEnabled && source.fxBursts.empty();
         // The band repaints the posed unit during Utopia singing.
         const bool utopiaSinging = source.karaokeAnimation == "utopia";
@@ -335,7 +340,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool fadedBandParticles = hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool movingScanline = (movingUtopiaScanline || movingUnscaledScanline || movingVerticalSingingScanline)
             && (resolved.scanlineShape == "band" || (solidShape && features.contains("p07_scanline_shape_line_animation")))
-            && resolved.scanlineMode != "role" && plainLineAnimation(source.entryAnimation, true)
+            && (resolved.scanlineMode != "role" || movingRoleScanline) && plainLineAnimation(source.entryAnimation, true)
             && plainLineAnimation(source.exitAnimation, false)
             && (!source.zoomPulseEnabled || (movingVerticalSingingScanline && composedScanline))
             && !source.wipeReverse && !source.strokeFlashEnabled

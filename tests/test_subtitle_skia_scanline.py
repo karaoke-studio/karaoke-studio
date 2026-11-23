@@ -1648,13 +1648,36 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
 
 @pytest.mark.parametrize('change', [
     {'scanline_mode': 'role', 'scanline_role_name': '__global__', 'scanline_effect': 'star'},
-    {'entry_anim': 'fade', 'entry_lead_ms': 400, 'scanline_mode': 'role', 'scanline_role_name': '__global__'},
     {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
 ])
 def test_unverified_glow_band_combinations_are_rejected(binary, reading, change):
     track, style = glow_band_source(reading, 'inherited')
     with pytest.raises(ValueError):
         upper_ir(binary, (track, replace(style, **change)), 1)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_role_scanline_with_glowing_ruby_fades_like_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base = glow_band_source(reading, 'inherited')
+    palette = SubtitleStyleScheme(karaoke_colors=colors('#FF51F0BD', '#FFEE8C32'))
+    style = replace(base, entry_anim='fade', entry_lead_ms=600, scanline_mode='role', scanline_role_name='band',
+                    custom_style_schemes={'band': palette})
+    times, dpr = (125, 225, 450, 550, 899, 1100, 1550, 1900), 3
+    refs = []
+    for look in (style, replace(style, scanline_enabled=False), replace(style, entry_anim='none')):
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in pixels])
+    for name, control in zip(('scanline', 'fade'), refs[1:], strict=True):
+        changes = [np.count_nonzero(a != b) for a, b in zip(refs[0], control, strict=True)]
+        assert max(changes[2:] if name == 'scanline' else changes[:2]) > 100, (name, changes)
+    assert 'p07_role_scanline_line_animation' in upper_ir(binary, (track, style), dpr)['required_features']
+    gpu, raster = glow_band_frames(binary, (track, style), dpr, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'role_scanline_fade', check_p00_edges=True)
 
 
 def shadow_band_source(reading):

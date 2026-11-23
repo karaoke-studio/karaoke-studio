@@ -876,7 +876,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && features.contains("p07_composed_stroke_flash");
         // The band repaints the glyph stack above its existing static glow.
         const bool roleScanlineGlow = features.contains("p07_role_scanline_layers")
-            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && line.karaokeAnimation == "none"
+            && ((line.entryAnimation == "none" && line.exitAnimation == "none")
+                || (unscaledScanlineMotion && features.contains("p07_role_scanline_line_animation")))
             && !line.strokeFlashEnabled && line.bursts.empty();
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && layout.value("scanline_band_schema").toDouble(-1) >= 6
