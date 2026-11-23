@@ -1,13 +1,14 @@
 #pragma once
 
 #include "character_geometry.h"
-#include "singing_scale.h"
+#include "utopia_transition.h"
 
 namespace subtitle::skia {
 struct SignalTransition {
     const CharacterFade& fade;
     const CharacterGeometry& geometry;
     const SingingScale& singingScale;
+    const UtopiaTransition& utopia;
     std::optional<float> lineCenter;
     int startMs, endMs;
 
@@ -16,11 +17,16 @@ struct SignalTransition {
         group.delay = count > 1 ? 350 / (count - 1) : 0;
         if (entryOnly) group.exit = false;
         const CharacterPivot pivot{x, x, y};
-        if (geometry.active() && group.side(time, startMs, endMs) == 0)
+        // Lamps and bars shear about their own centers.
+        if (group.side(time, startMs, endMs) != 0)
+            return characterTransformAt(group, time, startMs, endMs, index, count, pivot);
+        const bool geometric = entryOnly ? geometry.inEntryWindow(time, startMs) : geometry.inWindow(time, startMs, endMs);
+        if (geometric)
             return geometry.at(time, startMs, endMs, index, count, pivot,
                                entryOnly ? std::nullopt : lineCenter, entryOnly);
-        // Lamps and bars shear about their own centers.
-        return characterTransformAt(group, time, startMs, endMs, index, count, pivot);
+        if (utopia.inEntryWindow(time, startMs))
+            return UtopiaTransition::entryAt(time, startMs, index, count, x, y);
+        return {};
     }
 
     void applyZoomPulse(CharacterTransformState& pose, std::int64_t elapsed, std::int64_t start, std::int64_t end,

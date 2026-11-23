@@ -17,20 +17,34 @@ struct UtopiaTransition {
         return matrix;
     }
 
+    static CharacterTransformState entryAt(int time, int displayStart, int index, int count, float x, float y) {
+        const int delay = count > 1 ? (200 / (count - 1)) * index : 0;
+        const int elapsed = std::max(time - displayStart - delay, 0);
+        CharacterTransformState state;
+        state.opacity = std::min(float(elapsed) / 400.f, 1.f);
+        float scale = 1.f;
+        if (elapsed < 400) scale = entryPeakScale * float(elapsed) / 400.f;
+        else if (elapsed < 500) scale = 1.f + .3f * float(500 - elapsed) / 100.f;
+        if (state.opacity > 0 && scale != 1.f) {
+            state.matrix.setScale(scale, scale, x, y);
+            state.transformed = true;
+        }
+        return state;
+    }
+
     CharacterTransformState at(int time, int displayStart, int index, int count, int followingDone,
                                const CharacterPivot& pivot, const SingingScale& scale,
                                int wipeStart, int wipeEnd) const {
         constexpr float pi = 3.14159265358979323846f;
+        const float cx = (pivot.layoutLeft + pivot.layoutRight) * .5f;
+        const float cy = pivot.centerY;
+        if (inEntryWindow(time, displayStart))
+            return entryAt(time, displayStart, index, count, scale.zoomPulse ? cx : pivot.layoutLeft,
+                           scale.zoomPulse ? cy : pivot.baseline);
         const auto singing = scale.at(time, wipeStart, wipeEnd, pivot);
         float scaleX = 1.f, scaleY = 1.f, rotation = 0.f, dx = 0.f, dy = 0.f;
         CharacterTransformState state;
-        if (inEntryWindow(time, displayStart)) {
-            const int delay = count > 1 ? (200 / (count - 1)) * index : 0;
-            const int elapsed = std::max(time - displayStart - delay, 0);
-            state.opacity = std::min(float(elapsed) / 400.f, 1.f);
-            if (elapsed < 400) scaleX = scaleY = entryPeakScale * float(elapsed) / 400.f;
-            else if (elapsed < 500) scaleX = scaleY = 1.f + .3f * float(500 - elapsed) / 100.f;
-        } else if (leave && time > followingDone) {
+        if (leave && time > followingDone) {
             const float progress = std::clamp(float(time - followingDone) / 750.f, 0.f, 1.f);
             state.opacity = 1.f - progress;
             state.utopiaExit = true;
@@ -45,8 +59,6 @@ struct UtopiaTransition {
             return singing;
         }
         if (state.opacity <= 0.f) return state;
-        const float cx = (pivot.layoutLeft + pivot.layoutRight) * .5f;
-        const float cy = pivot.centerY;
         state.matrix.setRotate(rotation, cx, cy);
         state.matrix.postScale(scaleX, scaleY, scale.zoomPulse ? cx : pivot.layoutLeft,
                                scale.zoomPulse ? cy : pivot.baseline);

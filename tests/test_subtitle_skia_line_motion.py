@@ -1487,6 +1487,15 @@ def test_automatic_signal_uses_first_visible_cell_palette(binary, project, sourc
     ('lamp', 'tracking_in'), ('volume', 'wave_in'), ('lamp', 'petal'),
 ])
 def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, entry):
+    _assert_signal_entry(binary, project, signal, entry)
+
+
+@pytest.mark.parametrize('signal', ['lamp', 'volume'])
+def test_signal_utopia_entry_uses_the_unit_center(binary, project, signal):
+    _assert_signal_entry(binary, project, signal, 'utopia')
+
+
+def _assert_signal_entry(binary, project, signal, entry):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -1505,7 +1514,7 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, 
         style = replace(style, volume_enabled=True, volume_appearance_mode='custom', volume_column_count=3,
                         volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF',
                         volume_duration_ms=1000, volume_stroke_width=0, volume_flash_times=0)
-    times = (85, 260, 480, 650)
+    times = (85, 260, 480, 750 if entry == 'utopia' else 650)
     dpr = 1 if entry == 'char_fade' else 3
     reference = None
     if sys.platform == 'win32':
@@ -1516,7 +1525,8 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, 
                                        width=640, height=360, dpr=dpr, realization_enabled=False)
         reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
     ir = ir_for(binary, (track, style), dpr=dpr)
-    assert ir['track']['lines'][0]['entry_duration_ms'] == 600
+    if entry != 'utopia':
+        assert ir['track']['lines'][0]['entry_duration_ms'] == 600
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, reference, gpu, raster, ('signal_unit_entry', signal), check_p00_edges=True)
 
@@ -1534,8 +1544,11 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, 
         for frame in frames:
             columns = np.flatnonzero(signal_pixels(frame).any(axis=0))
             widths.append(1 + columns[-1] - columns[0])
-        assert 0 < widths[0] < widths[1] < widths[2] <= widths[3]
-        assert (widths[2] < widths[3]) == (entry == 'spin_flip')
+        if entry == 'utopia':
+            assert 0 < widths[0] < widths[3] / 3 and widths[1] > widths[0] * 3
+        else:
+            assert 0 < widths[0] < widths[1] < widths[2] <= widths[3]
+            assert (widths[2] < widths[3]) == (entry == 'spin_flip')
 
 
 @pytest.mark.parametrize('signal,exit_', [

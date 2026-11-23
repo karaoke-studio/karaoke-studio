@@ -39,7 +39,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                        : LineAnimation::State{1.f, 0.f, 0.f};
     const auto placement = line.translationAt(tMs);
     const SignalTransition signalTransition{line.characterFade, line.characterGeometry, line.singingScale,
-                                            line.characterMotionCenter, line.startMs, line.endMs};
+                                            line.utopiaTransition, line.characterMotionCenter, line.startMs, line.endMs};
     const bool decoratedLamp = line.shapeSignal && line.shapeSignal->decoration;
     const auto drawDecoratedLamp = [&] {
         const auto entry = line.animation.entryAt(tMs, line.startMs);

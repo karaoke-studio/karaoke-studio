@@ -14,12 +14,12 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 
 bool supportsSignalAnimation(const TextLine& line, bool entryOnly) {
-    const auto requiresPendingDrawing = [](const std::string& animation, int duration) {
-        return animation == "utopia" || (duration > 0 && (animation == "stretch_in" || animation == "stretch_out"
-            || animation == "glow_in" || animation == "glow_out"));
+    const auto requiresHalo = [](const std::string& animation, int duration) {
+        return duration > 0 && (animation == "stretch_in" || animation == "stretch_out"
+            || animation == "glow_in" || animation == "glow_out");
     };
-    return !requiresPendingDrawing(line.entryAnimation, line.entryDurationMs)
-        && (entryOnly || !requiresPendingDrawing(line.exitAnimation, line.exitDurationMs));
+    return !requiresHalo(line.entryAnimation, line.entryDurationMs)
+        && (entryOnly || (line.exitAnimation != "utopia" && !requiresHalo(line.exitAnimation, line.exitDurationMs)));
 }
 }
 
