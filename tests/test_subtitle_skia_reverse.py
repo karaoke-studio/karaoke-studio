@@ -15,6 +15,7 @@ from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_wh
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
 from test_subtitle_skia_ruby_groups import configure
 from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine
+from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 from krok_helper.subtitle_render.engine.render.skia_direction_ir import project_reverse_wipe
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, NativeRendererError
@@ -166,6 +167,39 @@ REVERSE_DECORATION_MOTION = (
     ('glow', 'glow', 'no_wipe', 'slide_in', 'slide_out'),
     ('shadow', 'glow', 'no_wipe', 'rise', 'rise'),
 )
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = source(project)
+    line = track.lines[0]
+    styled = replace(line.chars[1], role_label='lead')
+    track = replace(track, lines=[replace(line, chars=[line.chars[0], styled, *line.chars[2:]])])
+    style = replace(style, reverse_karaoke_anim='utopia', custom_style_schemes={
+        'lead': SubtitleStyleScheme(font_size_px=66, karaoke_colors=colors('#FF557ACC', '#FFEDA329')),
+    })
+    times, dpr = (250, 450, 725, 1100, 1375, 1600, 2100), 3
+    refs = []
+    for look in (style, replace(style, reverse_karaoke_anim='none'), replace(style, custom_style_schemes={})):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    feature = 'p07_reverse_role_singing'
+    assert feature in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'reverse_singing_roles', check_p00_edges=True)
+    ir['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, ir)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

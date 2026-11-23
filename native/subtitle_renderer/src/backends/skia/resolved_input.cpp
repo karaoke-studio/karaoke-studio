@@ -457,8 +457,18 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (vectorGuides && !prefixFadedScanline)
                 throw BackendError("Skia 矢量导唱符扫字线缺少对应布局能力");
         }
+        const bool reverseRoleSinging = hasInlineRoles && roleSinging && !line.scanlineEnabled
+            && features.contains("p07_reverse_role_singing")
+            && std::ranges::all_of(line.chars, [&](const auto& cell) {
+                if (cell.styleIndex < 0) return true;
+                const auto& look = projected.charStyles[cell.styleIndex];
+                return look.strokeWidth == 0 && look.stroke2Width == 0
+                    && look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid"
+                    && look.decorationKindForState(false) == "none" && look.decorationKindForState(true) == "none";
+            });
         const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
-            && !style.vertical && !style.rightToLeft && !annotated && !hasInlineRoles && !vectorGuides
+            && !style.vertical && !style.rightToLeft && !annotated && (!hasInlineRoles || reverseRoleSinging)
+            && !vectorGuides
             && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
             && style.strokeWidth == 0 && style.stroke2Width == 0;

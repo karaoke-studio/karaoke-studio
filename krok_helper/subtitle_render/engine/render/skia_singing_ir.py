@@ -2,10 +2,15 @@
 
 from ..guide.semantics import guide_symbol_is_bitmap
 from ..layout.line.skia_geometry import write_horizontal_pivots
-from ..style.style_semantics import uses_authored_decoration
+from ..style.style_semantics import effective_karaoke_colors, style_for_role_in_layout, uses_authored_decoration
 from .skia_line_animation_ir import is_noise_animation, ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 from .skia_scanline_ir import fixed_faded_utopia_band, reverse_singing_scale, utopia_entry_band
+
+
+def _reverse_role_scale(source, style):
+    colors = effective_karaoke_colors(style)
+    return reverse_singing_scale(source, style) and colors.before.text.mode == colors.after.text.mode == 'solid'
 
 
 def vertical_singing_lines(ir, plan):
@@ -34,6 +39,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
     vertical_shadow = False
     role_singing = False
     reverse_singing = False
+    reverse_role_singing = False
     with_line_animation = False
     role_guides = {'p08_inline_bitmap_guides', 'p05_role_vector_guides'}.intersection(ir['required_features'])
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
@@ -59,8 +65,15 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                            or item.track_index in particle_band_tracks)
         ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
         ruby_zoom_motion = annotated and 'p07_ruby_zoom_line_animation' in ir['required_features']
-        inline_roles = any(c.role_label is not None for c in item.render_line.chars)
-        reverse_scale = (not annotated and not inline_roles and 'p05_resolved_ruby' not in ir['required_features']
+        roles = {c.role_label for c in item.render_line.chars if c.role_label is not None}
+        inline_roles = bool(roles)
+        reverse_role_scale = False
+        if (inline_roles and source.get('wipe_reverse') and not source.get('scanline')
+                and all(c.vector_glyph is None for c in item.render_line.chars)):
+            reverse_role_scale = all(_reverse_role_scale(source, style_for_role_in_layout(style, label))
+                                     for label in roles)
+        reverse_scale = (not annotated and (not inline_roles or reverse_role_scale)
+                         and 'p05_resolved_ruby' not in ir['required_features']
                          and reverse_singing_scale(source, style)
                          and all(c.vector_glyph is None or ('p08_reverse_bitmap_singing' in ir['required_features']
                              and guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)
@@ -91,6 +104,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         singing = singing or scales
         role_singing = role_singing or role_scale
         reverse_singing |= reverse_scale
+        reverse_role_singing |= reverse_scale and reverse_role_scale
         transition = transition or 'utopia' in animations
         singing_ruby = singing_ruby or (scales and annotated)
         with_line_animation = with_line_animation or line_animation
@@ -109,6 +123,8 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         ir['required_features'].append('p07_role_singing_scale')
     if reverse_singing:
         ir['required_features'].append('p07_horizontal_reverse_singing')
+    if reverse_role_singing:
+        ir['required_features'].append('p07_reverse_role_singing')
     if transition:
         ir['required_features'].append('p07_utopia_transition')
         ir['skia_layout']['utopia_transition_schema'] = 1

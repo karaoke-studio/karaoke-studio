@@ -184,6 +184,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_singing_scale",
         "p07_vertical_reverse_singing",
         "p07_horizontal_reverse_singing",
+        "p07_reverse_role_singing",
         "p07_vertical_zoom_pulse",
         "p07_vertical_singing_line_animation",
         "p07_vertical_singing_shadow",
@@ -910,6 +911,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         != (verticalColumns && features.contains("p07_vertical_singing_scale")))
         throw BackendError("Skia 多列竖排 Utopia 唱字缺少对应布局能力");
     const bool roleSinging = features.contains("p07_role_singing_scale");
+    if (features.contains("p07_reverse_role_singing")
+        && (!roleSinging || !features.contains("p07_horizontal_reverse_singing")))
+        throw BackendError("Skia 反向角色唱字缺少对应布局能力");
     if (roleSinging && (!features.contains("p07_singing_scale") || !features.contains("p05_inline_roles")))
         throw BackendError("Skia 角色唱字放大缺少对应能力声明");
     const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
