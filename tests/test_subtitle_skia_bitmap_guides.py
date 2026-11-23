@@ -274,6 +274,39 @@ def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
     assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_guide', check_p00_edges=True)
 
 
+def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary, project, tmp_path):
+    from test_subtitle_skia_character_transform import transform_source
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = transform_source(project, 'spin_flip', 'spin_flip')
+    guide = GuideSymbol(kind='bitmap', bitmap_before_path=image(tmp_path / 'fixed.png', color='#30FF80'),
+                        bitmap_no_decor=True, bitmap_fix_size=True, bitmap_margin_bottom_px=18)
+    line, = track.lines
+    track = replace(track, lines=[replace(line, inline_guide_symbols={1: guide})])
+    times, dpr = (85, 180, 260, 480, 700, 2580, 2680, 2750), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_character_opacity', check_p00_edges=True)
+    for frames in (gpu, raster):
+        parts = []
+        for frame in frames:
+            r, g, b, a = np.moveaxis(frame, -1, 0)
+            pixels = (a > 10) & (g > 245) & (r < 70) & (b > 90) & (b < 160)
+            parts.append((int(a[pixels].max()) if pixels.any() else 0, int(pixels.sum())))
+        assert parts[0] == (0, 0)
+        assert 0 < parts[1][0] < parts[2][0] < parts[4][0] == 255
+        assert parts[1][1] == parts[2][1] == parts[4][1]
+
+
 @GPU
 def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, project, tmp_path):
     from krok_helper.subtitle_render.domain.timing import RubyAnnotation

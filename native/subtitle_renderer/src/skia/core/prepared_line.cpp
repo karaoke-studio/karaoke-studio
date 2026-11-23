@@ -226,7 +226,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             wiping = start < tMs && tMs < followingEnd && start != followingEnd;
         }
         const auto transform = [&] {
-            if (cell.bitmap) return CharacterTransformState{}; // The GPU never poses a bitmap guide.
+            if (cell.bitmap) {
+                // A bitmap keeps its image box and inherits the classic character fade.
+                const auto fade = characterTransformAt(line.characterFade, tMs, line.startMs,
+                    line.endMs, int(index), int(line.cells.size()), cell.pivot);
+                return CharacterTransformState{.opacity = fade.opacity};
+            }
             if (utopia) {
                 const int following = line.utopiaTransition.leave ? line.followingDone[index] : 0;
                 return line.utopiaTransition.at(tMs, line.startMs, int(index), int(line.cells.size()), following,
@@ -283,6 +288,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             guide.draw(canvas, false, titleOpacity, mediaTimeMs);
             return;
         }
+        const float opacity = titleOpacity * states[index].transform.opacity;
+        if (opacity <= 0) return;
         const auto phase = states[index].phase;
         if (!guide.wipes() || phase != Phase::Wiping) {
             if (guide.wipes() && phase == Phase::Before && !line.verticalBitmapClipInk.isEmpty()
@@ -298,10 +305,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                                   ink.right() + pad, line.wipeRightToLeft ? edge : 1e6f);
                 SkAutoCanvasRestore keep(&canvas, true);
                 canvas.clipRect(clip, SkClipOp::kIntersect, true);
-                guide.draw(canvas, false, titleOpacity, tMs);
+                guide.draw(canvas, false, opacity, tMs);
                 return;
             }
-            guide.draw(canvas, guide.wipes() && phase == Phase::After, titleOpacity, tMs);
+            guide.draw(canvas, guide.wipes() && phase == Phase::After, opacity, tMs);
             return;
         }
         float edge = front(cell, rawProgress(cell));
@@ -337,7 +344,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                   box.right() + pad, leading ? edge : box.bottom() + pad)
                 : band(leading ? box.left() - pad : edge, leading ? edge : box.right() + pad);
             clipViewportWipe(canvas, clip, wipeViewportHeight);
-            guide.draw(canvas, sung, titleOpacity, tMs);
+            guide.draw(canvas, sung, opacity, tMs);
         }
     };
     const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {
