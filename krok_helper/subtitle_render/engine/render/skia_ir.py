@@ -612,16 +612,20 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             source = ir['track']['lines'][item.track_index]
             moving = {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
             singing = source.get('karaoke_anim') == 'utopia' and not (moving or track.rubies)
-            if singing:
+            bitmap = has_bitmap_guides((item.render_line,))
+            solid_shadows = True
+            if singing or bitmap:
                 appearances = (look, *(style_for_role_in_layout(look, label) for label in _inline_role_labels(item)))
                 palettes = [effective_karaoke_colors(appearance) for appearance in appearances]
-                singing = all(palette.before.shadow.mode == palette.after.shadow.mode == 'solid' for palette in palettes)
+                solid_shadows = all(palette.before.shadow.mode == palette.after.shadow.mode == 'solid'
+                                    for palette in palettes)
+                singing &= solid_shadows
             if (look.vertical or look.right_to_left or item.line.wipe_reverse or look.lower_ruby_enabled
                     or (track.rubies and moving)
                     or (source.get('karaoke_anim') != 'none' and not singing)
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                    or (adjust_position is None and has_bitmap_guides((item.render_line,)))):
+                    or (bitmap and (moving or singing or not solid_shadows))):
                 raise ValueError('Skia 行内角色阴影当前需要正向横排普通走字或静态实色 Utopia 唱字')
             role_shadow_motion |= moving
             role_shadow_singing |= singing

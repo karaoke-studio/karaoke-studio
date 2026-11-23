@@ -710,6 +710,43 @@ def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path, p
         assert sampled >= 2
 
 
+def test_lyric_bitmap_guide_uses_its_own_role_shadow(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = shadowed_bitmap_guide(project, tmp_path)
+    line, = track.lines
+    colors = style.karaoke_colors
+    palette = replace(colors, before=replace(colors.before, shadow=PaintFill(color='#ED2342')),
+                      after=replace(colors.after, shadow=PaintFill(color='#592AF7')))
+    role = SubtitleStyleScheme(decoration_kind='shadow', decoration_before_sync=True,
+                               shadow_offset_x=-10, shadow_offset_y=9, karaoke_colors=palette)
+    prefix = replace(line.guide_symbol, role_labels=('accent',))
+    line = replace(line, guide_symbol=prefix,
+                   chars=[replace(line.chars[0], role_label='accent'), *line.chars[1:]])
+    track = replace(track, lines=[line])
+    style = replace(style, custom_style_schemes={'accent': role})
+    times = (250, 450, 750, 1100, 1550)
+    ir = ir_for(binary, (track, style))
+    assert {'p06_role_static_shadow', 'p08_bitmap_guide_shadow'} <= set(ir['required_features'])
+    gpu, raster = render_skia(binary, ir, times)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        control = replace(track, lines=[replace(line, guide_symbol=replace(prefix, bitmap_no_decor=True))])
+        refs = []
+        for source in (track, control):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                           width=640, height=360, realization_enabled=False)
+            refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+        reference, bare = refs
+        assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 40
+                   for a, b in zip(reference, bare, strict=True))
+    assert_glow_parity(times, reference, gpu, raster, 'lyric_bitmap_role_shadow', check_p00_edges=True)
+
+
 def mixed_reverse_bitmap_guide(project, tmp_path):
     track, style = shadowed_bitmap_guide(project, tmp_path)
     line, = track.lines

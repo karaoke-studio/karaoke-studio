@@ -859,16 +859,18 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleShadowMotion = !staticShadowLine && ordinaryLineAnimation
             && features.contains("p07_role_shadow_line_animation");
         const bool roleShadowRuby = staticShadowLine && features.contains("p06_role_shadow_ruby");
+        const auto solidRoleShadows = [&] {
+            return style.beforeDecorPaint.mode == "solid" && style.afterDecorPaint.mode == "solid"
+                && std::ranges::all_of(line.chars, [&](const auto& cell) {
+                    if (cell.styleIndex < 0) return true;
+                    const auto& look = projected.charStyles[cell.styleIndex];
+                    return look.beforeDecorPaint.mode == "solid" && look.afterDecorPaint.mode == "solid";
+                });
+        };
         const bool roleSingingShadow = staticShadowLine && roleSinging && !anyReadings
-            && features.contains("p07_role_singing_shadow")
-            && style.beforeDecorPaint.mode == "solid" && style.afterDecorPaint.mode == "solid"
-            && std::ranges::all_of(line.chars, [&](const auto& cell) {
-                if (cell.styleIndex < 0) return true;
-                const auto& look = projected.charStyles[cell.styleIndex];
-                return look.beforeDecorPaint.mode == "solid" && look.afterDecorPaint.mode == "solid";
-            });
+            && features.contains("p07_role_singing_shadow") && solidRoleShadows();
         const bool inlineShadow = roleStaticShadow && hasInlineRoles && (!annotated || roleShadowRuby)
-            && (!hasBitmapGuide || staticTitle)
+            && (!hasBitmapGuide || (staticShadowLine && line.karaokeAnimation == "none" && solidRoleShadows()))
             && !style.vertical && !style.rightToLeft && !line.wipeReverse
             && (line.karaokeAnimation == "none" || roleSingingShadow)
             && (staticShadowLine || roleShadowMotion) && !line.scanlineEnabled
