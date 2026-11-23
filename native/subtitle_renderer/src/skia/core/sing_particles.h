@@ -65,13 +65,16 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
                  item.burst, tMs, originAlong, originAcross,
                  verticalScanline ? item.boxH : item.boxW, verticalScanline ? item.boxW : item.boxH)) {
             if (particle.alpha <= 0.f || particle.sizePx <= 0.f) continue;
-            const float alpha = colorAlpha * std::clamp(particle.alpha, 0.f, 1.f);
+            const float opacity = std::clamp(particle.alpha, 0.f, 1.f);
+            const float alpha = colorAlpha * opacity;
             const SkPoint center = verticalScanline ? SkPoint{-particle.y, particle.x} : SkPoint{particle.x, particle.y};
             if (item.ring && !sampled) {
-                auto color = paint.getColor4f();
-                color.fA = alpha;
+                auto color = item.authoredPaint
+                    ? item.authoredPaint->ringColor(center.x(), particle.sizePx / std::max(item.burst.sizePx, 1.f))
+                    : paint.getColor4f();
+                color.fA *= opacity;
                 drawParticleRing(canvas, center, *item.ring, particle.sizePx / 1000.f,
-                                 color, quantized);
+                                 color, quantized || item.authoredPaint.has_value());
                 continue;
             }
             auto transform = SkMatrix::Translate(center.x(), center.y());
@@ -79,7 +82,7 @@ inline void drawSingParticles(SkCanvas& canvas, const std::vector<SingParticleBu
             transform.preScale(particle.sizePx * particle.stretchX / 1000.f,
                                particle.sizePx * particle.stretchY / 1000.f);
             if (item.authoredPaint) {
-                item.authoredPaint->draw(canvas, item.sprite, transform, std::clamp(particle.alpha, 0.f, 1.f));
+                item.authoredPaint->draw(canvas, item.sprite, transform, opacity);
                 continue;
             }
             // Solid fire paints a larger translucent silhouette before each

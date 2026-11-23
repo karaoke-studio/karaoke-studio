@@ -23,6 +23,11 @@ class ParticlePaint {
 
         static SkColor sample(const krok::subtitle::native::PaintStyle& source, float position) {
             if (source.stops.empty()) return color(source.color);
+            if (source.mode == "split_vertical") {
+                const auto next = std::upper_bound(source.stops.begin(), source.stops.end(), position,
+                    [](float value, const auto& stop) { return value < stop.position; });
+                return color((next == source.stops.begin() ? *next : *(next - 1)).color);
+            }
             const auto right = std::lower_bound(source.stops.begin(), source.stops.end(), position,
                 [](const auto& stop, float value) { return stop.position < value; });
             if (right == source.stops.begin()) return color(right->color);
@@ -35,26 +40,29 @@ class ParticlePaint {
                 channel(left.color.blue, right->color.blue));
         }
 
-        Layer(const krok::subtitle::native::PaintStyle& source, sk_sp<SkShader> image)
+        Layer(const krok::subtitle::native::PaintStyle& source, sk_sp<SkShader> image, bool sampleRadius = false)
             : tint(color(source.color)), shader(std::move(image)) {
-            if (source.mode == "gradient_horizontal") {
-                lineColors.reserve(lineSteps + 1);
+            const bool radial = sampleRadius && (source.mode == "gradient_vertical" || source.mode == "split_vertical");
+            if (source.mode == "gradient_horizontal" || radial) {
+                samples.reserve(lineSteps + 1);
                 for (int i = 0; i <= lineSteps; ++i)
-                    lineColors.push_back(sample(source, float(i) / lineSteps));
+                    samples.push_back(sample(source, float(i) / lineSteps));
             } else if (!shader) {
                 shader = lineGradient(source, SkRect::MakeLTRB(-500, -500, 500, 500), 0);
             }
         }
 
         void apply(SkPaint& paint, float opacity, int lineSample = 0) const {
-            paint.setColor(shader ? SK_ColorWHITE : (lineColors.empty() ? tint : lineColors[lineSample]));
+            paint.setColor(shader ? SK_ColorWHITE : colorAt(lineSample));
             paint.setShader(shader);
             paint.setAlphaf(paint.getAlphaf() * opacity);
         }
 
+        SkColor colorAt(int index) const { return samples.empty() ? tint : samples[index]; }
+
         SkColor tint;
         sk_sp<SkShader> shader;
-        std::vector<SkColor> lineColors;
+        std::vector<SkColor> samples;
     };
 
 public:
@@ -63,7 +71,7 @@ public:
     };
 
     ParticlePaint(const krok::subtitle::native::ParticleBurst& source, float lineLeft, float lineSpan, Images images)
-        : fill_(source.fill, std::move(images.fill)),
+        : fill_(source.fill, std::move(images.fill), source.kind == "ripple"),
           inner_(source.stroke, std::move(images.inner)),
           outer_(source.stroke2, std::move(images.outer)),
           decoration_(source.decor, std::move(images.decoration)),
@@ -73,8 +81,16 @@ public:
           shadowOffset_{source.decorOffsetX, source.decorOffsetY},
           glowRadius_(source.hasDecor ? source.decorRadius * 1000.f / source.sizePx : 0.f),
           glowPasses_(source.decorConcentration + 1),
-          lineMapped_(!fill_.lineColors.empty() || !inner_.lineColors.empty() || !outer_.lineColors.empty()),
+          lineMapped_(source.fill.mode == "gradient_horizontal"
+              || source.stroke.mode == "gradient_horizontal" || source.stroke2.mode == "gradient_horizontal"),
+          radiusMapped_(source.kind == "ripple" && !fill_.samples.empty() && !lineMapped_),
           lineLeft_(lineLeft), lineSpan_(lineSpan) {}
+
+    SkColor4f ringColor(float x, float sizeRatio) const {
+        // The evaluator grows the ripple's diameter from .25 to 1.10 times the burst size.
+        const int sample = radiusMapped_ ? quantizedPosition((sizeRatio - .25f) / .85f) : lineIndex(x);
+        return SkColor4f::FromColor(fill_.colorAt(sample));
+    }
 
     void draw(SkCanvas& canvas, const SkPath& path, const SkMatrix& pose, float opacity) const {
         SkAutoCanvasRestore restore(&canvas, true);
@@ -99,11 +115,7 @@ public:
         }
         canvas.concat(pose);
         // The legacy renderer samples a uniform sprite color in 1/32 steps across the line.
-        int lineSample = 0;
-        if (lineMapped_) {
-            const float position = std::clamp((pose.getTranslateX() - lineLeft_) / lineSpan_, 0.f, 1.f);
-            lineSample = int(std::lround(position * Layer::lineSteps));
-        }
+        const int lineSample = lineIndex(pose.getTranslateX());
         paint.setStyle(SkPaint::kStroke_Style);
         if (glowRadius_ > 0.f) {
             decoration_.apply(paint, opacity);
@@ -136,13 +148,21 @@ public:
     }
 
 private:
+    static int quantizedPosition(float fraction) {
+        return int(std::lround(std::clamp(fraction, 0.f, 1.f) * Layer::lineSteps));
+    }
+
+    int lineIndex(float x) const {
+        return lineMapped_ ? quantizedPosition((x - lineLeft_) / lineSpan_) : 0;
+    }
+
     Layer fill_, inner_, outer_, decoration_;
     float innerWidth_, outerWidth_;
     bool shadow_;
     SkPoint shadowOffset_;
     float glowRadius_;
     int glowPasses_;
-    bool lineMapped_;
+    bool lineMapped_, radiusMapped_;
     float lineLeft_, lineSpan_;
 };
 }

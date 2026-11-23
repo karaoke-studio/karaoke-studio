@@ -49,6 +49,7 @@ _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 's
 _PAINTED_SPRITES = {'twinkle', 'twinkle_classic', 'note', 'heart'} | FALLING_PARTICLES
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
 _LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'image'}
+_RIPPLE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical'}
 
 
 def _transition_layers(kind, entry):
@@ -123,6 +124,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     version = 3
     ruby_scanline = ruby_band_singing = painted_singing = False
     painted_sprites = sprite_shadows = sprite_line_gradients = sprite_images = False
+    painted_ripples = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -252,6 +254,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 paint = ir['fx_paint_table'][burst['paint_id']]
                 if faded_band and _supports_singing_particle_paint(paint):
                     painted_singing = True
+                elif (static_sprite_paint and kind == 'ripple' and paint['fill']['mode'] in _RIPPLE_PAINT_MODES
+                      and not (paint['stroke_width_px'] or paint['stroke2_width_px'] or paint.get('decor'))):
+                    painted_sprites = painted_ripples = True
+                    sprite_line_gradients |= paint['fill']['mode'] == 'gradient_horizontal'
                 elif static_sprite_paint and kind in _PAINTED_SPRITES and _supports_singing_particle_paint(
                         paint, local_sprite=True):
                     painted_sprites = True
@@ -337,6 +343,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_singing_sprite_line_gradients')
     if sprite_images:
         ir['required_features'].append('p07_singing_sprite_images')
+    if painted_ripples:
+        ir['required_features'].append('p07_ripple_singing_paints')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:

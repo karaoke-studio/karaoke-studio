@@ -190,6 +190,39 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project, tmp_
                        check_p00_edges=True)
 
 
+@pytest.mark.parametrize('mode', ['gradient_vertical', 'split_vertical'])
+def test_singing_ripple_inherits_color_along_radius(binary, project, mode):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = twinkle_source(project)
+    palette = colors('#FF25B4F2', '#FF25B4F2')
+    gradient = PaintFill(mode=mode, start_color='#FFCB24ED', end_color='#FF22F9D1',
+                         split_top_color='#FFCB24ED', split_bottom_color='#FF22F9D1', split_position_pct=43)
+    scheme = SubtitleStyleScheme(karaoke_colors=replace(palette, after=replace(palette.after, text=gradient)))
+    style = replace(style, karaoke_colors=colors('#00000000', '#00000000'), sing_fx='ripple',
+                    fx_particle_size_em=.72, fx_particle_color_mode='role', fx_particle_role_name='particle',
+                    custom_style_schemes={'particle': scheme})
+    control = replace(style, custom_style_schemes={'particle': replace(scheme, karaoke_colors=palette)})
+    times, dpr = (300, 475, 680, 950, 1280, 1590, 1940), 3
+    refs = []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        for look in (style, control):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, dpr=dpr, realization_enabled=False)
+            refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    gpu, raster = render_skia(binary, ir, times)
+    assert 'p07_ripple_singing_paints' in ir['required_features']
+    assert any(np.count_nonzero(frame[..., 3] > 30) > 100 for frame in gpu)
+    assert_glow_parity(times, refs[0] if refs else None, gpu, raster, ('ripple_radial_gradient', mode),
+                       check_p00_edges=True)
+
+
 RUBY_PARTICLE_TIMES = [150, 450, 550, 899, 950, 1100, 1400, 1700, 2100, 2650, 3200]
 
 

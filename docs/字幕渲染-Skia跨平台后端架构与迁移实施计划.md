@@ -995,6 +995,8 @@ P01/P03 的“某平台无法验证”要标注具体原因，允许继续不依
 
 macOS [双架构复验](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45154833478) 的 Metal/Raster 构建与浮窗步骤通过。两种架构的产品套件各通过 2,461 项，余下两处断言仍要求拒绝现在已按 D2D 行为处理的竖排配置。已更新测试核对横排方向和逐字淡入设置在竖排的实际效果、时间窗、注音及画面。修订后的相关回归在 Windows、WSL X11、WSL Wayland 各通过 8 项。
 
+第九十一批补齐唱字涟漪沿扩散半径的渐变与分层取色。用原有 1/32 分段选色，Vulkan 与 Raster 在逐环叠合前统一透明度取整。两种取色各采样 7 帧 1080p，三后端通过原画质预算，Windows 相关 7 项通过。包含第九十批与竖排测试修订的 [macOS 双架构 CI](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45161644401) 已启动。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）
