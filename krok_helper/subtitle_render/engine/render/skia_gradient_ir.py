@@ -207,7 +207,7 @@ def write_body_gradient_bounds(ir, plan):
                   and animations != {'none'}
                   and ordinary_line_animation(source) and modes <= {'solid', 'gradient_vertical'}
                   and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
-        unannotated_singing = (not (look.vertical or look.right_to_left or upper_ruby or annotated)
+        unannotated_singing = (not (look.vertical or look.right_to_left or annotated)
                                and animations == {'none'}
                                and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'stroke_flash'))
                                and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
@@ -224,7 +224,7 @@ def write_body_gradient_bounds(ir, plan):
                 or (not (faded_band or palette_band or moving or paint_fade or paint_scanline) and (animations != {'none'}
                                                   or source.get('scanline') or source.get('fx_bursts')))
                 or source.get('stroke_flash')
-                or (source.get('karaoke_anim') != 'none' and not singing)
+                or (source.get('karaoke_anim') not in {'none', 'no_wipe'} and not singing)
                 or (look.lower_ruby_enabled and not (particle_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or any(c.role_label is not None or (c.vector_glyph is not None

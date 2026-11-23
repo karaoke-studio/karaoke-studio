@@ -509,8 +509,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || (!features.contains("p05_horizontal_rtl") && !features.contains("p05_reverse_wipe"))))
         throw BackendError("Skia 反向或右至左实色描边缺少描边或走字方向能力");
     if (features.contains("p06_unannotated_singing_paints") && (!features.contains("p07_singing_scale")
-        || (!features.contains("p06_body_gradient") && !features.contains("p06_image_fill"))
-        || features.contains("p05_resolved_ruby")))
+        || (!features.contains("p06_body_gradient") && !features.contains("p06_image_fill"))))
         throw BackendError("Skia 正文唱字画笔缺少填充或唱字放大能力");
     if (features.contains("p06_unannotated_zoom_paints") && !features.contains("p06_unannotated_singing_paints"))
         throw BackendError("Skia 正文弹跳缩放画笔缺少唱字画笔能力");

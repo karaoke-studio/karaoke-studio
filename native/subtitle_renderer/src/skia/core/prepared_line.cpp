@@ -133,6 +133,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool movingGlow = compositingSpin || compositingDrip;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
+    // Move the path independently of paint anchored to the line or canvas.
+    const bool lineBodyShader = line.beforeGradient || line.afterGradient
+        || line.images.body[0] || line.images.body[1];
     // Signals, particles and stroke flashes can extend outside the text paint bounds.
     const bool dynamicPaint = movingCells || line.volumeSignal || (line.shapeSignal && !decoratedLamp)
         || !line.particles.empty() || line.hasStrokeFlash;
@@ -242,8 +245,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (cell.bitmap) transform = CharacterTransformState{.opacity = transform.opacity};
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
-            && (cell.outline || cell.outerOutline || cell.bodyPaintIndex >= 0 || transform.glowAlpha > 0
-                || !line.glow.empty() || !line.roleGlows.empty() || line.hasStrokeFlash))
+            && (cell.outline || cell.outerOutline || cell.bodyPaintIndex >= 0 || lineBodyShader
+                || transform.glowAlpha > 0 || !line.glow.empty() || !line.roleGlows.empty() || line.hasStrokeFlash))
             animatedInk = cell.path.makeTransform(transform.matrix);
         states.push_back({progress, edge, wiping ? Phase::Wiping : (tMs <= start ? Phase::Before : Phase::After),
                           transform, std::move(animatedInk)});

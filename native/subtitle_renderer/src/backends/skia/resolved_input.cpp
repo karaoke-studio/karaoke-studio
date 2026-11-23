@@ -1091,7 +1091,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (!movingGradient && !unscaledPaintFade && !unscaledPaintScanline
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"
                     || line.scanlineEnabled || !line.bursts.empty()))
-                || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
+                || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint)
                 || (!projected.charStyles.empty() && !scriptStylesOnly))
                 throw BackendError("Skia 正文渐变当前仅支持正向横排基础正文");

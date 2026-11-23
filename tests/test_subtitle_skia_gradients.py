@@ -71,7 +71,7 @@ def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target, 
     assert np.array_equal(replay[0], painted[0])
 
 
-@pytest.mark.parametrize('effect', ['fade', 'scanline'])
+@pytest.mark.parametrize('effect', ['fade', 'scanline', 'utopia'])
 def test_gradient_effect_on_unannotated_row_works_with_another_rows_ruby(binary, reading, effect):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_scanline import band
@@ -92,11 +92,13 @@ def test_gradient_effect_on_unannotated_row_works_with_another_rows_ruby(binary,
                      animation_override=LineAnimationOverride(
                          entry_anim='fade' if effect == 'fade' else 'none',
                          entry_duration_ms=600 if effect == 'fade' else 0,
-                         scanline_enabled=effect == 'scanline'))
+                         scanline_enabled=effect == 'scanline',
+                         karaoke_anim='utopia' if effect == 'utopia' else 'none'))
     track = replace(track, lines=[first, second])
     ir = upper_ir(binary, (track, style), 1)
     assert [bool(line['ruby_groups']) for line in ir['skia_layout']['lines']] == [True, False]
-    assert {'p06_ruby_main_paint', f'p06_unscaled_paint_{effect}'} <= set(ir['required_features'])
+    feature = 'p06_unannotated_singing_paints' if effect == 'utopia' else f'p06_unscaled_paint_{effect}'
+    assert {'p06_ruby_main_paint', feature} <= set(ir['required_features'])
     times = (450, 1300, 3600, 3800, 4200, 4850)
     gpu, raster = render_skia(binary, ir, times)
 
@@ -410,6 +412,31 @@ def outline_gradient_source(project, case):
         after = replace(after, stroke2=layer_paint(outer, '#FF601020', '#FF30A040'))
     return track, replace(style, karaoke_colors=replace(colors, before=before, after=after), stroke_width_px=5,
                           stroke2_enabled=outer is not None, stroke2_width_px=4 if outer else 0)
+
+
+def test_whole_cell_switch_uses_body_and_outline_gradients(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = outline_gradient_source(project, 'all')
+    style = replace(style, karaoke_anim='no_wipe')
+    ir = upper_ir(binary, (track, style), 1)
+    assert {'p06_body_gradient', 'p06_outline_gradient', 'p07_no_wipe'} <= set(ir['required_features'])
+    _, end = ir['track']['lines'][0]['resolved_intervals'][0]
+    times = (end - 100, end - 1, end, end + 1, end + 2, 1550)
+    gpu, raster = render_skia(binary, ir, times)
+    assert np.array_equal(gpu[0], gpu[1])
+    assert not np.array_equal(gpu[1], gpu[2])
+    assert np.array_equal(gpu[3], gpu[4])
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    assert_glow_parity(times, reference, gpu, raster, 'whole_cell_gradient', check_p00_edges=True)
 
 
 def assert_text_parity(refs, results, sample):
