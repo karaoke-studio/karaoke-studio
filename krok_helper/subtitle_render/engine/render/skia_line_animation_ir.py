@@ -1,5 +1,28 @@
 """Check line animation modes and declare whole-line animation in Skia IR."""
 
+from dataclasses import replace
+
+from ...domain.timing import CHAR_TRANSITION_ANIMS
+
+
+_INACTIVE_VERTICAL_TRANSITIONS = CHAR_TRANSITION_ANIMS | {'utopia'}
+
+
+def project_vertical_line_animations(plan):
+    """Keep the scheduled display windows and project only drawable animations."""
+    lines = []
+    for line in plan.lines:
+        style = line.animation_style
+        overrides = {}
+        if style.entry_anim in _INACTIVE_VERTICAL_TRANSITIONS:
+            overrides.update(entry_anim='none', entry_lead_ms=0)
+        if style.exit_anim in _INACTIVE_VERTICAL_TRANSITIONS:
+            overrides.update(exit_anim='none', exit_fade_ms=0)
+        if style.karaoke_stroke_flash:
+            overrides['karaoke_stroke_flash'] = False
+        lines.append(replace(line, animation_style=replace(style, **overrides)) if overrides else line)
+    return replace(plan, lines=tuple(lines))
+
 
 def ordinary_line_animation(source):
     return (source.get('entry_anim') in {'none', 'fade', 'slide_in', 'rise'}

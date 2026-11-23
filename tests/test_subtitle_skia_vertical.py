@@ -330,6 +330,43 @@ def test_unsupported_vertical_scanline_shape_is_ignored_like_d2d(binary, project
     assert_glow_parity(times, draws[0], gpu, raster, 'inactive_vertical_scanline', check_p00_edges=True)
 
 
+def vertical_inactive_effects(project):
+    track, base = vertical_source(project)
+    base = replace(base, stroke_width_px=3, entry_lead_ms=600, exit_fade_ms=600)
+    return track, base, replace(base, entry_anim='char_drip', exit_anim='lightning', karaoke_stroke_flash=True)
+
+
+def test_vertical_inactive_effects_preserve_display_windows(binary, project):
+    track, base, effects = vertical_inactive_effects(project)
+    control = ir_for(binary, (track, base))['track']['lines'][0]
+    line = ir_for(binary, (track, effects))['track']['lines'][0]
+    assert line['entry_anim'] == line['exit_anim'] == 'none'
+    assert line['entry_duration_ms'] == line['exit_duration_ms'] == 0
+    assert not line['stroke_flash'] and not line['fx_bursts']
+    assert line['display_start_ms'] == control['display_start_ms']
+    assert line['display_end_ms'] == control['display_end_ms']
+    assert effects.entry_anim == 'char_drip' and effects.exit_anim == 'lightning' and effects.karaoke_stroke_flash
+
+
+@GPU
+def test_vertical_inactive_effects_are_ignored_like_d2d(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base, effects = vertical_inactive_effects(project)
+    times = (300, 520, 750, 1100, 1550, 1780)
+    references = []
+    for look in (base, effects):
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in pixels])
+    assert np.array_equal(*references)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, effects)), times)
+    assert_glow_parity(times, references[0], gpu, raster, 'inactive_vertical_effects', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('directions', ['forward', 'reverse', 'mixed'])
 def test_vertical_column_decoration_fades_each_line_independently(binary, project, target, directions):

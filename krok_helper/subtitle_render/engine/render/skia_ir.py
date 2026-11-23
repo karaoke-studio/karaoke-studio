@@ -33,7 +33,9 @@ from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_b
 from .skia_lower_ir import lower_sources
 from .skia_line_band_ir import write_line_band
 from .skia_line_animation_ir import (
-    declare_line_animations, is_noise_animation, ordinary_line_animation, write_line_animation_schemas)
+    declare_line_animations, is_noise_animation, ordinary_line_animation, project_vertical_line_animations,
+    write_line_animation_schemas,
+)
 from .skia_singing_ir import vertical_singing_lines, write_utopia_pivots
 from .skia_scanline_ir import (
     declare_vertical_scanline_viewport, scanline_features, suppress_inactive_scanline_bands, transformed_cell_band,
@@ -286,6 +288,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 _validate_style(style_for_line(source_style, line))
             result = prepare_skia_layout(source, source_style, measure=measure, resolve_font=resolve_font,
                                          dpr=kwargs.get('dpr', 1), **plan_kwargs)
+        if source_style.vertical:
+            result = replace(result, plan=project_vertical_line_animations(result.plan))
         prepared.append(result)
         return result.plan
 

@@ -15,7 +15,6 @@ from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_secondary_outline import two_outlines
 from test_subtitle_skia_vector_guides import guide_source
-from test_subtitle_skia_vertical import vertical_ruby_source
 from test_subtitle_skia_scanline import band
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -91,20 +90,17 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
     assert np.array_equal(frames, expected)
 
 
-@pytest.mark.parametrize('case', ['rtl',
-                                  'reverse', 'vertical', 'roles', 'guide'])
+@pytest.mark.parametrize('case', ['rtl', 'reverse', 'roles', 'guide'])
 def test_unverified_combinations_are_rejected(binary, project, case):
     track, style = transform_source(project)
     if case == 'rtl': style = replace(style, right_to_left=True)
     elif case == 'reverse': track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
-    elif case == 'vertical':
-        track, style = vertical_ruby_source(project); track = replace(track, rubies=[])
     elif case == 'roles':
         style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
         track = replace(track, lines=[replace(track.lines[0], chars=[
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
-    elif case == 'guide': track, style = guide_source(project)
-    if case in {'vertical', 'guide'}:
+    elif case == 'guide':
+        track, style = guide_source(project)
         style = replace(style, entry_anim='char_drip', entry_lead_ms=600)
     with pytest.raises(ValueError, match='逐字滴落/翻转'):
         ir_for(binary, (track, style))
