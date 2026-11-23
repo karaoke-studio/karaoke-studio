@@ -54,13 +54,13 @@ def utopia_entry_band(line, style):
                      or any(uses_authored_decoration(style, kind) for kind in ('shadow', 'glow'))))
 
 
-def reverse_singing_scale(line, style, *, allow_outline=False):
+def reverse_singing_scale(line, style, *, allow_outline=False, allow_glow=False):
     return (line.get('wipe_reverse') and line.get('karaoke_anim') == 'utopia'
             and {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
             and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('stroke_flash')
-                     or line.get('fx_bursts') or line.get('zoom_pulse')
-                     or any(uses_authored_decoration(style, kind) for kind in ('shadow', 'glow')))
+                     or line.get('fx_bursts') or line.get('zoom_pulse') or uses_authored_decoration(style, 'shadow'))
             and (allow_outline or not (style.stroke_width_px or (style.stroke2_enabled and style.stroke2_width_px)))
+            and (allow_glow or not uses_authored_decoration(style, 'glow'))
             and (not line.get('scanline') or (style.scanline_shape == 'band'
                                             and style.scanline_mode in {'default', 'color'})))
 

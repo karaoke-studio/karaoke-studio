@@ -479,6 +479,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && std::ranges::none_of(states, [](const State& state) { return state.transform.opacity > .02f; });
     const bool canonicalUtopiaGlow = rubyUtopiaEntry && hasGlow
         && std::ranges::none_of(states, [](const State& state) { return state.transform.opacity > .125f; });
+    const bool reverseSingingGlow = utopia && line.wipeRightToLeft && !line.vertical && line.rubyGroups.empty();
     const auto glowOpacity = [=](float opacity) {
         return canonicalFadeGlow ? std::floor(opacity * opacitySteps) / opacitySteps : opacity;
     };
@@ -577,7 +578,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                    false, false, sample);
                 }
             });
-            if (canonicalFadeGlow || canonicalUtopiaGlow) layer.compositeCanonical(canvas, source);
+            if (canonicalFadeGlow || canonicalUtopiaGlow || reverseSingingGlow) layer.compositeCanonical(canvas, source);
             else layer.composite(canvas, source, particleEntryGlow || rubyUtopiaEntry, compositingSpin);
         }
         if (movingGlow)

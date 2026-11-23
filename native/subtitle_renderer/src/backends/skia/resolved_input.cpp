@@ -1004,10 +1004,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !vectorGuides && !line.wipeReverse && line.karaokeAnimation == "none"
             && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        const bool reverseSingingGlow = singingGlow && reverseHorizontalSinging && hasGlow && !hasShadow
+            && !gradientGlow && !line.scanlineEnabled && !hasInlineRoles && !hasBitmapGuide
+            && features.contains("p07_reverse_singing_glow");
         if (hasDecoration
             && ((style.vertical && !verticalDecoration)
                 || (style.rightToLeft && !rtlBitmapDecoration && (!rtlRuby || (hasShadow && !rtlShadow)))
-                || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
+                || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration || reverseSingingGlow))
                 || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
                     || horizontalShadowMotion || horizontalGlowMotion
                     || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))

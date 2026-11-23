@@ -38,7 +38,7 @@ from .skia_line_animation_ir import (
     declare_line_animations, is_noise_animation, ordinary_line_animation, project_vertical_line_animations,
     write_line_animation_schemas,
 )
-from .skia_singing_ir import vertical_singing_lines, write_utopia_pivots
+from .skia_singing_ir import reverse_singing_glow, vertical_singing_lines, write_utopia_pivots
 from .skia_scanline_ir import (
     declare_vertical_scanline_viewport, reverse_singing_scale, scanline_features,
     suppress_inactive_scanline_bands, transformed_cell_band, write_scanline_schema,
@@ -621,6 +621,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse
                              and item.track_index not in reverse_bitmap_lines
                              and (not track.rubies or has_bitmap_guides((item.render_line,)))
+                             and not reverse_singing_glow(item, ir['track']['lines'][item.track_index])
                              and any(uses_authored_decoration(item.layout_style, kind) for kind in decorations)]
         for item in decorated_reverse:
             source = ir['track']['lines'][item.track_index]

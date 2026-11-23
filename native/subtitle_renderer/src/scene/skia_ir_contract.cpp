@@ -199,6 +199,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_horizontal_reverse_singing",
         "p07_reverse_role_singing",
         "p07_reverse_singing_outline",
+        "p07_reverse_singing_glow",
         "p07_vertical_zoom_pulse",
         "p07_vertical_singing_line_animation",
         "p07_vertical_singing_shadow",
@@ -968,6 +969,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_reverse_singing_outline")
         && (!features.contains("p07_horizontal_reverse_singing") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 反向唱字描边缺少走字或描边能力");
+    if (features.contains("p07_reverse_singing_glow")
+        && (!features.contains("p07_horizontal_reverse_singing") || !features.contains("p07_singing_glow")))
+        throw BackendError("Skia 反向唱字光晕缺少走字或光晕能力");
     if (features.contains("p07_vertical_zoom_pulse")
         && !features.contains("p07_vertical_singing_scale"))
         throw BackendError("Skia 竖排整字放大缺少对应布局能力");

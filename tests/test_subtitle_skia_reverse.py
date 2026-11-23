@@ -202,6 +202,30 @@ def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, p
             configure(process, ir)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_singing_glow_matches_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity, glow_source
+
+    track, style = glow_source(project, 'split')
+    track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    style = replace(style, reverse_karaoke_anim='utopia')
+    times, dpr = (250, 450, 750, 1100, 1450, 1750, 2200), 3
+    refs = []
+    for look in (style, replace(style, decoration_kind='none', decoration_kind_before='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
+               for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p07_reverse_singing_glow' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'reverse_singing_glow', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('case', REVERSE_DECORATION_MOTION)
 def test_reverse_decoration_motion_replays(binary, project, case, target):
