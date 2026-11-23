@@ -238,19 +238,23 @@ def test_inline_vector_guide_and_upper_reading_match_actual_d2d_gpu(binary, appl
 
 
 @GPU
-def test_vector_guide_shadow_matches_actual_d2d_gpu(binary, project):
+@pytest.mark.parametrize('entry', ['none', 'fade'])
+def test_vector_guide_shadow_matches_actual_d2d_gpu(binary, project, entry):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = guide_source(project)
     line, = track.lines
+    if entry == 'fade':
+        line = replace(line, chars=[replace(char, start_ms=char.start_ms + 1000) for char in line.chars],
+                       end_ms=line.end_ms + 1000, display_start_override_ms=0, display_end_override_ms=3500)
     track = replace(track, lines=[replace(line, inline_guide_symbols={2: CURVES})])
     palette = style.karaoke_colors
     palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#C03429F6')),
                       after=replace(palette.after, shadow=PaintFill(color='#C0F07010')))
     style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=9, shadow_offset_y=13,
-                    karaoke_colors=palette)
+                    karaoke_colors=palette, entry_anim=entry, entry_lead_ms=600)
     times, dpr = (250, 350, 650, 950, 1550, 1900), 3
     refs = []
     for look in (style, replace(style, decoration_kind='none')):
@@ -261,6 +265,9 @@ def test_vector_guide_shadow_matches_actual_d2d_gpu(binary, project):
     reference, bare = refs
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p06_vector_guide_shadow' in ir['required_features']
+    if entry == 'fade':
+        assert ir['track']['lines'][0]['entry_duration_ms'] == 600
+        assert 0 < reference[0][..., 3].max() < reference[2][..., 3].max()
     guide = ir['skia_layout']['lines'][0]['cells'][0]
     xmin, xmax = round(guide['wipe_left'] * dpr), round(guide['wipe_right'] * dpr)
     assert any(np.count_nonzero((a[:, xmin:xmax, 3] > 16) & (b[:, xmin:xmax, 3] == 0)) > 40

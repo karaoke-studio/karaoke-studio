@@ -298,7 +298,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || prepared.noWipe) && ordinaryLineAnimation
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
-            && !vectorGuides && !hasInlineRoles;
+            && !hasInlineRoles && (!vectorGuides || features.contains("p06_vector_guide_shadow"));
         const auto usesDecoration = [&](const char* kind) {
             return style.decorationKindForState(false) == kind || style.decorationKindForState(true) == kind
                 || (annotated && (style.rubyDecorationKindForState(false) == kind

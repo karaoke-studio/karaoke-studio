@@ -150,6 +150,7 @@ def compose_vector_guides(plan_lines, ir):
         singing = source.get('karaoke_anim') == 'utopia'
         ordinary = (source.get('karaoke_anim') == 'none'
                     and not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts')))
+        whole_line = ordinary and ordinary_line_animation(source)
         stationary = ordinary and source.get('entry_anim') == source.get('exit_anim') == 'none'
         forward = not (look.vertical or look.right_to_left or line.wipe_reverse)
         needs_composition = has_outline_profile or upper_reading or lower_reading or has_shadow or has_glow or singing
@@ -164,15 +165,17 @@ def compose_vector_guides(plan_lines, ir):
                 raise ValueError('Skia 矢量导唱符与下方注音需要静态正向横排')
             required.add('p05_vector_guide_lower_ruby')
         if has_shadow and not (look.vertical or upper_reading or 'p05_role_vector_guides' in features):
-            if not (forward and stationary) or any(c.role_label is not None for c in chars):
-                raise ValueError('Skia 矢量导唱符阴影需要静态正向横排')
+            if not (forward and whole_line) or any(c.role_label is not None for c in chars):
+                raise ValueError('Skia 矢量导唱符阴影需要正向横排与整行出入场')
             required.add('p06_vector_guide_shadow')
+            if not stationary:
+                required.add('p07_horizontal_shadow_line_animation')
             continue
         if vector_guides_form_prefix(chars):
             continue
         if upper_reading and not lower_reading and forward and stationary:
             required.add('p05_inline_vector_guide_ruby')
-        elif (has_outline_profile and ordinary and ordinary_line_animation(source) and not look.vertical
+        elif (has_outline_profile and whole_line and not look.vertical
               and not (upper_reading or lower_reading or has_glow or has_shadow)):
             required.add('p06_inline_vector_guide_outline')
         else:

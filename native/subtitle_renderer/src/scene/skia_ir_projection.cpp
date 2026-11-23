@@ -521,7 +521,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && staticScanline && !source.scanlineEnabled && source.karaokeAnimation == "none"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow");
-        const bool staticVectorGuideShadow = vectorGuideShadow && staticScanline && !source.scanlineEnabled
+        const bool wholeLineGuideShadow = vectorGuideShadow && (staticScanline
+            || (features.contains("p07_horizontal_shadow_line_animation")
+                && plainLineAnimation(source.entryAnimation, true) && plainLineAnimation(source.exitAnimation, false)))
+            && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled
             && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
@@ -608,9 +611,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     return category == QChar::Other_Control || category == QChar::Other_Surrogate;
                 }))
                 throw BackendError("Skia 竖排单元包含控制字符或无效码点");
-            if (cell.vectorGlyph && vectorGuideShadow && !staticVectorGuideShadow)
-                throw BackendError("Skia 矢量导唱符阴影需要静态正向横排");
-            if (composedGuide && sawLyrics && cell.vectorGlyph && !(outlinedInlineGuide || staticVectorGuideShadow || inlineGuideRuby))
+            if (cell.vectorGlyph && vectorGuideShadow && !wholeLineGuideShadow)
+                throw BackendError("Skia 矢量导唱符阴影需要正向横排与整行出入场");
+            if (composedGuide && sawLyrics && cell.vectorGlyph && !(outlinedInlineGuide || wholeLineGuideShadow || inlineGuideRuby))
                 throw BackendError("Skia 导唱符组合仅支持整行前置导唱符");
             sawLyrics = sawLyrics || !cell.vectorGlyph;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
