@@ -660,7 +660,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (cell.vectorGlyph && hasLowerReading
                 && (cfg.vertical || (cfg.rightToLeft && !features.contains("p05_rtl_lower_ruby"))
                     || source.wipeReverse || !guideRubyAnimation
-                    || source.karaokeAnimation != "none" || &cellStyle != &resolved
+                    || (source.karaokeAnimation != "none" && !(singingScale && !cfg.rightToLeft))
+                    || &cellStyle != &resolved
                     || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled || !source.fxBursts.empty()))
                 throw BackendError("Skia 矢量导唱符与下方注音的行布局或动画尚未支持");
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
