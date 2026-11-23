@@ -2,6 +2,7 @@
 
 #include "include/core/SkRect.h"
 #include <map>
+#include <optional>
 #include <span>
 
 namespace subtitle::skia { struct ResolvedLine; }
@@ -21,10 +22,11 @@ struct RolePaintBounds {
     float outlinePad = 0;
 
     const SkRect& forRole(int role) const;
+    std::optional<int> leftmostRole() const;
 };
 
 RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
-                                      std::span<const TextStyle>, float layoutScale);
+                                      std::span<const TextStyle>, float layoutScale, bool includeBitmaps = false);
 void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
                           std::span<const TextStyle>, RolePaintBounds&, SkiaImageFillCache&, float layoutScale,
                           bool outlineGradients, bool outlinePaints);

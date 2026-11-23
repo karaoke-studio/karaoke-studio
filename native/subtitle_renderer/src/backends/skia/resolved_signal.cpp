@@ -106,7 +106,8 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
 }
 
 std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
-    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, const TextStyle* decorStyle
+    const QJsonObject& source, const TextLine& line, const TextStyle& style, double dpr, const TextStyle* decorStyle,
+    const SkRect& firstRoleInk
 ) {
     const auto anchor = source.value("volume_signal_anchor");
     const bool enabled = style.volumeEnabled || (style.litEnabled && style.litStyle == "volume");
@@ -137,8 +138,9 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     const auto& palette = decorStyle ? *decorStyle : style;
     StaticGlow glow;
     if (signal.decorated) {
-        const auto verticalBrush = [](const PaintStyle& paint) {
-            return paint.mode == "solid" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical";
+        const auto supportedBrush = [](const PaintStyle& paint) {
+            return paint.mode == "solid" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical"
+                || paint.mode == "gradient_horizontal";
         };
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
@@ -149,11 +151,11 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (!verticalBrush(fill))
-                throw BackendError("Skia 音量柱当前支持实色、纵向渐变或上下分色填充");
-            if ((signal.strokeWidth > 0 && !verticalBrush(stroke))
-                || (signal.outerWidth > 0 && !verticalBrush(outer)))
-                throw BackendError("Skia 音量柱描边当前支持实色、纵向渐变或上下分色");
+            if (!supportedBrush(fill))
+                throw BackendError("Skia 未支持音量柱当前填充画笔");
+            if ((signal.strokeWidth > 0 && !supportedBrush(stroke))
+                || (signal.outerWidth > 0 && !supportedBrush(outer)))
+                throw BackendError("Skia 未支持音量柱当前描边画笔");
             auto& paint = signal.palette[after];
             paint = {argb(fill.color), argb(stroke.color), argb(outer.color)};
             const auto kind = palette.decorationKindForState(after);
@@ -191,13 +193,21 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     if (signal.decorated) {
         SkRect bounds = SkRect::MakeEmpty();
         for (const auto& bar : signal.bars) bounds.join(bar.rect.rect());
+        auto horizontalBounds = bounds;
+        if (!firstRoleInk.isEmpty()) {
+            horizontalBounds.fLeft = std::min(bounds.left(), firstRoleInk.left());
+            horizontalBounds.fRight = std::max(bounds.right(), firstRoleInk.right());
+        }
+        const auto gradient = [&](const PaintStyle& paint) {
+            return lineGradient(paint, paint.mode == "gradient_horizontal" ? horizontalBounds : bounds, 0);
+        };
         for (const bool after : {false, true}) {
             auto& brush = signal.palette[after];
-            brush.fillGradient = lineGradient(after ? palette.afterFillPaint : palette.beforeFillPaint, bounds, 0);
+            brush.fillGradient = gradient(after ? palette.afterFillPaint : palette.beforeFillPaint);
             if (signal.strokeWidth > 0)
-                brush.strokeGradient = lineGradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint, bounds, 0);
+                brush.strokeGradient = gradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint);
             if (signal.outerWidth > 0)
-                brush.outerGradient = lineGradient(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint, bounds, 0);
+                brush.outerGradient = gradient(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint);
         }
     }
     return signal;

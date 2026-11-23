@@ -502,6 +502,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         TextLine line;
         line.litHead = source.litHead;
         line.volumeHead = source.volumeHead;
+        line.signalBandJoin = source.signalBandJoin;
         line.wipeReverse = source.wipeReverse;
         line.entryAnimation = source.entryAnimation.toStdString();
         line.entryDurationMs = source.entryDurationMs;

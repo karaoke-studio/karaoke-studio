@@ -1865,6 +1865,49 @@ def test_decorated_signal_uses_the_gradient_for_each_outline(binary, project, si
         assert len(np.unique(g[outline_pixels & (b > 140) & (r < 80)])) > 10
 
 
+@pytest.mark.parametrize('appearance', ['role', 'auto'])
+def test_volume_horizontal_gradient_spans_the_columns_and_first_text_role(binary, project, appearance):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    line, = track.lines
+    track = replace(track, lines=[replace(line, chars=[
+        *line.chars[:3], *(replace(char, role_label='following') for char in line.chars[3:])])])
+    neutral = colors('#BBBBBB', '#BBBBBB')
+    paint = PaintFill(mode='gradient_horizontal', start_color='#EE4008', end_color='#123DFF')
+    column_palette = replace(neutral, before=replace(neutral.before, text=paint), after=replace(neutral.after, text=paint))
+    style = replace(style, karaoke_colors=column_palette if appearance == 'auto' else neutral,
+                    volume_enabled=True, volume_appearance_mode=appearance, volume_offset_x=-12,
+                    volume_role_name='column-gradient', volume_size=55, volume_column_count=3, volume_flash_times=0,
+                    custom_style_schemes={
+                        'column-gradient': SubtitleStyleScheme(font_size_px=50, karaoke_colors=column_palette),
+                        'following': SubtitleStyleScheme(font_size_px=50, karaoke_colors=neutral),
+                    })
+    times, dpr = (260, 650, 1000), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert ir['track']['lines'][0]['signal_band_join'] == (appearance == 'auto')
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('volume_horizontal_brush', appearance), check_p00_edges=True)
+    text_left = round(ir['skia_layout']['lines'][0]['volume_signal_anchor'][0] * dpr)
+    for frames in (gpu, raster):
+        r, g, b, a = np.moveaxis(frames[0][:, :text_left], -1, 0)
+        column_red = r[(a > 250) & ((r != g) | (g != b))]
+        assert len(np.unique(column_red)) > 12
+        assert 18 < column_red.min() < column_red.max() <= 238
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source

@@ -13,5 +13,5 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     const QJsonObject&, const TextLine&, const TextStyle&, double dpr, SkiaImageFillCache&,
     const TextStyle* role);
 std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
-    const QJsonObject&, const TextLine&, const TextStyle&, double dpr, const TextStyle* role);
+    const QJsonObject&, const TextLine&, const TextStyle&, double dpr, const TextStyle* role, const SkRect& firstRoleInk);
 }

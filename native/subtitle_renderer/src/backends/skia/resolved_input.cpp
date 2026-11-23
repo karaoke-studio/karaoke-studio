@@ -747,7 +747,23 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto* volumePaint = style.volumeAppearanceMode == "role" && projected.volumeDecorStyle
             ? &*projected.volumeDecorStyle : firstVisiblePaint;
         prepared.shapeSignal = resolveShapeSignal(source, line, style, glyphs.dpr, imageCache, lampPaint);
-        prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr, volumePaint);
+        SkRect volumeTextInk = SkRect::MakeEmpty();
+        std::optional<int> leftmostVolumeRole;
+        if (style.volumeEnabled && line.volumeHead && style.volumeAppearanceMode != "custom") {
+            const auto& palette = volumePaint ? *volumePaint : style;
+            const auto paints = {&palette.beforeFillPaint, &palette.afterFillPaint, &palette.beforeStrokePaint,
+                                 &palette.afterStrokePaint, &palette.beforeStroke2Paint, &palette.afterStroke2Paint};
+            if (line.signalBandJoin
+                || std::ranges::any_of(paints, [](const auto* paint) { return paint->mode == "gradient_horizontal"; })) {
+                const auto domains = collectRolePaintBounds(prepared, line, style, projected.charStyles,
+                                                           projected.layoutReferenceScale, true);
+                leftmostVolumeRole = domains.leftmostRole();
+                if (leftmostVolumeRole) volumeTextInk = domains.forRole(*leftmostVolumeRole);
+            }
+        }
+        prepared.volumeSignal = resolveVolumeSignal(source, line, style, glyphs.dpr, volumePaint, volumeTextInk);
+        const auto volumeBandLeft = line.signalBandJoin && prepared.volumeSignal && leftmostVolumeRole
+            ? std::optional(prepared.volumeSignal->bars.front().rect.rect().left()) : std::nullopt;
         const int timingOffset = cells.isEmpty() ? 0
             : line.chars.front().startMs - int(intervals[0].toArray()[0].toDouble());
         auto rubyTransition = RubyTransition::None;
@@ -767,6 +783,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || features.contains("p06_ruby_gradient_shadow"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale);
+        if (rolePaintBounds && volumeBandLeft) {
+            if (auto first = rolePaintBounds->roles.find(*leftmostVolumeRole); first != rolePaintBounds->roles.end())
+                first->second.ink.fLeft = std::min(first->second.ink.left(), *volumeBandLeft);
+        }
         if (gradientScanlineRole && !rolePaintBounds->line.isEmpty()) {
             const auto& ink = style.scanlineRolePaint.mode == "gradient_horizontal"
                 ? rolePaintBounds->forRole(-1) : rolePaintBounds->line;
@@ -1102,16 +1122,21 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 // Every layer shares the line's visual pad at the layout reference scale.
                 const float pad = verticalPaints ? 0.f : ::subtitle::skia::outlineVisualPad(
                     style.strokeWidth, style.stroke2Width, projected.layoutReferenceScale);
-                using ::subtitle::skia::lineGradient;
-                prepared.beforeGradient = lineGradient(style.beforeFillPaint, ink, pad);
-                prepared.afterGradient = lineGradient(style.afterFillPaint, ink, pad);
+                auto horizontalInk = ink;
+                if (volumeBandLeft) horizontalInk.fLeft = std::min(ink.left(), *volumeBandLeft);
+                const auto gradientFor = [&](const PaintStyle& paint) {
+                    return ::subtitle::skia::lineGradient(paint,
+                        paint.mode == "gradient_horizontal" ? horizontalInk : ink, pad);
+                };
+                prepared.beforeGradient = gradientFor(style.beforeFillPaint);
+                prepared.afterGradient = gradientFor(style.afterFillPaint);
                 if (primaryOutline) {
-                    prepared.beforeOutlineGradient = lineGradient(style.beforeStrokePaint, ink, pad);
-                    prepared.afterOutlineGradient = lineGradient(style.afterStrokePaint, ink, pad);
+                    prepared.beforeOutlineGradient = gradientFor(style.beforeStrokePaint);
+                    prepared.afterOutlineGradient = gradientFor(style.afterStrokePaint);
                 }
                 if (secondaryOutline) {
-                    prepared.beforeOuterGradient = lineGradient(style.beforeStroke2Paint, ink, pad);
-                    prepared.afterOuterGradient = lineGradient(style.afterStroke2Paint, ink, pad);
+                    prepared.beforeOuterGradient = gradientFor(style.beforeStroke2Paint);
+                    prepared.afterOuterGradient = gradientFor(style.afterStroke2Paint);
                 }
                 if (brightenedScanlineGradient)
                     for (int i = 0; i < 6; ++i)

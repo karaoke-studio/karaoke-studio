@@ -42,14 +42,21 @@ const SkRect& RolePaintBounds::forRole(int role) const {
     return it == roles.end() ? line : it->second.ink;
 }
 
+std::optional<int> RolePaintBounds::leftmostRole() const {
+    const auto first = std::ranges::min_element(roles, {}, [](const auto& item) { return item.second.ink.left(); });
+    return first == roles.end() ? std::nullopt : std::optional(first->first);
+}
+
 RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine& line, const TextLine& source,
-                                      const TextStyle& base, std::span<const TextStyle> styles, float scale) {
+                                      const TextStyle& base, std::span<const TextStyle> styles, float scale,
+                                      bool includeBitmaps) {
     RolePaintBounds bounds;
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
-        if (line.cells[index].path.isEmpty()) continue;
+        const auto& cell = line.cells[index];
+        if (cell.path.isEmpty() && !(includeBitmaps && cell.bitmap)) continue;
         const int role = source.chars[index].styleIndex;
         const auto& look = role < 0 ? base : styles[role];
-        const auto ink = line.cells[index].path.computeTightBounds();
+        const auto ink = includeBitmaps && cell.bitmap ? cell.bitmap->box : cell.path.computeTightBounds();
         bounds.roles[role].ink.join(ink);
         bounds.line.join(ink);
         bounds.outlinePad = std::max(bounds.outlinePad,
