@@ -105,7 +105,7 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'ruby', 'role', 'shadow'])
+@pytest.mark.parametrize('change', ['bitmap', 'ruby', 'role'])
 def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     track, style = guide_source(project, 'inline' if change == 'ruby' else 'prefix')
     line = track.lines[0]
@@ -117,8 +117,6 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
                                                       target_char_start=1, target_char_end=2)])
     elif change == 'role':
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, role_labels=('lead',)))])
-    elif change == 'shadow':
-        style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
 
@@ -143,6 +141,38 @@ def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application
     ir = ir_for(binary, (case.track, case.style))
     assert 'p05_vector_guide_lower_ruby' in ir['required_features']
     assert_ruby_transition_gpu_parity(binary, case, times)
+
+
+@GPU
+def test_vector_guide_shadow_matches_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = guide_source(project)
+    line, = track.lines
+    track = replace(track, lines=[replace(line, inline_guide_symbols={2: CURVES})])
+    palette = style.karaoke_colors
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#C03429F6')),
+                      after=replace(palette.after, shadow=PaintFill(color='#C0F07010')))
+    style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=9, shadow_offset_y=13,
+                    karaoke_colors=palette)
+    times, dpr = (250, 350, 650, 950, 1550, 1900), 3
+    refs = []
+    for look in (style, replace(style, decoration_kind='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    reference, bare = refs
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p06_vector_guide_shadow' in ir['required_features']
+    guide = ir['skia_layout']['lines'][0]['cells'][0]
+    xmin, xmax = round(guide['wipe_left'] * dpr), round(guide['wipe_right'] * dpr)
+    assert any(np.count_nonzero((a[:, xmin:xmax, 3] > 16) & (b[:, xmin:xmax, 3] == 0)) > 40
+               for a, b in zip(reference, bare, strict=True))
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'vector_guide_shadow', check_p00_edges=True)
 
 
 def vertical_vector_guide(project, reverse=False):

@@ -86,6 +86,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vector_guide_composition",
         "p05_vector_guide_lower_ruby",
         "p06_inline_vector_guide_outline",
+        "p06_vector_guide_shadow",
         "p08_bitmap_guides",
         "p08_vertical_bitmap_guides",
         "p08_bitmap_lower_ruby",
@@ -674,6 +675,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (rtlVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左导唱符缺少方向或布局能力声明");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
+    const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow");
+    if (vectorGuideShadow && (!features.contains("p05_vector_guide_composition") || !features.contains("p06_static_shadow")
+        || features.contains("p05_resolved_ruby") || features.contains("p05_vertical_solid")
+        || features.contains("p05_horizontal_rtl") || features.contains("p05_reverse_wipe")))
+        throw BackendError("Skia 矢量导唱符阴影缺少正向横排布局或画笔能力声明");
     const bool lowerVectorGuides = features.contains("p05_vector_guide_lower_ruby");
     if (lowerVectorGuides != (features.contains("p05_vector_guides") && features.contains("p05_lower_ruby"))
         || (lowerVectorGuides && !features.contains("p05_vector_guide_composition")))
@@ -734,6 +740,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature))
                 && !(roleVectorGuides && roleGuides.contains(feature)) && !(rtlVectorGuides && rtlGuides.contains(feature))
                 && !(lowerVectorGuides && lowerGuides.contains(feature))
+                && !(vectorGuideShadow && (feature == QJsonValue("p06_vector_guide_shadow")
+                    || feature == QJsonValue("p06_static_shadow")))
                 && !(verticalVectorGuides && (verticalGuides.contains(feature) || verticalGuideLayout.contains(feature))))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }

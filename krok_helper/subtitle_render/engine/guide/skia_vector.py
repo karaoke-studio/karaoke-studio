@@ -106,7 +106,7 @@ def validate_vector_guides(track, style):
 # Verified with a line-level prefix guide: Utopia singing, upper ruby, solid
 # double outlines and glow. Any other capability keeps the plain subset only.
 VECTOR_GUIDE_COMPOSITION_TRIGGERS = frozenset({
-    'p05_resolved_ruby', 'p06_primary_solid_outline', 'p06_static_glow', 'p07_singing_scale'})
+    'p05_resolved_ruby', 'p06_primary_solid_outline', 'p06_static_glow', 'p06_static_shadow', 'p07_singing_scale'})
 VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
     'p05_fixed_row_grid', 'p05_inline_roles', 'p05_overlap_wipe', 'p05_page_collisions',
     'p05_resolved_horizontal', 'p05_resolved_ruby', 'p05_segmented_wipe', 'p05_single_line_placement',
@@ -162,6 +162,9 @@ def compose_vector_guides(track, ir):
     vertical_guides = 'p05_vertical_vector_guides' in features
     lower_reading = 'p05_lower_ruby' in features
     line_motion = 'p07_utopia_line_animation' in features
+    shadow_features = {'p06_static_shadow', 'p06_vector_guide_shadow'}
+    static_shadow = ('p06_static_shadow' in features and not track.rubies
+                     and set(features) <= VECTOR_GUIDE_COMPOSITION_FEATURES | shadow_features)
     inline_outlines = ('p06_primary_solid_outline' in features
                        and set(features) <= (VECTOR_GUIDE_COMPOSITION_FEATURES | RTL_VECTOR_GUIDE_FEATURES
                                              | VERTICAL_VECTOR_GUIDE_FEATURES)
@@ -177,9 +180,14 @@ def compose_vector_guides(track, ir):
                               or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                               or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
             raise ValueError('Skia 矢量导唱符与下方注音需要静态正向横排')
-        if lower_reading and vector_guides_form_prefix(chars):
+        if static_shadow:
+            if (line.wipe_reverse or source.get('karaoke_anim') != 'none'
+                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                    or any(c.role_label is not None for c in chars)):
+                raise ValueError('Skia 矢量导唱符阴影需要静态正向横排')
             continue
-        if (animated_gradient or faded_scanline or line_motion or vertical_guides) and vector_guides_form_prefix(chars):
+        if (lower_reading or animated_gradient or faded_scanline or line_motion or vertical_guides) and vector_guides_form_prefix(chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             if not inline_outlines:
@@ -202,11 +210,15 @@ def compose_vector_guides(track, ir):
         allowed |= ROLE_VECTOR_GUIDE_FEATURES
     if lower_reading:
         allowed |= LOWER_RUBY_VECTOR_GUIDE_FEATURES
+    if static_shadow:
+        allowed |= shadow_features
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')
     if lower_reading:
         features.append('p05_vector_guide_lower_ruby')
+    if static_shadow:
+        features.append('p06_vector_guide_shadow')
     if has_inline_outlines:
         features.append('p06_inline_vector_guide_outline')
 
