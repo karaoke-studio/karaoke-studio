@@ -3,7 +3,7 @@
 from ..guide.semantics import render_line_with_guide_symbols
 from ..guide.skia_vector import vector_guides_form_prefix
 from ..layout.line.style import style_for_line
-from ..style.style_semantics import uses_authored_decoration
+from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
 from .elements.horizontal.scanline import scanline_role_fill
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
@@ -33,6 +33,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     moving_shapes = shaped_singing = particle_scanline_image = lower_readings = moving_lower_readings = False
     lower_singing_particles = False
     role_gradient = False
+    shaped_palette = False
+    rtl_band = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -60,7 +62,18 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             reverse_vertical_palette |= palette and source.wipe_reverse
             singing_vertical_palette |= palette and singing
             continue
-        shape_style = look.scanline_shape in {'flame', 'bubble', 'image'} and look.scanline_mode == 'color'
+        role_fill = scanline_role_fill(look)
+        palette_shape = False
+        if ordinary and look.scanline_shape in {'flame', 'bubble'} and not (
+                track.rubies or look.lower_ruby_enabled or bursts or source.wipe_reverse
+                or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')):
+            colors = effective_karaoke_colors(look)
+            palette_shape = (look.scanline_mode == 'default'
+                             or (look.scanline_mode == 'role' and role_fill is not None and role_fill.mode == 'solid')
+                             or (look.scanline_mode in {'follow_before', 'follow_after', 'brighten'}
+                                 and colors.before.text.mode == colors.after.text.mode == 'solid'))
+        shape_style = (palette_shape or (look.scanline_shape in {'flame', 'bubble', 'image'}
+                                         and look.scanline_mode == 'color'))
         image_during_transition = particle_entry and look.scanline_shape == 'image'
         shape_with_singing = (shape_style and (ordinary or image_during_transition) and bool(track.rubies) and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
@@ -85,11 +98,16 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         chars = render_line_with_guide_symbols(source).chars
         inline_roles = any(c.role_label is not None for c in chars)
         vector_guides = any(c.vector_glyph is not None for c in chars)
+        rtl_scanline = (look.right_to_left and ordinary and look.scanline_shape == 'band'
+                        and look.scanline_mode in {'color', 'default', 'brighten', 'follow_before', 'follow_after'}
+                        and line.get('karaoke_anim') == 'none' and not track.rubies and not look.lower_ruby_enabled
+                        and not (inline_roles or vector_guides or bursts or with_zoom_or_flash
+                                 or uses_authored_decoration(look, 'glow')))
         fixed_fade = fixed_faded_utopia_band(line, look)
         role_fade = inline_roles and fixed_fade
         prefix_fade = (vector_guides and not inline_roles and vector_guides_form_prefix(chars)
                        and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'})))
-        if ((look.scanline_shape != 'band' and not shape) or look.right_to_left
+        if ((look.scanline_shape != 'band' and not shape) or (look.right_to_left and not rtl_scanline)
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
                 or (look.lower_ruby_enabled and not lower_band)
@@ -98,7 +116,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                 or (track.rubies and not (ordinary or motion or particle_entry))
                 or (inline_roles and not role_fade) or (vector_guides and not prefix_fade)):
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
-        role_fill = scanline_role_fill(look)
+        rtl_band |= rtl_scanline
         role_gradient |= (role_fill is not None
                           and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
                           and ordinary and not (track.rubies or bursts or with_zoom_or_flash or utopia or inline_roles))
@@ -114,12 +132,17 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         lower_singing_particles |= lower_band and lower_particles
         if shape:
             shapes.add(look.scanline_shape)
+            shaped_palette |= palette_shape
             particle_scanline_image |= image_during_transition
             moving_shapes = moving_shapes or motion
             shaped_singing = shaped_singing or shape_with_singing
     features = []
     if role_gradient:
         features.append('p07_scanline_role_gradient')
+    if shaped_palette:
+        features.append('p07_scanline_shape_palette')
+    if rtl_band:
+        features.append('p07_rtl_scanline_band')
     if inline_role_fade:
         features.append('p07_inline_role_faded_scanline')
     if prefix_guide_fade:

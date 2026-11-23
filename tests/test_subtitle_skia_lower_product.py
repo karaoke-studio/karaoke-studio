@@ -589,6 +589,36 @@ def test_lower_reading_gradient_matches_actual_d2d_gpu(binary, application, tmp_
     assert_ruby_transition_gpu_parity(binary, case, (1550, 2600, 4110, 4280))
 
 
+def test_rtl_lower_reading_preserves_direction_and_scene(binary, independent):
+    track, style, resolve = independent
+    ir = ir_for(binary, (track, replace(style, right_to_left=True), resolve))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p05_rtl_lower_ruby')
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert any(group.get('lower') for group in groups)
+    reading = next(group for group in groups if group.get('lower') and len(group['units']) > 1)
+    assert reading['units'][0]['origin_x'] > reading['units'][-1]['origin_x']
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [400, 950])
+        with pytest.raises(NativeRendererError, match='右至左下方注音'):
+            configure(process, bad)
+        replay, _ = collect(process, [950, 400], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_rtl_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    style = replace(case.style, right_to_left=True, entry_anim='none', exit_anim='none', karaoke_anim='none',
+                    decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), (1550, 2600, 4110, 4280))
+
+
 @pytest.mark.parametrize('gpu,missing_loader', [(True, False),(False, False),(True, True)])
 def test_real_lower_preview_uses_skia(binary, independent, monkeypatch, tmp_path, gpu, missing_loader):
     run_preview(binary, monkeypatch, tmp_path, independent[:2], gpu, missing_loader)

@@ -279,7 +279,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
-        if (rtl && lower) throw BackendError("Skia 右至左单元排列暂不支持下方注音组合");
+        if (rtl && lower && (!features.contains("p05_rtl_lower_ruby") || !staticLine
+                || line.karaokeAnimation != "none" || object.contains("lower_glow") || object.contains("lower_shadow")))
+            throw BackendError("Skia 右至左下方注音缺少对应布局或装饰能力");
         const bool utopiaExit = transition == RubyTransition::UtopiaExit;
         const bool animatedOwner = transition != RubyTransition::None && !utopiaExit;
         const bool spinComposition = transition == RubyTransition::Spin;

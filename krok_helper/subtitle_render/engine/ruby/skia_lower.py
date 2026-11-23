@@ -47,8 +47,8 @@ def select_lower_targets(track, style, line_styles, measured):
             continue
         # A reverse line derives nothing (shared lower_rubies_for_line), but
         # the enabled setting still owns the source row frame like the GPU.
-        if appearance.vertical or appearance.right_to_left:
-            raise ValueError('Skia 下方注音准备仅支持正向横排')
+        if appearance.vertical:
+            raise ValueError('Skia 下方注音准备仅支持横排')
         options = appearance._lower_romaji_options
         if options is None or len(options) != 4 or any(type(v) is not bool for v in options):
             raise ValueError('Skia 下方注音准备需要已冻结的罗马音选项')

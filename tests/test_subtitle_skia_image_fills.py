@@ -208,11 +208,45 @@ def test_invalid_image_fill_keeps_previous_scene(binary, project, images, mutati
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-def test_image_fill_with_scanline_is_explicitly_rejected(binary, project, images):
+def scanline_paint_source(project, images):
     track, style = image_source(project, images, 'body')
-    style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_glow_px=0)
-    with pytest.raises(ValueError, match='Skia'):
-        ir_for(binary, (track, style))
+    return track, replace(style, scanline_enabled=True, scanline_forward_enabled=True,
+                          scanline_mode='color', scanline_color='#FF48FF70', scanline_glow_px=0)
+
+
+def test_image_fill_scanline_keeps_existing_scene_after_missing_capability(binary, project, images):
+    ir = ir_for(binary, scanline_paint_source(project, images))
+    unsupported = copy.deepcopy(ir)
+    unsupported['required_features'].remove('p06_unscaled_paint_scanline')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        expected, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError, match='正文渐变'):
+            configure(process, unsupported)
+        replay, _ = collect(process, [750], generation=2)
+    assert np.array_equal(expected, replay)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_image_fill_scanline_matches_actual_d2d_gpu(binary, project, images):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = scanline_paint_source(project, images)
+    times = (450, 750, 1100, 1550)
+    reference = []
+    for look in (style, replace(style, scanline_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    scans, bare = reference
+    highlight = np.array([72, 255, 112])
+    assert any(np.count_nonzero(np.all(frame[..., :3] == highlight, axis=-1)) > 10 for frame in scans)
+    assert all(not np.any(np.all(frame[..., :3] == highlight, axis=-1)) for frame in bare)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, scans, gpu, raster, 'image_fill_scanline')
 
 
 def fading_paint_source(project, images):

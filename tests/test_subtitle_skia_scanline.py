@@ -168,17 +168,15 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['flame', 'image', 'combined_particles', 'reverse_image', 'rtl', 'vertical_shape',
+@pytest.mark.parametrize('case', ['image', 'combined_particles', 'reverse_image', 'vertical_shape',
                                   'ruby_role_utopia', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
-    if case == 'flame': style = replace(style, scanline_shape='flame', scanline_mode='brighten')
-    elif case == 'image': style = replace(style, scanline_shape='image', scanline_mode='follow_after')
+    if case == 'image': style = replace(style, scanline_shape='image', scanline_mode='follow_after')
     elif case == 'combined_particles':
         track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
     elif case == 'reverse_image': track, style = reverse_band(track, replace(style, scanline_shape='image'))
-    elif case == 'rtl': track, style = rtl_source(project); style = band(style)
     elif case == 'vertical_shape':
         track, style = vertical_ruby_source(project)
         style = replace(band(style), scanline_shape='flame')
@@ -196,6 +194,45 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     else: style = replace(style, karaoke_anim='no_wipe')
     with pytest.raises(ValueError, match='扫字线|Utopia'):
         ir_for(binary, (track, style))
+
+
+def test_rtl_scanline_keeps_the_previous_scene_when_capability_is_missing(binary, project):
+    track, style = rtl_source(project)
+    style = band(style)
+    ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_rtl_scanline_band')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 750, 1100])
+        with pytest.raises(NativeRendererError, match='扫字线'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 750, 550], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('reverse', [False, True], ids=['normal', 'reverse'])
+def test_rtl_scanline_matches_actual_d2d_gpu(binary, project, reverse):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = rtl_source(project, reverse=reverse)
+    style = band(style)
+    if reverse:
+        track, style = reverse_band(track, style)
+    times = (450, 550, 750, 1100, 1550)
+    frames = []
+    for look in (style, replace(style, scanline_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        frames.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = frames
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, bare, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, ('rtl_scanline', reverse))
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 7, 'legacy_mode', 'legacy_glow', 'shape', 'reverse',
@@ -853,6 +890,49 @@ def paint_band(project, mode, kind='plain', softness=0, brightness=50):
         custom_style_schemes={'spotlight': SubtitleStyleScheme(karaoke_colors=colors('#224412', '#DEBB83'))},
         karaoke_colors=palette,
     )
+
+
+def test_brighten_zero_disables_the_glyph_band_and_keeps_the_flame(binary, project):
+    track, style = paint_band(project, 'brighten', brightness=0)
+    ir = ir_for(binary, (track, replace(style, scanline_shape='flame')))
+    band_ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_shape_palette')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        active, _ = collect(process, [750])
+        with pytest.raises(NativeRendererError, match='扫字线'):
+            configure(process, bad)
+        replay, _ = collect(process, [750], generation=2)
+        configure(process, band_ir)
+        default, _ = collect(process, [750], generation=3)
+    assert np.array_equal(active, replay)
+    assert np.count_nonzero((active[0][..., 3] > 16) & (default[0][..., 3] == 0)) > 100
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape,mode,brightness', [
+    ('flame', 'brighten', 0), ('flame', 'follow_after', 40), ('bubble', 'default', 50), ('bubble', 'role', 50),
+])
+def test_procedural_scanline_palette_matches_actual_d2d_gpu(binary, project, shape, mode, brightness):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, band_style = paint_band(project, mode, brightness=brightness)
+    style = replace(band_style, scanline_shape=shape)
+    times = (550, 750, 1100)
+    reference = []
+    for look in (style, band_style):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    shaped, band = reference
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
+               for a, b in zip(shaped, band, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, shaped, gpu, raster, (shape, mode, brightness))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

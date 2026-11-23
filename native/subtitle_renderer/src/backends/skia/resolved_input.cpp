@@ -254,13 +254,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
         const bool rtlRubyUnscaledMotion = rtlRuby && !singingScale && ordinaryLineAnimation
             && features.contains("p07_rtl_ruby_unscaled_line_animation");
-        if (rtlRuby && (style.strokeWidth <= 0 || line.wipeReverse
+        if (rtlRuby && ((style.strokeWidth <= 0 && !features.contains("p05_rtl_ruby_without_body_stroke"))
+            || line.wipeReverse
             || (line.karaokeAnimation != "none" && !rtlRubySinging && !rtlRubyNoWipe)
             || (!(rtlRubyMotion || rtlRubyUnscaledMotion) && (line.entryAnimation != "none" || line.exitAnimation != "none"))
             || line.zoomPulseEnabled
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
             || !projected.charStyles.empty()))
-            throw BackendError("Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种");
+            throw BackendError("Skia 右至左上注音缺少对应画笔或动画能力");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
         const bool reverseBitmapLine = line.wipeReverse && features.contains("p08_reverse_bitmap_guides")
@@ -502,15 +503,26 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             prepared.scanline = {true, halfWidth, {mode, argb(color), style.scanlineBrightness},
                                  std::max(style.strokeWidth, 0.f) + std::max(style.stroke2Width, 0.f) + 4.f,
                                  std::max(style.stroke2Width, 0.f) * .5f + .5f,
-                                 std::min(style.scanlineGlowRadius, halfWidth), line.wipeReverse,
+                                 std::min(style.scanlineGlowRadius, halfWidth),
+                                 style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse,
                                  features.contains("p07_ruby_scanline") && !(style.vertical && line.wipeReverse),
                                  style.vertical};
             if (features.contains("p07_scanline_shape") && style.scanlineShape != "band") {
                 int lastCharEnd = line.endMs;
                 for (const auto& cell : line.chars) lastCharEnd = std::max(lastCharEnd, cell.endMs);
+                const auto color = prepared.scanline.paint.shade(argb(style.beforeFillPaint.color),
+                                                                argb(style.afterFillPaint.color), true);
+                const RgbaColor base{std::uint8_t(color >> 16), std::uint8_t(color >> 8),
+                                     std::uint8_t(color), std::uint8_t(color >> 24)};
                 prepared.scanline.shape = ::subtitle::skia::ScanlineShape::make(
-                    style.scanlineShape, style.scanlineColor, style.scanlineWidth, style.fontSize,
+                    style.scanlineShape, base, style.scanlineWidth, style.fontSize,
                     line.displayWindows[0].startMs, line.displayWindows[0].endMs, lastCharEnd);
+                if (style.scanlineMode == "default") {
+                    const bool flame = style.scanlineShape == "flame";
+                    prepared.scanline.shape.outer = flame ? RgbaColor{232, 58, 18, 255} : RgbaColor{143, 211, 255, 255};
+                    prepared.scanline.shape.inner = flame ? RgbaColor{255, 176, 46, 255} : RgbaColor{242, 248, 255, 255};
+                    prepared.scanline.shape.core = flame ? RgbaColor{255, 241, 184, 255} : RgbaColor{255, 255, 255, 255};
+                }
                 if (style.scanlineShape == "image")
                     prepared.scanline.image = imageCache.scanline(style, projected.height);
             }
@@ -866,10 +878,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 && (line.exitAnimation == "none" || line.exitAnimation == "fade")
                 && line.karaokeAnimation == "none" && !line.scanlineEnabled && !line.zoomPulseEnabled
                 && line.bursts.empty() && prepared.rubyGroups.empty();
+            const bool unscaledPaintScanline = features.contains("p06_unscaled_paint_scanline")
+                && line.entryAnimation == "none" && line.exitAnimation == "none" && line.karaokeAnimation == "none"
+                && line.scanlineEnabled && style.scanlineShape == "band"
+                && (style.scanlineMode == "default" || style.scanlineMode == "color")
+                && !line.zoomPulseEnabled && line.bursts.empty() && prepared.rubyGroups.empty();
             if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
                 || (image && !imageFills)
                 || style.vertical || style.rightToLeft || line.wipeReverse || (utopia && !singingMainPaint)
-                || (!movingGradient && !unscaledPaintFade && (line.entryAnimation != "none" || line.exitAnimation != "none"
+                || (!movingGradient && !unscaledPaintFade && !unscaledPaintScanline
+                    && (line.entryAnimation != "none" || line.exitAnimation != "none"
                     || line.scanlineEnabled || !line.bursts.empty()))
                 || line.karaokeAnimation == "no_wipe" || line.strokeFlashEnabled
                 || (!prepared.rubyGroups.empty() && !rubyMainPaint)

@@ -188,16 +188,37 @@ def test_python_flow_flag_must_be_boolean(binary,project,value):
     with pytest.raises(ValueError,match='布尔值'):ir_for(binary,(track,replace(style,right_to_left=value)))
 
 
-@pytest.mark.parametrize('kind',['upper','lower','vertical'])
-def test_unvalidated_rtl_combinations_stay_explicitly_gated(binary,project,kind):
+def test_vertical_rtl_combination_is_rejected(binary, project):
     track,style=rtl_source(project)
-    if kind=='upper':
-        ruby=RubyAnnotation('字','A',pos_start_ms=600,pos_end_ms=900,
-                            target_line_index=0,target_char_start=1,target_char_end=2)
-        track=replace(track,rubies=[ruby])
-    elif kind=='lower':style=replace(style,lower_ruby_enabled=True)
-    else:style=replace(style,vertical=True)
-    with pytest.raises(ValueError):ir_for(binary,(track,style))
+    with pytest.raises(ValueError):
+        ir_for(binary, (track, replace(style, vertical=True)))
+
+
+def test_rtl_upper_reading_without_body_stroke_preserves_scene(binary, reading):
+    track, style = reading
+    style = replace(style, right_to_left=True, stroke_width_px=0)
+    ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p05_rtl_ruby_without_body_stroke')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 1100, 2300])
+        with pytest.raises(NativeRendererError, match='右至左上注音'):
+            configure(process, bad)
+        replay, _ = collect(process, [2300, 1100, 550], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_rtl_upper_reading_without_body_stroke_matches_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(case for case in build_cases(tmp_path) if case.case_id == 'rtl')
+    style = replace(case.style, stroke_width_px=0, stroke2_enabled=False,
+                    decoration_kind='none', decoration_kind_before='none',
+                    ruby_decoration_kind='none', ruby_decoration_kind_before='none')
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), (1500, 2600, 3400, 3900, 4400, 4501))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

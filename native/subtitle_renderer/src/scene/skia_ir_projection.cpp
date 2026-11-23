@@ -304,10 +304,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
             && (staticScanline || particleScanlineImage)
             && std::ranges::none_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
+        const bool shapePalette = features.contains("p07_scanline_shape_palette") && staticScanline
+            && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && !features.contains("p05_resolved_ruby")
+            && source.karaokeAnimation == "none" && source.fxBursts.empty()
+            && (resolved.scanlineShape == "bubble" || resolved.scanlineShape == "flame");
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
-            && resolved.scanlineMode == "color" && !source.wipeReverse
+            && (resolved.scanlineMode == "color" || shapePalette) && !source.wipeReverse
             && !source.zoomPulseEnabled && !source.strokeFlashEnabled && (source.fxBursts.empty() || shapedSinging);
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
         const bool movingVerticalSingingScanline = cfg.vertical && utopiaSinging
@@ -358,12 +362,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 && (!source.wipeReverse || features.contains("p07_vertical_reverse_scanline_particles"))
                 && (features.contains("p07_vertical_scanline_singing_particles")
                     || features.contains("p07_vertical_scanline_particles"))));
+        const bool rtlBand = cfg.rightToLeft && features.contains("p07_rtl_scanline_band")
+            && !cfg.vertical && staticScanline && cfg.rubies.empty() && !features.contains("p05_resolved_ruby")
+            && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
+            && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+            && source.fxBursts.empty();
         if (source.scanlineEnabled
             && (!features.contains("p07_scanline_band")
                 || (resolved.scanlineMode != "color" && scanlineVersion < 3)
                 || (resolved.scanlineShape != "band" && !scanlineShape)
                 || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
-                || (cfg.vertical && !verticalBand) || cfg.rightToLeft || (source.wipeReverse && scanlineVersion < 4)
+                || (cfg.vertical && !verticalBand) || (cfg.rightToLeft && !rtlBand)
+                || (source.wipeReverse && scanlineVersion < 4)
                 || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
                     && (!composedScanline || (source.wipeReverse && !cfg.vertical) || resolved.scanlineMode == "role"))
                 || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
@@ -375,6 +385,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
             throw BackendError("Skia 扫字线当前的布局或高亮组合不受支持");
         applyResolvedStyle(style, resolved, cfg.dpr);
+        if (source.scanlineEnabled && shapePalette
+            && (style.scanlineMode == "follow_before" || style.scanlineMode == "follow_after"
+                || style.scanlineMode == "brighten")
+            && (style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid"))
+            throw BackendError("Skia 扫字线形状当前仅支持实色来源配色");
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid") {
             const auto& paint = style.scanlineRolePaint.mode;
             const bool gradient = paint == "gradient_horizontal" || paint == "gradient_vertical" || paint == "split_vertical";

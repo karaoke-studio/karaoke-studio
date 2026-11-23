@@ -249,8 +249,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
 
     def build_plan(source, source_style, **plan_kwargs):
         _validate_style(source_style)
-        if source_style.right_to_left and source_style.lower_ruby_enabled:
-            raise ValueError('Skia 右至左单元排列暂不支持下方注音组合')
         if source_style.right_to_left:
             if any(len(char.text) > 1 and not _validated_rtl_cell(char.text) for line in source.lines for char in line.chars):
                 raise ValueError('Skia 右至左排列的多码点单元包含尚未验证的字符')
@@ -615,6 +613,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     utopia_exit_body_glow |= body_glow
                     utopia_exit_ruby_glow |= ruby_glow
         rtl_shadow = False
+        rtl_without_body_stroke = False
         rtl_motion = False
         rtl_motion_without_scale = False
         if style.right_to_left:
@@ -625,13 +624,18 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                     'shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
                 moving = {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                 karaoke = source.get('karaoke_anim')
-                if (look.stroke_width_px <= 0 or item.line.wipe_reverse
+                if look.lower_ruby_enabled and (moving or karaoke != 'none' or any(
+                        group.target.lower and set(ruby_decoration_kinds(group.target.style)) != {'none'}
+                        for group in reading.rubies)):
+                    raise ValueError('Skia 右至左下方注音当前支持静态基础走字')
+                if (item.line.wipe_reverse
                         or karaoke not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
                         or (moving and not ordinary_line_animation(source))
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                         or _inline_role_labels(item)
                         or (shadow and karaoke == 'utopia')):
-                    raise ValueError('Skia 右至左上注音需要有描边的普通走字、整字变色或 Utopia 唱字，阴影限前两种')
+                    raise ValueError('Skia 右至左上注音仅支持普通走字、整字变色或 Utopia 唱字，阴影限前两种')
+                rtl_without_body_stroke |= look.stroke_width_px <= 0
                 rtl_shadow |= shadow
                 rtl_motion |= moving and karaoke == 'utopia'
                 rtl_motion_without_scale |= moving and karaoke != 'utopia'
@@ -673,6 +677,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_utopia_exit_body_glow')
         if style.right_to_left:
             ir['required_features'].append('p05_horizontal_rtl_ruby')
+            if rtl_without_body_stroke:
+                ir['required_features'].append('p05_rtl_ruby_without_body_stroke')
             if rtl_shadow:
                 ir['required_features'].append('p06_rtl_ruby_shadow')
             if rtl_motion:
@@ -693,6 +699,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p05_standalone_marks')
         if lower_enabled:
             ir['required_features'].append('p05_lower_ruby')
+            if style.right_to_left:
+                ir['required_features'].append('p05_rtl_lower_ruby')
         if 'ruby_solid_outline_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_ruby_solid_outline')
         if 'ruby_outline_gradient_schema' in ir['skia_layout']:

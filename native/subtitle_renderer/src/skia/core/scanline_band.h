@@ -45,8 +45,8 @@ struct ScanlineBand {
     }
     // The GPU's wipeEdge, or nothing once the line is complete or nothing is sung.
     template <class Cell>
-    std::optional<float> frontAt(const std::vector<Cell>& cells, int t, float inkStart) const {
-        if (!enabled || !paint.visible() || cells.empty() || lineWipeComplete(cells, t))
+    std::optional<float> frontAt(const std::vector<Cell>& cells, int t, float inkStart, bool requirePaint = true) const {
+        if (!enabled || (requirePaint && !paint.visible()) || cells.empty() || lineWipeComplete(cells, t))
             return std::nullopt;
         const float edge = lineWipeFront(cells, t, inkStart, restingPad, rightToLeft, vertical);
         if (rightToLeft ? edge >= inkStart : edge <= inkStart) return std::nullopt;

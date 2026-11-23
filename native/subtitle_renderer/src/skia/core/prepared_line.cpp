@@ -688,7 +688,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         for (const auto& group : line.rubyGroups)
             group.drawScanline(canvas, line.scanline, tMs, line.singingScale, line.rubySingingOrigin);
     if (line.scanline.shape && !line.bodyInk.isEmpty()) {
-        if (const auto front = line.scanline.frontAt(line.cells, tMs, line.inkStart)) {
+        if (const auto front = line.scanline.frontAt(line.cells, tMs, line.inkStart, false)) {
             if (line.scanline.image)
                 line.scanline.image->draw(canvas, tMs, *front, line.bodyInk.centerY(), scanlineAlpha);
             else

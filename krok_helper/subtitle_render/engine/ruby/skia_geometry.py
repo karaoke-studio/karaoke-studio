@@ -161,7 +161,7 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
             span = ruby_target_x_range(original, authored, clock[prefix:], ranges[prefix:])
             if span is None:
                 continue
-            if has_lower:
+            if has_lower and not appearance.right_to_left:
                 # The GPU prepares annotation unit rounding before inserting
                 # slots, then translates each whole group with its first main
                 # cell. Re-rounding after a negative origin crosses zero can

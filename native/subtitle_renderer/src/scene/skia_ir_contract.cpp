@@ -38,6 +38,8 @@ const QJsonArray& skiaIrProfiles() {
         "p07_zero_ruby_no_wipe",
         "p05_horizontal_rtl",
         "p05_horizontal_rtl_ruby",
+        "p05_rtl_ruby_without_body_stroke",
+        "p05_rtl_lower_ruby",
         "p06_rtl_ruby_shadow",
         "p07_rtl_ruby_singing_scale",
         "p07_rtl_ruby_no_wipe",
@@ -113,6 +115,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_multi_lane_outline",
         "p06_body_gradient",
         "p06_unscaled_paint_fade",
+        "p06_unscaled_paint_scanline",
         "p06_outline_gradient",
         "p06_image_fill",
         "p06_ruby_main_paint",
@@ -203,6 +206,8 @@ const QJsonArray& skiaIrProfiles() {
         "p07_composed_scanline",
         "p07_role_scanline_layers",
         "p07_scanline_role_gradient",
+        "p07_scanline_shape_palette",
+        "p07_rtl_scanline_band",
         "p07_ruby_scanline",
         "p07_lower_ruby_scanline",
         "p07_lower_ruby_scanline_line_animation",
@@ -456,6 +461,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_rtl_ruby_no_wipe")
         && (!features.contains("p05_horizontal_rtl_ruby") || !features.contains("p07_no_wipe")))
         throw BackendError("Skia 右至左上注音整字变色缺少对应布局能力");
+    if (features.contains("p05_rtl_ruby_without_body_stroke") && !features.contains("p05_horizontal_rtl_ruby"))
+        throw BackendError("Skia 无正文描边的右至左上注音缺少布局能力");
+    if (features.contains("p05_rtl_lower_ruby")
+        && (!features.contains("p05_horizontal_rtl_ruby") || !features.contains("p05_lower_ruby")))
+        throw BackendError("Skia 右至左下方注音缺少方向或布局能力");
     if (features.contains("p07_rtl_ruby_line_animation")
         && (!features.contains("p07_rtl_ruby_singing_scale") || !features.contains("p07_utopia_line_animation")))
         throw BackendError("Skia 右至左上注音整行出入场缺少对应能力");
@@ -833,6 +843,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             && layout.value("line_band_schema").toDouble(-1) != (slicedLineBand ? 3 : fittedLineBand ? 2 : 1)))
         throw BackendError("Skia 行背景带布局版本无效");
     const auto scanlineVersion = layout.value("scanline_band_schema").toDouble(-1);
+    if (features.contains("p07_rtl_scanline_band") && (!features.contains("p07_scanline_band")
+        || !features.contains("p05_horizontal_rtl") || scanlineVersion < 3))
+        throw BackendError("Skia 右至左扫字线缺少方向或布局能力声明");
     if (features.contains("p07_scanline_band")
         && (scanlineVersion < 1 || scanlineVersion > kScanlineBandSchema || std::floor(scanlineVersion) != scanlineVersion))
         throw BackendError("Skia 扫字线布局版本无效");
@@ -895,6 +908,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_scanline_role_gradient")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3))
         throw BackendError("Skia 渐变扫字线缺少高亮带能力声明");
+    if (features.contains("p07_scanline_shape_palette") && !features.contains("p07_scanline_shape"))
+        throw BackendError("Skia 扫字线配色缺少形状能力声明");
     if (features.contains("p07_ruby_scanline")
         && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")
             || (features.contains("p05_lower_ruby") && !features.contains("p07_lower_ruby_scanline"))))
@@ -1062,6 +1077,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_line_fade")
             || !(features.contains("p06_body_gradient") || features.contains("p06_image_fill"))))
         throw BackendError("Skia 正文画笔淡化缺少淡化或画笔能力声明");
+    if (features.contains("p06_unscaled_paint_scanline")
+        && (!features.contains("p07_scanline_band")
+            || !(features.contains("p06_body_gradient") || features.contains("p06_image_fill"))))
+        throw BackendError("Skia 正文画笔扫字线缺少高亮带或画笔能力声明");
     if (features.contains("p07_lower_ruby_scanline_singing_particles")
         && (!features.contains("p07_lower_ruby_scanline_line_animation")
             || !features.contains("p07_faded_scanline_singing_particles")))
