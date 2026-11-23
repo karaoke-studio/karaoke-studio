@@ -153,6 +153,8 @@ def compose_vector_guides(plan_lines, ir):
         whole_line = ordinary and ordinary_line_animation(source)
         stationary = ordinary and source.get('entry_anim') == source.get('exit_anim') == 'none'
         forward = not (look.vertical or look.right_to_left or line.wipe_reverse)
+        cell_transform = (ordinary and forward and 'p07_character_transform_cells' in features
+                          and {source.get('entry_anim'), source.get('exit_anim')} <= {'char_drip', 'spin_flip', 'none'})
         needs_composition = has_outline_profile or upper_reading or lower_reading or has_shadow or has_glow or singing
         if not needs_composition:
             continue
@@ -175,7 +177,7 @@ def compose_vector_guides(plan_lines, ir):
             continue
         if upper_reading and not lower_reading and forward and whole_line:
             required.add('p05_inline_vector_guide_ruby')
-        elif (has_outline_profile and whole_line and not look.vertical
+        elif (has_outline_profile and (whole_line or cell_transform) and not look.vertical
               and not (upper_reading or lower_reading or has_glow or has_shadow)):
             required.add('p06_inline_vector_guide_outline')
         else:

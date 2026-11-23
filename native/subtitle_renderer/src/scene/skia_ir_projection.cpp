@@ -531,10 +531,18 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled
             && !source.zoomPulseEnabled && source.fxBursts.empty();
+        const auto simpleTransform = [](const QString& animation) {
+            return animation == "none" || animation == "char_drip" || animation == "spin_flip";
+        };
+        const bool styledCellTransform = features.contains("p07_character_transform_cells")
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
+            && simpleTransform(source.entryAnimation) && simpleTransform(source.exitAnimation)
+            && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+            && !source.scanlineEnabled && source.fxBursts.empty();
         const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
             && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !cfg.vertical
             && source.karaokeAnimation == "none"
-            && guideWholeLineAnimation
+            && (guideWholeLineAnimation || styledCellTransform)
             && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
@@ -548,14 +556,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
             && (source.entryAnimation == "none" || source.entryAnimation == "fade")
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");
-        const auto simpleTransform = [](const QString& animation) {
-            return animation == "none" || animation == "char_drip" || animation == "spin_flip";
-        };
-        const bool styledCellTransform = features.contains("p07_character_transform_cells")
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
-            && simpleTransform(source.entryAnimation) && simpleTransform(source.exitAnimation)
-            && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
-            && !source.scanlineEnabled && source.fxBursts.empty();
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool fixedShape = scanlineShape && resolved.scanlineMode == "color"

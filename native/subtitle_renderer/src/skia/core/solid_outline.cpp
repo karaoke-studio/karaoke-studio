@@ -5,11 +5,12 @@
 #include "include/core/SkPathUtils.h"
 #include "include/core/SkSurface.h"
 #include "include/effects/SkRuntimeEffect.h"
+#include "include/pathops/SkPathOps.h"
 #include <cmath>
 #include <stdexcept>
 
 namespace subtitle::skia {
-SkPath prepareOutlinePath(const SkPath& body, float width) {
+SkPath prepareOutlinePath(const SkPath& body, float width, bool includeBody) {
     SkPaint stroke;
     stroke.setStyle(SkPaint::kStroke_Style);
     stroke.setStrokeWidth(width);
@@ -18,6 +19,11 @@ SkPath prepareOutlinePath(const SkPath& body, float width) {
     auto path = skpathutils::FillPathWithPaint(body, stroke, &isFill);
     if (!isFill || !path.isFinite())
         throw std::runtime_error("Skia 无法准备正文描边轮廓");
+    if (includeBody) {
+        auto expanded = Op(path, body, kUnion_SkPathOp);
+        if (!expanded) throw std::runtime_error("Skia 无法合并矢量导唱符的外扩轮廓");
+        return *expanded;
+    }
     return path;
 }
 void drawFixedOutline(SkCanvas& canvas, const SkPath& path, const SkPaint& paint, float width) {

@@ -261,7 +261,7 @@ def test_directional_character_transform_matches_actual_d2d_gpu(binary, project,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('kind', ['roles', 'outlined_role', 'inline_guide', 'prefix_guide'])
+@pytest.mark.parametrize('kind', ['roles', 'outlined_role', 'inline_guide', 'outlined_inline_guide', 'prefix_guide'])
 def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
@@ -281,12 +281,17 @@ def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind
                                  karaoke_colors=role_outline_palette())
         style = replace(style, custom_style_schemes={'lead': appearance})
         line = replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])
-    elif kind == 'inline_guide':
+    elif kind in {'inline_guide', 'outlined_inline_guide'}:
         line = replace(line, inline_guide_symbols={1: SQUARE})
+        if kind == 'outlined_inline_guide':
+            style = replace(style, exit_anim='spin_flip', stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=3,
+                            karaoke_colors=role_outline_palette())
     else:
         line = replace(line, guide_symbol=SQUARE)
     track = replace(track, lines=[line])
     times, dpr = (65, 125, 159, 200, 260, 400, 700, 1200), 3
+    if kind == 'outlined_inline_guide':
+        times += (2490, 2559, 2650, 2750, 2850, 3000)
     refs = []
     for look in (style, replace(style, entry_anim='none')):
         with NativeRendererProcess() as process:

@@ -116,6 +116,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool rubyUtopiaEntry = utopia && !line.rubyGroups.empty()
         && line.utopiaTransition.inEntryWindow(tMs, line.startMs);
     const bool fadeActive = fadeSide != 0;
+    const bool lineSpins = fadeActive && (fadeSide < 0 ? line.characterFade.entryKind
+                                                       : line.characterFade.exitKind) == CharacterFade::Kind::Spin;
     const bool rubyExitFade = fadeSide > 0 && line.characterFade.exitKind == CharacterFade::Kind::Fade
         && !line.rubyGroups.empty();
     const bool compositingSpin = fadeActive
@@ -356,10 +358,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const bool atFront = (line.vertical || drawOutline || animatedClip) && phase == Phase::Wiping;
         const bool before = !atFront && progress == 0;
         const bool after = !atFront && progress == 1;
-        // The existing GPU poses the cached rings that protect translucent
-        // paint with their glyph. Opaque outlines retain their drawn width.
-        const bool poseProtected = drawOutline && animatedInk && stroke->protectBody;
-        const auto posedStroke = poseProtected ? std::optional(path.makeTransform(transform.matrix)) : std::nullopt;
+        // The outer vector silhouette and protected rings move with the glyph.
+        const bool poseStroke = drawOutline && animatedInk && (stroke->protectBody || stroke->poseWithGlyph);
+        const auto posedStroke = poseStroke ? std::optional(path.makeTransform(transform.matrix)) : std::nullopt;
         const auto draw = [&](bool sung) {
             if (drawOutline && stroke->protectBody) {
                 const auto& body = animatedInk ? *animatedInk : cell.path;
@@ -367,7 +368,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 if (layer == Layer::OuterOutline && cell.outline) {
                     auto inner = cell.outline->path;
                     if (animatedInk)
-                        inner = poseProtected ? inner.makeTransform(transform.matrix)
+                        inner = poseStroke ? inner.makeTransform(transform.matrix)
                                               : prepareOutlinePath(body, cell.outline->width);
                     canvas.clipPath(inner, SkClipOp::kDifference, true);
                 }
@@ -396,7 +397,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             // Near the start of a spin, a one-byte change in edge coverage
             // can remove the only visible part of a letter from one target.
             if (animatedInk && !shader && transform.opacity < .125f
-                && (rubyUtopiaEntry || (entrySpin && drawOutline))) {
+                && (rubyUtopiaEntry || (entrySpin && drawOutline)
+                    || (lineSpins && cell.outerOutline && cell.outerOutline->poseWithGlyph))) {
                 const auto posed = posedStroke ? *posedStroke
                     : drawOutline ? prepareOutlinePath(*animatedInk, stroke->width) : *animatedInk;
                 drawSamplePatternPath(canvas, posed, paint, true);

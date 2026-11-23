@@ -197,12 +197,12 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
                       and animations <= {'char_drip', 'spin_flip', 'none'})
         simple = (not track.rubies and source.get('karaoke_anim') == 'none'
                   and animations <= {'char_drip', 'spin_flip', 'none'}
-                  and not (look.stroke_width_px or (look.stroke2_enabled and look.stroke2_width_px)
-                           or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                  and not (any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                            or any(uses_authored_decoration(look, kind) for kind in ('glow', 'shadow'))))
         reversed_flow = look.right_to_left or line.wipe_reverse
         styled_cells = any(c.role_label is not None or c.vector_glyph is not None for c in chars)
-        directional = simple and reversed_flow and not styled_cells
+        directional = (simple and reversed_flow and not styled_cells and not look.stroke_width_px
+                       and not (look.stroke2_enabled and look.stroke2_width_px))
         styled = (simple and styled_cells and not reversed_flow
                   and not any(guide_symbol_is_bitmap(c.vector_glyph) for c in chars))
         if (look.vertical or (reversed_flow and not directional)

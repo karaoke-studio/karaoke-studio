@@ -683,15 +683,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     || paintNeedsBodyProtection(paint.afterStrokePaint);
                 const auto beforeOutline = argb(paint.beforeStrokePaint.color);
                 const auto afterOutline = argb(paint.afterStrokePaint.color);
+                const bool expandedOuter = vector && !bodyAlpha && !strokeAlpha;
                 if (strokeWidth > 0)
                     glyph.outline = ::subtitle::skia::SolidOutline{
                         ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth),
                         beforeOutline, afterOutline, bodyAlpha, strokeWidth};
                 if (stroke2Width > 0)
                     glyph.outerOutline = ::subtitle::skia::SolidOutline{
-                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth + stroke2Width),
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth + stroke2Width, expandedOuter),
                         argb(paint.beforeStroke2Paint.color), argb(paint.afterStroke2Paint.color),
-                        bodyAlpha || strokeAlpha, strokeWidth + stroke2Width};
+                        bodyAlpha || strokeAlpha, strokeWidth + stroke2Width, expandedOuter};
             }
             glyph.wipePoints = resolvedSkiaWipePoints(cell, ir, line.chars[clock].startMs - int(interval[0].toDouble()), totalPoints);
             if (const auto end = resolvedSkiaWipeEnd(cell, ir)) {
