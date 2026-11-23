@@ -558,7 +558,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");
         const bool roleVectorGuides = singingGuide && features.contains("p05_role_vector_guides");
         const bool unscaledRoleVectorGuide = features.contains("p05_inline_roles")
-            && !cfg.vertical && !source.wipeReverse
+            && !cfg.vertical
             && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
             && (guideWholeLineAnimation || styledCellTransform);
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
