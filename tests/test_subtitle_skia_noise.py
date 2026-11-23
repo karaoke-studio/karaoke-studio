@@ -108,3 +108,45 @@ def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr):
             if union.any():
                 diff = abs(pa[union] - pb[union])
                 assert diff.mean() <= 5 and np.percentile(diff, 95) <= 24, (t, name, diff.mean())
+
+
+def noise_zoom_reading(reading):
+    track, style = reading
+    return track, replace(style, karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=150,
+                          entry_anim='noise', entry_lead_ms=600, exit_anim='noise', exit_fade_ms=600)
+
+
+def test_noise_zoom_with_upper_reading_requires_capability(binary, reading):
+    ir = ir_for(binary, noise_zoom_reading(reading))
+    forged = copy.deepcopy(ir)
+    forged['required_features'].remove('p07_ruby_zoom_noise')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [450, 1500])
+        with pytest.raises(NativeRendererError, match='噪声'):
+            configure(process, forged)
+        after, _ = collect(process, [1500, 450], generation=2)
+    assert all(frame.any() for frame in before) and np.array_equal(before, after[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_noise_zoom_with_upper_reading_matches_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = noise_zoom_reading(reading)
+    times, dpr = (90, 159, 325, 450, 550, 650, 1500, 4600, 4850), 3
+    refs = []
+    for look in (style, replace(style, entry_anim='none', exit_anim='none'), replace(style, karaoke_anim='utopia')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    reference, still, utopia = refs
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, still, strict=True))
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[2:5], utopia[2:5], strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p07_ruby_zoom_noise' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'noise_zoom_upper_reading')

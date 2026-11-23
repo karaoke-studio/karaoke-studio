@@ -155,7 +155,7 @@ def _validate_noise_transition(track, style, lines):
         look = style_for_line(style, source)
         if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                 or entry not in {'noise', 'none'} or exit_ not in {'noise', 'none'}
-                or line.get('karaoke_anim') not in {'none', 'utopia'} or line.get('zoom_pulse')
+                or line.get('karaoke_anim') not in {'none', 'utopia'} or (line.get('zoom_pulse') and not track.rubies)
                 or line.get('scanline') or line.get('stroke_flash') or line.get('fx_bursts')
                 or uses_authored_decoration(look, 'shadow')
                 or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
@@ -719,10 +719,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if line.get('zoom_pulse') and geometry_line.rubies
             and not lower_enabled and not markers
             and (line.get('entry_anim') == line.get('exit_anim') == 'none'
-                 or (ordinary_line_animation(line)
+                 or ((ordinary_line_animation(line) or is_noise_animation(line))
                      and not any(line.get(flag) for flag in ('scanline', 'stroke_flash', 'fx_bursts'))))
         }
-        zoom_motion = any({ir['track']['lines'][i].get(phase) for phase in ('entry_anim', 'exit_anim')} != {'none'}
+        zoom_noise = any(is_noise_animation(ir['track']['lines'][i]) for i in zoom_lines)
+        zoom_motion = any(ordinary_line_animation(ir['track']['lines'][i])
+                          and {ir['track']['lines'][i].get(phase) for phase in ('entry_anim', 'exit_anim')} != {'none'}
                           for i in zoom_lines)
         singing_lines = {
             index for index, line in enumerate(ir['track']['lines'])
@@ -768,6 +770,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_zoom_pulse')
         if zoom_motion:
             ir['required_features'].append('p07_ruby_zoom_line_animation')
+        if zoom_noise:
+            ir['required_features'].append('p07_ruby_zoom_noise')
         if 'p07_scanline_band' in ir['required_features']:
             ir['required_features'].append('p07_ruby_scanline')
         if markers:

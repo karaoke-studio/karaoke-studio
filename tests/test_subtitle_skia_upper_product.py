@@ -211,18 +211,15 @@ def test_raw_annotations_without_complete_final_layout_are_rejected_and_keep_sce
     assert np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', [
-    {'entry_anim': 'noise', 'karaoke_anim': 'zoom_pulse'},
-    {'vertical': True}])
-def test_unsupported_upper_ruby_combinations_fail_and_keep_previous_scene(binary, reading, change):
+def test_latin_vertical_reading_draws_through_product_entry(binary, reading):
     track, style = reading
+    style = replace(style, vertical=True)
+    ir = product_ir(binary, (track, style))
+    assert {'p05_vertical_ruby', 'p05_vertical_ruby_extended_units'} <= set(ir['required_features'])
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         process.configure(track, style, width=640, height=360, fps=60)
-        before, _ = collect(process, [550])
-        with pytest.raises(NativeRendererError):
-            process.configure(track, replace(style, **change), width=640, height=360, fps=60)
-        after, _ = collect(process, [550], generation=2)
-    assert np.array_equal(before[0], after[0])
+        frames, _ = collect(process, [550, 1500])
+    assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
 
 
 def animated_upper_reading(reading):

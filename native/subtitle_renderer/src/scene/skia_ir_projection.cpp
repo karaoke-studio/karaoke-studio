@@ -272,7 +272,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool composedNoise = features.contains("p07_noise_composition");
         if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
                 || ((!cfg.rubies.empty() || features.contains("p05_resolved_ruby") || singingScale) && !composedNoise)
-                || source.scanlineEnabled || source.zoomPulseEnabled
+                || source.scanlineEnabled || (source.zoomPulseEnabled && !features.contains("p07_ruby_zoom_noise"))
                 || (source.entryAnimation != "none" && source.entryAnimation != "noise")
                 || (source.exitAnimation != "none" && source.exitAnimation != "noise")
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
