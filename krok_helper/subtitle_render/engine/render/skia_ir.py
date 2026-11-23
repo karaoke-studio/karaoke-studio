@@ -479,10 +479,22 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         ir['required_features'].extend(f'p06_ruby_{kind}' for kind in ('shadow', 'glow')
                                        if vertical_ruby.get(f'ruby_{kind}_schema'))
     secondary_outline = declare_outline_layers(ir, plan, title=adjust_position is not None)
-    if any(char.vector_glyph is not None and not guide_symbol_is_bitmap(char.vector_glyph)
-           for item in plan.lines for char in item.render_line.chars):
+    vector_guide_lines = [item for item in plan.lines if any(
+        char.vector_glyph is not None and not guide_symbol_is_bitmap(char.vector_glyph)
+        for char in item.render_line.chars)]
+    if vector_guide_lines:
         ir['required_features'].append('p05_vector_guides')
         ir['skia_layout']['vector_guide_schema'] = 1
+    if any(item.layout_style.vertical for item in vector_guide_lines):
+        for item in vector_guide_lines:
+            source = ir['track']['lines'][item.track_index]
+            if item.layout_style.vertical and (
+                    track.rubies or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or source.get('karaoke_anim') not in {'none', 'no_wipe'}
+                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                    or any(uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow'))):
+                raise ValueError('Skia 竖排矢量导唱符需要静态实色和普通走字')
+        ir['required_features'].append('p05_vertical_vector_guides')
     declare_line_animations(ir)
     fade_lines = set()
     if any(line.get('entry_anim') == 'char_fade' or line.get('exit_anim') == 'char_fade'

@@ -77,6 +77,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
         "p05_vector_guides",
+        "p05_vertical_vector_guides",
         "p05_rtl_vector_guides",
         "p05_role_vector_guides",
         "p05_vector_guide_composition",
@@ -639,6 +640,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && layout.value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");
     const bool rtlVectorGuides = features.contains("p05_rtl_vector_guides");
+    const bool verticalVectorGuides = features.contains("p05_vertical_vector_guides");
+    if (verticalVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_vertical_solid")))
+        throw BackendError("Skia 竖排矢量导唱符缺少竖排或导唱符布局能力");
     if (rtlVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左导唱符缺少方向或布局能力声明");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
@@ -681,6 +685,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_rtl_vector_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks",
             "p05_reverse_wipe", "p05_reverse_overlap"};
+        static const QJsonArray verticalGuides{
+            "p05_vertical_vector_guides", "p05_vertical_solid", "p05_vertical_japanese_glyphs",
+            "p05_vertical_columns", "p05_reverse_wipe", "p05_reverse_overlap", "p07_no_wipe",
+            "p06_vertical_outline", "p06_vertical_columns_outline", "p06_vertical_reverse_outline"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
         const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
@@ -692,7 +700,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(useLineMotion && lineMotion.contains(feature))
                 && !(useFadedScanline && fadedScanline.contains(feature))
                 && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature))
-                && !(roleVectorGuides && roleGuides.contains(feature)) && !(rtlVectorGuides && rtlGuides.contains(feature)))
+                && !(roleVectorGuides && roleGuides.contains(feature)) && !(rtlVectorGuides && rtlGuides.contains(feature))
+                && !(verticalVectorGuides && verticalGuides.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
     if (features.contains("p07_faded_scanline_prefix_guides")

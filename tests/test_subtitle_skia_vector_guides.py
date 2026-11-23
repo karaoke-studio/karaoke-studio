@@ -105,14 +105,13 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'ruby', 'lower', 'role', 'shadow'])
+@pytest.mark.parametrize('change', ['bitmap', 'ruby', 'lower', 'role', 'shadow'])
 def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     track, style = guide_source(project, 'inline' if change == 'ruby' else 'prefix')
     line = track.lines[0]
     if change == 'bitmap':
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, kind='bitmap', path_commands=(),
                                                                          bitmap_before_path='missing.png'))])
-    elif change == 'vertical': style = replace(style, vertical=True)
     elif change == 'ruby':
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=600, pos_end_ms=900, target_line_index=0,
                                                       target_char_start=1, target_char_end=2)])
@@ -123,6 +122,56 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
         style = replace(style, stroke_width_px=4, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def vertical_vector_guide(project, reverse=False):
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, position='center', texts=['字', '한', '字', '한'], reverse=reverse)
+    line, = track.lines
+    return replace(track, lines=[replace(line, guide_symbol=SQUARE)]), style
+
+
+def test_vertical_vector_guide_keeps_cell_clock_and_centers_ink(binary, project):
+    ir = ir_for(binary, vertical_vector_guide(project))
+    first, second, *_ = ir['skia_layout']['lines'][0]['cells']
+    assert first['metrics']['vector_glyph_id']
+    assert first['wipe_bottom'] == pytest.approx(second['wipe_top'])
+    ink = first['metrics']['ink']
+    assert first['baseline_y'] + (ink[1] + ink[3]) / 2 == pytest.approx(
+        (first['wipe_top'] + first['wipe_bottom']) / 2)
+    missing = copy.deepcopy(ir)
+    missing['required_features'].remove('p05_vertical_vector_guides')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [250, 750])
+        with pytest.raises(NativeRendererError, match='导唱符'):
+            configure(process, missing)
+        replay, _ = collect(process, [750, 250], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+@pytest.mark.parametrize('reverse', [False, True], ids=['top_to_bottom', 'bottom_to_top'])
+def test_vertical_vector_guide_matches_actual_d2d_gpu(binary, project, reverse):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = vertical_vector_guide(project, reverse)
+    line, = track.lines
+    times = (250, 450, 750, 1100, 1550, 1900)
+    references = []
+    for source in (track, replace(track, lines=[replace(line, guide_symbol=None)])):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, control = references
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 300
+               for a, b in zip(reference, control, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'vertical_vector_guide', check_p00_edges=True)
 
 
 def outlined_inline_guide(project):

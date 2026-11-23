@@ -99,13 +99,17 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0, si
     cells = []
     for index, cell in enumerate(local.cells):
         # The glyph keeps its offset from its own horizontal cell-box centre.
-        text = item.line.chars[index].text
+        text = item.render_line.chars[index].text
         offset = vertical_glyph_shift(text)
         x = column + measured.offsets[index] - measured.widths[index] / 2 + size * offset
         ink = cell['metrics']['ink']
         cell_top = top + index * cell_height
+        baseline = cell_top + ascent - cell_height * offset
+        if 'vector_glyph_id' in cell['metrics']:
+            x = column - (ink[0] + ink[2]) / 2
+            baseline = cell_top + (cell_height - ink[1] - ink[3]) / 2
         wipe_pad = measured.edge_sizes[index] // 2
-        positioned = {**cell, 'origin_x': x, 'baseline_y': cell_top + ascent - cell_height * offset,
+        positioned = {**cell, 'origin_x': x, 'baseline_y': baseline,
                       'wipe_left': x + ink[0] - wipe_pad, 'wipe_right': x + ink[2] + wipe_pad,
                       'wipe_top': cell_top, 'wipe_bottom': cell_top + cell_height,
                       'wipe_end_position': 1.0}

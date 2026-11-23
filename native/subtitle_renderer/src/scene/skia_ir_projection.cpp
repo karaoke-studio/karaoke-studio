@@ -481,6 +481,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none"
             && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
+        const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
+            && staticScanline && cfg.rubies.empty() && !source.scanlineEnabled
+            && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
+            && !features.contains("p06_static_shadow") && !features.contains("p06_static_glow");
         const bool roleVectorGuides = composedGuide && features.contains("p05_role_vector_guides")
             && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
@@ -548,7 +553,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 逐字变换暂不支持导唱符或行内角色");
             // Ruby and outlines use their own composition profile.
-            if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical
+            if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !roleVectorGuides)
                 || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
