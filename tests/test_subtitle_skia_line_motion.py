@@ -1484,7 +1484,7 @@ def test_automatic_signal_uses_first_visible_cell_palette(binary, project, sourc
 
 @pytest.mark.parametrize('signal,entry', [
     ('lamp', 'char_fade'), ('volume', 'char_fade'), ('lamp', 'spin_flip'), ('volume', 'char_drip'),
-    ('lamp', 'tracking_in'), ('volume', 'wave_in'),
+    ('lamp', 'tracking_in'), ('volume', 'wave_in'), ('lamp', 'petal'),
 ])
 def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, entry):
     from test_subtitle_skia_outline_ruby import render_skia
@@ -1538,7 +1538,9 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, 
         assert (widths[2] < widths[3]) == (entry == 'spin_flip')
 
 
-@pytest.mark.parametrize('signal,exit_', [('lamp', 'scatter_out'), ('volume', 'converge_out')])
+@pytest.mark.parametrize('signal,exit_', [
+    ('lamp', 'scatter_out'), ('volume', 'converge_out'), ('volume', 'dissolve_out'),
+])
 def test_signal_geometry_departure_matches_device_policy(binary, project, signal, exit_):
     from test_subtitle_skia_character_transform import transform_source
     from test_subtitle_skia_outline_ruby import render_skia
