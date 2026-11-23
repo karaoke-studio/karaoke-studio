@@ -201,6 +201,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_character_transform",
         "p07_no_wipe_character_transform",
         "p07_directional_character_transform",
+        "p07_character_transform_cells",
         "p07_scanline_utopia_entry",
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
@@ -1054,6 +1055,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 || features.contains("p07_scanline_unscaled_line_animation"))))
         throw BackendError("Skia 下方注音扫字线缺少整行出入场能力");
     const auto transformVersion = layout.value("character_transform_schema").toDouble(-1);
+    if (features.contains("p07_character_transform_cells")
+        && (!features.contains("p07_character_transform") || transformVersion < 3
+            || features.contains("p05_resolved_ruby")))
+        throw BackendError("Skia 角色或导唱符缺少逐字变换能力声明");
     if (features.contains("p07_directional_character_transform")
         && (!features.contains("p07_character_transform") || transformVersion < 3
             || (!features.contains("p05_horizontal_rtl") && !features.contains("p05_reverse_overlap"))

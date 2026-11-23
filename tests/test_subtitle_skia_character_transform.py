@@ -14,7 +14,6 @@ from test_subtitle_skia_line_fade import (
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_secondary_outline import two_outlines
-from test_subtitle_skia_vector_guides import guide_source
 from test_subtitle_skia_scanline import band
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
@@ -88,20 +87,6 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
         configure(process, plain)
         expected, _ = collect(process, times, generation=2)
     assert np.array_equal(frames, expected)
-
-
-@pytest.mark.parametrize('case', ['roles', 'guide'])
-def test_unverified_combinations_are_rejected(binary, project, case):
-    track, style = transform_source(project)
-    if case == 'roles':
-        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
-        track = replace(track, lines=[replace(track.lines[0], chars=[
-            replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
-    elif case == 'guide':
-        track, style = guide_source(project)
-        style = replace(style, entry_anim='char_drip', entry_lead_ms=600)
-    with pytest.raises(ValueError, match='逐字滴落/翻转'):
-        ir_for(binary, (track, style))
 
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 9, 'missing_pivot', 'pivot_type',
@@ -273,6 +258,41 @@ def test_directional_character_transform_matches_actual_d2d_gpu(binary, project,
     assert 'p07_directional_character_transform' in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, reference, gpu, raster, direction, check_p00_edges=True)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind', ['roles', 'inline_guide', 'prefix_guide'])
+def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style = singing_overlap(project, 'char_drip' if kind == 'roles' else 'spin_flip')
+    if kind == 'prefix_guide':
+        track, style = transform_source(project, 'spin_flip', 'none')
+    line, = track.lines
+    if kind == 'roles':
+        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
+        line = replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])
+    elif kind == 'inline_guide':
+        line = replace(line, inline_guide_symbols={1: SQUARE})
+    else:
+        line = replace(line, guide_symbol=SQUARE)
+    track = replace(track, lines=[line])
+    times, dpr = (65, 125, 159, 200, 260, 400, 700, 1200), 3
+    refs = []
+    for look in (style, replace(style, entry_anim='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    reference, plain = refs
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:4], plain[:4], strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p07_character_transform_cells' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, kind, check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

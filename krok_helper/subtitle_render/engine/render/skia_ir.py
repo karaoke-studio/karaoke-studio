@@ -178,6 +178,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
     energy_outlines = False
     whole_cell_transform = False
     directional_transform = False
+    styled_cell_transform = False
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
         animations = {source.get('entry_anim'), source.get('exit_anim')}
@@ -191,20 +192,25 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         elif geometry:
             version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
         line, look = track.lines[item.track_index], item.layout_style
+        chars = render_line_with_guide_symbols(line).chars
         whole_cell = (source.get('karaoke_anim') == 'no_wipe' and not track.rubies
                       and animations <= {'char_drip', 'spin_flip', 'none'})
-        directional = ((look.right_to_left or line.wipe_reverse) and not track.rubies
-                       and source.get('karaoke_anim') == 'none' and animations <= {'char_drip', 'spin_flip', 'none'}
-                       and not (look.stroke_width_px or (look.stroke2_enabled and look.stroke2_width_px)
-                                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                                or any(uses_authored_decoration(look, kind) for kind in ('glow', 'shadow'))))
-        if (look.vertical or ((look.right_to_left or line.wipe_reverse) and not directional)
+        simple = (not track.rubies and source.get('karaoke_anim') == 'none'
+                  and animations <= {'char_drip', 'spin_flip', 'none'}
+                  and not (look.stroke_width_px or (look.stroke2_enabled and look.stroke2_width_px)
+                           or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                           or any(uses_authored_decoration(look, kind) for kind in ('glow', 'shadow'))))
+        reversed_flow = look.right_to_left or line.wipe_reverse
+        styled_cells = any(c.role_label is not None or c.vector_glyph is not None for c in chars)
+        directional = simple and reversed_flow and not styled_cells
+        styled = (simple and styled_cells and not reversed_flow
+                  and not any(guide_symbol_is_bitmap(c.vector_glyph) for c in chars))
+        if (look.vertical or (reversed_flow and not directional)
                 or (index not in character_warp_lines and index not in composed_geometry_lines
                     and ((source.get('karaoke_anim') != 'none' and not whole_cell) or track.rubies))
                 or (source.get('scanline') and item.track_index not in particle_band_tracks
                     and not transformed_cell_band(source, look)) or look.lower_ruby_enabled
-                or any(c.role_label is not None or c.vector_glyph is not None
-                       for c in render_line_with_guide_symbols(line).chars)):
+                or (styled_cells and not styled)):
             raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排正文')
         entry = source.get('entry_anim') in _TRANSFORMS and source['entry_duration_ms'] > 0
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
@@ -212,6 +218,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
             continue
         whole_cell_transform |= whole_cell
         directional_transform |= directional
+        styled_cell_transform |= styled
         outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
         if geometry and outlined and index not in composed_geometry_lines:
             if not track.rubies and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
@@ -238,6 +245,8 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         ir['required_features'].append('p07_no_wipe_character_transform')
     if directional_transform:
         ir['required_features'].append('p07_directional_character_transform')
+    if styled_cell_transform:
+        ir['required_features'].append('p07_character_transform_cells')
     return version
 
 

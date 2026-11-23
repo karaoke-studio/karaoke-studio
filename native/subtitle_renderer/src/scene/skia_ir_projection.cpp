@@ -510,6 +510,14 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
             && (source.entryAnimation == "none" || source.entryAnimation == "fade")
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");
+        const auto simpleTransform = [](const QString& animation) {
+            return animation == "none" || animation == "char_drip" || animation == "spin_flip";
+        };
+        const bool styledCellTransform = features.contains("p07_character_transform_cells")
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
+            && simpleTransform(source.entryAnimation) && simpleTransform(source.exitAnimation)
+            && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+            && !source.scanlineEnabled && source.fxBursts.empty();
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
@@ -573,8 +581,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (!source.fxBursts.empty() && ((cell.vectorGlyph && !prefixGuideParticles) || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
-                && (cell.vectorGlyph || &cellStyle != &resolved))
-                throw BackendError("Skia 逐字变换暂不支持导唱符或行内角色");
+                && (cell.vectorGlyph || &cellStyle != &resolved)
+                && (!styledCellTransform || cell.bitmapGuide || cellStyle.strokeWidthPx != 0 || cellStyle.stroke2WidthPx != 0
+                    || protocol::decorationKindForState(cellStyle, false) != "none"
+                    || protocol::decorationKindForState(cellStyle, true) != "none"
+                    || cellStyle.baseFill.mode != "solid" || cellStyle.afterFill.mode != "solid"))
+                throw BackendError("Skia 逐字变换暂不支持该导唱符或行内角色样式");
             // Ruby and outlines use their own composition profile.
             if (cell.vectorGlyph && features.contains("p05_vector_guide_lower_ruby")
                 && (cfg.vertical || cfg.rightToLeft || source.wipeReverse || !staticScanline
