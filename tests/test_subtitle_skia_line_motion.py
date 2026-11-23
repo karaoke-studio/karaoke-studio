@@ -1482,8 +1482,10 @@ def test_automatic_signal_uses_first_visible_cell_palette(binary, project, sourc
         assert np.count_nonzero(region) > 100
 
 
-@pytest.mark.parametrize('signal', ['lamp', 'volume'])
-def test_signal_units_follow_their_own_staggered_entry(binary, project, signal):
+@pytest.mark.parametrize('signal,entry', [
+    ('lamp', 'char_fade'), ('volume', 'char_fade'), ('lamp', 'spin_flip'), ('volume', 'char_drip'),
+])
+def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, entry):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -1492,7 +1494,7 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal):
     chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
     track = replace(track, lines=[replace(line, chars=chars, end_ms=line.end_ms + 1000,
                                          display_start_override_ms=0, display_end_override_ms=3400)])
-    style = replace(style, entry_anim='char_fade', entry_lead_ms=600, exit_anim='none')
+    style = replace(style, entry_anim=entry, entry_lead_ms=600, exit_anim='none')
     if signal == 'lamp':
         style = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square',
                         lit_size=20, lit_number=3, lit_fill_color='#FF00FF', lit_offset_y=-30,
@@ -1503,15 +1505,16 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal):
                         volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF',
                         volume_duration_ms=1000, volume_stroke_width=0, volume_flash_times=0)
     times = (85, 260, 480, 650)
+    dpr = 1 if entry == 'char_fade' else 3
     reference = None
     if sys.platform == 'win32':
         from test_subtitle_render_gpu_backend import _render_g1_frames
 
         with NativeRendererProcess() as process:
             _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
-                                       width=640, height=360, realization_enabled=False)
-        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
-    ir = ir_for(binary, (track, style))
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
     assert ir['track']['lines'][0]['entry_duration_ms'] == 600
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, reference, gpu, raster, ('signal_unit_entry', signal), check_p00_edges=True)
@@ -1521,7 +1524,8 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal):
             pixels = (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245) & (frame[..., 3] > 20)
             columns = np.flatnonzero(pixels.any(axis=0))
             widths.append(1 + columns[-1] - columns[0])
-        assert 0 < widths[0] < widths[1] < widths[2] == widths[3]
+        assert 0 < widths[0] < widths[1] < widths[2] <= widths[3]
+        assert (widths[2] < widths[3]) == (entry == 'spin_flip')
 
 
 def test_rtl_signals_share_resolved_text_anchor(binary, project):

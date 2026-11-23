@@ -50,13 +50,14 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
         const bool active = index == state.activeIndex;
-        const float alpha = transition.opacityAt(time, index, clock.count, true)
-            * (active ? state.activeOpacity : 1.f);
-        if (alpha <= 0) continue;
         const float x = origin.x() + index * pitch + (active ? state.dx : 0.f);
         const float y = origin.y() + (active ? state.dy : 0.f);
         const auto box = SkRect::MakeXYWH(x, y, size, size);
-        SkAutoCanvasRestore restore(&canvas, false);
+        const auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY(), true);
+        const float alpha = pose.opacity * (active ? state.activeOpacity : 1.f);
+        if (alpha <= 0) continue;
+        SkAutoCanvasRestore restore(&canvas, pose.transformed);
+        if (pose.transformed) canvas.concat(pose.matrix);
         if (alpha < 1) {
             const float pad = (strokeWidth + strokeSoften) * .5f + shadowOffset + 2.f;
             const auto bounds = box.makeOutset(pad, pad);

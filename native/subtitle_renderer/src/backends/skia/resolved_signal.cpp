@@ -14,10 +14,12 @@ std::uint32_t argb(const RgbaColor& c) {
 }
 
 bool supportsSignalAnimation(const TextLine& line) {
-    const auto& entry = line.entryAnimation;
-    const auto& exit = line.exitAnimation;
-    return (entry == "none" || entry == "fade" || entry == "slide_in" || entry == "rise" || entry == "char_fade")
-        && (exit == "none" || exit == "fade" || exit == "slide_out" || exit == "rise" || exit == "char_fade");
+    const auto supported = [](const std::string& animation, bool entry) {
+        return animation == "none" || animation == "fade" || animation == "rise"
+            || animation == (entry ? "slide_in" : "slide_out")
+            || animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
+    };
+    return supported(line.entryAnimation, true) && supported(line.exitAnimation, false);
 }
 }
 

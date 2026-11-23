@@ -9,9 +9,16 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
     if (!state.visible || state.opacity <= 0 || opacity <= 0) return;
     SkAutoCanvasRestore flashLayer(&canvas, false);
     if (state.opacity < 1) canvas.saveLayerAlphaf(nullptr, state.opacity);
+    const auto poseAt = [&](int index) {
+        const auto& box = bars[index].rect.rect();
+        return transition.at(time, index, clock.count, box.centerX(), box.centerY());
+    };
     for (int index = 0; index < clock.count; ++index) {
-        const float columnOpacity = opacity * transition.opacityAt(time, index, clock.count);
+        const auto pose = poseAt(index);
+        const float columnOpacity = opacity * pose.opacity;
         if (columnOpacity <= 0) continue;
+        SkAutoCanvasRestore restore(&canvas, pose.transformed);
+        if (pose.transformed) canvas.concat(pose.matrix);
         const bool filled = index <= state.activeIndex;
         for (const auto& layer : bars[index].glow) {
             if (!layer.visible(filled)) continue;
@@ -24,8 +31,11 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto column = [&](int index, bool filled) {
-        const float columnOpacity = opacity * transition.opacityAt(time, index, clock.count);
+        const auto pose = poseAt(index);
+        const float columnOpacity = opacity * pose.opacity;
         if (columnOpacity <= 0) return;
+        SkAutoCanvasRestore restore(&canvas, pose.transformed);
+        if (pose.transformed) canvas.concat(pose.matrix);
         const auto draw = [&](const SkRRect& rect, SkColor color, float width, sk_sp<SkShader> shader = nullptr) {
             if (!shader && !SkColorGetA(color)) return;
             paint.setColor(shader ? SK_ColorWHITE : color);
