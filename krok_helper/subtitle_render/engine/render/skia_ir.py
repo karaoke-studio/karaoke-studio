@@ -328,12 +328,13 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     reverse_bitmap_lines = set()
     mixed_reverse_bitmap_lines = False
     reverse_bitmap_singing = False
+    reverse_bitmap_singing_outline = False
     for item in plan.lines:
         if item.layout_style.vertical or not (item.line.wipe_reverse and has_bitmap_guides((item.render_line,))):
             continue
         source = ir['track']['lines'][item.track_index]
         avatar_only = is_undecorated_bitmap_line(item.render_line)
-        singing = (not avatar_only and not track.rubies and reverse_singing_scale(source, item.layout_style)
+        singing = (not avatar_only and reverse_singing_scale(source, item.layout_style, allow_outline=True)
                    and all(c.vector_glyph is None or (guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)
                            for c in item.render_line.chars))
         modes = {'none', 'utopia'} if avatar_only or singing else {'none'}
@@ -349,6 +350,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         else:
             mixed_reverse_bitmap_lines = True
             reverse_bitmap_singing |= singing
+            look = item.layout_style
+            reverse_bitmap_singing_outline |= singing and (
+                look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0))
     spin_lines = set()
     drip_lines = set()
     paired_drips = False
@@ -1021,6 +1025,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     transitions = fade_lines | character_warp_lines | composed_geometry_lines | utopia_entry_lines | utopia_exit_lines
     if reverse_bitmap_singing:
         ir['required_features'].append('p08_reverse_bitmap_singing')
+    if reverse_bitmap_singing_outline:
+        ir['required_features'].append('p08_reverse_bitmap_singing_outline')
     write_utopia_pivots(ir, plan, measured, transitions,
                        particle_band_tracks, vertical_singing)
     if role_line_fade:

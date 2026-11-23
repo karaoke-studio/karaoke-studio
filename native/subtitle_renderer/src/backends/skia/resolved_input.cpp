@@ -474,7 +474,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             });
         const bool reverseSingingOutline = features.contains("p07_reverse_singing_outline")
             && line.wipeReverse && !hasInlineRoles && !line.scanlineEnabled
-            && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
+            && std::ranges::all_of(line.chars, [&](const auto& cell) {
+                return !cell.bitmapGuide || (cell.bitmapGuide->noDecor && mixedReverseBitmaps
+                    && features.contains("p08_reverse_bitmap_singing_outline"));
+            });
         const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
             && !style.vertical && !style.rightToLeft && !annotated && (!hasInlineRoles || reverseRoleSinging)
             && !vectorGuides

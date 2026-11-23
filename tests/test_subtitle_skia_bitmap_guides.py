@@ -323,6 +323,35 @@ def test_reverse_singing_keeps_bitmap_guides_unposed_like_actual_d2d_gpu(binary,
     assert_glow_parity(times, refs[0], gpu, raster, 'reverse_singing_bitmap_guides', check_p00_edges=True)
 
 
+@GPU
+def test_reverse_singing_bitmap_guides_keep_outlines_like_actual_d2d_gpu(binary, application, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case, track = p00_guide(tmp_path, bitmap_no_decor=True)
+    track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    style = replace(case.style, decoration_kind='none', decoration_kind_before='none', reverse_karaoke_anim='utopia')
+    times, dpr = (600, 1320, 1750, 2850, 3800, 4520, 4980), 3
+    refs = []
+    for source, look in (
+        (track, style),
+        (replace(track, rubies=[]), style),
+        (track, replace(style, reverse_karaoke_anim='none')),
+    ):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=source,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    assert np.array_equal(refs[0], refs[1])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], refs[2], strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p08_reverse_bitmap_singing_outline' in ir['required_features']
+    assert not ir['skia_layout']['lines'][0]['ruby_groups']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'reverse_bitmap_singing_outline', check_p00_edges=True)
+
+
 def shadowed_bitmap_guide(project, tmp_path, *, paint_mode='solid'):
     track, style = rtl_bitmap_guide(project, tmp_path)
     line, = track.lines
