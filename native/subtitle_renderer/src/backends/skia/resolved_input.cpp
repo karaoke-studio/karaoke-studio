@@ -686,7 +686,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 const bool expandedOuter = vector && !bodyAlpha && !strokeAlpha;
                 if (strokeWidth > 0)
                     glyph.outline = ::subtitle::skia::SolidOutline{
-                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth),
+                        ::subtitle::skia::prepareOutlinePath(glyph.path, strokeWidth, staticTitle && vector && !bodyAlpha),
                         beforeOutline, afterOutline, bodyAlpha, strokeWidth};
                 if (stroke2Width > 0)
                     glyph.outerOutline = ::subtitle::skia::SolidOutline{

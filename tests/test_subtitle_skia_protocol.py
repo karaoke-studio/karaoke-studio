@@ -413,11 +413,16 @@ def test_title_vector_guides_use_prefix_count_and_fixed_frame(binary, target):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_title_vector_guides_match_actual_d2d_gpu(binary):
+@pytest.mark.parametrize('outlined', [False, True])
+def test_title_vector_guides_match_actual_d2d_gpu(binary, outlined):
     from types import SimpleNamespace
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     track, style = vector_guide_title()
+    if outlined:
+        title = replace(style.title_overlays[0], stroke_width_px=8, stroke2_width_px=5,
+                        stroke=PaintFill(color='#8D1E89'), stroke2=PaintFill(color='#682014'))
+        style = replace(style, title_overlays=[title])
     assert_ruby_transition_gpu_parity(
         binary, SimpleNamespace(track=track, style=style, case_id='title_vector_guides'),
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
