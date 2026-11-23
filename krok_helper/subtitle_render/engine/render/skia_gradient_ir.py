@@ -170,7 +170,6 @@ def write_body_gradient_bounds(ir, plan):
                          and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
         static_vertical = static_paints and look.vertical
-        static_bitmap_paints = static_paints and not (look.vertical or directional)
         directional_solid_outline |= (static_directional and outlined and modes == {'solid'}
                                       and all(c.role_label is None and not guide_symbol_is_bitmap(c.vector_glyph)
                                               for c in item.render_line.chars))
@@ -200,6 +199,7 @@ def write_body_gradient_bounds(ir, plan):
                           and look.scanline_mode in {'default', 'color'} and animations == {'none'}
                           and source.get('karaoke_anim') == 'none' and not annotated
                           and not (source.get('fx_bursts') or source.get('zoom_pulse')))
+        bitmap_paints = not (look.vertical or directional) and (static_paints or paint_fade)
         palette_band = (source.get('scanline') and look.scanline_shape == 'band' and look.scanline_mode == 'brighten'
                         and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
                         and not source.get('fx_bursts') and 'fade' in animations and animations <= {'none', 'fade'}
@@ -229,8 +229,7 @@ def write_body_gradient_bounds(ir, plan):
                 or (look.lower_ruby_enabled and not (particle_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or any(c.role_label is not None for c in item.render_line.chars)
-                or (not static_bitmap_paints and any(guide_symbol_is_bitmap(c.vector_glyph)
-                                                     for c in item.render_line.chars))
+                or (not bitmap_paints and any(guide_symbol_is_bitmap(c.vector_glyph) for c in item.render_line.chars))
                 or (not (ordinary_vector_paint or moving or vector_band)
                     and any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
                             for c in item.render_line.chars))):

@@ -31,13 +31,18 @@ def image(path, width=12, height=12, color='#30FF80'):
     return str(path)
 
 
-def test_prefix_avatar_uses_existing_line_fade(binary, project, tmp_path):
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'gradient'])
+def test_prefix_avatar_uses_existing_line_fade(binary, project, tmp_path, gradient):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
     from test_subtitle_skia_vector_guides import guide_source
 
     track, style = guide_source(project)
     style = replace(style, stroke_width_px=3, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    if gradient:
+        fill = PaintFill(mode='gradient_horizontal', start_color='#17CE77', end_color='#FFAA32')
+        palette = style.karaoke_colors
+        style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, text=fill)))
     path = image(tmp_path / 'avatar.png')
     symbol = GuideSymbol(kind='bitmap', bitmap_before_path=path, bitmap_after_path=path, duration_ms=300)
     line, = track.lines
@@ -49,6 +54,7 @@ def test_prefix_avatar_uses_existing_line_fade(binary, project, tmp_path):
     times = (250, 450, 750, 1100)
     ir = ir_for(binary, (track, style))
     assert {'p08_bitmap_guides', 'p07_line_fade'} <= set(ir['required_features'])
+    assert ('p06_unscaled_paint_fade' in ir['required_features']) == gradient
     assert ir['track']['lines'][0]['entry_duration_ms'] == 600
     gpu, raster = render_skia(binary, ir, times)
     assert 0 < gpu[0][..., 3].sum() < gpu[-1][..., 3].sum()
