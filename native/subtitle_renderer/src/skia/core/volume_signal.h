@@ -15,7 +15,7 @@ struct VolumeSignal {
     struct Palette {
         SkColor fill = 0, stroke = 0, outerStroke = 0, shadow = 0;
         float shadowX = 0, shadowY = 0;
-        sk_sp<SkShader> fillGradient, strokeGradient, outerGradient;
+        sk_sp<SkShader> fillGradient, strokeGradient, outerGradient, shadowGradient;
     };
     struct Bar {
         SkRRect rect;

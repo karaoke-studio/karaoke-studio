@@ -64,32 +64,32 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maxStroke);
     decoration.outerStroke = argb(palette.afterStroke2Paint.color);
     decoration.outerWidth = std::clamp(palette.stroke2Width * ratio, 0.f, maxStroke);
+    const auto gradient = [&](const PaintStyle& paint, const char* error) {
+        auto shader = ::subtitle::skia::lineGradient(paint, SkRect::MakeWH(1, 1), 0);
+        if (!solid(paint) && !shader) throw BackendError(error);
+        return shader;
+    };
     if (!signal.image) {
-        const auto gradient = [&](const PaintStyle& paint, const char* error) {
-            auto shader = ::subtitle::skia::lineGradient(paint, SkRect::MakeWH(1, 1), 0);
-            if (!solid(paint) && !shader) throw BackendError(error);
-            return shader;
-        };
         decoration.unitGradients.fill = gradient(palette.afterFillPaint, "Skia 指示灯当前支持实色或渐变填充");
         if (signal.strokeWidth > 0 && SkColorGetA(signal.stroke))
             decoration.unitGradients.stroke = gradient(palette.afterStrokePaint, "Skia 指示灯当前支持实色或渐变描边");
         if (decoration.outerWidth > 0 && SkColorGetA(decoration.outerStroke))
             decoration.unitGradients.outerStroke = gradient(palette.afterStroke2Paint, "Skia 指示灯当前支持实色或渐变外描边");
     }
-    if (signal.path && !decoration.unitGradients.empty()) {
-        const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
-        if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
-            throw BackendError("Skia 矢量指示灯渐变缺少有效的基线");
-        decoration.glyphPaintOrigin = SkPoint::Make(float(xy[0].toDouble() * dpr), float(baseline.toDouble() * dpr));
-    }
     const auto kind = palette.decorationKindForState(true);
     if (!signal.image && kind == "shadow") {
         decoration.shadowX = palette.shadowOffsetXForState(true) * ratio;
         decoration.shadowY = palette.shadowOffsetYForState(true) * ratio;
         if (decoration.shadowX || decoration.shadowY) {
-            if (!solid(palette.afterDecorPaint)) throw BackendError("Skia 指示灯阴影当前仅支持实色");
             decoration.shadow = argb(palette.afterDecorPaint.color);
+            decoration.unitGradients.shadow = gradient(palette.afterDecorPaint, "Skia 指示灯当前支持实色或渐变阴影");
         }
+    }
+    if (signal.path && !decoration.unitGradients.empty()) {
+        const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
+        if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
+            throw BackendError("Skia 矢量指示灯渐变缺少有效的基线");
+        decoration.glyphPaintOrigin = SkPoint::Make(float(xy[0].toDouble() * dpr), float(baseline.toDouble() * dpr));
     }
     if (kind == "glow") {
         using namespace ::subtitle::skia;
@@ -163,7 +163,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                 paint.shadowX = palette.shadowOffsetXForState(after) * ratio;
                 paint.shadowY = palette.shadowOffsetYForState(after) * ratio;
                 if (paint.shadowX || paint.shadowY) {
-                    if (decor.mode != "solid") throw BackendError("Skia 音量柱阴影当前仅支持实色");
+                    if (!supportedBrush(decor)) throw BackendError("Skia 音量柱当前支持实色或渐变阴影");
                     paint.shadow = argb(decor.color);
                 }
             }
@@ -208,6 +208,8 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                 brush.strokeGradient = gradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint);
             if (signal.outerWidth > 0)
                 brush.outerGradient = gradient(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint);
+            if (brush.shadowX || brush.shadowY)
+                brush.shadowGradient = gradient(after ? palette.afterDecorPaint : palette.beforeDecorPaint);
         }
     }
     return signal;

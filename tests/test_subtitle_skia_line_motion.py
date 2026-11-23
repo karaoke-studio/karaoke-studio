@@ -1908,6 +1908,46 @@ def test_volume_horizontal_gradient_spans_the_columns_and_first_text_role(binary
         assert 18 < column_red.min() < column_red.max() <= 238
 
 
+@pytest.mark.parametrize('signal', ['lamp', 'volume'])
+def test_signal_shadow_uses_its_authored_gradient(binary, project, signal):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    neutral = colors('#BBBBBB', '#BBBBBB')
+    shadow = PaintFill(mode='gradient_vertical', start_color='#D52C36', end_color='#2FC82A')
+    palette = SubtitleStyleScheme(font_size_px=50, decoration_kind='shadow', shadow_offset_x=13, shadow_offset_y=9,
+                                  karaoke_colors=replace(neutral, before=replace(neutral.before, shadow=shadow),
+                                                         after=replace(neutral.after, shadow=shadow)))
+    style = replace(style, karaoke_colors=neutral, custom_style_schemes={'signal-shadow': palette})
+    if signal == 'lamp':
+        style = replace(style, lit_enabled=True, lit_style='square', lit_appearance_mode='role',
+                        lit_role_name='signal-shadow', lit_size=34, lit_number=1,
+                        lit_edge_brightness_pct=0, lit_offset_y=-42)
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='role', volume_role_name='signal-shadow',
+                        volume_size=55, volume_column_count=3, volume_flash_times=0)
+    times, dpr = (260, 650), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, ('signal_gradient_shadow', signal), check_p00_edges=True)
+    for frames in (gpu, raster):
+        r, g, b, a = np.moveaxis(frames[0], -1, 0)
+        shaded = (a > 250) & ((r != g) | (g != b))
+        assert np.count_nonzero(shaded) > 500
+        assert len(np.unique(g[shaded])) > 12
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source

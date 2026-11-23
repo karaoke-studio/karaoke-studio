@@ -71,8 +71,8 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
         if (decorated) {
             if (SkColorGetA(color.shadow)) {
                 const auto shadow = rect.makeOffset(color.shadowX, color.shadowY);
-                if (strokeWidth + outerWidth > 0) draw(shadow, color.shadow, strokeWidth + outerWidth);
-                draw(shadow, color.shadow, 0);
+                if (strokeWidth + outerWidth > 0) draw(shadow, color.shadow, strokeWidth + outerWidth, color.shadowGradient);
+                draw(shadow, color.shadow, 0, color.shadowGradient);
             }
             if (outerWidth > 0) draw(rect, color.outerStroke, strokeWidth + outerWidth, color.outerGradient);
         } else {

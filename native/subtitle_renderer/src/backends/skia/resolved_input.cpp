@@ -752,7 +752,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         if (style.volumeEnabled && line.volumeHead && style.volumeAppearanceMode != "custom") {
             const auto& palette = volumePaint ? *volumePaint : style;
             const auto paints = {&palette.beforeFillPaint, &palette.afterFillPaint, &palette.beforeStrokePaint,
-                                 &palette.afterStrokePaint, &palette.beforeStroke2Paint, &palette.afterStroke2Paint};
+                                 &palette.afterStrokePaint, &palette.beforeStroke2Paint, &palette.afterStroke2Paint,
+                                 &palette.beforeDecorPaint, &palette.afterDecorPaint};
             if (line.signalBandJoin
                 || std::ranges::any_of(paints, [](const auto* paint) { return paint->mode == "gradient_horizontal"; })) {
                 const auto domains = collectRolePaintBounds(prepared, line, style, projected.charStyles,

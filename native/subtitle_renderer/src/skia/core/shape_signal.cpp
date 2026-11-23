@@ -66,7 +66,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
             return brush ? brush->makeWithLocalMatrix(mapping) : nullptr;
         };
         const auto& unit = decoration->unitGradients;
-        gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke)};
+        gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke), fit(unit.shadow)};
     }
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
@@ -122,8 +122,8 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
             if (SkColorGetA(decoration->shadow)) {
                 const auto shadowBox = box.makeOffset(decoration->shadowX, decoration->shadowY);
                 const float width = strokeWidth + decoration->outerWidth;
-                if (width > 0) drawShape(shadowBox, decoration->shadow, width);
-                drawShape(shadowBox, decoration->shadow, 0);
+                if (width > 0) drawShape(shadowBox, decoration->shadow, width, gradients.shadow);
+                drawShape(shadowBox, decoration->shadow, 0, gradients.shadow);
             }
             if (decoration->outerWidth > 0 && SkColorGetA(decoration->outerStroke))
                 drawShape(box, decoration->outerStroke, strokeWidth + decoration->outerWidth, gradients.outerStroke);
