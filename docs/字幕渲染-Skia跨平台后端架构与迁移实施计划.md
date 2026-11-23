@@ -1015,6 +1015,8 @@ macOS [双架构复验](https://github.com/karaoke-studio/karaoke-studio/actions
 
 宿主和原生投影允许浮在行上的指示灯与行背景带同时绘制。固定场景确认灯覆盖背景、背景带布局不随灯变化，D2D GPU、Skia Vulkan 与 Raster 的灯位置误差不超过 1 像素。行内音量柱扩展背景带的范围，需要独立核对其布局。
 
+行内矢量导唱符的描边复用正文的整行淡入和位移，去掉仅允许静止行的校验。Windows 使用相同的歌词场景核对前置导唱符、行内导唱符淡入和滑入，三个用例均通过 D2D GPU、Skia Vulkan 和 Raster 对照。指示灯、背景带和导唱符相关回归另有 18 项通过。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）

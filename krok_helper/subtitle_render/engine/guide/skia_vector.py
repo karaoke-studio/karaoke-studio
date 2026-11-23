@@ -9,6 +9,7 @@ cell's left edge, and advances by the *unrounded* ``size * advance / em``
 from __future__ import annotations
 
 import math
+from ..render.skia_line_animation_ir import ordinary_line_animation
 from ..style.style_semantics import uses_authored_decoration
 
 
@@ -171,7 +172,7 @@ def compose_vector_guides(plan_lines, ir):
             continue
         if upper_reading and not lower_reading and forward and stationary:
             required.add('p05_inline_vector_guide_ruby')
-        elif (has_outline_profile and stationary and not look.vertical
+        elif (has_outline_profile and ordinary and ordinary_line_animation(source) and not look.vertical
               and not (upper_reading or lower_reading or has_glow or has_shadow)):
             required.add('p06_inline_vector_guide_outline')
         else:

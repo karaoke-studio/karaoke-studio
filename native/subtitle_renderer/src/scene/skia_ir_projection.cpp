@@ -527,7 +527,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
             && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !cfg.vertical
-            && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && source.karaokeAnimation == "none"
+            && plainLineAnimation(source.entryAnimation, true) && plainLineAnimation(source.exitAnimation, false)
             && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
