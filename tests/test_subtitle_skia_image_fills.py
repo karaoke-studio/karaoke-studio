@@ -88,6 +88,38 @@ CASES = ('body', 'mixed', 'outlines', 'missing')
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_plain_utopia_body_paints_match_actual_d2d_gpu(binary, project, images):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base = image_source(project, images, 'mixed')
+    style = replace(base, karaoke_anim='utopia')
+    times, dpr = (175, 250, 450, 750, 1100, 1400, 1750, 2200), 3
+    colors = style.karaoke_colors
+    solid = replace(style, karaoke_colors=replace(colors,
+        before=replace(colors.before, text=PaintFill(color='#FFA31A6D')),
+        after=replace(colors.after, text=PaintFill(color='#FFA0EC5C'))))
+    refs = []
+    for look in (style, base, solid):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    feature = 'p06_unannotated_singing_paints'
+    assert feature in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'plain_utopia_body_paints', check_p00_edges=True)
+    ir['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, ir)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('direction', ['reverse', 'rtl'])
 def test_directional_body_paints_match_actual_d2d_gpu(binary, project, images, direction):
     from test_subtitle_render_gpu_backend import _render_g1_frames

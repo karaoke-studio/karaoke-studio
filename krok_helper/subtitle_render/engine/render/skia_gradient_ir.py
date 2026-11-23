@@ -148,6 +148,7 @@ def write_body_gradient_bounds(ir, plan):
     directional_paints = False
     directional_solid_outline = False
     vertical_paints = False
+    unannotated_singing_paints = False
     independent_ruby_fill = False
     upper_ruby = 'p05_upper_ruby' in ir['required_features']
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
@@ -200,7 +201,11 @@ def write_body_gradient_bounds(ir, plan):
                   and animations != {'none'}
                   and ordinary_line_animation(source) and modes <= {'solid', 'gradient_vertical'}
                   and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
-        singing = (source.get('karaoke_anim') == 'utopia' and (annotated or faded_band or palette_band or moving)
+        unannotated_singing = (not upper_ruby and not annotated and animations == {'none'}
+                               and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'stroke_flash'))
+                               and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
+        singing = (source.get('karaoke_anim') == 'utopia'
+                   and (annotated or faded_band or palette_band or moving or unannotated_singing)
                    and not source.get('zoom_pulse'))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or (look.vertical and not static_vertical)
@@ -217,6 +222,7 @@ def write_body_gradient_bounds(ir, plan):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint |= annotated or (moving and upper_ruby)
         singing_paint |= singing and (annotated or moving)
+        unannotated_singing_paints |= singing and unannotated_singing
         faded_scanline_gradient |= faded_band
         palette_scanline_gradient |= palette_band
         animated_singing_gradient |= moving
@@ -249,6 +255,7 @@ def write_body_gradient_bounds(ir, plan):
         (enabled, 'p06_body_gradient'), (outlined_gradient, 'p06_outline_gradient'),
         (images, 'p06_image_fill'), (ruby_paint, 'p06_ruby_main_paint'),
         (singing_paint, 'p06_utopia_main_paint'),
+        (unannotated_singing_paints, 'p06_unannotated_singing_paints'),
         (ruby_gradient, 'p06_ruby_fill_gradient'),
         (ruby_image, 'p06_ruby_fill_image'),
         (faded_scanline_gradient, 'p06_faded_scanline_gradient_fill'),

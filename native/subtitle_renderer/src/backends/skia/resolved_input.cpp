@@ -484,6 +484,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
             && ((style.strokeWidth == 0 && style.stroke2Width == 0) || reverseSingingOutline);
+        const bool unannotatedSingingPaint = features.contains("p06_unannotated_singing_paints")
+            && singingScale && !annotated && !style.vertical && !style.rightToLeft && !line.wipeReverse
+            && !hasInlineRoles && !vectorGuides && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
+            && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
         if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !(verticalSinging || reverseHorizontalSinging))
@@ -706,7 +712,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                         return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
                     };
                     const bool paintedSinging = singingScale && !transforms && !line.zoomPulseEnabled
-                        && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill
+                        && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill || unannotatedSingingPaint
                             || (roleSinging && roleBodyPaints));
                     const bool translucentOutline = !utopia && !geometry && !annotated && !hasInlineRoles
                         && features.contains("p07_translucent_character_outline");
@@ -949,7 +955,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
             && (!features.contains("p05_lower_ruby")
                 || (fadedScanlineParticles && features.contains("p07_lower_ruby_scanline_singing_particles")));
-        const bool singingMainPaint = movingGradient || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
+        const bool singingMainPaint = unannotatedSingingPaint || movingGradient
+            || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
             && features.contains("p06_utopia_main_paint"));
         const bool movingGradientShadow = movingSingingGradientFill && movingGradient && hasShadow && !hasGlow;
         const bool paintedDecoration = (rubyMainPaint || movingGradient) && (!hasShadow || movingGradientShadow);
