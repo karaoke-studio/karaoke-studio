@@ -77,6 +77,57 @@ def test_invalid_flash_ir_preserves_scene(binary, project, mutation):
     assert np.array_equal(before, after)
 
 
+@pytest.mark.parametrize('cell_kind', ['vector_guide', 'role'])
+def test_flash_consumes_existing_cell_outline(binary, project, cell_kind):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style = flash_source(project)
+    line, = track.lines
+    chars = [replace(char, start_ms=char.start_ms + 500) for char in line.chars]
+    line = replace(line, chars=chars, end_ms=line.end_ms + 500)
+    if cell_kind == 'vector_guide':
+        line = replace(line, guide_symbol=SQUARE)
+        clock = chars[0].start_ms - SQUARE.duration_ms
+    else:
+        line = replace(line, chars=[replace(chars[0], role_label='lead'), *chars[1:]])
+        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
+            font_family=style.font_family, font_size_px=60, stroke_width_px=5,
+            karaoke_colors=colors('#0000FF', '#0000FF'))})
+        clock = chars[0].start_ms
+    track = replace(track, lines=[line])
+    times = (clock - 1, clock + 24, clock + 150, clock + 240)
+    controls = replace(style, karaoke_stroke_flash=False)
+    results, baseline = [], []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        for appearance, output in ((style, results), (controls, baseline)):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, appearance, times, force_warp=False, track=track,
+                                           width=640, height=360, realization_enabled=False)
+            output.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    ir = ir_for(binary, (track, style))
+    assert ir['track']['lines'][0]['resolved_intervals'][0][0] == clock
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, results[0] if results else None, gpu, raster, cell_kind, check_p00_edges=True)
+    results.extend((gpu, raster))
+    baseline.extend(render_skia(binary, ir_for(binary, (track, controls)), times))
+    pulses = [
+        [white_coverage(frame) - white_coverage(base) for frame, base in zip(frames, bare, strict=True)]
+        for frames, bare in zip(results, baseline, strict=True)
+    ]
+    for pulse in pulses:
+        peak = [coverage.max() for coverage in pulse]
+        assert peak[0] == peak[3] == 0 and peak[1] > peak[2] > 24
+        for time, expected, actual in zip(times, pulses[0], pulse, strict=True):
+            assert within_one_pixel(expected > 24, actual > 24), (cell_kind, time)
+            assert abs(expected.max() - actual.max()) <= 3, (cell_kind, time)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('outlines,dpr', [(False, 1), (False, 1.5), (True, 1.5)])
 def test_flash_matches_actual_d2d_and_gpu_raster(binary, project, outlines, dpr):
