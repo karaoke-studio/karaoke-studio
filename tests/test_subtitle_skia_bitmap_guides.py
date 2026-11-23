@@ -710,14 +710,16 @@ def test_vertical_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp_p
     assert_glow_parity(times, refs[0], gpu, raster, ('vertical_guide', decoration), check_p00_edges=True)
 
 
-@pytest.mark.parametrize('entry', ['none', 'fade'])
-def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path, entry):
+@pytest.mark.parametrize('entry,rtl', [('none', False), ('fade', False), ('none', True)])
+def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path, entry, rtl):
     from test_subtitle_skia_lower_product import ir_for as lower_ir
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style, resolve = lower_source
     track, style = bitmap_lower_reading(track, style, image(tmp_path / 'guide.png'))
+    if rtl:
+        style = replace(style, right_to_left=True)
     if entry == 'fade':
         line, = track.lines
         chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
@@ -748,14 +750,17 @@ def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_
 
 
 @GPU
-@pytest.mark.parametrize('entry', ['none', 'fade'])
-def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path, entry):
+@pytest.mark.parametrize('entry,rtl', [('none', False), ('fade', False), ('none', True)])
+def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path, entry, rtl):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     base = next(c for c in build_cases(tmp_path / 'assets') if c.case_id == 'lower_ruby')
     track, style = bitmap_lower_reading(base.track, base.style, image(tmp_path / 'guide.png'))
+    if rtl:
+        style = replace(style, right_to_left=True, decoration_kind='none', decoration_kind_before='none',
+                        ruby_decoration_kind='none', ruby_decoration_kind_before='none')
     times = (1000, 1550, 2600, 4110, 4280)
     if entry == 'fade':
         style = replace(style, entry_anim='fade', decoration_kind='none', ruby_decoration_kind='none')

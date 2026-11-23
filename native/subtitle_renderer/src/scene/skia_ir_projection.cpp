@@ -673,11 +673,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (cell.bitmapGuide) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
                 if (hasLowerReading
-                    && (cfg.rightToLeft || source.wipeReverse || !guideRubyAnimation
+                    && ((cfg.rightToLeft && (!rtlBitmapUpperRuby || !features.contains("p05_rtl_lower_ruby")))
+                        || source.wipeReverse || !guideRubyAnimation
                         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "utopia")
                         || source.scanlineEnabled || source.zoomPulseEnabled
                         || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                    throw BackendError("Skia 图片导唱符与下方注音需要正向横排与整行出入场");
+                    throw BackendError("Skia 图片导唱符与下方注音的行布局或动画尚未支持");
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || (cfg.vertical && !verticalBitmap)
                     || (cfg.rightToLeft && (!rtlBitmap || (!cell.bitmapGuide->noDecor
                         && (!rtlBitmapDecoration || &cellStyle != &resolved))))

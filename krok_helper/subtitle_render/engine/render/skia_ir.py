@@ -299,7 +299,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             validate_vertical_source(source)
         nonlocal animated_bitmap_guides, role_vector_guides
         role_vector_guides = validate_vector_guides(source, source_style)
-        animated_bitmap_guides = validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
+        animated_bitmap_guides = validate_bitmap_guides(source, static_title=adjust_position is not None)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:

@@ -823,7 +823,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby");
     const bool rtlBitmapSinging = features.contains("p08_rtl_bitmap_singing");
     if (rtlBitmapUpperRuby && (!rtlBitmapGuides || !features.contains("p05_horizontal_rtl_ruby")
-        || !features.contains("p05_upper_ruby") || features.contains("p05_lower_ruby")))
+        || !features.contains("p05_upper_ruby")))
         throw BackendError("Skia 右至左图片导唱符上注音缺少对应布局能力");
     if (rtlBitmapSinging && (!rtlBitmapUpperRuby || !features.contains("p07_rtl_ruby_singing_scale")))
         throw BackendError("Skia 右至左图片导唱符唱字缺少对应上注音和缩放能力");

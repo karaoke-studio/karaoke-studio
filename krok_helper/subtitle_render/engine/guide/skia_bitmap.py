@@ -92,9 +92,8 @@ def uses_inline_bitmap_guides(plan_lines):
     return False
 
 
-def validate_bitmap_guides(track, style, *, static_title=False):
+def validate_bitmap_guides(track, *, static_title=False):
     """Validate bitmap guide assets and placement."""
-    from ..layout.line.style import style_for_line
     animated = False
     for line in track.lines:
         rendered = render_line_with_guide_symbols(line)
@@ -108,12 +107,9 @@ def validate_bitmap_guides(track, style, *, static_title=False):
             animated |= QImageReader(path).imageCount() > 1
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
-        appearance = style_for_line(style, line)
         if ((line.wipe_reverse and static_title)
                 or (not inline and any(c.role_label is not None for c in cells))):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
-        if appearance.right_to_left and appearance.lower_ruby_enabled:
-            raise ValueError('Skia 右至左图片导唱符暂不支持下方注音')
     return animated
 
 
@@ -194,11 +190,11 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                     or not any(group.get('lower') for group in final.get('ruby_groups', ()))):
                 continue
             source = ir['track']['lines'][item.track_index]
-            if (item.layout_style.right_to_left or item.line.wipe_reverse
+            if (item.line.wipe_reverse
                     or source.get('karaoke_anim') not in {'none', 'utopia'}
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-                raise ValueError('Skia 图片导唱符与下方注音需要正向横排与整行出入场')
+                raise ValueError('Skia 图片导唱符与下方注音的行布局或动画尚未支持')
         features.append('p08_bitmap_lower_ruby')
     if any(uses_authored_decoration(item.layout_style, 'shadow')
            and any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
