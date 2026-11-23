@@ -138,7 +138,7 @@ def _validate_stroke_flash(track, style, lines):
             continue
         look = style_for_line(style, source)
         if (look.vertical or look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
-                or line.get('entry_anim') != 'none' or line.get('exit_anim') != 'none'
+                or not ordinary_line_animation(line)
                 or line.get('karaoke_anim') not in {'none', 'utopia', 'no_wipe'}
                 or line.get('fx_bursts') or uses_authored_decoration(look, 'shadow')):
             raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')

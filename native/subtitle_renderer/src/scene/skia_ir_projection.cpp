@@ -285,7 +285,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || source.karaokeAnimation == "utopia"))
                 || (source.scanlineEnabled && !composedScanline)
                 || (source.zoomPulseEnabled && !features.contains("p07_zoom_pulse_decoration"))
-                || source.entryAnimation != "none" || source.exitAnimation != "none"
+                || !plainLineAnimation(source.entryAnimation, true) || !plainLineAnimation(source.exitAnimation, false)
                 || (source.karaokeAnimation == "no_wipe" && !features.contains("p07_no_wipe_decoration"))
                 || !source.fxBursts.empty()))
             throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");

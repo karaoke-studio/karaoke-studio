@@ -172,6 +172,45 @@ def test_flash_matches_actual_d2d_and_gpu_raster(binary, project, outlines, dpr)
                 assert np.percentile(delta, 95) <= rules['max_union_p95'], (sample, 'paint P95')
 
 
+def test_stroke_flash_is_composited_inside_whole_line_fade(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = flash_source(project)
+    row, = track.lines
+    track = replace(track, lines=[replace(row, end_ms=1460, display_end_override_ms=1630)])
+    style = replace(style, exit_anim='fade', exit_fade_ms=500)
+    still = replace(style, karaoke_stroke_flash=False)
+    times = (1375, 1420, 1510, 1629)
+    references = []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        for look in (style, still):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, realization_enabled=False)
+            references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    ir = ir_for(binary, (track, style))
+    row, = ir['track']['lines']
+    assert row['exit_duration_ms'] == 170
+    assert row['display_end_ms'] == 1630
+    rendered = render_skia(binary, ir, times)
+    controls = render_skia(binary, ir_for(binary, (track, still)), times)
+    pairs = list(zip(rendered, controls, strict=True))
+    if references:
+        pairs.insert(0, (references[0], references[1]))
+    pulses = [
+        [white_coverage(image) - white_coverage(control) for image, control in zip(frames, bare, strict=True)]
+        for frames, bare in pairs
+    ]
+    for pulse in pulses:
+        peaks = [sample.max() for sample in pulse]
+        assert peaks[0] == peaks[3] == 0 and peaks[1] > peaks[2] > 0
+        for expected, actual in zip(pulses[0], pulse, strict=True):
+            assert abs(expected.max() - actual.max()) <= 3
+            assert within_one_pixel(expected > 5, actual > 5)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('animation', ['utopia', 'zoom_pulse', 'no_wipe'])
 def test_composed_flash_preserves_ruby_clocks_and_replays(binary, reading, target, animation, tmp_path):

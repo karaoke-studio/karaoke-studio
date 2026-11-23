@@ -1053,6 +1053,8 @@ macOS [双架构复验](https://github.com/karaoke-studio/karaoke-studio/actions
 
 复用现有注音测试字体，为上述两种淡入路径补充可移植用例。Windows 和 WSL 的 X11、Wayland 各通过 2 项，WSL 原生 CTest 3 项通过。
 
+唱字描边闪光继承整行合成的位移和透明度，合成范围覆盖伸出字形的闪光。Windows 5 项专项通过，新增用例包含最后一字仍在闪光时开始整行淡出，分别核对开关差异、脉冲轮廓和峰值。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）
