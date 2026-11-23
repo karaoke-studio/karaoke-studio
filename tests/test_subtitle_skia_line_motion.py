@@ -1426,6 +1426,40 @@ def test_automatic_signal_uses_first_visible_cell_palette(binary, project, sourc
         assert np.count_nonzero(region) > 100
 
 
+def test_rtl_signals_share_resolved_text_anchor(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_rtl_flow import rtl_source
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = rtl_source(project)
+    line, = track.lines
+    chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
+    track = replace(track, lines=[replace(line, chars=chars, end_ms=line.end_ms + 1000)])
+    style = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square',
+                    lit_size=20, lit_offset_y=-30, lit_number=1, lit_fill_color='#FF00FF',
+                    lit_stroke_width=0, lit_edge_brightness_pct=0, lit_shadow=False,
+                    volume_enabled=True, volume_appearance_mode='custom', volume_fill_color='#35DFF0',
+                    volume_overlay_fill_color='#35DFF0', volume_stroke_width=0, volume_duration_ms=1100,
+                    volume_column_count=3, volume_flash_times=0)
+    times = (500, 950)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    ir = ir_for(binary, (track, style))
+    row, = ir['skia_layout']['lines']
+    assert {'text_flow', 'shape_signal_anchor', 'volume_signal_anchor'} <= row.keys()
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'rtl_line_signals', check_p00_edges=True)
+    for frame in gpu:
+        for rgb in ([255, 0, 255], [53, 223, 240]):
+            assert np.count_nonzero(np.all(frame[..., :3] == rgb, axis=-1) & (frame[..., 3] > 250)) > 100
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', [
     'volume', 'lamp_shape_volume', 'volume_appearance_custom', 'volume_appearance_auto', 'volume_appearance_role',

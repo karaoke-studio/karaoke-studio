@@ -81,8 +81,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         || (s.latinFontHint.present && s.latinFontHint != s.fontHint)
         || s.latinFontWeight.value_or(s.fontWeight) != s.fontWeight))
         || ((s.volumeEnabled || (s.litEnabled && s.litStyle == "volume"))
-            && (!caps.volumeSignal || s.vertical || s.rightToLeft))
-        || (s.litEnabled && s.litStyle != "volume" && (!caps.customShapeSignal || s.vertical || s.rightToLeft
+            && (!caps.volumeSignal || s.vertical))
+        || (s.litEnabled && s.litStyle != "volume" && (!caps.customShapeSignal || s.vertical
             || (s.litAppearanceMode != "custom" && (!caps.decoratedShapeSignal
                 || (s.litAppearanceMode != "auto" && s.litAppearanceMode != "role")))
             || (s.litStyle != "circle" && s.litStyle != "square" && s.litStyle != "rounded"
