@@ -89,6 +89,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_inline_vector_guide_outline",
         "p06_vector_guide_shadow",
         "p08_bitmap_guides",
+        "p08_mixed_guide_kinds",
         "p08_vertical_bitmap_guides",
         "p08_vertical_bitmap_decoration",
         "p08_bitmap_lower_ruby",
@@ -765,6 +766,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !features.contains("p07_line_fade")))
         throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
     const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides");
+    const bool mixedGuideKinds = features.contains("p08_mixed_guide_kinds");
+    if (mixedGuideKinds && (!features.contains("p08_bitmap_guides") || !features.contains("p05_vector_guides")
+        || features.contains("p05_vector_guide_composition") || features.contains("p05_horizontal_rtl")
+        || features.contains("p05_vertical_solid") || features.contains("p05_reverse_wipe")))
+        throw BackendError("Skia 位图与矢量导唱符混用需要正向横排普通正文");
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
     const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
     const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
@@ -805,7 +811,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
             "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
             "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
-            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides", "p08_animated_title_guides", "p08_animated_bitmap_guides",
+            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides", "p08_mixed_guide_kinds",
+            "p08_animated_title_guides", "p08_animated_bitmap_guides",
             "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
             "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};

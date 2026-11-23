@@ -43,8 +43,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         throw BackendError("Skia 动图导唱符必须属于标题布局");
     if (features.contains("p08_title_role_outlines") && (!staticTitle || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 角色描边必须属于标题布局");
-    if (!staticTitle && features.contains("p08_bitmap_guides") && features.contains("p05_vector_guides"))
-        throw BackendError("Skia 正文当前不支持混用位图和矢量导唱符");
+    const bool mixedGuides = features.contains("p08_mixed_guide_kinds");
+    if (mixedGuides != (!staticTitle && features.contains("p08_bitmap_guides") && features.contains("p05_vector_guides")))
+        throw BackendError("Skia 位图与矢量导唱符混用缺少对应布局能力声明");
     const bool markerFeature = features.contains("p05_ruby_markers");
     if (markerFeature && ir.value("skia_layout").toObject().value("ruby_marker_schema").toDouble(-1) != 1)
         throw BackendError("Skia 短语标记布局版本无效");

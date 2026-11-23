@@ -166,6 +166,9 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     features.append('p08_bitmap_guides')
     ir['skia_layout']['bitmap_guide_schema'] = 1
     allowed = BITMAP_GUIDE_FEATURES | {'p05_vector_guides'} if static_title else BITMAP_GUIDE_FEATURES
+    if not static_title and 'p05_vector_guides' in features:
+        features.append('p08_mixed_guide_kinds')
+        allowed |= {'p05_vector_guides', 'p08_mixed_guide_kinds'}
     vertical_lines = [item for item in plan_lines
                       if item.layout_style.vertical and has_bitmap_guides((item.render_line,))]
     for item in vertical_lines:

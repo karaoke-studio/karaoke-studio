@@ -242,6 +242,33 @@ def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
     assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_guide', check_p00_edges=True)
 
 
+@GPU
+def test_vector_and_bitmap_guides_share_a_line_like_actual_d2d_gpu(binary, project, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    bitmaps, style = rtl_bitmap_guide(project, tmp_path)
+    line = replace(bitmaps.lines[0], guide_symbol=SQUARE)
+    track = replace(bitmaps, lines=[line])
+    style = replace(style, right_to_left=False)
+    times, dpr = (250, 450, 750, 1100, 1550), 3
+    refs = []
+    for source in (track, replace(track, lines=[replace(line, guide_symbol=None)]),
+                   replace(track, lines=[replace(line, inline_guide_symbols={})])):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p08_mixed_guide_kinds' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'mixed_guide_kinds', check_p00_edges=True)
+
+
 def shadowed_bitmap_guide(project, tmp_path, *, paint_mode='solid'):
     track, style = rtl_bitmap_guide(project, tmp_path)
     line, = track.lines
