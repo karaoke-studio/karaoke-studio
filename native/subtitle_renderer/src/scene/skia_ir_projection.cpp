@@ -329,12 +329,16 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool originalImagePalette = basicImage && features.contains("p07_original_scanline_image_palette")
             && resolved.scanlineImageColorLayers.isEmpty() && resolved.scanlineMode != "role";
         const bool reverseImage = basicImage && features.contains("p07_reverse_scanline_image");
+        const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging && staticScanline
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !features.contains("p05_lower_ruby")
+            && resolved.scanlineShape == "flame" && resolved.scanlineMode == "color" && source.fxBursts.empty();
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
             && (resolved.scanlineMode == "color" || shapePalette || originalImagePalette)
             && (!source.wipeReverse || reverseImage)
-            && !source.zoomPulseEnabled && !source.strokeFlashEnabled && (source.fxBursts.empty() || shapedSinging);
+            && (!source.zoomPulseEnabled || zoomScanlineShape) && !source.strokeFlashEnabled
+            && (source.fxBursts.empty() || shapedSinging);
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
         const bool movingVerticalSingingScanline = cfg.vertical && utopiaSinging
             && features.contains("p07_vertical_singing_scanline_line_animation");

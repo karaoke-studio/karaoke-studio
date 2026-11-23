@@ -1646,10 +1646,25 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
         }, sort_keys=True), encoding='utf-8')
 
 
-def test_unverified_zoom_flame_is_rejected(binary, reading):
-    track, style = glow_band_source(reading, 'inherited')
-    with pytest.raises(ValueError):
-        upper_ir(binary, (track, replace(style, karaoke_anim='zoom_pulse_scanline', scanline_shape='flame')), 1)
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_zoom_flame_scanline_with_glowing_ruby_matches_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base = glow_band_source(reading, 'inherited')
+    style = replace(base, karaoke_anim='zoom_pulse_scanline', scanline_shape='flame', zoom_pulse_peak_pct=147)
+    times, dpr = (380, 550, 899, 1100, 1250, 1550, 1900, 2150), 3
+    refs = []
+    for look in (style, replace(style, scanline_shape='band'), replace(style, karaoke_anim='utopia_scanline')):
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in pixels])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    assert 'p07_zoom_scanline_shape' in upper_ir(binary, (track, style), dpr)['required_features']
+    gpu, raster = glow_band_frames(binary, (track, style), dpr, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'zoom_flame_scanline', check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

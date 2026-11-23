@@ -85,6 +85,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     role_gradient = False
     role_line_motion = False
     role_scanline_particles = False
+    zoom_shapes = False
     role_singing_band = False
     shaped_palette = False
     rtl_band = False
@@ -143,8 +144,11 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         image_during_transition = particle_entry and look.scanline_shape == 'image'
         shape_with_singing = (shape_style and (ordinary or image_during_transition) and bool(track.rubies) and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
+        zoom_shape = (ordinary and look.scanline_shape == 'flame' and look.scanline_mode == 'color'
+                      and line.get('karaoke_anim') == 'utopia' and line.get('zoom_pulse')
+                      and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled or bursts))
         solid_shape = (shape_style and (not source.wipe_reverse or image_reverse)
-                       and not (line.get('zoom_pulse') or line.get('stroke_flash'))
+                       and (not line.get('zoom_pulse') or zoom_shape) and not line.get('stroke_flash')
                        and (not bursts or shape_with_singing))
         faded_band = faded_band_singing_particles(line, look)
         motion = (not ordinary and ordinary_line_animation(line)
@@ -234,6 +238,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         lower_singing_particles |= lower_band and lower_particles
         if shape:
             shapes.add(look.scanline_shape)
+            zoom_shapes |= zoom_shape
             shaped_palette |= palette_shape
             reverse_image |= image_reverse
             original_image_palette |= image_follows_palette
@@ -287,6 +292,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_vertical_singing_scanline_palette')
     if shapes:
         features.append('p07_scanline_shape')
+    if zoom_shapes:
+        features.append('p07_zoom_scanline_shape')
     if 'image' in shapes:
         features.append('p07_scanline_image')
     if particle_scanline_image:
