@@ -362,10 +362,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             && line.bursts.empty();
         const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints")
             && (line.karaokeAnimation == "none" || features.contains("p07_role_singing_scale"));
+        const bool independentFill = staticLine && roleBounds && !rtl && scene.charStyles.empty()
+            && features.contains("p06_independent_ruby_fill");
         const bool allowGradientFill = allowFillPaint && (allowRoleFill ||
-            (scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")));
+            independentFill || (scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")));
         const bool allowImageFill = allowFillPaint && (allowRoleFill ||
-            (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
+            independentFill || (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
                 || (roleFadedScanline && allowRoleFill && fill.mode == "gradient_vertical")
@@ -576,7 +578,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto outlinePad = ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr));
         const bool shareHorizontalFill = lower ? shareLowerGradient.toBool() : paint.rubyHorizontalGradientWithMain;
         const auto* sharedFillBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
-            : allowRoleFill ? &roleBounds->forRole(role) : nullptr;
+            : (allowRoleFill || independentFill) ? &roleBounds->forRole(role) : nullptr;
         auto gradients = gradientFill ? rubyGradients({&beforeFill, &afterFill},
             shareHorizontalFill, source, ink, outlinePad, glyphs.dpr, sharedFillBounds)
             : std::array<sk_sp<SkShader>, 2>{};

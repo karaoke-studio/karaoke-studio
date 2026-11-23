@@ -585,7 +585,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             auto glyph = bitmap
                 ? resolvedBitmapGuideCell(cell, *bitmap, imageCache, paint, glyphs.dpr, line.chars[clock].startMs,
                                           line.chars[clock].endMs, beforeColor, afterColor, wipePad,
-                                          staticTitle && features.contains("p08_animated_title_guides"))
+                                          staticTitle ? features.contains("p08_animated_title_guides")
+                                                      : features.contains("p08_animated_bitmap_guides"))
                 : vector
                 ? glyphs.vectorCell(cell, *vector, glyphId.toString(), paint.fontSize / glyphs.dpr, line.chars[clock].startMs,
                                     line.chars[clock].endMs, beforeColor, afterColor, wipePad)
@@ -642,7 +643,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     const bool paintedSinging = singingScale && !transforms && !line.zoomPulseEnabled
                         && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill
                             || (roleSinging && roleBodyPaints));
-                    if (!paintedSinging && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
+                    const bool translucentOutline = !utopia && !geometry && !annotated && !hasInlineRoles
+                        && features.contains("p07_translucent_character_outline");
+                    if (!paintedSinging && !translucentOutline
+                        && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
                         || (glyph.outerOutline && !opaque(*glyph.outerOutline))))
                         throw BackendError("Skia 逐字变换当前仅支持不透明实色描边");
                     const auto ink = glyph.path.computeTightBounds();
@@ -671,7 +675,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool gradientScanlineRole = line.scanlineEnabled && style.scanlineMode == "role"
             && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
         if (roleBodyPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole
-            || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient"))
+            || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient")
+            || features.contains("p06_independent_ruby_fill"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale);
         if (gradientScanlineRole && !rolePaintBounds->line.isEmpty()) {

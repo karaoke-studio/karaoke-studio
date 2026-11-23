@@ -6,19 +6,29 @@
 #include "include/effects/SkImageFilters.h"
 #include <algorithm>
 #include <cmath>
+#include <span>
 #include <stdexcept>
 
 namespace subtitle::skia {
 PreparedBitmapGuide::PreparedBitmapGuide(const BitmapGuide& guide, std::size_t& remainingHaloBytes)
     : before_(guide.before), after_(guide.after), box_(guide.box), clipPad_(guide.clipPad),
-      useLineFront_(guide.useLineFront), animation_(guide.animation) {
+      useLineFront_(guide.useLineFront), animations_(guide.animations), animationAnchorMs_(guide.animationAnchorMs) {
     if (!box_.isFinite() || box_.isEmpty() || !std::isfinite(clipPad_) || clipPad_ < 0
         || (!before_ && !after_))
         throw std::runtime_error("Skia 图片导唱符的图片或绘制框无效");
     if (!guide.decorate) return;
-    if (before_) halo_[0] = prepareHalo(*before_, guide.glow.before, remainingHaloBytes);
-    // The after decoration state applies only while the after image is shown.
-    if (after_) halo_[1] = prepareHalo(*after_, guide.glow.after, remainingHaloBytes);
+    for (const bool after : {false, true}) {
+        const auto& state = after ? guide.glow.after : guide.glow.before;
+        if (state.radius <= 0) continue;
+        auto& halos = halos_[after];
+        if (const auto& animation = animations_[after]) {
+            halos.reserve(animation->size());
+            for (const auto& frame : *animation)
+                halos.push_back(prepareHalo(*frame.image, state, remainingHaloBytes));
+        } else if (const auto& image = after ? after_ : before_) {
+            halos.push_back(prepareHalo(*image, state, remainingHaloBytes));
+        }
+    }
 }
 
 std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const SkImage& image,
@@ -60,17 +70,22 @@ std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const Sk
 
 void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity, int mediaTimeMs) const {
     const SkImage* image = (after ? after_ : before_).get();
-    if (!after && animation_ && !animation_->empty()) {
-        const auto phase = std::max(mediaTimeMs, 0) % animation_->back().endMs;
-        const auto frame = std::upper_bound(animation_->begin(), animation_->end(), phase,
+    std::size_t frameIndex = 0;
+    if (const auto& animation = animations_[after]; animation && !animation->empty()) {
+        const auto elapsed = std::max(std::int64_t(mediaTimeMs) - animationAnchorMs_, std::int64_t(0));
+        const auto phase = elapsed % animation->back().endMs;
+        const auto frame = std::upper_bound(animation->begin(), animation->end(), phase,
             [](auto t, const BitmapGuideFrame& item) { return t < item.endMs; });
         image = frame->image.get();
+        frameIndex = std::size_t(frame - animation->begin());
     }
     if (!image || opacity <= 0) return;
     const SkSamplingOptions linear(SkFilterMode::kLinear, SkMipmapMode::kNone);
     const float scaleX = box_.width() / std::max(float(image->width()), 1.f);
     const float scaleY = box_.height() / std::max(float(image->height()), 1.f);
-    for (const auto& halo : halo_[after]) {
+    const auto& halos = halos_[after];
+    const auto passes = halos.empty() ? std::span<const Halo>{} : std::span<const Halo>(halos[frameIndex]);
+    for (const auto& halo : passes) {
         const float margin = float((halo.image->width() - image->width()) / 2);
         const auto source = SkRect::MakeLTRB(margin - halo.pad, margin - halo.pad,
                                              margin + float(image->width()) + halo.pad,

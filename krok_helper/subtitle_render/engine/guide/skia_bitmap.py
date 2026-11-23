@@ -103,10 +103,7 @@ def validate_bitmap_guides(track, style, *, static_title=False):
         images = [cell.vector_glyph for cell in cells]
         paths = {path for image in images for path in (image.bitmap_before_path, image.bitmap_after_path) if path}
         for path in sorted(paths):
-            if QImageReader(path).imageCount() > 1:
-                if not static_title:
-                    raise ValueError('Skia 图片导唱符暂不支持动图')
-                animated = True
+            animated |= QImageReader(path).imageCount() > 1
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)

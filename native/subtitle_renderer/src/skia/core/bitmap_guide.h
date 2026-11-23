@@ -3,6 +3,7 @@
 #include "include/core/SkImage.h"
 #include "include/core/SkRect.h"
 #include "static_glow.h"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -29,7 +30,8 @@ struct BitmapGuide {
     StaticGlow glow;
     bool decorate = true;
     float clipPad = 0; // Wipe clip reach beyond the box (stroke widths + 4).
-    std::shared_ptr<const BitmapGuideAnimation> animation; // Title before image, looping on media time.
+    std::array<std::shared_ptr<const BitmapGuideAnimation>, 2> animations;
+    int animationAnchorMs = 0; // Looping media time measured from the source's guide anchor.
     bool useLineFront = false;
 };
 
@@ -52,7 +54,8 @@ private:
     SkRect box_;
     float clipPad_;
     bool useLineFront_;
-    std::vector<Halo> halo_[2];
-    std::shared_ptr<const BitmapGuideAnimation> animation_;
+    std::array<std::vector<std::vector<Halo>>, 2> halos_;
+    std::array<std::shared_ptr<const BitmapGuideAnimation>, 2> animations_;
+    int animationAnchorMs_;
 };
 }

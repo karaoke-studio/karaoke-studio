@@ -339,14 +339,14 @@ def test_transformed_outline_keeps_width_across_targets_and_seeks(binary, projec
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('case', ['v2', 'translucent'])
+@pytest.mark.parametrize('case', ['v2', 'missing_translucent_capability'])
 def test_unverified_animated_outline_keeps_the_previous_scene(binary, project, case):
-    good = ir_for(binary, outlined_transform(project, 'spin_flip', 2))
+    good = ir_for(binary, outlined_transform(project, 'char_drip', 2, body_alpha=case != 'v2'))
+    bad = copy.deepcopy(good)
     if case == 'v2':
-        bad = copy.deepcopy(good)
         bad['skia_layout']['character_transform_schema'] = 2
     else:
-        bad = ir_for(binary, outlined_transform(project, 'char_drip', 2, body_alpha=True))
+        bad['required_features'].remove('p07_translucent_character_outline')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, good)
         before, _ = collect(process, [125])
@@ -354,6 +354,22 @@ def test_unverified_animated_outline_keeps_the_previous_scene(binary, project, c
             configure(process, bad)
         after, _ = collect(process, [125], generation=2)
     assert np.array_equal(before, after)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_translucent_transformed_outlines_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = outlined_transform(project, 'char_drip', 2, body_alpha=True)
+    times = (100, 125, 180, 250, 330, 599, 700)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, refs, gpu, raster, 'translucent_transformed_outlines', check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

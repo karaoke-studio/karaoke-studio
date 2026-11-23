@@ -112,20 +112,33 @@ def write_body_gradient_bounds(ir, plan):
     enabled = outlined_gradient = images = ruby_paint = singing_paint = ruby_gradient = False
     ruby_image = faded_scanline_gradient = animated_singing_gradient = palette_scanline_gradient = False
     unscaled_paint_fade = False
+    independent_ruby_fill = False
     upper_ruby = 'p05_upper_ruby' in ir['required_features']
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
         look = item.layout_style
         modes, outlined = _layer_modes(look)
-        if not modes & (_GRADIENTS | {'image'}):
-            continue
         source = ir['track']['lines'][item.track_index]
+        animations = {source.get('entry_anim'), source.get('exit_anim')}
         annotated = bool(final.get('ruby_groups'))
+        ruby_modes = set()
+        if annotated:
+            colors = effective_ruby_karaoke_colors(look)
+            ruby_modes = {colors.before.text.mode, colors.after.text.mode}
+            independent_gradient = bool(ruby_modes & _GRADIENTS) and not modes & _GRADIENTS
+            independent_image = 'image' in ruby_modes and 'image' not in modes
+            independent_ruby_fill |= (
+                (independent_gradient or independent_image)
+                and not (look.vertical or look.right_to_left or item.line.wipe_reverse or look.lower_ruby_enabled)
+                and animations == {'none'} and source.get('karaoke_anim') in {'none', 'utopia'}
+                and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash'))
+                and not any(cell.role_label or cell.vector_glyph for cell in item.render_line.chars))
+        if not modes & _TEXTURED:
+            continue
         particle_band = ('p07_faded_scanline_singing_particles' in ir['required_features']
                          and faded_band_singing_particles(source, look) and look.scanline_mode in {'default', 'color'})
         prefix_band = ('p07_faded_scanline_prefix_guides' in ir['required_features']
                        and (fixed_faded_utopia_band(source, look) or particle_band))
         faded_band = (prefix_band or particle_band) and modes <= {'solid', 'gradient_vertical'}
-        animations = {source.get('entry_anim'), source.get('exit_anim')}
         paint_fade = ('fade' in animations and animations <= {'none', 'fade'}
                       and source.get('karaoke_anim') == 'none' and not (annotated or upper_ruby)
                       and not (source.get('scanline') or source.get('fx_bursts') or source.get('zoom_pulse')))
@@ -158,8 +171,6 @@ def write_body_gradient_bounds(ir, plan):
         animated_singing_gradient |= moving
         unscaled_paint_fade |= paint_fade
         if annotated:
-            colors = effective_ruby_karaoke_colors(look)
-            ruby_modes = {colors.before.text.mode, colors.after.text.mode}
             if (faded_band or palette_band or moving) and not ruby_modes <= {'solid', 'gradient_vertical'}:
                 raise ValueError('Skia 整行出入场的上注音填充当前支持实色和纵向渐变')
             ruby_gradient = ruby_gradient or bool(modes & _GRADIENTS and ruby_modes & _GRADIENTS)
@@ -188,6 +199,7 @@ def write_body_gradient_bounds(ir, plan):
         (palette_scanline_gradient, 'p06_faded_scanline_palette_gradient'),
         (animated_singing_gradient, 'p06_animated_singing_gradient_fill'),
         (unscaled_paint_fade, 'p06_unscaled_paint_fade'),
+        (independent_ruby_fill, 'p06_independent_ruby_fill'),
     ):
         if enabled_feature:
             ir['required_features'].append(feature)

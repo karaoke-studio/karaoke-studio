@@ -82,6 +82,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
         "p08_animated_title_guides",
+        "p08_animated_bitmap_guides",
         "p08_static_line_band",
         "p08_line_band_fit",
         "p08_line_band_slices",
@@ -119,6 +120,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_fill_gradient",
         "p06_faded_scanline_gradient_fill",
         "p06_ruby_fill_image",
+        "p06_independent_ruby_fill",
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
         "p06_ruby_outline_gradient",
@@ -209,6 +211,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_lower_ruby_static_gradient",
         "p07_ruby_scanline_particles",
         "p07_character_transform",
+        "p07_translucent_character_outline",
         "p07_sing_twinkle",
         "p07_vertical_sing_twinkle",
         "p07_vertical_sing_shapes",
@@ -664,13 +667,15 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 行内头像缺少图片导唱符能力声明");
     if (features.contains("p08_inline_bitmap_decoration") && !inlineBitmapGuides)
         throw BackendError("Skia 行内图片装饰缺少行内头像布局能力");
+    if (features.contains("p08_animated_bitmap_guides") && !features.contains("p08_bitmap_guides"))
+        throw BackendError("Skia 动态图片导唱符缺少图片导唱符布局能力");
     if (features.contains("p08_bitmap_guides")) {
         // Verified line-prefix image guides with Utopia, upper ruby, solid outlines and glow only.
         static const QJsonArray allowed{
             "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
             "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
             "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
-            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides", "p08_animated_title_guides",
+            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides", "p08_animated_title_guides", "p08_animated_bitmap_guides",
             "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
             "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
             "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};
@@ -906,6 +911,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_character_transform")
         && (transformVersion < 1 || transformVersion > kCharacterTransformSchema || std::floor(transformVersion) != transformVersion))
         throw BackendError("Skia 逐字变换布局版本无效");
+    if (features.contains("p07_translucent_character_outline")
+        && (!features.contains("p07_character_transform") || transformVersion < 3
+            || !features.contains("p06_primary_solid_outline")))
+        throw BackendError("Skia 逐字半透明描边缺少逐字变换或描边能力声明");
     if ((features.contains("p07_ruby_character_entry_spin") || features.contains("p07_ruby_character_exit_spin")
             || features.contains("p07_ruby_character_drip"))
         && (!features.contains("p07_character_transform") || !features.contains("p05_resolved_ruby")))
@@ -1090,6 +1099,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_ruby_fill_image")
         && (!features.contains("p06_ruby_main_paint") || !features.contains("p06_image_fill")))
         throw BackendError("Skia 上注音图片缺少正文画笔或注音能力声明");
+    if (features.contains("p06_independent_ruby_fill") && !features.contains("p05_upper_ruby"))
+        throw BackendError("Skia 独立注音画笔缺少上注音能力声明");
     if (features.contains("p06_ruby_role_paints")
         && (!features.contains("p06_role_body_paints") || !features.contains("p05_upper_ruby")))
         throw BackendError("Skia 上注音角色画笔缺少正文角色画笔或上注音能力声明");
@@ -1169,7 +1180,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         };
         static const QJsonArray avatarFeatures{
             "p08_bitmap_guides", "p08_inline_bitmap_guides", "p06_role_outline_gradient", "p06_ruby_outline_gradient",
-            "p08_inline_bitmap_decoration", "p06_ruby_horizontal_outline",
+            "p08_inline_bitmap_decoration", "p08_animated_bitmap_guides", "p06_ruby_horizontal_outline",
             "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
         };
         static const QJsonArray roleGuideFeatures{

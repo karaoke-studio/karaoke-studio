@@ -6,6 +6,7 @@ measurement or rendering is used here, and frame draws never call this module.
 from dataclasses import replace
 from hashlib import sha256
 
+from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.domain.models import style_for_track
 from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
 from krok_helper.subtitle_render.engine.layout.display.section_edges import section_edge_context
@@ -14,7 +15,9 @@ from krok_helper.subtitle_render.engine.layout.line.skia_geometry import positio
 from krok_helper.subtitle_render.engine.layout.line.skia_vertical import (
     validate_vertical_source, validate_vertical_style, vertical_cells, vertical_japanese_glyphs, vertical_solid_schema)
 from krok_helper.subtitle_render.engine.layout.plan.skia_plan import prepare_skia_layout
-from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout, uses_authored_decoration
+from krok_helper.subtitle_render.engine.style.style_semantics import (
+    effective_karaoke_colors, style_for_role_in_layout, uses_authored_decoration,
+)
 from krok_helper.subtitle_render.engine.text.skia_batch import font_snapshot
 from .render_ir import build_render_ir
 from .skia_ruby_ir import prepared_ruby_layout
@@ -164,6 +167,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
     """Write canonical cell and glyph pivots and return the required version."""
     from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     version = 3
+    translucent_outlines = False
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
         animations = {source.get('entry_anim'), source.get('exit_anim')}
@@ -191,8 +195,20 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         if geometry and index not in composed_geometry_lines and (
                 look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)):
             raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
+        if not geometry and not track.rubies and (look.stroke_width_px > 0 or look.stroke2_enabled):
+            colors = effective_karaoke_colors(look)
+            layers = ['text']
+            if look.stroke_width_px > 0:
+                layers.append('stroke')
+            if look.stroke2_enabled and look.stroke2_width_px > 0:
+                layers.append('stroke2')
+            if len(layers) > 1:
+                translucent_outlines |= any(rgba(getattr(state, layer).color)[3] < 255
+                                            for state in (colors.before, colors.after) for layer in layers)
         cells, metrics = ir['skia_layout']['lines'][index]['cells'], measured.lines[item.track_index]
         write_horizontal_pivots(cells, metrics)
+    if translucent_outlines:
+        ir['required_features'].append('p07_translucent_character_outline')
     return version
 
 
@@ -228,7 +244,7 @@ def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=No
 
 def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=None, **kwargs):
     prepared = []
-    animated_title_guides = False
+    animated_bitmap_guides = False
     role_vector_guides = False
 
     def build_plan(source, source_style, **plan_kwargs):
@@ -241,9 +257,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         validate_reverse_source(source)
         if source_style.vertical:
             validate_vertical_source(source)
-        nonlocal animated_title_guides, role_vector_guides
+        nonlocal animated_bitmap_guides, role_vector_guides
         role_vector_guides = validate_vector_guides(source, source_style)
-        animated_title_guides = validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
+        animated_bitmap_guides = validate_bitmap_guides(source, source_style, static_title=adjust_position is not None)
         with layout_pass():
             section_edge_context(source, source_style)
             for line in source.lines:
@@ -909,6 +925,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     write_line_band(ir, style, prepared[0], width=kwargs['width'], height=kwargs['height'])
     compose_vector_guides(track, ir['required_features'])
     declare_bitmap_guides(plan.lines, ir, static_title=adjust_position is not None)
-    if animated_title_guides:
-        ir['required_features'].append('p08_animated_title_guides')
+    if animated_bitmap_guides:
+        ir['required_features'].append('p08_animated_title_guides' if adjust_position is not None
+                                       else 'p08_animated_bitmap_guides')
     return ir

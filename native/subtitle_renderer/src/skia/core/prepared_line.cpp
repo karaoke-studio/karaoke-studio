@@ -262,7 +262,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         }
         const auto phase = states[index].phase;
         if (!guide.wipes() || phase != Phase::Wiping) {
-            guide.draw(canvas, guide.wipes() && phase == Phase::After, titleOpacity);
+            guide.draw(canvas, guide.wipes() && phase == Phase::After, titleOpacity, tMs);
             return;
         }
         float edge = front(cell, rawProgress(cell));
@@ -296,7 +296,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 ? SkRect::MakeLTRB(box.left() - pad, -1e6f, edge, 1e6f)
                 : SkRect::MakeLTRB(edge, -1e6f, box.right() + pad, 1e6f);
             clipViewportWipe(canvas, clip, wipeViewportHeight);
-            guide.draw(canvas, sung, titleOpacity);
+            guide.draw(canvas, sung, titleOpacity, tMs);
         }
     };
     const auto drawCell = [&](std::size_t index, Layer layer, const PhaseShaders& shaders) {
@@ -322,7 +322,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const bool after = !atFront && progress == 1;
         // The existing GPU poses the cached rings that protect translucent
         // paint with their glyph. Opaque outlines retain their drawn width.
-        const bool poseProtected = utopia && drawOutline && animatedInk && stroke->protectBody;
+        const bool poseProtected = drawOutline && animatedInk && stroke->protectBody;
         const auto posedStroke = poseProtected ? std::optional(path.makeTransform(transform.matrix)) : std::nullopt;
         const auto draw = [&](bool sung) {
             if (drawOutline && stroke->protectBody) {

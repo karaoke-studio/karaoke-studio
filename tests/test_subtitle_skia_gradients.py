@@ -203,6 +203,53 @@ def test_inherited_ruby_image_uses_shared_texture_and_missing_asset_fallback(bin
     assert not np.array_equal(actual[0][:cutoff], expected[0][:cutoff])
 
 
+def independently_painted_reading(reading, tmp_path):
+    from test_subtitle_skia_image_fills import pattern, write_png
+    from test_subtitle_skia_roles import colors
+
+    track, style = reading
+    texture = write_png(tmp_path / 'reading.png', pattern('opaque'))
+    palette = colors('#FFE6A0', '#8CF0E6')
+    before = replace(palette.before, text=PaintFill(
+        mode='gradient_horizontal', start_color='#F95831', end_color='#325BF2'))
+    after = replace(palette.after, text=PaintFill(mode='image', image_path=str(texture)))
+    return track, replace(style, karaoke_anim='none', ruby_colors_follow_main=False,
+                          ruby_karaoke_colors=replace(palette, before=before, after=after))
+
+
+def test_independent_ruby_paint_uses_separate_phases_and_preserves_scene(binary, reading, tmp_path):
+    ir = upper_ir(binary, independently_painted_reading(reading, tmp_path), 1)
+    feature = 'p06_independent_ruby_fill'
+    assert feature in ir['required_features']
+    assert 'p06_body_gradient' not in ir['required_features'] and 'p06_image_fill' not in ir['required_features']
+    forged = copy.deepcopy(ir)
+    forged['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 1100, 2300])
+        with pytest.raises(NativeRendererError, match='注音最终绘制'):
+            configure(process, forged)
+        replay, _ = collect(process, [2300, 1100, 550], generation=2)
+    assert np.array_equal(frames, replay[::-1])
+    assert all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_independent_ruby_paints_match_actual_d2d_gpu(binary, reading, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = independently_painted_reading(reading, tmp_path)
+    times = (550, 1100, 1700, 2300)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), 1), times)
+    assert_glow_parity(times, refs, gpu, raster, 'independent_ruby_paint', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('mode', MODES)
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_gradient_uses_one_domain_and_replays(binary, project, mode, target, tmp_path):

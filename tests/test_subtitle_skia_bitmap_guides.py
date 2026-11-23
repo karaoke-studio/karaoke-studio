@@ -1,5 +1,4 @@
 """Line-prefix bitmap guides (bitmap_guide_schema=1) against the existing GPU."""
-from base64 import b64decode
 from dataclasses import replace
 import copy
 import sys
@@ -103,22 +102,15 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
 
 
 @pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse', 'shadow',
-                                    'lower', 'animated', 'missing'])
+                                    'lower', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
-    symbol = line.guide_symbol
     if change == 'vertical': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse': line = replace(line, wipe_reverse=True)
     elif change == 'shadow': style = replace(style, decoration_kind='shadow', shadow_offset_x=6, shadow_offset_y=4)
     elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
-    elif change == 'animated':
-        frames = tmp_path / 'blink.gif'
-        frames.write_bytes(b64decode(
-            'R0lGODlhAgACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAgAC'
-            'AAAIBgABCAQQEAAh+QQBCgABACwAAAAAAgACAIEAAP8AAAAAAAAAAAAIBgABCAQQEAA7'))
-        line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(frames)))
     else:
         line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
@@ -157,6 +149,58 @@ def test_decorated_inline_bitmap_guide_matches_actual_d2d_gpu(binary, applicatio
 
     case = decorated_inline_guide(tmp_path)
     assert_ruby_transition_gpu_parity(binary, case, (1400, 1700, 2600, 3830))
+
+
+def animated_lyric_guide(tmp_path, family=None):
+    from test_subtitle_skia_line_motion import animated_alpha_band
+
+    animation = animated_alpha_band(tmp_path)
+    case, track = p00_guide(tmp_path, family=family, bitmap_before_path=animation,
+                           bitmap_after_path=animation, bitmap_fix_size=False, bitmap_zoom_percent=100)
+    line, = track.lines
+    line = replace(line, display_start_override_ms=350, display_end_override_ms=6100)
+    return replace(case, track=replace(track, lines=[line]), case_id='animated_lyric_guide')
+
+
+def animated_guide_times(ir):
+    line, = ir['track']['lines']
+    guide = next(cell['bitmap_guide'] for cell in line['chars'] if cell.get('bitmap_guide'))
+    anchor = guide['anim_anchor_ms']
+    last_word_end = max(interval[1] for interval in line['resolved_intervals'])
+    after = anchor + (max(last_word_end - anchor, 0) + 499) // 250 * 250
+    assert line['display_start_ms'] <= anchor and after + 100 < line['display_end_ms']
+    return anchor, anchor + 99, anchor + 100, anchor + 250, after, after + 99, after + 100
+
+
+def test_animated_lyric_guides_follow_authored_anchor_and_seek(binary, project, tmp_path):
+    case = animated_lyric_guide(tmp_path, project[1].font_family)
+    ir = ir_for(binary, (case.track, case.style))
+    feature = 'p08_animated_bitmap_guides'
+    assert feature in ir['required_features']
+    times = animated_guide_times(ir)
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        before, before_tail, during, _, after, after_tail, after_next = frames
+        with pytest.raises(NativeRendererError, match='动图'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert np.array_equal(frames, replay[::-1])
+    assert before.any()
+    assert np.array_equal(after, after_tail)
+    assert np.count_nonzero(np.abs(before_tail[..., 3].astype(int) - during[..., 3]) > 64) > 100
+    assert np.count_nonzero(np.abs(after_tail[..., 3].astype(int) - after_next[..., 3]) > 64) > 100
+
+
+@GPU
+def test_animated_lyric_guides_match_actual_d2d_gpu(binary, application, tmp_path):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = animated_lyric_guide(tmp_path)
+    ir = ir_for(binary, (case.track, case.style))
+    assert_ruby_transition_gpu_parity(binary, case, animated_guide_times(ir))
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
