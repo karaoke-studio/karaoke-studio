@@ -500,6 +500,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && source.entryAnimation == "none" && source.exitAnimation == "none"
             && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && std::ranges::all_of(source.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
+        const bool reverseMixedBitmaps = source.wipeReverse && features.contains("p08_mixed_reverse_bitmap_guides")
+            && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty() && source.karaokeAnimation == "none"
+            && source.entryAnimation == "none" && source.exitAnimation == "none" && !source.scanlineEnabled
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         bool sawLyrics = false;
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {
@@ -549,7 +553,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
                     || (cfg.rightToLeft && (!rtlBitmap || !cell.bitmapGuide->noDecor))
-                    || (source.wipeReverse && !reverseBitmapLine)
+                    || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps))
+                    || (reverseMixedBitmaps && &cellStyle != &resolved)
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }

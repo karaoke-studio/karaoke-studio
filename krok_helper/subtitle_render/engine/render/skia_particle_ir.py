@@ -28,14 +28,14 @@ _TRANSITION_LAYERS = {
 _FLAME_SINGING_SWEEPS = {'flame': 2, 'flame_alt': 2, 'flame_glow': 0, 'smoke': 0, 'ember': 0, 'spark': 0}
 _ENERGY_PARTICLES = {'lightning', 'lightning_glow'} | _FLAME_SINGING_SWEEPS.keys()
 _BACK_PARTICLES = {'ripple', 'lightning_glow', 'flame_glow', 'smoke', 'shockwave'}
-_VERTICAL_STARS = {('twinkle', 1), ('twinkle_classic', 0)}
+_SINGING_STARS = {('twinkle', 1), ('twinkle_classic', 0)}
 _VERTICAL_SHAPES = {(kind, 0) for kind in ('note', 'heart', 'ripple')}
 _VERTICAL_FALLING = {(kind, 0) for kind in FALLING_PARTICLES}
 _VERTICAL_LIGHTNING = {(kind, 0) for kind in ('lightning', 'lightning_glow')}
 _VERTICAL_FLAME = set(_FLAME_SINGING_SWEEPS.items())
 _VERTICAL_SCANLINE = {('scanline', 0)}
 _VERTICAL_PARTICLE_FEATURES = (
-    (_VERTICAL_STARS, 'p07_vertical_sing_twinkle'),
+    (_SINGING_STARS, 'p07_vertical_sing_twinkle'),
     (_VERTICAL_SHAPES, 'p07_vertical_sing_shapes'),
     (_VERTICAL_FALLING, 'p07_vertical_sing_falling'),
     (_VERTICAL_LIGHTNING, 'p07_vertical_sing_lightning'),
@@ -119,6 +119,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     outlined_vertical_particles = False
     no_wipe_vertical_particles = False
     horizontal_line_motion = False
+    energy_line_motion = energy_singing_stars = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         bursts = source.get('fx_bursts', ())
@@ -167,17 +168,25 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         outlined_energy = ('p07_energy_transition_outlines' in ir['required_features']
                            and bool({entry, exit_} & ENERGY_TRANSITIONS)
                            and {entry, exit_} <= ENERGY_TRANSITIONS | {'none'})
+        energy = (not annotated and not band and not look.vertical and not look.right_to_left
+                  and not item.line.wipe_reverse and source.get('karaoke_anim') == 'none'
+                  and bool({entry, exit_} & ENERGY_TRANSITIONS))
+        energy_motion = (energy and not outlined
+                         and ((entry in ENERGY_TRANSITIONS and exit_ in {'fade', 'slide_out', 'rise'})
+                              or (exit_ in ENERGY_TRANSITIONS and entry in {'fade', 'slide_in', 'rise'})))
+        energy_stars = (energy and look.sing_fx in {'twinkle', 'twinkle_classic'}
+                        and ({entry, exit_} <= ENERGY_TRANSITIONS | {'none'} or energy_motion))
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
         if ((look.vertical and not vertical_particles) or look.right_to_left
                 or (item.line.wipe_reverse and not (band or vertical_particles))
                 or (source.get('karaoke_anim') != 'none' and not (scaled_singing or vertical_particles))
-                or (not (vertical_particles or faded_band or unscaled_motion)
+                or (not (vertical_particles or faded_band or unscaled_motion or energy_motion)
                     and entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
-                or (not (vertical_particles or faded_band or unscaled_motion)
+                or (not (vertical_particles or faded_band or unscaled_motion or energy_motion)
                     and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
                 or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
-                                  or (look.sing_fx != 'none' and not petal_with_flame)))
+                                  or (look.sing_fx != 'none' and not (petal_with_flame or energy_stars))))
                 or (look.lower_ruby_enabled and not (faded_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or (annotated and animated and index not in composed_lines)
@@ -185,6 +194,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         horizontal_line_motion |= unscaled_motion
+        energy_line_motion |= energy_motion
+        energy_singing_stars |= energy_stars
         for burst in bursts:
             kind = burst['kind']
             has_paint = 'paint_id' in burst
@@ -207,6 +218,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 if not ((entry_kind and sweep == entry_sweep and kind in _transition_layers(entry_kind, True))
                         or (exit_kind and sweep == exit_sweep and kind in _transition_layers(exit_kind, False))
                         or (petal_with_flame and sweep == _FLAME_SINGING_SWEEPS.get(kind))
+                        or (energy_stars and (kind, sweep) in _SINGING_STARS)
                         or (petal_with_band and kind == 'scanline' and sweep == 0)):
                     raise ValueError('Skia 粒子出入场暂不支持与唱字粒子同场')
             elif kind in {'fireball', 'flash', 'shockwave', 'ash'}:
@@ -260,4 +272,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_faded_scanline_particle_paint')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
+    if energy_line_motion:
+        ir['required_features'].append('p07_energy_transition_line_animation')
+    if energy_singing_stars:
+        ir['required_features'].append('p07_energy_transition_singing_stars')
     return 13 if track.rubies else version

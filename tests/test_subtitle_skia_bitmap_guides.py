@@ -112,7 +112,7 @@ def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_p
     elif change == 'reverse': line = replace(line, wipe_reverse=True)
     elif change == 'lower': style = replace(style, lower_ruby_enabled=True)
     else:
-        line = replace(line, guide_symbol=replace(symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
+        line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
     with pytest.raises(ValueError):
         ir_for(binary, (replace(track, lines=[line]), style))
 
@@ -290,6 +290,49 @@ def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path):
                for a, b in zip(reference, no_guide_shadow, strict=True))
     gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
     assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_shadow', check_p00_edges=True)
+
+
+def mixed_reverse_bitmap_guide(project, tmp_path):
+    track, style = shadowed_bitmap_guide(project, tmp_path)
+    line, = track.lines
+    style = replace(style, decoration_kind='glow', glow_before_radius_px=5, glow_after_radius_px=5,
+                    stroke_width_px=3, reverse_karaoke_anim='none')
+    return replace(track, lines=[replace(line, wipe_reverse=True)]), style
+
+
+def test_mixed_reverse_bitmap_guide_keeps_scene_after_missing_capability(binary, project, tmp_path):
+    ir = ir_for(binary, mixed_reverse_bitmap_guide(project, tmp_path))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p08_mixed_reverse_bitmap_guides')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 900, 1500])
+        with pytest.raises(NativeRendererError, match='图片导唱符'):
+            configure(process, bad)
+        replay, _ = collect(process, [1500, 900, 450], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@GPU
+def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = mixed_reverse_bitmap_guide(project, tmp_path)
+    times = (250, 450, 750, 1100, 1550)
+    line, = track.lines
+    forward = replace(track, lines=[replace(line, wipe_reverse=False)])
+    refs = []
+    for source in (track, forward):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, control = refs
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, control, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'mixed_reverse_bitmap_guide', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

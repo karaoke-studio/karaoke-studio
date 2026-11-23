@@ -292,11 +292,55 @@ def test_invalid_energy_transition_keeps_scene(binary, project, mutation):
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-@pytest.mark.parametrize('changes', [{'sing_fx': 'twinkle'}, {'exit_anim': 'fade'}])
-def test_unverified_energy_combinations_are_rejected(binary, project, changes):
+def energy_companion_source(project, companion):
     track, style = symbol_source(project, 'flame', 'lightning')
-    with pytest.raises(ValueError, match='Skia'):
-        ir_for(binary, (track, replace(style, **changes)))
+    if companion == 'fade':
+        return track, replace(style, exit_anim='fade')
+    return track, replace(style, sing_fx='twinkle')
+
+
+@pytest.mark.parametrize('companion,feature', [
+    ('fade', 'p07_energy_transition_line_animation'), ('stars', 'p07_energy_transition_singing_stars'),
+])
+def test_energy_companion_keeps_scene_after_missing_capability(binary, project, companion, feature):
+    ir = ir_for(binary, energy_companion_source(project, companion))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [1100, 1840, 2850])
+        with pytest.raises(NativeRendererError, match='粒子'):
+            configure(process, bad)
+        replay, _ = collect(process, [2850, 1840, 1100], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('companion', ['fade', 'stars'])
+def test_energy_companion_matches_actual_d2d_gpu(binary, project, companion):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = energy_companion_source(project, companion)
+    ir = ir_for(binary, (track, style))
+    line, = ir['track']['lines']
+    start, end = line['display_start_ms'], line['display_end_ms']
+    times = (start + 150, start + 450, 2100, end - 200, end - 20, end + 40)
+    control = replace(style, exit_anim='none') if companion == 'fade' else replace(style, sing_fx='none')
+    references = []
+    for look in (style, control):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = references
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, bare, strict=True))
+    gpu, raster = render_skia(binary, ir, times)
+    for time, ref, first, second in zip(times, reference, gpu, raster, strict=True):
+        assert_particle_region(ref, first, ('energy_companion', companion, time), check_contour=False,
+                               coverage=alpha_coverage)
+        assert_particle_region(first, second, ('energy_companion_raster', companion, time), check_contour=False,
+                               coverage=alpha_coverage)
 
 
 def outlined_energy_source(project):

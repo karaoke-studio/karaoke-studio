@@ -25,7 +25,8 @@ from .skia_ruby_paint_ir import ruby_decoration_kinds
 from .skia_vertical_ruby_ir import vertical_ruby_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import compose_vector_guides, validate_vector_guides
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import (
-    declare_bitmap_guides, is_undecorated_bitmap_line, uses_inline_bitmap_guides, validate_bitmap_guides,
+    declare_bitmap_guides, has_bitmap_guides, is_undecorated_bitmap_line, uses_inline_bitmap_guides,
+    validate_bitmap_guides,
 )
 from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from .skia_lower_ir import lower_sources
@@ -284,17 +285,24 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     plan, measured, geometry = prepared[0].plan, prepared[0].measured, prepared[0].geometry
     geometry.set_lanes(plan.lines)
     reverse_bitmap_lines = set()
+    mixed_reverse_bitmap_lines = False
     for item in plan.lines:
-        if not (item.line.wipe_reverse and is_undecorated_bitmap_line(item.render_line)):
+        if not (item.line.wipe_reverse and has_bitmap_guides((item.render_line,))):
             continue
         source = ir['track']['lines'][item.track_index]
+        avatar_only = is_undecorated_bitmap_line(item.render_line)
+        modes = {'none', 'utopia'} if avatar_only else {'none'}
         if ({source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-                or source.get('karaoke_anim') not in {'none', 'utopia'}
-                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
+                or source.get('karaoke_anim') not in modes
+                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                or (not avatar_only and (item.layout_style.right_to_left or _inline_role_labels(item)))):
             raise ValueError('Skia 反向头像行当前仅支持图片走字')
-        # Direct2D poses no bitmap glyphs. Retain the resolved clock and skip glyph transforms.
-        source['karaoke_anim'] = 'none'
-        reverse_bitmap_lines.add(item.track_index)
+        if avatar_only:
+            # Direct2D poses no bitmap glyphs. Retain the resolved clock and skip glyph transforms.
+            source['karaoke_anim'] = 'none'
+            reverse_bitmap_lines.add(item.track_index)
+        else:
+            mixed_reverse_bitmap_lines = True
     spin_lines = set()
     drip_lines = set()
     paired_drips = False
@@ -909,6 +917,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     project_reverse_wipe(ir)
     if reverse_bitmap_lines:
         ir['required_features'].append('p08_reverse_bitmap_guides')
+    if mixed_reverse_bitmap_lines:
+        ir['required_features'].append('p08_mixed_reverse_bitmap_guides')
     if any(item.layout_style.lit_enabled and item.layout_style.lit_style != 'volume' for item in plan.lines):
         ir['required_features'].append('p08_custom_shape_signal')
         if any(item.layout_style.lit_enabled and item.layout_style.lit_style == 'image' for item in plan.lines):

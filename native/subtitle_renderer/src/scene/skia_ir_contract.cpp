@@ -85,6 +85,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_inline_bitmap_guides",
         "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
+        "p08_mixed_reverse_bitmap_guides",
         "p08_rtl_bitmap_guides",
         "p08_bitmap_guide_shadow",
         "p08_animated_title_guides",
@@ -225,6 +226,8 @@ const QJsonArray& skiaIrProfiles() {
         "p07_character_transform",
         "p07_translucent_character_outline",
         "p07_energy_transition_outlines",
+        "p07_energy_transition_line_animation",
+        "p07_energy_transition_singing_stars",
         "p07_sing_twinkle",
         "p07_singing_particle_line_animation",
         "p07_vertical_sing_twinkle",
@@ -690,9 +693,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
     const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides");
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
+    const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
     const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
     if (reverseBitmapGuides && (!inlineBitmapGuides || !features.contains("p05_reverse_overlap")))
         throw BackendError("Skia 反向头像缺少图片或走字布局能力声明");
+    if (mixedReverseBitmapGuides && (!features.contains("p08_bitmap_guides") || !features.contains("p05_reverse_overlap")))
+        throw BackendError("Skia 含正文的反向图片导唱符缺少图片或走字布局能力声明");
     if (inlineBitmapGuides && !features.contains("p08_bitmap_guides"))
         throw BackendError("Skia 行内头像缺少图片导唱符能力声明");
     if (features.contains("p08_inline_bitmap_decoration") && !inlineBitmapGuides)
@@ -728,6 +734,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray reverseAllowed{
             "p08_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_static_shadow"
         };
+        static const QJsonArray mixedReverseAllowed{
+            "p08_mixed_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_reverse_decoration"
+        };
         static const QJsonArray rtlAllowed{
             "p08_rtl_bitmap_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
@@ -738,6 +747,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         for (const auto& feature : features)
             if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature))
                 && !(reverseBitmapGuides && reverseAllowed.contains(feature))
+                && !(mixedReverseBitmapGuides && mixedReverseAllowed.contains(feature))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
                 && !(bitmapGuideShadow && shadowAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
@@ -971,6 +981,14 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_character_transform") || transformVersion < 8
             || !features.contains("p07_sing_twinkle") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 能量过渡描边缺少逐字变换、粒子或描边能力声明");
+    if ((features.contains("p07_energy_transition_line_animation")
+            || features.contains("p07_energy_transition_singing_stars"))
+        && (!features.contains("p07_character_transform") || transformVersion < 8
+            || !features.contains("p07_sing_twinkle")))
+        throw BackendError("Skia 能量过渡组合缺少逐字变换或粒子能力声明");
+    if (features.contains("p07_energy_transition_line_animation")
+        && !(features.contains("p07_line_fade") || features.contains("p07_line_motion")))
+        throw BackendError("Skia 能量过渡的整行动画缺少对应能力");
     if ((features.contains("p07_ruby_character_entry_spin") || features.contains("p07_ruby_character_exit_spin")
             || features.contains("p07_ruby_character_drip"))
         && (!features.contains("p07_character_transform") || !features.contains("p05_resolved_ruby")))

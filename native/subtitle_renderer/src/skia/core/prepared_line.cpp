@@ -43,7 +43,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool ltrDecorationWithoutScale = !line.singingScale.active
         && (line.shadow.visible() || line.hasRubyShadow || line.scanline.enabled);
     const bool plainGlowOpacity = line.animation.quantizeOpacity && (!line.glow.empty() || line.hasRubyGlow());
-    const bool fixedOpacity = plainGlowOpacity || (!line.vertical && (line.wipeRightToLeft
+    const bool particleTransitionOpacity = line.characterGeometry.active() && !line.particles.empty();
+    const bool fixedOpacity = plainGlowOpacity || particleTransitionOpacity || (!line.vertical && (line.wipeRightToLeft
         ? (reverseDecoration || rtlRubyWithoutScale) : (ltrDecorationWithoutScale || lowerReadingDecoration)));
     // Match the reference's fixed-point layer opacity before 8-bit blending.
     constexpr float opacitySteps = 4096.f;

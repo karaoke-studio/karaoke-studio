@@ -85,10 +85,18 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (source.karaokeAnimation == "none" || verticalScale || verticalNoWipe)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
-    const bool energyOutlines = !cfg.vertical && !rubyParticles && version >= 11
-        && features.contains("p07_energy_transition_outlines")
-        && (isSkiaEnergyTransition(entry) || isSkiaEnergyTransition(exit))
+    const bool energyEntry = isSkiaEnergyTransition(entry), energyExit = isSkiaEnergyTransition(exit);
+    const bool plainEnergy = !cfg.vertical && !cfg.rightToLeft && !rubyParticles && !source.wipeReverse
+        && !source.scanlineEnabled && !source.strokeFlashEnabled && source.karaokeAnimation == "none"
+        && version >= 11 && (energyEntry || energyExit);
+    const bool energyOutlines = plainEnergy && features.contains("p07_energy_transition_outlines")
         && (entry.isEmpty() || isSkiaEnergyTransition(entry)) && (exit.isEmpty() || isSkiaEnergyTransition(exit));
+    const bool energyLineMotion = plainEnergy && features.contains("p07_energy_transition_line_animation")
+        && ((energyEntry && (source.exitAnimation == "fade" || source.exitAnimation == "slide_out" || source.exitAnimation == "rise"))
+            || (energyExit && (source.entryAnimation == "fade" || source.entryAnimation == "slide_in" || source.entryAnimation == "rise")));
+    const bool energyStars = plainEnergy && features.contains("p07_energy_transition_singing_stars")
+        && (energyLineMotion || ((energyEntry || source.entryAnimation == "none")
+                                 && (energyExit || source.exitAnimation == "none")));
     const bool horizontalMotion = features.contains("p07_singing_particle_line_animation")
         && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !source.scanlineEnabled
         && !source.strokeFlashEnabled && !animated && !rubyParticles && source.karaokeAnimation == "none"
@@ -102,7 +110,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles)
-        || (!verticalParticles && !fadedBand && !horizontalMotion && ((source.entryAnimation != "none" && entry.isEmpty())
+        || (!verticalParticles && !fadedBand && !horizontalMotion && !energyLineMotion
+            && ((source.entryAnimation != "none" && entry.isEmpty())
             || (source.exitAnimation != "none" && exit.isEmpty())))
         || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
         || (noteExit && !petalWithBand)
@@ -139,6 +148,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
                 || (!exit.isEmpty() && fx.sweep == exitSweep && isSkiaTransitionLayer(exit, fx.kind, false))
                 || (petalWithFlame && flame && fx.sweep == singingFlameSweep)
+                || (energyStars && ((fx.kind == "twinkle" && fx.sweep == 1)
+                                    || (fx.kind == "twinkle_classic" && fx.sweep == 0)))
                 || (petalWithBand && fx.kind == "scanline" && fx.sweep == 0)
             : !falling || fx.sweep == 0;
         const bool scanline = version >= 7 && fx.kind == "scanline";

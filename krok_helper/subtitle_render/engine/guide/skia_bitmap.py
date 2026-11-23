@@ -109,7 +109,7 @@ def validate_bitmap_guides(track, style, *, static_title=False):
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
         if (appearance.vertical or appearance.lower_ruby_enabled
-                or (line.wipe_reverse and not (inline and is_undecorated_bitmap_line(rendered)))
+                or (line.wipe_reverse and (static_title or (track.rubies and not is_undecorated_bitmap_line(rendered))))
                 or (not inline and any(c.role_label is not None for c in cells))):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
         if appearance.right_to_left and (track.rubies or any(not image.bitmap_no_decor for image in images)):
@@ -138,6 +138,9 @@ INLINE_BITMAP_GUIDE_FEATURES = frozenset({
     'p07_role_line_fade', 'p07_ruby_line_animation', 'p07_utopia_line_animation'})
 REVERSE_BITMAP_GUIDE_FEATURES = frozenset({
     'p08_reverse_bitmap_guides', 'p05_reverse_wipe', 'p05_reverse_overlap', 'p06_static_shadow'})
+MIXED_REVERSE_BITMAP_GUIDE_FEATURES = frozenset({
+    'p08_mixed_reverse_bitmap_guides', 'p05_reverse_wipe', 'p05_reverse_overlap', 'p06_reverse_decoration',
+})
 RTL_BITMAP_GUIDE_FEATURES = frozenset({
     'p08_rtl_bitmap_guides', 'p05_horizontal_rtl', 'p05_horizontal_rtl_cells',
     'p05_horizontal_rtl_kana_cells', 'p05_horizontal_rtl_kana_marks',
@@ -161,6 +164,8 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                 break
     if 'p08_reverse_bitmap_guides' in features:
         allowed |= REVERSE_BITMAP_GUIDE_FEATURES
+    if 'p08_mixed_reverse_bitmap_guides' in features:
+        allowed |= MIXED_REVERSE_BITMAP_GUIDE_FEATURES
     if 'p05_horizontal_rtl' in features:
         features.append('p08_rtl_bitmap_guides')
         allowed |= RTL_BITMAP_GUIDE_FEATURES

@@ -267,6 +267,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool reverseBitmapLine = line.wipeReverse && features.contains("p08_reverse_bitmap_guides")
             && !line.chars.empty()
             && std::ranges::all_of(line.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
+        const bool mixedReverseBitmaps = line.wipeReverse && features.contains("p08_mixed_reverse_bitmap_guides")
+            && std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
         const bool verticalSingingAnimation = style.vertical && singingScale && ordinaryLineAnimation
             && !line.wipeReverse && features.contains("p07_vertical_singing_line_animation")
             && (!line.scanlineEnabled || features.contains("p07_vertical_singing_scanline_line_animation"));
@@ -859,7 +861,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
         if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline)
-            && !(reverseHorizontalDecoration || reverseBitmapLine))
+            && !(reverseHorizontalDecoration || reverseBitmapLine || mixedReverseBitmaps))
             throw BackendError("Skia 横排反向走字的描边缺少对应能力");
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
         if (hasDecoration
