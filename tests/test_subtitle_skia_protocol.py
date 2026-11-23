@@ -233,6 +233,32 @@ def test_title_roles_match_actual_d2d_gpu(binary, outlined):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_title_role_decoration_matches_actual_d2d_gpu(binary, decoration):
+    from types import SimpleNamespace
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, base = role_title(outlined=True)
+    accent = base.custom_style_schemes['accent']
+    palette = accent.karaoke_colors
+    state = replace(palette.after, shadow=PaintFill(color='#D03D49DF'))
+    scheme = replace(accent, decoration_kind=decoration, glow_radius_px=7,
+                     glow_before_radius_px=7, glow_after_radius_px=7, shadow_offset_x=-9, shadow_offset_y=11,
+                     karaoke_colors=replace(palette, before=state, after=state))
+    style = replace(base, custom_style_schemes={'accent': scheme})
+    times = (299, 400, 500, 900, 1000, 1400, 1750, 1801)
+    refs = []
+    for look in (style, base):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track, realization_enabled=False)
+        refs.append(raw)
+    assert any(a != b for a, b in zip(*refs, strict=True))
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id=f'title_role_{decoration}'), times)
+
+
 def painted_title(tmp_path, mode):
     from test_subtitle_skia_image_fills import pattern, write_png
 

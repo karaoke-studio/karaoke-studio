@@ -53,6 +53,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow", "p07_singing_glow",
         "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
         "p06_static_shadow", "p06_ruby_shadow",
+        "p06_role_static_shadow",
         "p06_lower_ruby_static_gradient", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient",
         "p06_lower_ruby_shadow_image",
         "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale", "p07_role_singing_glow",

@@ -59,12 +59,11 @@ def title_style(title):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
     textured = any(paint[layer]['mode'] != 'solid' for paint in paints for layer in ('fill', 'stroke', 'stroke2'))
-    if textured and (guides or title['decoration_kind'] != 'none'):
+    if textured and (guides or any(paint['decoration_kind'] != 'none' for paint in paints)):
         return None
     if guides and (roles or title['decoration_kind'] != 'none' or title['stroke_width_px'] or title['stroke2_width_px']):
         return None
-    if roles and any(paint['decoration_kind'] != 'none'
-                     or paint['letter_spacing_px'] != title['letter_spacing_px']
+    if roles and any(paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
                      for paint in (title, *roles.values())):
         return None
@@ -73,10 +72,15 @@ def title_style(title):
     state = _title_color(title)
     font_fields = ('font_family', 'font_family_latin', 'font_size_px', 'font_weight', 'italic',
                    'latin_font_size_px', 'latin_font_weight', 'latin_font_stretch_pct')
+    decoration_fields = ('decoration_kind', 'glow_concentration_level', 'shadow_offset_x', 'shadow_offset_y')
     schemes = {}
     for label, appearance in roles.items():
         color = _title_color(appearance)
         schemes[label] = SubtitleStyleScheme(**{key: appearance[key] for key in font_fields},
+                                            **{key: appearance[key] for key in decoration_fields},
+                                            decoration_before_sync=True,
+                                            glow_before_radius_px=appearance['glow_radius_px'],
+                                            glow_after_radius_px=appearance['glow_radius_px'],
                                             stroke_width_px=appearance['stroke_width_px'],
                                             stroke2_width_px=appearance['stroke2_width_px'],
                                             stroke2_enabled=appearance['stroke2_width_px'] > 0,

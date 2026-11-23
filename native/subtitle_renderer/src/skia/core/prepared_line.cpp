@@ -545,7 +545,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 const auto edge = state.phase == Phase::Wiping
                     ? std::optional(utopia ? transformedEdge(index) : state.edge) : std::nullopt;
                 const auto* ink = state.animatedInk ? &*state.animatedInk : nullptr;
-                layer.drawCell(*source.surface->getCanvas(), local, after, edge, ink, state.transform.opacity);
+                layer.drawCell(*source.surface->getCanvas(), local, after, edge, ink,
+                               state.transform.opacity * titleOpacity);
             }
             layer.composite(canvas, source);
         }
