@@ -46,6 +46,8 @@ _VERTICAL_PARTICLE_FEATURES = (
 _VERTICAL_PARTICLE_MODES = set().union(*(modes for modes, _ in _VERTICAL_PARTICLE_FEATURES))
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
+_PAINTED_SPRITES = {'twinkle', 'twinkle_classic', 'note', 'heart'} | FALLING_PARTICLES
+_SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
 
 
 def _transition_layers(kind, entry):
@@ -84,11 +86,13 @@ def faded_band_singing_particles(line, style):
             and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart', 'snow_solid'} for burst in bursts))
 
 
-def _supports_singing_particle_paint(paint):
+def _supports_singing_particle_paint(paint, *, outlines=False):
     decor = paint.get('decor')
-    return (paint['fill']['mode'] in {'solid', 'gradient_vertical'}
-            and paint['stroke_width_px'] == paint['stroke2_width_px'] == 0
-            and (decor is None or (decor['kind'] == 'glow' and decor['fill']['mode'] in {'solid', 'gradient_vertical'})))
+    if paint['fill']['mode'] not in _SPRITE_PAINT_MODES or any(
+            paint[f'{layer}_width_px'] and (not outlines or paint[layer]['mode'] not in _SPRITE_PAINT_MODES)
+            for layer in ('stroke', 'stroke2')):
+        return False
+    return decor is None or (decor['kind'] == 'glow' and decor['fill']['mode'] in _SPRITE_PAINT_MODES)
 
 
 def vertical_singing_particle_modes(source):
@@ -110,6 +114,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = ruby_band_singing = painted_singing = False
+    painted_sprites = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -186,6 +191,9 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                                       or any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))))
         outlined_singing = unannotated_scale and outlined and not (item.line.wipe_reverse or source.get('zoom_pulse'))
         plain_scale = unannotated_scale and (not outlined or outlined_singing)
+        static_sprite_paint = (not (look.vertical or look.right_to_left or item.line.wipe_reverse or band or annotated)
+                               and (entry, exit_) == ('none', 'none') and source.get('karaoke_anim') == 'none'
+                               and not (source.get('zoom_pulse') or source.get('stroke_flash')))
         scaled_singing = (faded_band or plain_scale
                           or (annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')))
         unscaled_motion = (not look.vertical and not look.right_to_left and not item.line.wipe_reverse
@@ -234,9 +242,13 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             has_paint = 'paint_id' in burst
             if has_paint:
                 paint = ir['fx_paint_table'][burst['paint_id']]
-                if not faded_band or not _supports_singing_particle_paint(paint):
+                if faded_band and _supports_singing_particle_paint(paint):
+                    painted_singing = True
+                elif static_sprite_paint and kind in _PAINTED_SPRITES and _supports_singing_particle_paint(
+                        paint, outlines=True):
+                    painted_sprites = True
+                else:
                     raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
-                painted_singing = True
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not (band or no_wipe_singing))
                     or (annotated and band and kind != 'scanline'
@@ -304,6 +316,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_ruby_band_singing_particles')
     if painted_singing:
         ir['required_features'].append('p07_faded_scanline_particle_paint')
+    if painted_sprites:
+        ir['required_features'].append('p07_singing_sprite_paints')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:

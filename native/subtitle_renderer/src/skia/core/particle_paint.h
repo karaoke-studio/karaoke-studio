@@ -8,13 +8,28 @@
 
 namespace subtitle::skia {
 
-// Authored fills and glow widths use the same 1000-unit sprite space as the outline.
+// Authored paint and widths use the same 1000-unit space as the sprite path.
 class ParticlePaint {
+    struct Layer {
+        explicit Layer(const krok::subtitle::native::PaintStyle& source)
+            : tint(SkColorSetARGB(source.color.alpha, source.color.red, source.color.green, source.color.blue)),
+              shader(lineGradient(source, SkRect::MakeLTRB(-500, -500, 500, 500), 0)) {}
+
+        void apply(SkPaint& paint, float opacity) const {
+            paint.setColor(shader ? SK_ColorWHITE : tint);
+            paint.setShader(shader);
+            paint.setAlphaf(paint.getAlphaf() * opacity);
+        }
+
+        SkColor tint;
+        sk_sp<SkShader> shader;
+    };
+
 public:
     explicit ParticlePaint(const krok::subtitle::native::ParticleBurst& source)
-        : fill_(color(source.fill.color)), glow_(color(source.decor.color)),
-          gradient_(lineGradient(source.fill, SkRect::MakeLTRB(-500, -500, 500, 500), 0)),
-          glowGradient_(lineGradient(source.decor, SkRect::MakeLTRB(-500, -500, 500, 500), 0)),
+        : fill_(source.fill), inner_(source.stroke), outer_(source.stroke2), glow_(source.decor),
+          innerWidth_(source.strokeWidth * 1000.f / source.sizePx),
+          outerWidth_(source.stroke2Width * 1000.f / source.sizePx),
           glowRadius_(source.hasDecor ? source.decorRadius * 1000.f / source.sizePx : 0.f),
           glowPasses_(source.decorConcentration + 1) {}
 
@@ -23,13 +38,12 @@ public:
         canvas.concat(pose);
         SkPaint paint;
         paint.setAntiAlias(true);
+        paint.setStrokeJoin(SkPaint::kRound_Join);
+        paint.setStrokeCap(SkPaint::kRound_Cap);
+        paint.setStyle(SkPaint::kStroke_Style);
         if (glowRadius_ > 0.f) {
-            paint.setStrokeJoin(SkPaint::kRound_Join);
-            paint.setStrokeCap(SkPaint::kRound_Cap);
-            paint.setStyle(SkPaint::kStroke_Style);
-            paint.setColor(glowGradient_ ? SK_ColorWHITE : glow_);
-            paint.setShader(glowGradient_);
-            const float alpha = paint.getAlphaf() * opacity;
+            glow_.apply(paint, opacity);
+            const float alpha = paint.getAlphaf();
             using krok::subtitle::native::effects::kGlowHaloStrokes;
             for (int pass = glowPasses_; pass > 0; --pass) {
                 const float radius = glowRadius_ * float(pass) / float(glowPasses_);
@@ -42,21 +56,24 @@ public:
                 }
             }
         }
+        if (outerWidth_ >= 1.f) {
+            outer_.apply(paint, opacity);
+            paint.setStrokeWidth(innerWidth_ + outerWidth_);
+            canvas.drawPath(path, paint);
+        }
+        if (innerWidth_ >= 1.f) {
+            inner_.apply(paint, opacity);
+            paint.setStrokeWidth(innerWidth_);
+            canvas.drawPath(path, paint);
+        }
         paint.setStyle(SkPaint::kFill_Style);
-        paint.setColor(gradient_ ? SK_ColorWHITE : fill_);
-        paint.setShader(gradient_);
-        paint.setAlphaf(paint.getAlphaf() * opacity);
+        fill_.apply(paint, opacity);
         canvas.drawPath(path, paint);
     }
 
 private:
-    static SkColor color(const krok::subtitle::native::RgbaColor& value) {
-        return SkColorSetARGB(value.alpha, value.red, value.green, value.blue);
-    }
-
-    SkColor fill_, glow_;
-    sk_sp<SkShader> gradient_, glowGradient_;
-    float glowRadius_;
+    Layer fill_, inner_, outer_, glow_;
+    float innerWidth_, outerWidth_, glowRadius_;
     int glowPasses_;
 };
 }

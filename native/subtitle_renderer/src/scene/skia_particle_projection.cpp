@@ -149,20 +149,31 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");
     line.bursts.reserve(source.fxBursts.size());
+    const bool paintedSprites = features.contains("p07_singing_sprite_paints") && !cfg.vertical && !cfg.rightToLeft
+        && !source.wipeReverse && cfg.rubies.empty() && !source.scanlineEnabled && !source.strokeFlashEnabled
+        && !source.zoomPulseEnabled && source.karaokeAnimation == "none"
+        && source.entryAnimation == "none" && source.exitAnimation == "none";
+    const auto spritePaint = [](const auto& paint) {
+        return paint.mode == "solid" || paint.mode == "gradient_vertical";
+    };
+    const auto spriteStroke = [&](double width, const auto& paint) {
+        return width == 0 || (std::isfinite(width) && width > 0 && width <= 2048 && spritePaint(paint));
+    };
     for (const auto& fx : source.fxBursts) {
-        const bool painted = fadedBand && features.contains("p07_faded_scanline_particle_paint") && fx.hasPaint
-            && (fx.fill.mode == "solid" || fx.fill.mode == "gradient_vertical")
-            && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0
-            && (!fx.hasDecor || (fx.decorKind == "glow"
-                && (fx.decor.mode == "solid" || fx.decor.mode == "gradient_vertical")
-                && std::isfinite(fx.decorRadius) && fx.decorRadius >= 0 && fx.decorRadius <= 532
-                && fx.decorConcentration >= 0 && fx.decorConcentration <= 2));
         const bool symbol = version >= 3 && (fx.kind == "note" || fx.kind == "heart");
         const bool ripple = version >= 4 && fx.kind == "ripple";
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic")
             || (version >= 10 && animated && fx.kind == "sparkle");
         const bool assemblySprite = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
+        const bool fadedPaint = fadedBand && features.contains("p07_faded_scanline_particle_paint")
+            && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0;
+        const bool localPaint = paintedSprites && (star || symbol || falling)
+            && spriteStroke(fx.strokeWidthPx, fx.stroke) && spriteStroke(fx.stroke2WidthPx, fx.stroke2);
+        const bool painted = fx.hasPaint && (fadedPaint || localPaint) && spritePaint(fx.fill)
+            && (!fx.hasDecor || (fx.decorKind == "glow" && spritePaint(fx.decor)
+                && std::isfinite(fx.decorRadius) && fx.decorRadius >= 0 && fx.decorRadius <= 532
+                && fx.decorConcentration >= 0 && fx.decorConcentration <= 2));
         // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
         const bool impact = version >= 11 && animated
             && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
@@ -262,6 +273,14 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         if (painted) {
             burst.hasPaint = true;
             burst.fill = projectPaint(fx.fill, fx.color);
+            if (fx.strokeWidthPx > 0) {
+                burst.stroke = projectPaint(fx.stroke, fx.color);
+                burst.strokeWidth = float(fx.strokeWidthPx * cfg.dpr);
+            }
+            if (fx.stroke2WidthPx > 0) {
+                burst.stroke2 = projectPaint(fx.stroke2, fx.color);
+                burst.stroke2Width = float(fx.stroke2WidthPx * cfg.dpr);
+            }
             burst.hasDecor = fx.hasDecor;
             if (burst.hasDecor) {
                 burst.decor = projectPaint(fx.decor, fx.color);
