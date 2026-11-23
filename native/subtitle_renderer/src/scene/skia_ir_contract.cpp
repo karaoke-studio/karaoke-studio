@@ -240,6 +240,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_vertical_sing_flame",
         "p07_vertical_singing_with_particles",
         "p07_vertical_reverse_singing_particles",
+        "p07_reverse_singing_particles",
         "p07_vertical_singing_particle_line_animation",
         "p07_vertical_scanline_singing_particles",
         "p07_vertical_scanline_particles",
@@ -1006,6 +1007,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_ruby_character_drip_pair") && !features.contains("p07_ruby_character_drip"))
         throw BackendError("Skia 上注音双向逐字滴落缺少对应能力");
     const auto twinkleVersion = layout.value("sing_twinkle_schema").toDouble(-1);
+    if (features.contains("p07_reverse_singing_particles")
+        && (!features.contains("p07_sing_twinkle") || !features.contains("p05_reverse_wipe")))
+        throw BackendError("Skia 横排反向唱字粒子缺少粒子或反向走字能力声明");
     const bool verticalParticles = hasSkiaVerticalParticleProfile(features);
     if (verticalParticles
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_vertical_solid")))

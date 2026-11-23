@@ -85,6 +85,11 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && (source.karaokeAnimation == "none" || verticalScale || verticalNoWipe)
         && ((source.entryAnimation == "none" && source.exitAnimation == "none") || verticalMotion);
     const bool outlinedVertical = verticalParticles && features.contains("p07_vertical_outlined_singing_particles");
+    const bool reverseSinging = source.wipeReverse && !cfg.vertical && !cfg.rightToLeft && !rubyParticles
+        && features.contains("p07_reverse_singing_particles") && source.karaokeAnimation == "none"
+        && source.entryAnimation == "none" && source.exitAnimation == "none"
+        && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+        && (!source.scanlineEnabled || (version >= 8 && style.scanlineShape == "band" && style.scanlineMode != "role"));
     const bool energyEntry = isSkiaEnergyTransition(entry), energyExit = isSkiaEnergyTransition(exit);
     const bool plainEnergy = !cfg.vertical && !cfg.rightToLeft && !rubyParticles && !source.wipeReverse
         && !source.scanlineEnabled && !source.strokeFlashEnabled && source.karaokeAnimation == "none"
@@ -107,7 +112,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
     if ((cfg.vertical && !verticalParticles) || cfg.rightToLeft
-        || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles)
+        || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles && !reverseSinging)
         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
             && !scaledSinging && !verticalParticles)
         || (!verticalParticles && !fadedBand && !horizontalMotion && !energyLineMotion
@@ -180,7 +185,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
         const bool validBand = scanline ? source.scanlineEnabled
-            : !source.scanlineEnabled || verticalBand
+            : !source.scanlineEnabled || verticalBand || reverseSinging
                 || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (verticalParticles && !(verticalStars && star && fx.sweep == (fx.kind == "twinkle" ? 1 : 0))

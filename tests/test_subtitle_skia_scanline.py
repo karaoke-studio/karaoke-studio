@@ -168,14 +168,12 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['combined_particles', 'vertical_shape',
+@pytest.mark.parametrize('case', ['vertical_shape',
                                   'ruby_role_utopia', 'roles', 'guide', 'zoom_role', 'utopia_entry', 'utopia_reverse',
                                   'no_wipe'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
-    if case == 'combined_particles':
-        track, style = reverse_band(track, replace(style, scanline_effect='sakura', sing_fx='twinkle'))
-    elif case == 'vertical_shape':
+    if case == 'vertical_shape':
         track, style = vertical_ruby_source(project)
         style = replace(band(style), scanline_shape='flame')
     elif case == 'ruby_role_utopia':
@@ -1242,6 +1240,43 @@ def combined_particles(project, singing, scan):
     track, style = particle_band(project, scan, -180)
     return track, replace(style, sing_fx=singing, fx_particle_color='#0000FF',
                           fx_particle_color2='#0000FF', fx_particle_speed_pct=140)
+
+
+def test_reverse_singing_particles_require_the_capability(binary, project):
+    track, style = reverse_band(*combined_particles(project, 'twinkle', 'sakura'))
+    ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_reverse_singing_particles')
+    times = [500, 1100, 1600]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='粒子'):
+            configure(process, bad)
+        after, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in before) and np.array_equal(before, after[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_singing_particles_with_scanline_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = reverse_band(*combined_particles(project, 'twinkle', 'sakura'))
+    times = (300, 500, 620, 750, 1100, 1600, 1850, 2200)
+    references = []
+    for look in (style, replace(style, sing_fx='none'), replace(style, scanline_effect='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, *controls = references
+    for control in controls:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, control, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    for time, expected, first, second in zip(times, reference, gpu, raster, strict=True):
+        assert_particle_region(expected, first, ('reverse_combined', time), check_contour=False)
+        assert_particle_region(first, second, ('reverse_combined_raster', time), check_contour=False)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

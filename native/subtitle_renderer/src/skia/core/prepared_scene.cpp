@@ -109,11 +109,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     || burst.kind == "ember" || burst.kind == "spark"));
             const bool verticalSinging = source.vertical && (verticalStar || verticalShape || verticalFlame);
             const bool verticalScanline = source.vertical && band.enabled && burst.kind == "scanline" && burst.sweep == 0;
-            const bool reversedScanline = source.wipeRightToLeft && !verticalSinging;
+            const bool scanline = burst.kind == "scanline";
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
                 || (source.vertical && !verticalSinging && !verticalScanline) || (source.noWipe && !verticalSinging)
-                || burst.reverse != reversedScanline || (reversedScanline && (!band.enabled || burst.kind != "scanline")))
+                || (scanline && !band.enabled) || burst.reverse != (source.wipeRightToLeft && scanline))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
         }
         line.particles = source.particles;
