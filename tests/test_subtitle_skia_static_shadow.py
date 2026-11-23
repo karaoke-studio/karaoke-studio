@@ -25,7 +25,7 @@ _LINE_MOTIONS = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case', ['solid', 'textured', 'motion'])
+@pytest.mark.parametrize('case', ['solid', 'textured', 'motion', 'utopia'])
 def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_reverse import source
@@ -38,7 +38,7 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, cas
     track = replace(track, lines=[replace(line, chars=chars, wipe_reverse=False)])
     palette = colors('#FFF4E7C0', '#FF177FDC')
     before, after = PaintFill(color='#A044AA40'), PaintFill(color='#D0E040FF')
-    if case != 'solid':
+    if case in {'textured', 'motion'}:
         from test_subtitle_skia_image_fills import image_paint, pattern, write_png
 
         tile = write_png(tmp_path / 'role-shadow.png', pattern('transparent'))
@@ -54,6 +54,8 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, cas
     if case == 'motion':
         style = replace(style, entry_anim='rise', entry_lead_ms=320, exit_anim='fade', exit_fade_ms=600)
         times = (35, 95, 180, 450, 725, 1850, 2450, 2850, 2999)
+    elif case == 'utopia':
+        style = replace(style, karaoke_anim='utopia')
     refs = []
     for appearance in (role, replace(role, decoration_kind='none')):
         with NativeRendererProcess() as process:
@@ -70,9 +72,15 @@ def test_inline_role_shadows_match_actual_d2d_gpu(binary, project, tmp_path, cas
                                        width=640, height=360, dpr=dpr, realization_enabled=False)
         assert all(np.count_nonzero(a != np.frombuffer(b, np.uint8).reshape(a.shape)) > 100
                    for a, b in zip((refs[0][0], refs[0][-2]), raw, strict=True))
+    elif case == 'utopia':
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, replace(style, karaoke_anim='none'), times, force_warp=False,
+                                       track=track, width=640, height=360, dpr=dpr, realization_enabled=False)
+        assert any(np.count_nonzero(a != np.frombuffer(b, np.uint8).reshape(a.shape)) > 100
+                   for a, b in zip(refs[0], raw, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     feature = {'solid': 'p06_role_static_shadow', 'textured': 'p06_role_shadow_paints',
-               'motion': 'p07_role_shadow_line_animation'}[case]
+               'motion': 'p07_role_shadow_line_animation', 'utopia': 'p07_role_singing_shadow'}[case]
     assert feature in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, ('inline_role_shadows', case), check_p00_edges=True)

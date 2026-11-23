@@ -174,6 +174,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_reverse_decoration_line_animation",
         "p07_horizontal_shadow_line_animation",
         "p07_role_shadow_line_animation",
+        "p07_role_singing_shadow",
         "p07_horizontal_glow_line_animation",
         "p06_gradient_glow",
         "p06_role_static_glow",
@@ -479,6 +480,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_role_shadow_line_animation") && (!features.contains("p06_role_static_shadow")
         || (!features.contains("p07_line_fade") && !features.contains("p07_line_motion"))))
         throw BackendError("Skia 行内角色阴影缺少整行出入场能力");
+    if (features.contains("p07_role_singing_shadow") && (!features.contains("p06_role_static_shadow")
+        || !features.contains("p07_role_singing_scale")))
+        throw BackendError("Skia 行内角色阴影缺少唱字放大能力");
     if (features.contains("p06_directional_body_paints")
         && ((!features.contains("p06_body_gradient") && !features.contains("p06_image_fill"))
             || (!features.contains("p05_horizontal_rtl") && !features.contains("p05_reverse_wipe"))))

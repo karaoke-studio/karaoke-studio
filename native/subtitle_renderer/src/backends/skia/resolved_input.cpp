@@ -816,9 +816,18 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleShadowMotion = !staticShadowLine && ordinaryLineAnimation
             && features.contains("p07_role_shadow_line_animation");
         const bool roleShadowRuby = staticShadowLine && features.contains("p06_role_shadow_ruby");
+        const bool roleSingingShadow = staticShadowLine && roleSinging && !anyReadings
+            && features.contains("p07_role_singing_shadow")
+            && style.beforeDecorPaint.mode == "solid" && style.afterDecorPaint.mode == "solid"
+            && std::ranges::all_of(line.chars, [&](const auto& cell) {
+                if (cell.styleIndex < 0) return true;
+                const auto& look = projected.charStyles[cell.styleIndex];
+                return look.beforeDecorPaint.mode == "solid" && look.afterDecorPaint.mode == "solid";
+            });
         const bool inlineShadow = roleStaticShadow && hasInlineRoles && (!annotated || roleShadowRuby)
             && !vectorGuides && !hasBitmapGuide
-            && !style.vertical && !style.rightToLeft && !line.wipeReverse && line.karaokeAnimation == "none"
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse
+            && (line.karaokeAnimation == "none" || roleSingingShadow)
             && (staticShadowLine || roleShadowMotion) && !line.scanlineEnabled
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         prepared.shadow = skiaStaticShadow(style);
