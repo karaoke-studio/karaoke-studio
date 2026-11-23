@@ -491,7 +491,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
-            && staticScanline && cfg.rubies.empty() && !source.scanlineEnabled
+            && staticScanline && !source.scanlineEnabled
             && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && !features.contains("p06_static_shadow") && !features.contains("p06_static_glow");
@@ -515,7 +515,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
             && cfg.rubies.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
-            && staticScanline && cfg.rubies.empty() && !source.scanlineEnabled
+            && staticScanline && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && source.fxBursts.empty() && !features.contains("p06_static_shadow") && !features.contains("p06_static_glow");
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides

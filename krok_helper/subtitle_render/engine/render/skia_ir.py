@@ -491,7 +491,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
         for item in vector_guide_lines:
             source = ir['track']['lines'][item.track_index]
             if item.layout_style.vertical and (
-                    track.rubies or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                     or source.get('karaoke_anim') not in {'none', 'no_wipe'}
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                     or any(uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow'))):

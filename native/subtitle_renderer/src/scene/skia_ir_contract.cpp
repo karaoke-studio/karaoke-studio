@@ -646,6 +646,13 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 导唱符布局版本无效");
     const bool rtlVectorGuides = features.contains("p05_rtl_vector_guides");
     const bool verticalVectorGuides = features.contains("p05_vertical_vector_guides");
+    static const QJsonArray verticalGuideLayout{
+        "p05_vertical_solid", "p05_vertical_japanese_glyphs", "p05_vertical_columns",
+        "p05_reverse_wipe", "p05_reverse_overlap",
+        "p06_vertical_outline", "p06_vertical_columns_outline", "p06_vertical_reverse_outline",
+        "p05_vertical_ruby", "p05_vertical_ruby_groups", "p05_vertical_ruby_extended_units",
+        "p05_vertical_shifted_ruby", "p05_vertical_rotated_ruby", "p06_vertical_ruby_outline",
+        "p06_vertical_ruby_group_paint", "p05_vertical_reverse_ruby_track", "p05_vertical_columns_ruby"};
     if (verticalVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排矢量导唱符缺少竖排或导唱符布局能力");
     if (rtlVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_horizontal_rtl")))
@@ -690,10 +697,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_rtl_vector_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks",
             "p05_reverse_wipe", "p05_reverse_overlap"};
-        static const QJsonArray verticalGuides{
-            "p05_vertical_vector_guides", "p05_vertical_solid", "p05_vertical_japanese_glyphs",
-            "p05_vertical_columns", "p05_reverse_wipe", "p05_reverse_overlap", "p07_no_wipe",
-            "p06_vertical_outline", "p06_vertical_columns_outline", "p06_vertical_reverse_outline"};
+        static const QJsonArray verticalGuides{"p05_vertical_vector_guides", "p07_no_wipe"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
         const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
@@ -706,7 +710,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(useFadedScanline && fadedScanline.contains(feature))
                 && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature))
                 && !(roleVectorGuides && roleGuides.contains(feature)) && !(rtlVectorGuides && rtlGuides.contains(feature))
-                && !(verticalVectorGuides && verticalGuides.contains(feature)))
+                && !(verticalVectorGuides && (verticalGuides.contains(feature) || verticalGuideLayout.contains(feature))))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
     if (features.contains("p07_faded_scanline_prefix_guides")
@@ -774,11 +778,6 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p08_bitmap_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_lower_ruby_glow", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient", "p06_lower_ruby_static_gradient"
         };
-        static const QJsonArray verticalAllowed{
-            "p08_vertical_bitmap_guides", "p05_vertical_solid", "p05_vertical_columns", "p05_vertical_japanese_glyphs",
-            "p05_reverse_wipe", "p05_reverse_overlap",
-            "p06_vertical_outline", "p06_vertical_columns_outline", "p06_vertical_reverse_outline"
-        };
         if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
             throw BackendError("Skia 图片导唱符布局版本无效");
         for (const auto& feature : features)
@@ -787,7 +786,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(mixedReverseBitmapGuides && mixedReverseAllowed.contains(feature))
                 && !(rtlBitmapGuides && rtlAllowed.contains(feature))
                 && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))
-                && !(verticalBitmapGuides && verticalAllowed.contains(feature))
+                && !(verticalBitmapGuides && (feature == QJsonValue("p08_vertical_bitmap_guides")
+                    || verticalGuideLayout.contains(feature)))
                 && !(bitmapGuideShadow && shadowAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
     }

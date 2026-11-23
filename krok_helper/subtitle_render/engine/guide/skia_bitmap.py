@@ -15,6 +15,7 @@ import math
 
 from PyQt6.QtGui import QImageReader
 
+from ..layout.line.skia_vertical import VERTICAL_GUIDE_LAYOUT_FEATURES
 from ..style.style_semantics import uses_authored_decoration
 from .metrics import bitmap_guide_image, vector_glyph_width
 from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
@@ -148,11 +149,7 @@ LOWER_RUBY_BITMAP_FEATURES = frozenset({
     'p08_bitmap_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_lower_ruby_glow', 'p06_lower_ruby_shadow', 'p06_lower_ruby_shadow_gradient', 'p06_lower_ruby_static_gradient',
 })
-VERTICAL_BITMAP_GUIDE_FEATURES = frozenset({
-    'p08_vertical_bitmap_guides', 'p05_vertical_solid', 'p05_vertical_columns', 'p05_vertical_japanese_glyphs',
-    'p05_reverse_wipe', 'p05_reverse_overlap',
-    'p06_vertical_outline', 'p06_vertical_columns_outline', 'p06_vertical_reverse_outline',
-})
+VERTICAL_BITMAP_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p08_vertical_bitmap_guides'}
 
 
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
@@ -167,7 +164,7 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                       if item.layout_style.vertical and has_bitmap_guides((item.render_line,))]
     for item in vertical_lines:
         source = ir['track']['lines'][item.track_index]
-        if (static_title or 'p05_resolved_ruby' in features or source.get('karaoke_anim') != 'none'
+        if (static_title or source.get('karaoke_anim') != 'none'
                 or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                 or any(uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow'))):

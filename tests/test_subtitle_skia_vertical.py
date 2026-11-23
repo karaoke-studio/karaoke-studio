@@ -980,6 +980,54 @@ def test_vertical_reading_latin_and_middle_dot_match_actual_gpu(binary, project)
     assert_gpu_parity(binary, track, style, 1.5, 'vertical_latin_punctuation_reading')
 
 
+def vertical_guide_and_reading(project, tmp_path, guide_kind, family=None):
+    from test_subtitle_skia_bitmap_guides import image
+    from test_subtitle_skia_vector_guides import SQUARE
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+
+    track, style = vertical_ruby_source(project, span=(1, 2), position='center', family=family)
+    line, = track.lines
+    guide = SQUARE
+    if guide_kind == 'bitmap':
+        guide = GuideSymbol(kind='bitmap', bitmap_before_path=image(tmp_path / 'guide.png'),
+                            bitmap_no_decor=True, bitmap_zoom_percent=70, duration_ms=300)
+    return replace(track, lines=[replace(line, guide_symbol=guide)]), style
+
+
+@pytest.mark.parametrize('guide_kind', ['vector', 'bitmap'])
+def test_vertical_guide_moves_the_reading_target_to_render_cells(binary, project, tmp_path, guide_kind):
+    ir = ir_for(binary, vertical_guide_and_reading(project, tmp_path, guide_kind))
+    source, = ir['track']['lines']
+    layout, = ir['skia_layout']['lines']
+    group, = layout['ruby_groups']
+    assert group['style_cell'] == 2
+    assert group['units'][0]['interval_ms'] == source['resolved_intervals'][2]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 750, 1350, 750])
+    assert all(frame.any() for frame in frames) and np.array_equal(frames[1], frames[-1])
+
+
+@GPU
+@pytest.mark.parametrize('guide_kind', ['vector', 'bitmap'])
+def test_vertical_guide_and_reading_match_actual_d2d_gpu(binary, project, tmp_path, guide_kind):
+    from PyQt6.QtGui import QFontDatabase
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    if 'Meiryo' not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
+    track, style = vertical_guide_and_reading(project, tmp_path, guide_kind, family='Meiryo')
+    times = (450, 750, 950, 1350, 1670)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, refs, gpu, raster, ('vertical_guide_and_reading', guide_kind), check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_vertical_ruby_groups_in_one_column_keep_independent_clocks(binary, project, target):
     # Reverse source order to exercise top-to-bottom placement by authored span.

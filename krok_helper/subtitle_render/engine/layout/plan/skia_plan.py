@@ -42,6 +42,7 @@ def prepare_skia_layout(track, style, *, measure, resolve_font, dpr=1, **plan_kw
                                       measure=measure, resolve_font=resolve_font)
                 if not style.vertical and (track.rubies or any(s.lower_ruby_enabled for s in styles)) else None)
         vertical_readings = (prepare_vertical_readings(track, style, styles, measured, dpr=dpr,
+                                                       rendered_lines=rendered.lines,
                                                        resolve_font=resolve_font, measure=measure)
                              if style.vertical and track.rubies else None)
         geometry = SkiaCollisionGeometry(track, style, styles, measured, ruby_geometry=ruby,

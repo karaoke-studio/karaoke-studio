@@ -9,6 +9,7 @@ cell's left edge, and advances by the *unrounded* ``size * advance / em``
 from __future__ import annotations
 
 import math
+from ..layout.line.skia_vertical import VERTICAL_GUIDE_LAYOUT_FEATURES
 
 
 def vector_guide_advance(glyph, size) -> float:
@@ -120,11 +121,7 @@ RTL_VECTOR_GUIDE_FEATURES = frozenset({
     'p05_horizontal_rtl_kana_cells', 'p05_horizontal_rtl_kana_marks',
     'p05_reverse_wipe', 'p05_reverse_overlap',
 })
-VERTICAL_VECTOR_GUIDE_FEATURES = frozenset({
-    'p05_vertical_vector_guides', 'p05_vertical_solid', 'p05_vertical_japanese_glyphs', 'p05_vertical_columns',
-    'p05_reverse_wipe', 'p05_reverse_overlap', 'p07_no_wipe',
-    'p06_vertical_outline', 'p06_vertical_columns_outline', 'p06_vertical_reverse_outline',
-})
+VERTICAL_VECTOR_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p05_vertical_vector_guides', 'p07_no_wipe'}
 VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
@@ -159,6 +156,7 @@ def compose_vector_guides(track, features):
         return
     animated_gradient = 'p06_animated_singing_gradient_fill' in features
     faded_scanline = 'p07_faded_scanline_prefix_guides' in features
+    vertical_guides = 'p05_vertical_vector_guides' in features
     line_motion = 'p07_utopia_line_animation' in features
     inline_outlines = ('p06_primary_solid_outline' in features
                        and set(features) <= (VECTOR_GUIDE_COMPOSITION_FEATURES | RTL_VECTOR_GUIDE_FEATURES
@@ -170,7 +168,7 @@ def compose_vector_guides(track, features):
         chars = render_line_with_guide_symbols(line).chars
         if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
             continue
-        if (animated_gradient or faded_scanline or line_motion) and vector_guides_form_prefix(chars):
+        if (animated_gradient or faded_scanline or line_motion or vertical_guides) and vector_guides_form_prefix(chars):
             continue
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             if not inline_outlines:
@@ -179,7 +177,7 @@ def compose_vector_guides(track, features):
     allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
     if 'p05_rtl_vector_guides' in features:
         allowed |= RTL_VECTOR_GUIDE_FEATURES
-    if 'p05_vertical_vector_guides' in features:
+    if vertical_guides:
         allowed |= VERTICAL_VECTOR_GUIDE_FEATURES
     if animated_gradient or faded_scanline:
         allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES

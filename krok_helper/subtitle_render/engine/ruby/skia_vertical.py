@@ -1,5 +1,5 @@
 """Prepare vertical readings and reserve their width before page placement."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 from ..layout.line.skia_vertical import upright_vertical_text, vertical_glyph_rotates, vertical_glyph_shift
@@ -24,17 +24,21 @@ def extended_reading_unit(unit):
     return len(unit) == 1 and (unit == '・' or is_n3_latin_text(unit))
 
 
-def prepare_vertical_readings(track, style, styles, measured, *, dpr, resolve_font, measure):
+def prepare_vertical_readings(track, style, styles, measured, *, dpr, resolve_font, measure, rendered_lines=None):
     annotation_indices = {id(ruby): i for i, ruby in enumerate(track.rubies)}
     entries, readings = [], []
     version = 1
     shifted = rotated = False
     extended = False
-    for index, (line, look) in enumerate(zip(track.lines, styles, strict=True)):
-        intervals = measured.snapshot.resolve_intervals(line, style)
-        targets = sorted(upper_ruby_targets(track, index, line, look, intervals, annotation_indices),
+    rendered_lines = track.lines if rendered_lines is None else rendered_lines
+    for index, (line, rendered, look) in enumerate(zip(track.lines, rendered_lines, styles, strict=True)):
+        intervals = measured.snapshot.resolve_intervals(rendered, style)
+        prefix = len(rendered.chars) - len(line.chars)
+        targets = sorted(upper_ruby_targets(track, index, line, look, intervals[prefix:], annotation_indices),
                          key=lambda target: min(target.indices))
-        timing = prepare_ruby_target_timing(line, targets, look.ruby_main_progress_mode)
+        if prefix:
+            targets = [replace(target, indices=tuple(i + prefix for i in target.indices)) for target in targets]
+        timing = prepare_ruby_target_timing(rendered, targets, look.ruby_main_progress_mode)
         groups, previous_end = [], 0
         for target, clock in zip(targets, timing.readings, strict=True):
             if min(target.indices) < previous_end:
