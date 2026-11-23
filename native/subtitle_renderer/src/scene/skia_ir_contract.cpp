@@ -244,6 +244,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_ruby_band_singing_particles",
         "p07_scanline_image",
         "p07_reverse_scanline_image",
+        "p07_reverse_procedural_scanline",
         "p07_original_scanline_image_palette",
         "p07_composed_scanline",
         "p07_role_scanline_layers",
@@ -999,6 +1000,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_reverse_scanline_image")
         && (!features.contains("p07_scanline_image") || !features.contains("p05_reverse_wipe")))
         throw BackendError("Skia 反向图片扫字线缺少走字方向或图片能力声明");
+    if (features.contains("p07_reverse_procedural_scanline")
+        && (!features.contains("p07_scanline_shape") || !features.contains("p05_reverse_wipe")))
+        throw BackendError("Skia 反向火焰或水泡扫字线缺少走字方向或形态能力声明");
     if (features.contains("p07_original_scanline_image_palette") && !features.contains("p07_scanline_image"))
         throw BackendError("Skia 原图扫字线缺少图片能力声明");
     if (features.contains("p07_scanline_shape_line_animation")

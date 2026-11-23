@@ -1141,6 +1141,31 @@ def test_procedural_scanline_palette_matches_actual_d2d_gpu(binary, project, sha
     assert_glow_parity(times, shaped, gpu, raster, (shape, mode, brightness))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape,mode', [('flame', 'color'), ('bubble', 'follow_after')])
+def test_reverse_procedural_scanline_matches_actual_d2d_gpu(binary, project, shape, mode):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, band_style = reverse_band(*paint_band(project, mode))
+    style = replace(band_style, scanline_shape=shape)
+    times, dpr = (450, 550, 750, 1100, 1550), 3
+    reference = []
+    for look in (style, band_style):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    shaped, band_frames = reference
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
+               for a, b in zip(shaped, band_frames, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p07_reverse_procedural_scanline' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, shaped, gpu, raster, ('reverse_procedural_scanline', shape), check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('mode,palette', [('follow_before', ((160, 40, 80),)),
                                          ('follow_after', ((29, 88, 176),)),

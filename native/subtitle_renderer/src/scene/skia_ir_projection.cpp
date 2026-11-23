@@ -330,6 +330,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool originalImagePalette = basicImage && features.contains("p07_original_scanline_image_palette")
             && resolved.scanlineImageColorLayers.isEmpty() && resolved.scanlineMode != "role";
         const bool reverseImage = basicImage && features.contains("p07_reverse_scanline_image");
+        const bool reverseProceduralShape = features.contains("p07_reverse_procedural_scanline")
+            && staticScanline && !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
+            && !features.contains("p05_resolved_ruby") && source.karaokeAnimation == "none" && source.fxBursts.empty()
+            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
         const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging && staticScanline
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !features.contains("p05_lower_ruby")
             && resolved.scanlineShape == "flame" && resolved.scanlineMode == "color" && source.fxBursts.empty();
@@ -337,7 +341,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
             && (resolved.scanlineMode == "color" || shapePalette || originalImagePalette)
-            && (!source.wipeReverse || reverseImage)
+            && (!source.wipeReverse || reverseImage || reverseProceduralShape)
             && (!source.zoomPulseEnabled || zoomScanlineShape) && !source.strokeFlashEnabled
             && (source.fxBursts.empty() || shapedSinging);
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
@@ -373,7 +377,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (!source.wipeReverse || reverseSingingScanline
                 || (cfg.vertical && features.contains("p07_vertical_reverse_scanline_singing")))
             && (staticScanline || movingScanline || particleScanline || utopiaEntryScanline);
-        // Shaped scanlines use a solid palette and the forward line's own front.
+        // Shaped scanlines use a solid palette and the line's own front.
         const bool scanlineShape = solidShape && (staticScanline || movingScanline || particleScanlineImage);
         const bool lowerScanline = features.contains("p07_lower_ruby_scanline")
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
