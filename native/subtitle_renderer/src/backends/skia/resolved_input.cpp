@@ -965,8 +965,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !(reverseHorizontalDecoration || reverseBitmapLine || mixedReverseBitmaps))
             throw BackendError("Skia 横排反向走字的描边缺少对应能力");
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
+        const bool rtlBitmapDecoration = style.rightToLeft && hasBitmapGuide
+            && features.contains("p08_rtl_bitmap_guide_decoration") && !annotated && !hasInlineRoles
+            && !vectorGuides && !line.wipeReverse && line.karaokeAnimation == "none"
+            && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
+            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if (hasDecoration
-            && ((style.vertical && !verticalDecoration) || (style.rightToLeft && (!rtlRuby || (hasShadow && !rtlShadow)))
+            && ((style.vertical && !verticalDecoration)
+                || (style.rightToLeft && !rtlBitmapDecoration && (!rtlRuby || (hasShadow && !rtlShadow)))
                 || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration))
                 || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
                     || horizontalShadowMotion || horizontalGlowMotion

@@ -560,6 +560,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
             && cfg.rubies.empty();
+        const bool rtlBitmapDecoration = rtlBitmap && features.contains("p08_rtl_bitmap_guide_decoration")
+            && staticScanline && !source.wipeReverse && !source.scanlineEnabled && source.karaokeAnimation == "none"
+            && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
             && staticScanline && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
@@ -648,7 +651,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                         || source.strokeFlashEnabled || !source.fxBursts.empty()))
                     throw BackendError("Skia 图片导唱符与下方注音需要静态正向横排");
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || (cfg.vertical && !verticalBitmap)
-                    || (cfg.rightToLeft && (!rtlBitmap || !cell.bitmapGuide->noDecor))
+                    || (cfg.rightToLeft && (!rtlBitmap || (!cell.bitmapGuide->noDecor
+                        && (!rtlBitmapDecoration || &cellStyle != &resolved))))
                     || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps || verticalBitmap))
                     || (reverseMixedBitmaps && &cellStyle != &resolved)
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))

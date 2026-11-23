@@ -328,6 +328,34 @@ def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project,
     assert np.array_equal(output, replay[::-1])
 
 
+@GPU
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_rtl_bitmap_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp_path, decoration):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = shadowed_bitmap_guide(project, tmp_path)
+    style = replace(style, right_to_left=True, decoration_kind=decoration, glow_before_radius_px=5,
+                    glow_after_radius_px=6)
+    line, = track.lines
+    plain = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=True))])
+    times, dpr = (250, 450, 750, 1100, 1550, 1950), 3
+    refs = []
+    for source in (track, plain):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 40 for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p08_rtl_bitmap_guide_decoration' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, ('rtl_bitmap_guide', decoration), check_p00_edges=True)
+    gpu, raster = render_skia(binary, ir_for(binary, (plain, style), dpr=dpr), times)
+    assert_glow_parity(times, refs[1], gpu, raster, ('rtl_bitmap_guide_no_decor', decoration), check_p00_edges=True)
+
+
 def gradient_glowing_bitmap_guide(project, tmp_path):
     track, style = shadowed_bitmap_guide(project, tmp_path, paint_mode='gradient')
     style = replace(style, decoration_kind='glow', glow_before_radius_px=6, glow_after_radius_px=7)
