@@ -35,7 +35,8 @@ from .skia_line_animation_ir import (
     declare_line_animations, is_noise_animation, ordinary_line_animation, write_line_animation_schemas)
 from .skia_singing_ir import vertical_singing_lines, write_utopia_pivots
 from .skia_scanline_ir import (
-    declare_vertical_scanline_viewport, scanline_features, suppress_no_wipe_bands, write_scanline_schema,
+    declare_vertical_scanline_viewport, scanline_features, suppress_no_wipe_bands, transformed_cell_band,
+    write_scanline_schema,
 )
 from .skia_outline_ir import declare_outline_layers
 from .skia_title_ir import build_title_sources
@@ -188,7 +189,8 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         if (look.vertical or look.right_to_left or line.wipe_reverse
                 or (index not in character_warp_lines and index not in composed_geometry_lines
                     and (source.get('karaoke_anim') != 'none' or track.rubies))
-                or (source.get('scanline') and item.track_index not in particle_band_tracks) or look.lower_ruby_enabled
+                or (source.get('scanline') and item.track_index not in particle_band_tracks
+                    and not transformed_cell_band(source, look)) or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
                        for c in render_line_with_guide_symbols(line).chars)):
             raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排正文')

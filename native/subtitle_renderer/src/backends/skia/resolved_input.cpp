@@ -738,8 +738,16 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     || (fade.exit && fade.exitKind != Kind::Fade && end > std::max(line.endMs, prepared.endMs - 600)))
                     throw BackendError("Skia 逐字滴落/翻转期间暂不支持走字");
             }
+            const auto bandAnimation = [](std::string_view animation) {
+                return animation == "none" || animation == "char_drip" || animation == "spin_flip";
+            };
+            const bool transformBand = features.contains("p07_scanline_character_transform") && !geometry
+                && !annotated && !hasInlineRoles && !vectorGuides && line.karaokeAnimation == "none"
+                && bandAnimation(line.entryAnimation) && bandAnimation(line.exitAnimation)
+                && style.scanlineShape == "band" && (style.scanlineMode == "default" || style.scanlineMode == "color")
+                && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty();
             if (style.vertical || style.rightToLeft || line.wipeReverse || prepared.noWipe
-                || (line.scanlineEnabled && !petalScanline))
+                || (line.scanlineEnabled && !(petalScanline || transformBand)))
                 throw BackendError("Skia 逐字滴落/翻转仅支持正向横排正文");
         }
         const bool primaryOutline = style.strokeWidth > 0, secondaryOutline = style.stroke2Width > 0;

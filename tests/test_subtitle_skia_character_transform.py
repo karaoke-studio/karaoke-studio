@@ -91,12 +91,11 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
     assert np.array_equal(frames, expected)
 
 
-@pytest.mark.parametrize('case', ['scanline', 'rtl',
+@pytest.mark.parametrize('case', ['rtl',
                                   'reverse', 'vertical', 'roles', 'guide', 'no_wipe'])
 def test_unverified_combinations_are_rejected(binary, project, case):
     track, style = transform_source(project)
-    if case == 'scanline': style = band(style)
-    elif case == 'rtl': style = replace(style, right_to_left=True)
+    if case == 'rtl': style = replace(style, right_to_left=True)
     elif case == 'reverse': track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
     elif case == 'vertical':
         track, style = vertical_ruby_source(project); track = replace(track, rubies=[])
@@ -236,6 +235,41 @@ def singing_overlap(project, effect, handoff=False):
     if handoff:
         chars[0] = replace(chars[0], pause_release_ms=140)
     return replace(track, lines=[replace(line, chars=chars, end_ms=1200)]), style
+
+
+def test_character_transform_scanline_keeps_scene_without_capability(binary, project):
+    track, style = singing_overlap(project, 'char_drip')
+    ir = ir_for(binary, (track, band(style)))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_character_transform')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [125, 400])
+        with pytest.raises(NativeRendererError, match='逐字'):
+            configure(process, bad)
+        replay, _ = collect(process, [400, 125], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_character_transform_scanline_matches_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = singing_overlap(project, 'char_drip')
+    times = (100, 125, 159, 200, 260, 400, 700, 1200)
+    dpr = 3
+    references = []
+    for look in (band(style), style):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    reference, bare = references
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:4], bare[:4], strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, band(style)), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, 'character_transform_scanline', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('effect', ['char_drip', 'spin_flip'])

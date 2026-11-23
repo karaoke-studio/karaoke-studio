@@ -635,8 +635,17 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             });
     } else line.scanline.draw(canvas, line.cells, tMs, line.inkStart, line.inkTop, [&](std::size_t index, bool sung) {
         const auto& cell = line.cells[index];
-        const float opacity = states[index].transform.opacity * scanlineAlpha;
+        const auto& state = states[index];
+        const float opacity = state.transform.opacity * scanlineAlpha;
         if (opacity <= 0) return;
+        if (state.transform.transformed) {
+            const float pad = line.scanline.solidPad;
+            // The line-wide scanline mask stays within the unposed ink band.
+            canvas.clipRect(SkRect::MakeLTRB(-1e6f, line.bodyInk.top() - pad, 1e6f, line.bodyInk.bottom() + pad),
+                            SkClipOp::kIntersect, true);
+            if (!state.animatedInk) canvas.concat(state.transform.matrix);
+        }
+        const auto& body = state.animatedInk ? *state.animatedInk : cell.path;
         const auto setPaint = [&](int layer, std::uint32_t before, std::uint32_t after) {
             const auto& shader = line.scanline.gradients[layer][sung];
             paint.setShader(shader);
@@ -648,14 +657,20 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             if (!stroke) continue;
             SkAutoCanvasRestore keep(&canvas, true);
             if (stroke->protectBody) {
-                canvas.clipPath(cell.path, SkClipOp::kDifference, true);
-                if (outer && cell.outline) canvas.clipPath(cell.outline->path, SkClipOp::kDifference, true);
+                canvas.clipPath(body, SkClipOp::kDifference, true);
+                if (outer && cell.outline) {
+                    const auto inner = state.animatedInk ? cell.outline->path.makeTransform(state.transform.matrix)
+                                                         : cell.outline->path;
+                    canvas.clipPath(inner, SkClipOp::kDifference, true);
+                }
             }
             setPaint(outer ? 0 : 1, stroke->before, stroke->after);
-            canvas.drawPath(stroke->path, paint);
+            if (!state.animatedInk) canvas.drawPath(stroke->path, paint);
+            else if (stroke->protectBody) canvas.drawPath(stroke->path.makeTransform(state.transform.matrix), paint);
+            else drawFixedOutline(canvas, body, paint, stroke->width);
         }
         setPaint(2, cell.before, cell.after);
-        canvas.drawPath(cell.path, paint);
+        canvas.drawPath(body, paint);
         paint.setShader(nullptr);
     });
     if (line.hasStrokeFlash)

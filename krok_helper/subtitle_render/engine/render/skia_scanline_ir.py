@@ -30,12 +30,23 @@ def fixed_faded_utopia_band(line, style):
                      or line.get('stroke_flash') or line.get('zoom_pulse') or line.get('fx_bursts')))
 
 
+def transformed_cell_band(line, style):
+    animations = {line.get('entry_anim'), line.get('exit_anim')}
+    transforms = {'char_drip', 'spin_flip'}
+    return (line.get('scanline') and bool(animations & transforms) and animations <= transforms | {'none'}
+            and line.get('karaoke_anim') == 'none' and style.scanline_shape == 'band'
+            and style.scanline_mode in {'default', 'color'}
+            and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('wipe_reverse')
+                     or line.get('stroke_flash') or line.get('zoom_pulse') or line.get('fx_bursts')))
+
+
 def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks):
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
     unscaled_line_motion = faded_band_particles = False
     inline_role_fade = prefix_guide_fade = False
     static_cell_band = False
+    transform_band = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
     reverse_vertical_palette = False
     singing_vertical_palette = False
@@ -121,6 +132,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         chars = render_line_with_guide_symbols(source).chars
         inline_roles = any(c.role_label is not None for c in chars)
         vector_guides = any(c.vector_glyph is not None for c in chars)
+        transform_band |= (transformed_cell_band(line, look)
+                           and not (track.rubies or inline_roles or vector_guides))
         rtl_scanline = (look.right_to_left and ordinary and look.scanline_shape == 'band'
                         and look.scanline_mode in {'color', 'default', 'brighten', 'follow_before', 'follow_after'}
                         and line.get('karaoke_anim') == 'none' and not track.rubies and not look.lower_ruby_enabled
@@ -191,6 +204,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_inline_role_faded_scanline')
     if static_cell_band:
         features.append('p07_scanline_static_cells')
+    if transform_band:
+        features.append('p07_scanline_character_transform')
     if prefix_guide_fade:
         features.append('p07_faded_scanline_prefix_guides')
     if vertical_band:
