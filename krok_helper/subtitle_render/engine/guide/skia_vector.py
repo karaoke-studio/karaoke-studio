@@ -167,8 +167,9 @@ def compose_vector_guides(plan_lines, ir):
         if look.vertical and (has_shadow or has_glow):
             required.add('p06_vertical_vector_guide_decoration')
         if lower_reading:
-            singing_reading = singing and forward and plain_effects and ordinary_line_animation(source)
-            if look.vertical or line.wipe_reverse or not (whole_line or singing_reading):
+            allowed_modes = {'none', 'utopia', 'no_wipe'} if forward else {'none'}
+            if (look.vertical or line.wipe_reverse or not plain_effects or not ordinary_line_animation(source)
+                    or source.get('karaoke_anim') not in allowed_modes):
                 raise ValueError('Skia 矢量导唱符与下方注音的行布局或动画尚未支持')
         if has_shadow and not (look.vertical or upper_reading or source.get('scanline')
                                or 'p05_role_vector_guides' in features):

@@ -172,7 +172,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 }
             }
             if (cell.bitmap && (!cell.path.isEmpty() || cell.outline || cell.outerOutline
-                                || source.noWipe || cell.strokeFlashWidth > 0))
+                                || cell.strokeFlashWidth > 0))
                 throw std::runtime_error("Skia 图片导唱符走字单元的布局无效");
             if (cell.bodyPaintIndex < -1 || cell.bodyPaintIndex >= int(line.roleBodyPaints.size()))
                 throw std::runtime_error("Skia 正文角色画笔索引无效");

@@ -189,7 +189,7 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                 continue
             source = ir['track']['lines'][item.track_index]
             if (item.line.wipe_reverse
-                    or source.get('karaoke_anim') not in {'none', 'utopia'}
+                    or source.get('karaoke_anim') not in {'none', 'no_wipe', 'utopia'}
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
                 raise ValueError('Skia 图片导唱符与下方注音的行布局或动画尚未支持')

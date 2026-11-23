@@ -908,14 +908,17 @@ def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_
 
 
 @GPU
-@pytest.mark.parametrize('entry,rtl', [('none', False), ('fade', False), ('none', True)])
-def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path, entry, rtl):
+@pytest.mark.parametrize('entry,rtl,karaoke', [
+    ('none', False, 'none'), ('fade', False, 'none'), ('none', True, 'none'), ('none', False, 'no_wipe'),
+])
+def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path, entry, rtl, karaoke):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     base = next(c for c in build_cases(tmp_path / 'assets') if c.case_id == 'lower_ruby')
     track, style = bitmap_lower_reading(base.track, base.style, image(tmp_path / 'guide.png'))
+    style = replace(style, karaoke_anim=karaoke)
     if rtl:
         style = replace(style, right_to_left=True, decoration_kind='none', decoration_kind_before='none',
                         ruby_decoration_kind='none', ruby_decoration_kind_before='none')
@@ -923,6 +926,12 @@ def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_pa
     if entry == 'fade':
         style = replace(style, entry_anim='fade', decoration_kind='none', ruby_decoration_kind='none')
         times = (450, 600, 850, 1000, 1550)
+    if karaoke == 'no_wipe':
+        line, = track.lines
+        guide = replace(line.guide_symbol, bitmap_after_path=image(tmp_path / 'sung.png', color='#3048FF'))
+        track = replace(track, lines=[replace(line, guide_symbol=guide)])
+        start = line.chars[0].start_ms
+        times = (start - guide.duration_ms // 2, start - 1, start, start + 1, 1550, 2600)
     case = replace(base, track=track, style=style)
     references = []
     for look in (case.style, replace(case.style, lower_ruby_enabled=False)):

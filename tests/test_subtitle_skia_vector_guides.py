@@ -226,6 +226,7 @@ def test_vector_guide_and_lower_reading_match_actual_d2d_gpu(binary, application
 @GPU
 @pytest.mark.parametrize('entry,lower,karaoke', [
     ('none', False, 'none'), ('fade', False, 'none'), ('fade', True, 'none'), ('none', True, 'utopia'),
+    ('none', True, 'no_wipe'),
 ])
 def test_inline_vector_guide_and_readings_match_actual_d2d_gpu(binary, application, tmp_path, entry, lower, karaoke):
     from scripts.subtitle_gpu_baseline.cases import build_cases
