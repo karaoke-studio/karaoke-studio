@@ -527,7 +527,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && staticScanline && !source.scanlineEnabled
             && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
-            && !features.contains("p06_static_shadow") && !features.contains("p06_static_glow");
+            && ((!features.contains("p06_static_shadow") && !features.contains("p06_static_glow"))
+                || features.contains("p06_vertical_vector_guide_decoration"));
         const bool roleVectorGuides = composedGuide && features.contains("p05_role_vector_guides")
             && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"

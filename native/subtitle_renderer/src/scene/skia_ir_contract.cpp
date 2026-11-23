@@ -88,6 +88,7 @@ const QJsonArray& skiaIrProfiles() {
         "p05_inline_vector_guide_ruby",
         "p06_inline_vector_guide_outline",
         "p06_vector_guide_shadow",
+        "p06_vertical_vector_guide_decoration",
         "p08_bitmap_guides",
         "p08_mixed_guide_kinds",
         "p08_vertical_bitmap_guides",
@@ -684,6 +685,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         "p06_vertical_ruby_group_paint", "p05_vertical_reverse_ruby_track", "p05_vertical_columns_ruby"};
     if (verticalVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排矢量导唱符缺少竖排或导唱符布局能力");
+    const bool verticalVectorDecoration = features.contains("p06_vertical_vector_guide_decoration");
+    if (verticalVectorDecoration && (!verticalVectorGuides || !features.contains("p05_vector_guide_composition")
+        || (!features.contains("p06_vertical_glow") && !features.contains("p06_vertical_shadow"))))
+        throw BackendError("Skia 竖排矢量导唱符缺少装饰能力声明");
     if (rtlVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_horizontal_rtl")))
         throw BackendError("Skia 右至左导唱符缺少方向或布局能力声明");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
@@ -742,6 +747,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks",
             "p05_reverse_wipe", "p05_reverse_overlap"};
         static const QJsonArray verticalGuides{"p05_vertical_vector_guides", "p07_no_wipe"};
+        static const QJsonArray verticalVectorDecorations{
+            "p06_vertical_vector_guide_decoration", "p06_static_shadow", "p06_vertical_shadow",
+            "p06_vertical_reverse_shadow", "p06_vertical_glow", "p06_vertical_reverse_glow"};
         static const QJsonArray lowerGuides{
             "p05_vector_guide_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers",
             "p05_standalone_marks", "p06_lower_ruby_glow"};
@@ -760,6 +768,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(lowerVectorGuides && lowerGuides.contains(feature))
                 && !(vectorGuideShadow && (feature == QJsonValue("p06_vector_guide_shadow")
                     || feature == QJsonValue("p06_static_shadow")))
+                && !(verticalVectorDecoration && verticalVectorDecorations.contains(feature))
                 && !(verticalVectorGuides && (verticalGuides.contains(feature) || verticalGuideLayout.contains(feature))))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }

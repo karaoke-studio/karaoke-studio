@@ -277,6 +277,38 @@ def test_vertical_vector_guide_matches_actual_d2d_gpu(binary, project, reverse):
     assert_glow_parity(times, reference, gpu, raster, 'vertical_vector_guide', check_p00_edges=True)
 
 
+@GPU
+@pytest.mark.parametrize('decoration,reverse', [('glow', False), ('shadow', True)])
+def test_vertical_vector_guide_decoration_matches_actual_d2d_gpu(binary, project, decoration, reverse):
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, base = vertical_vector_guide(project, reverse)
+    palette = base.karaoke_colors
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#D0FC4022')),
+                      after=replace(palette.after, shadow=PaintFill(color='#D0E030FF')))
+    style = replace(base, decoration_before_sync=True, decoration_kind=decoration, line_y_margin_px=60,
+                    glow_before_radius_px=5, glow_after_radius_px=5, shadow_offset_x=9, shadow_offset_y=8,
+                    karaoke_colors=palette)
+    times, dpr = (250, 450, 750, 1100, 1550, 1750), 3
+    refs = []
+    for look in (style, replace(style, decoration_kind='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p06_vertical_vector_guide_decoration' in ir['required_features']
+    guide, next_cell, *_ = ir['skia_layout']['lines'][0]['cells']
+    above_text = slice(max(0, int((guide['wipe_top'] - 15)*dpr)), int(next_cell['wipe_top']*dpr))
+    assert any(np.count_nonzero((a[above_text, :, 3] > 16) & (b[above_text, :, 3] == 0)) > 30
+               for a, b in zip(*refs, strict=True))
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, ('vertical_vector_guide', decoration), check_p00_edges=True)
+
+
 def outlined_inline_guide(project):
     from test_subtitle_skia_outline_ruby import outlined
 

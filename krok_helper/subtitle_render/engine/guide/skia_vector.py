@@ -132,6 +132,10 @@ RTL_VECTOR_GUIDE_FEATURES = frozenset({
     'p05_reverse_wipe', 'p05_reverse_overlap',
 })
 VERTICAL_VECTOR_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p05_vertical_vector_guides', 'p07_no_wipe'}
+VERTICAL_VECTOR_GUIDE_DECORATION_FEATURES = frozenset({
+    'p06_static_shadow', 'p06_vertical_shadow', 'p06_vertical_reverse_shadow',
+    'p06_vertical_glow', 'p06_vertical_reverse_glow',
+})
 LOWER_RUBY_VECTOR_GUIDE_FEATURES = frozenset({
     'p05_vector_guide_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_lower_ruby_glow',
@@ -172,6 +176,7 @@ def compose_vector_guides(track, ir):
     animated_gradient = 'p06_animated_singing_gradient_fill' in features
     faded_scanline = 'p07_faded_scanline_prefix_guides' in features
     vertical_guides = 'p05_vertical_vector_guides' in features
+    vertical_decoration = vertical_guides and bool({'p06_vertical_shadow', 'p06_vertical_glow'}.intersection(features))
     lower_reading = 'p05_lower_ruby' in features
     inline_ruby = ('p05_upper_ruby' in features and not lower_reading and not vertical_guides
                    and not {'p05_horizontal_rtl', 'p05_reverse_wipe'}.intersection(features))
@@ -218,6 +223,8 @@ def compose_vector_guides(track, ir):
         allowed |= RTL_VECTOR_GUIDE_FEATURES
     if vertical_guides:
         allowed |= VERTICAL_VECTOR_GUIDE_FEATURES
+    if vertical_decoration:
+        allowed |= VERTICAL_VECTOR_GUIDE_DECORATION_FEATURES
     if animated_gradient or faded_scanline:
         allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES
     if animated_gradient or faded_scanline or line_motion:
@@ -235,6 +242,8 @@ def compose_vector_guides(track, ir):
     if not set(features) <= allowed - {'p05_vector_guide_composition'}:
         raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
     features.append('p05_vector_guide_composition')
+    if vertical_decoration:
+        features.append('p06_vertical_vector_guide_decoration')
     if lower_reading:
         features.append('p05_vector_guide_lower_ruby')
     if static_shadow:
