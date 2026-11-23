@@ -16,12 +16,13 @@ SkPath ShapeSignal::outline() const {
     return SkPath::Oval(bounds);
 }
 
-void ShapeSignal::draw(SkCanvas& canvas, int time) const {
+void ShapeSignal::draw(SkCanvas& canvas, int time, float entryOpacity) const {
     const auto state = krok::subtitle::native::shapeSignalState(clock, time);
-    if (!state.visible || opacity <= 0) return;
+    const float signalOpacity = opacity * entryOpacity;
+    if (!state.visible || signalOpacity <= 0) return;
     SkAutoCanvasRestore group(&canvas, false);
-    if (decoration && opacity < 1) canvas.saveLayerAlphaf(nullptr, opacity);
-    const float brushOpacity = decoration ? 1.f : opacity;
+    if (decoration && signalOpacity < 1) canvas.saveLayerAlphaf(nullptr, signalOpacity);
+    const float brushOpacity = decoration ? 1.f : signalOpacity;
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto drawShape = [&](const SkRect& box, SkColor color, float width) {

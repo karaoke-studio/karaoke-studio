@@ -40,9 +40,6 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         throw BackendError("Skia 指示灯的熄灭过渡模式尚未支持");
     if (!usesOnlyWholeLineAnimation(line))
         throw BackendError("Skia 尚未接通指示灯自身的逐灯出入场变换");
-    // Decorated lamps follow the entry pose outside the whole-line opacity layer.
-    if (style.litAppearanceMode != "custom" && (line.entryAnimation != "none" || line.exitAnimation != "none"))
-        throw BackendError("Skia 尚未接通装饰指示灯的独立入场变换");
     if (std::max({style.litSize, style.litTracking, std::abs(style.litOffsetX),
             std::abs(style.litOffsetY), style.litStrokeWidth, style.litStrokeSoften,
             style.litTransitionDistance}) > 8192.f)

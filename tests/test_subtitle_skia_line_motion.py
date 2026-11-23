@@ -988,15 +988,16 @@ def test_custom_shape_signal_countdown(binary, project, target, shape):
 
 @pytest.mark.parametrize('signal,entry_anim,exit_anim', [
     ('lamp', 'fade', 'fade'), ('lamp', 'slide_in', 'rise'), ('volume', 'slide_in', 'rise'),
+    ('decorated_lamp', 'slide_in', 'rise'),
 ])
-def test_custom_signal_shares_line_animation(binary, project, signal, entry_anim, exit_anim):
+def test_signal_follows_its_line_animation(binary, project, signal, entry_anim, exit_anim):
     track, style = project
     line = track.lines[0]
     line = replace(line, chars=[replace(char, start_ms=char.start_ms + 1000) for char in line.chars],
                    end_ms=line.end_ms + 1000, display_start_override_ms=0, display_end_override_ms=3400)
     track = replace(track, lines=[line])
     style = replace(style, entry_anim=entry_anim, entry_lead_ms=600, exit_anim=exit_anim, exit_fade_ms=400)
-    if signal == 'lamp':
+    if signal != 'volume':
         style = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square', lit_number=1,
                         lit_size=24, lit_offset_y=-36, lit_fill_color='#FF00FF', lit_stroke_width=0,
                         lit_edge_brightness_pct=0, lit_shadow=False)
@@ -1004,6 +1005,14 @@ def test_custom_signal_shares_line_animation(binary, project, signal, entry_anim
         style = replace(style, volume_enabled=True, volume_appearance_mode='custom', volume_column_count=1,
                         volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF', volume_stroke_width=0,
                         volume_duration_ms=3400, volume_flash_times=0, volume_time_offset_ms=2200)
+    if signal == 'decorated_lamp':
+        from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+        from test_subtitle_skia_roles import colors
+
+        palette = SubtitleStyleScheme(karaoke_colors=colors('#FF00FF', '#FF00FF'), stroke_width_px=0,
+                                      stroke2_enabled=False, decoration_kind='none')
+        style = replace(style, lit_appearance_mode='role', lit_role_name='signal-palette',
+                        custom_style_schemes={'signal-palette': palette})
     ir = ir_for(binary, (track, style))
     source, = ir['track']['lines']
     assert source['entry_duration_ms'] == 600 and source['exit_duration_ms'] == 400
@@ -1033,10 +1042,15 @@ def test_custom_signal_shares_line_animation(binary, project, signal, entry_anim
 
     for frames in results:
         entering, full, before_exit, leaving = [int(frame.max()) for frame in frames]
-        assert 0 < entering < full == before_exit and 0 < leaving < before_exit
+        assert 0 < entering < full == before_exit
         if entry_anim == 'slide_in':
             assert signal_bounds(frames[0])[0, 1] < signal_bounds(frames[1])[0, 1]
-        if exit_anim == 'rise':
+        if signal == 'decorated_lamp':
+            assert leaving == before_exit
+            assert np.array_equal(frames[2], frames[3])
+        else:
+            assert 0 < leaving < before_exit
+        if exit_anim == 'rise' and signal != 'decorated_lamp':
             assert signal_bounds(frames[3])[0, 0] < signal_bounds(frames[2])[0, 0]
     for frames in results[1:]:
         for time, expected, actual in zip(times, results[0], frames, strict=True):

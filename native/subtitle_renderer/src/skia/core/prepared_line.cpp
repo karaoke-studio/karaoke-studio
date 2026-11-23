@@ -36,6 +36,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     paint.setAntiAlias(true);
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
+    const auto placement = line.translationAt(tMs);
+    const bool decoratedLamp = line.shapeSignal && line.shapeSignal->decoration;
+    const auto drawDecoratedLamp = [&] {
+        const auto entry = line.animation.entryAt(tMs, line.startMs);
+        SkAutoCanvasRestore restore(&canvas, true);
+        canvas.translate(entry.dx, entry.dy);
+        canvas.translate(placement.x(), placement.y());
+        line.shapeSignal->draw(canvas, tMs, entry.opacity);
+    };
     const bool reverseDecoration = line.rubyGroups.empty() && (!line.glow.empty() || line.shadow.visible());
     const bool rtlRubyWithoutScale = !line.rubyGroups.empty() && !line.singingScale.active;
     const bool lowerReadingDecoration = !line.rubyGlows[1].empty()
@@ -50,11 +59,14 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     constexpr float opacitySteps = 4096.f;
     const float lineOpacity = fixedOpacity ? std::floor(animation.opacity * opacitySteps) / opacitySteps
                                            : animation.opacity;
-    if (lineOpacity <= 0.f) return;
+    if (lineOpacity <= 0.f) {
+        if (decoratedLamp && textVisible)
+            drawDecoratedLamp();
+        return;
+    }
     SkAutoCanvasRestore restore(&canvas, true);
     if (animation.dx != 0 || animation.dy != 0)
         canvas.translate(animation.dx, animation.dy);
-    const auto placement = line.translationAt(tMs);
     if (placement.x() != 0 || placement.y() != 0) canvas.translate(placement.x(), placement.y());
     const bool rubyGeometryPhase = line.rubyGeometryComposition
         && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
@@ -115,7 +127,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     // Signals and particles can extend outside the text paint bounds.
-    const bool dynamicPaint = movingCells || line.volumeSignal || line.shapeSignal || !line.particles.empty();
+    const bool dynamicPaint = movingCells || line.volumeSignal || (line.shapeSignal && !decoratedLamp)
+        || !line.particles.empty();
     if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (dynamicPaint || !line.paintBounds.isEmpty())) {
         const auto* bounds = dynamicPaint ? nullptr : &line.paintBounds;
         // Keep the same bounded destination-format layer at every opacity
@@ -734,6 +747,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         }
     }
     if (line.volumeSignal) line.volumeSignal->draw(canvas, tMs);
-    if (line.shapeSignal) line.shapeSignal->draw(canvas, tMs);
+    if (decoratedLamp) {
+        // Decorated lamps have their own countdown and share only the line's entry pose.
+        restore.restore();
+        drawDecoratedLamp();
+    } else if (line.shapeSignal) {
+        line.shapeSignal->draw(canvas, tMs);
+    }
 }
 }

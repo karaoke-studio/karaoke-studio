@@ -31,6 +31,6 @@ struct ShapeSignal {
     std::optional<SignalPath> path;
 
     SkPath outline() const;
-    void draw(SkCanvas& canvas, int time) const;
+    void draw(SkCanvas& canvas, int time, float entryOpacity = 1.f) const;
 };
 }
