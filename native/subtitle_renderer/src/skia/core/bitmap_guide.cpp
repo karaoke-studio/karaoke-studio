@@ -2,6 +2,7 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorFilter.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkShader.h"
 #include "include/core/SkSurface.h"
 #include "include/effects/SkImageFilters.h"
 #include <algorithm>
@@ -86,9 +87,16 @@ void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity, int 
     if (const auto& shadow = shadow_[after]; shadow.visible()) {
         SkPaint paint;
         paint.setAlphaf(opacity);
-        paint.setColorFilter(SkColorFilters::Blend(shadow.color, SkBlendMode::kSrcIn));
-        canvas.drawImageRect(image, imageRect, box_.makeOffset(shadow.x, shadow.y), linear, &paint,
-                             SkCanvas::kStrict_SrcRectConstraint);
+        const auto destination = box_.makeOffset(shadow.x, shadow.y);
+        if (shadow.shader) {
+            const auto mapping = SkMatrix::RectToRect(imageRect, destination);
+            auto mask = image->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, linear, mapping);
+            paint.setShader(SkShaders::Blend(SkBlendMode::kDstIn, shadow.shader, std::move(mask)));
+            canvas.drawRect(destination, paint);
+        } else {
+            paint.setColorFilter(SkColorFilters::Blend(shadow.color, SkBlendMode::kSrcIn));
+            canvas.drawImageRect(image, imageRect, destination, linear, &paint, SkCanvas::kStrict_SrcRectConstraint);
+        }
     }
     const float scaleX = box_.width() / std::max(float(image->width()), 1.f);
     const float scaleY = box_.height() / std::max(float(image->height()), 1.f);

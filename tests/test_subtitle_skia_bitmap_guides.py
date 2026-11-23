@@ -243,22 +243,27 @@ def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
     assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_guide', check_p00_edges=True)
 
 
-def shadowed_bitmap_guide(project, tmp_path):
+def shadowed_bitmap_guide(project, tmp_path, *, gradient=False):
     track, style = rtl_bitmap_guide(project, tmp_path)
     line, = track.lines
     track = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=False),
                                           inline_guide_symbols={})])
     palette = colors('#FFB2FF', '#90CAFB')
-    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#DDF72839')),
-                      after=replace(palette.after, shadow=PaintFill(color='#DDBF28F7')))
+    before = PaintFill(color='#DDF72839')
+    after = PaintFill(color='#DDBF28F7')
+    if gradient:
+        before = PaintFill(mode='gradient_vertical', gradient_stops=[(0, '#DDF72839'), (100, '#DDFF7D28')])
+        after = PaintFill(mode='gradient_horizontal', gradient_stops=[(0, '#DDBF28F7'), (100, '#DD2741F0')])
+    palette = replace(palette, before=replace(palette.before, shadow=before), after=replace(palette.after, shadow=after))
     return track, replace(style, right_to_left=False, decoration_before_sync=True, decoration_kind='shadow',
                           karaoke_colors=palette, shadow_offset_x=9, shadow_offset_y=14)
 
 
-def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project, tmp_path):
-    ir = ir_for(binary, shadowed_bitmap_guide(project, tmp_path))
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'gradient'])
+def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project, tmp_path, gradient):
+    ir = ir_for(binary, shadowed_bitmap_guide(project, tmp_path, gradient=gradient))
     bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p08_bitmap_guide_shadow')
+    bad['required_features'].remove('p08_bitmap_guide_gradient_shadow' if gradient else 'p08_bitmap_guide_shadow')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         output, _ = collect(process, [450, 900])
@@ -269,12 +274,15 @@ def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project,
 
 
 @GPU
-def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path):
+@pytest.mark.parametrize('gradient', [False, True], ids=['solid', 'gradient'])
+def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path, gradient):
+    from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_static_shadow import premultiplied
 
-    track, style = shadowed_bitmap_guide(project, tmp_path)
+    track, style = shadowed_bitmap_guide(project, tmp_path, gradient=gradient)
     line, = track.lines
     plain = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=True))])
     times = (250, 450, 750, 1100, 1550)
@@ -289,6 +297,18 @@ def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path):
                for a, b in zip(reference, no_guide_shadow, strict=True))
     gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
     assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_shadow', check_p00_edges=True)
+    if gradient:
+        budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
+        sampled = 0
+        for reference_frame, bare, gpu_frame, raster_frame in zip(reference, no_guide_shadow, gpu, raster, strict=True):
+            shadow_only = (reference_frame[..., 3] > 160) & (bare[..., 3] == 0)
+            if np.count_nonzero(shadow_only) < 40:
+                continue
+            expected = premultiplied(reference_frame[shadow_only])
+            for rendered in (gpu_frame, raster_frame):
+                assert abs(expected - premultiplied(rendered[shadow_only])).mean() <= budget['max_union_channel_mae']
+            sampled += 1
+        assert sampled >= 2
 
 
 def mixed_reverse_bitmap_guide(project, tmp_path):

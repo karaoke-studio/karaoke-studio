@@ -22,7 +22,8 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
                                                      SkiaImageFillCache& images, const TextStyle& style, double dpr,
                                                      int start, int end, std::uint32_t before, std::uint32_t after,
                                                      double wipePad, bool allowAnimation, bool allowShadow) {
-    if (!guide.noDecor && (style.beforeDecorPaint.mode != "solid" || style.afterDecorPaint.mode != "solid"))
+    if (!guide.noDecor && ((style.decorationKindForState(false) == "glow" && style.beforeDecorPaint.mode != "solid")
+        || (style.decorationKindForState(true) == "glow" && style.afterDecorPaint.mode != "solid")))
         throw BackendError("Skia 图片导唱符光晕仅支持实色装饰");
     const auto shadow = guide.noDecor ? ::subtitle::skia::StaticShadow{} : skiaStaticShadow(style);
     if (shadow.visible() && !allowShadow)

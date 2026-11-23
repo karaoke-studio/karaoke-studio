@@ -783,21 +783,35 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
         const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill || brightenedScanlineGradient)
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
+        const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
+        const bool hasBitmapGuide = std::ranges::any_of(prepared.cells, [](const auto& cell) { return bool(cell.bitmap); });
         prepared.shadow = skiaStaticShadow(style);
-        const auto prepareShadow = [&](auto& state, const PaintStyle& paint) {
+        const auto prepareShadow = [&](auto& state, const PaintStyle& paint, bool after) {
             if (!state.enabled || paint.mode == "solid") return;
             if (!bodyShadowGradients || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.karaokeAnimation != "none" || line.entryAnimation != "none" || line.exitAnimation != "none"
                 || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-                || hasInlineRoles || vectorGuides || std::ranges::any_of(line.chars, [](const auto& cell) {
-                    return bool(cell.bitmapGuide);
-                }))
+                || hasInlineRoles || vectorGuides || (hasBitmapGuide && (!bitmapGuideGradientShadow || staticTitle)))
                 throw BackendError("Skia 正文渐变阴影暂只支持静态正向横排");
-            if (hasVisibleGradientStops(paint) && !rolePaintBounds->line.isEmpty())
-                state.shader = ::subtitle::skia::lineGradient(paint, rolePaintBounds->line, rolePaintBounds->outlinePad);
+            if (!hasVisibleGradientStops(paint)) return;
+            auto ink = rolePaintBounds->line;
+            if (hasBitmapGuide && ink.isEmpty()) throw BackendError("Skia 图片导唱符渐变阴影需要同一行存在正文");
+            if (paint.mode == "gradient_horizontal") {
+                // Bitmap artwork extends the horizontal paint span only.
+                for (const auto& cell : prepared.cells)
+                    if (cell.bitmap) {
+                        ink.fLeft = std::min(ink.fLeft, cell.bitmap->box.left());
+                        ink.fRight = std::max(ink.fRight, cell.bitmap->box.right());
+                    }
+            }
+            if (ink.isEmpty()) return;
+            state.shader = ::subtitle::skia::lineGradient(paint, ink, rolePaintBounds->outlinePad);
+            if (hasBitmapGuide)
+                for (auto& cell : prepared.cells)
+                    if (cell.bitmap && cell.bitmap->shadow[after].enabled) cell.bitmap->shadow[after].shader = state.shader;
         };
-        prepareShadow(prepared.shadow.before, style.beforeDecorPaint);
-        prepareShadow(prepared.shadow.after, style.afterDecorPaint);
+        prepareShadow(prepared.shadow.before, style.beforeDecorPaint, false);
+        prepareShadow(prepared.shadow.after, style.afterDecorPaint, true);
         prepared.glow = skiaStaticGlow(style);
         const bool baseOwnsText = std::ranges::any_of(line.chars, [](const auto& cell) {
             return cell.styleIndex < 0 && !cell.bitmapGuide;
