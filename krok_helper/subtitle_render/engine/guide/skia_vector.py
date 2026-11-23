@@ -171,7 +171,7 @@ def compose_vector_guides(plan_lines, ir):
             if (look.vertical or line.wipe_reverse or not plain_effects or not ordinary_line_animation(source)
                     or source.get('karaoke_anim') not in allowed_modes):
                 raise ValueError('Skia 矢量导唱符与下方注音的行布局或动画尚未支持')
-        if has_shadow and not (look.vertical or upper_reading or source.get('scanline')
+        if has_shadow and not (look.vertical or line.wipe_reverse or upper_reading or source.get('scanline')
                                or 'p05_role_vector_guides' in features):
             if not (forward and whole_line) or any(c.role_label is not None for c in chars):
                 raise ValueError('Skia 矢量导唱符阴影需要正向横排与整行出入场')

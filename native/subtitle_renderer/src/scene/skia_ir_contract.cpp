@@ -753,9 +753,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 右至左导唱符缺少方向或布局能力声明");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
     const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow");
-    if (vectorGuideShadow && (!features.contains("p05_vector_guide_composition") || !features.contains("p06_static_shadow")
-        || features.contains("p05_resolved_ruby") || features.contains("p05_vertical_solid")
-        || features.contains("p05_horizontal_rtl") || features.contains("p05_reverse_wipe")))
+    if (vectorGuideShadow && (!features.contains("p05_vector_guide_composition") || !features.contains("p06_static_shadow")))
         throw BackendError("Skia 矢量导唱符阴影缺少正向横排布局或画笔能力声明");
     const bool lowerVectorGuides = features.contains("p05_vector_guide_lower_ruby");
     if (features.contains("p05_inline_vector_guide_ruby")

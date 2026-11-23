@@ -1025,12 +1025,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool reverseHorizontalMotion = line.wipeReverse && ordinaryLineAnimation
             && features.contains("p07_reverse_decoration_line_animation");
         const bool reverseHorizontalDecoration = features.contains("p06_reverse_decoration")
-            && !style.vertical && !style.rightToLeft && (!anyReadings || mixedReverseBitmaps)
+            && !style.vertical && !style.rightToLeft && !annotated
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool staticPaintStack = !hasDecoration && !hasBitmapGuide
-            && !anyReadings && !hasInlineRoles && line.karaokeAnimation == "none" && line.entryAnimation == "none"
+            && !annotated && !hasInlineRoles && line.karaokeAnimation == "none" && line.entryAnimation == "none"
             && line.exitAnimation == "none" && !line.zoomPulseEnabled && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
         const bool staticDirectional = staticPaintStack && !style.vertical && style.rightToLeft != line.wipeReverse;

@@ -162,6 +162,19 @@ def test_reverse_decoration_matches_actual_d2d_and_gpu_raster(binary, project, b
     assert_reverse_decoration_parity(binary, track, style, times, (before, after, effect))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_vector_guide_uses_existing_shadow_and_glow(binary, project):
+    from test_subtitle_skia_vector_guides import CURVES
+
+    track, style = decorated_reverse(project, 'shadow', 'glow', 'none')
+    line, = track.lines
+    track = replace(track, lines=[replace(line, inline_guide_symbols={1: CURVES})])
+    ir = ir_for(binary, (track, style))
+    assert {'p06_reverse_decoration', 'p05_vector_guide_composition'} <= set(ir['required_features'])
+    assert_reverse_decoration_parity(binary, track, style, [250, 450, 750, 1100, 1550, 1850],
+                                     'reverse_vector_guide_decoration')
+
+
 REVERSE_DECORATION_MOTION = (
     ('shadow', 'shadow', 'none', 'fade', 'fade'),
     ('glow', 'glow', 'no_wipe', 'slide_in', 'slide_out'),

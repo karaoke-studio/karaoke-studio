@@ -157,6 +157,40 @@ def test_directional_body_paints_match_actual_d2d_gpu(binary, project, images, d
     assert_glow_parity(times, refs[0], gpu, raster, ('directional_body_paints', direction, guide), check_p00_edges=True)
 
 
+def test_reverse_painted_row_can_share_a_track_with_upper_reading(binary, project, images):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+
+    track, style = image_source(project, images, 'mixed')
+    first, = track.lines
+    first = replace(first, track_line_index=0)
+    shift = 3000
+    second = replace(first, track_line_index=1, wipe_reverse=True, break_before='page',
+                     display_start_override_ms=shift, display_end_override_ms=shift + 2400,
+                     end_ms=first.end_ms + shift,
+                     chars=[replace(char, start_ms=char.start_ms + shift) for char in first.chars])
+    reading = RubyAnnotation(first.chars[1].text, '字', target_line_index=0, target_char_start=1, target_char_end=2,
+                             pos_start_ms=first.chars[1].start_ms, pos_end_ms=first.chars[2].start_ms)
+    track = replace(track, lines=[first, second], rubies=[reading])
+    style = replace(style, ruby_font_family=style.font_family, ruby_font_size_px=24, ruby_gap_px=8,
+                    ruby_colors_follow_main=False, ruby_stroke_width_px=0, ruby_stroke2_enabled=False)
+    times = (450, 750, 1100, 3450, 3750, 4100)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert {'p06_directional_body_paints', 'p06_ruby_main_paint'} <= set(ir['required_features'])
+    assert [bool(row['ruby_groups']) for row in ir['skia_layout']['lines']] == [True, False]
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'reverse_paint_peer_ruby', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_multitrack_paints_keep_independent_domains(binary, project, images, target):
     from test_subtitle_skia_static_glow import assert_glow_parity

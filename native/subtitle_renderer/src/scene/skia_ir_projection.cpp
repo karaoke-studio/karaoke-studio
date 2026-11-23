@@ -528,6 +528,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool guideRubyAnimation = staticScanline
             || (features.contains("p07_ruby_line_animation") && guideWholeLineAnimation);
         const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow") && rubyGroups.isEmpty()
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !source.scanlineEnabled
             && (protocol::decorationKindForState(resolved, false) == "shadow"
                 || protocol::decorationKindForState(resolved, true) == "shadow");
         const bool wholeLineGuideShadow = vectorGuideShadow && (staticScanline

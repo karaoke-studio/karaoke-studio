@@ -165,7 +165,7 @@ def write_body_gradient_bounds(ir, plan):
         annotated = bool(final.get('ruby_groups'))
         directional = look.right_to_left or item.line.wipe_reverse
         static_paints = (animations == {'none'} and source.get('karaoke_anim') == 'none'
-                         and not (look.lower_ruby_enabled or ir['track'].get('rubies') or upper_ruby or annotated)
+                         and not annotated
                          and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash'))
                          and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
