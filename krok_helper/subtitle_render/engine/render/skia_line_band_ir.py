@@ -36,10 +36,11 @@ def write_line_band(ir, style, prepared, *, width, height):
             or style.vertical or style.right_to_left
             or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
             or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})
-            or style.volume_enabled or style.lit_enabled
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
         raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')
+    if style.volume_enabled or (style.lit_enabled and style.lit_style == 'volume'):
+        raise ValueError('Skia 行背景带尚未包含行内音量柱的布局范围')
     if preset and not material:
         raise ValueError('Skia 行背景带无法读取预设图片')
     if staff and any(not ir['style'].get(key) for key in

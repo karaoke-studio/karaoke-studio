@@ -1031,6 +1031,49 @@ def test_custom_shape_signal_shares_line_fade(binary, project):
             assert abs(expected_pixels.max(axis=0) - actual_pixels.max(axis=0)).max() <= 1, time
 
 
+def test_shape_signal_draws_above_line_band(binary, project, tmp_path):
+    track, style = project
+    style = replace(style, entry_anim='none', exit_anim='none',
+                    line_band_enabled=True, line_band_image=str(static_band_image(tmp_path)),
+                    line_band_fill_mode='stretch', line_band_pad_top_px=75, line_band_pad_left_px=16,
+                    line_band_opacity_pct=100)
+    lamp = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square',
+                   lit_number=1, lit_size=18, lit_offset_x=8, lit_offset_y=-9, lit_fill_color='#FF00FF',
+                   lit_stroke_width=0, lit_edge_brightness_pct=0, lit_shadow=False)
+    band = ir_for(binary, (track, style))
+    time = band['track']['lines'][0]['display_start_ms']
+
+    def lamp_pixels(frame):
+        return np.argwhere((frame[..., 0] > 245) & (frame[..., 1] < 10)
+                           & (frame[..., 2] > 245) & (frame[..., 3] > 245))
+
+    positions = []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, lamp, (time,), force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        positions.append(lamp_pixels(np.frombuffer(raw[0], np.uint8).reshape(360, 640, 4)))
+    combined = ir_for(binary, (track, lamp))
+    assert combined['skia_layout']['lines'][0]['line_band_rect'] == band['skia_layout']['lines'][0]['line_band_rect']
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, band)
+            plain, _ = collect(process, [time])
+            configure(process, combined)
+            frames, _ = collect(process, [time], generation=2)
+        points = lamp_pixels(frames[0])
+        assert len(points) >= 16 * 16
+        y, x = points.T
+        assert np.count_nonzero(plain[0][y, x, 3]) > len(points) / 2
+        positions.append(points)
+    assert all(len(points) >= 16 * 16 for points in positions)
+    for points in positions[1:]:
+        assert abs(positions[0].min(axis=0) - points.min(axis=0)).max() <= 1
+        assert abs(positions[0].max(axis=0) - points.max(axis=0)).max() <= 1
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id,appearance', [
     ('lit_appearance_custom', None), ('lamp_shape_image', 'custom'),

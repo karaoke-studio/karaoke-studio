@@ -268,9 +268,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
         if (staticBand && (!bandAnimation(source.entryAnimation, true)
                 || !bandAnimation(source.exitAnimation, false)
-                || ((source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)
-                || resolved.litEnabled || resolved.volumeEnabled))
+                || ((source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)))
             throw BackendError("Skia 行背景带缺少对应行出入场能力");
+        if (staticBand && (resolved.volumeEnabled || (resolved.litEnabled && resolved.litStyle == "volume")))
+            throw BackendError("Skia 行背景带尚未包含行内音量柱的布局范围");
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
         const bool composedNoise = features.contains("p07_noise_composition");
         if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
