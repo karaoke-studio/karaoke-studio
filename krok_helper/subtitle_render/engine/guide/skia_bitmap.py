@@ -136,7 +136,7 @@ INLINE_BITMAP_GUIDE_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_role_solid_outlines', 'p06_multi_lane_outline', 'p06_role_body_paints',
     'p06_ruby_role_paints', 'p06_role_static_glow', 'p06_ruby_role_glow',
-    'p06_role_outline_gradient', 'p06_ruby_outline_gradient',
+    'p06_role_outline_gradient', 'p06_role_outline_paints', 'p06_ruby_outline_gradient',
     'p06_static_shadow', 'p06_ruby_shadow', 'p06_gradient_glow',
     'p06_vertical_gradient_glow', 'p06_role_gradient_glow',
     'p07_role_singing_scale', 'p07_role_singing_glow', 'p07_line_fade',

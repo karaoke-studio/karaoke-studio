@@ -407,9 +407,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             for (const auto& paint : line.roleBodyPaints) {
                 auto pair = layer == Layer::Body ? paint.gradients
                     : layer == Layer::Outline ? paint.outlineGradients : paint.outerGradients;
-                if (layer == Layer::Body)
-                    for (std::size_t phase = 0; phase < pair.size(); ++phase)
-                        if (paint.images[phase]) pair[phase] = paint.images[phase].shaderAt(canvas.getTotalMatrix());
+                const auto& roleImages = layer == Layer::Body ? paint.images.body
+                    : layer == Layer::Outline ? paint.images.outline : paint.images.outer;
+                for (std::size_t phase = 0; phase < pair.size(); ++phase)
+                    if (roleImages[phase]) pair[phase] = roleImages[phase].shaderAt(canvas.getTotalMatrix());
                 roles.push_back(std::move(pair));
             }
         }

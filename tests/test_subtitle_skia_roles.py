@@ -111,6 +111,29 @@ def test_body_role_paints_match_actual_d2d_gpu(binary, application, tmp_path, di
     assert_ruby_transition_gpu_parity(binary, case, (299, 300, 1500, 1750, 2600, 4400, 5499, 5500))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_role_outline_paints_match_actual_d2d_gpu_without_bitmap_guides(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    base = next(case for case in build_cases(tmp_path, include_real=False) if case.case_id == 'n3_grid')
+    style = replace(base.style, stroke_width_px=0, stroke2_enabled=False, decoration_kind='none', karaoke_anim='none')
+    track, style = textured_roles(base.track, style, tmp_path, 'gradient_horizontal')
+    vertical = PaintFill(mode='gradient_vertical', start_color='#D02050', end_color='#5318D1')
+    horizontal = PaintFill(mode='gradient_horizontal', start_color='#126E3D', end_color='#AD1D98')
+    split = PaintFill(mode='split_vertical', split_top_color='#6020AC', split_bottom_color='#F4A829')
+    path = write_png(tmp_path / 'role-outline.png', pattern('transparent'))
+    image = PaintFill(mode='image', image_path=str(path), image_scale_pct=95)
+    roles = dict(style.custom_style_schemes)
+    palette = roles['a'].karaoke_colors
+    palette = replace(palette, before=replace(palette.before, stroke=vertical, stroke2=split),
+                      after=replace(palette.after, stroke=horizontal, stroke2=image))
+    roles['a'] = replace(roles['a'], karaoke_colors=palette)
+    case = replace(base, case_id='role_outline_paints', track=track, style=replace(style, custom_style_schemes=roles))
+    assert_ruby_transition_gpu_parity(binary, case, (299, 300, 1500, 1750, 2600, 4400, 5499, 5500))
+
+
 def ruby_role_paints_case(tmp_path, direction, shared):
     from scripts.subtitle_gpu_baseline.cases import build_cases
 

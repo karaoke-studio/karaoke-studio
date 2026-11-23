@@ -79,7 +79,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool latinSecondaryOutline = features.contains("p06_latin_secondary_outline");
     const bool bodyGradients = features.contains("p06_body_gradient") || roleBodyPaints;
     const bool roleOutlineGradients = features.contains("p06_role_outline_gradient");
-    const bool outlineGradients = features.contains("p06_outline_gradient") || roleOutlineGradients;
+    const bool roleOutlinePaints = features.contains("p06_role_outline_paints");
+    const bool outlineGradients = features.contains("p06_outline_gradient") || roleOutlineGradients || roleOutlinePaints;
     const bool inlineAvatars = features.contains("p08_inline_bitmap_guides");
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
     validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
@@ -669,7 +670,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (source.contains("body_gradient_bounds"))
                 throw BackendError("Skia 角色画笔不能携带整行画笔范围");
             resolveRoleBodyPaints(prepared, line, style, projected.charStyles, *rolePaintBounds, imageCache,
-                                  projected.layoutReferenceScale, roleOutlineGradients);
+                                  projected.layoutReferenceScale, roleOutlineGradients, roleOutlinePaints);
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,

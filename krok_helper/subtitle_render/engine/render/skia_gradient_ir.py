@@ -13,25 +13,31 @@ _TEXTURED = _GRADIENTS | {'image'}
 
 
 def _declare_role_body_paints(ir, plan):
+    palettes = []
+    has_roles = False
     for item in plan.lines:
         look = item.layout_style
         labels = {cell.role_label for cell in item.render_line.chars
                   if cell.role_label in look.custom_style_schemes}
-        if not labels:
-            continue
+        has_roles |= bool(labels)
         appearances = (look, *(style_for_role_in_layout(look, label) for label in labels))
-        palettes = [effective_karaoke_colors(appearance) for appearance in appearances]
-        if not any(state.text.mode in _TEXTURED for colors in palettes for state in (colors.before, colors.after)):
-            continue
-        outlines = {getattr(state, layer).mode for colors in palettes for state in (colors.before, colors.after)
-                    for layer in ('stroke', 'stroke2')}
-        if outlines - {'solid'}:
-            if 'p08_inline_bitmap_guides' not in ir['required_features'] or not outlines <= {'solid', 'gradient_vertical', 'split_vertical'}:
-                raise ValueError('Skia 正文渐变暂不支持角色的复杂描边')
-            ir['required_features'].append('p06_role_outline_gradient')
-        ir['required_features'].append('p06_role_body_paints')
-        return True
-    return False
+        palettes.extend(effective_karaoke_colors(appearance) for appearance in appearances)
+    if not has_roles:
+        return False
+    states = [state for colors in palettes for state in (colors.before, colors.after)]
+    features = ir['required_features']
+    layers = [layer for layer, feature in (('stroke', 'p06_primary_solid_outline'),
+                                            ('stroke2', 'p06_secondary_solid_outline')) if feature in features]
+    outlines = {getattr(state, layer).mode for state in states for layer in layers} - {'solid'}
+    if not outlines and not any(state.text.mode in _TEXTURED for state in states):
+        return False
+    if outlines:
+        if 'p08_inline_bitmap_guides' in features and outlines <= {'gradient_vertical', 'split_vertical'}:
+            features.append('p06_role_outline_gradient')
+        else:
+            features.append('p06_role_outline_paints')
+    features.append('p06_role_body_paints')
+    return True
 
 
 def _layer_modes(look):

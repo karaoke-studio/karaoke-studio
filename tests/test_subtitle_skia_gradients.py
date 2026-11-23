@@ -413,14 +413,25 @@ def test_invalid_outline_gradient_keeps_previous_scene(binary, project, mutation
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-def test_outline_gradient_with_roles_is_rejected(binary, project):
+def test_outline_gradient_with_roles_preserves_scene_if_capability_is_missing(binary, project):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     track, style = outline_gradient_source(project, 'primary')
     style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
     line = track.lines[0]
     track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])])
-    with pytest.raises(ValueError, match='正文渐变'):
-        ir_for(binary, (track, style))
+    ir = ir_for(binary, (track, style))
+    assert {'p06_role_body_paints', 'p06_role_outline_paints'} <= set(ir['required_features'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p06_role_outline_paints')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [600, 1500])
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        replay, _ = collect(process, [1500, 600], generation=2)
+    assert frames[0].any() and frames[1].any()
+    np.testing.assert_array_equal(frames[0], replay[1])
+    np.testing.assert_array_equal(frames[1], replay[0])
 
 
 def test_old_sidecar_without_outline_gradients_is_rejected(binary, monkeypatch):

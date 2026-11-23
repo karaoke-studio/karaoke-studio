@@ -41,7 +41,7 @@ struct LineImageFills {
 
 struct BodyPaint {
     std::array<sk_sp<SkShader>, 2> gradients;
-    std::array<ImageFill, 2> images;
+    LineImageFills images;
     std::array<sk_sp<SkShader>, 2> outlineGradients, outerGradients;
 };
 }

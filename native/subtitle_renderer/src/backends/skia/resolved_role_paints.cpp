@@ -60,39 +60,37 @@ RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine& lin
 
 void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
                          std::span<const TextStyle> styles, RolePaintBounds& bounds, SkiaImageFillCache& images, float scale,
-                         bool outlineGradients) {
+                         bool outlineGradients, bool outlinePaints) {
     for (auto& [role, domain] : bounds.roles) {
         const auto& look = role < 0 ? base : styles[role];
-        bool paintedOutline = false;
-        for (const auto* paint : {&look.beforeStrokePaint, &look.afterStrokePaint,
-                                  &look.beforeStroke2Paint, &look.afterStroke2Paint}) {
-            if (paint->mode == "solid") continue;
-            if (!outlineGradients || (paint->mode != "gradient_vertical" && paint->mode != "split_vertical"))
-                throw BackendError("Skia 角色正文画笔暂不支持此描边");
-            paintedOutline = true;
-        }
-        if (look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid" && !paintedOutline) continue;
+        const auto needsPaint = [](const PaintStyle& before, const PaintStyle& after) {
+            return before.mode != "solid" || after.mode != "solid";
+        };
+        const bool outline = look.strokeWidth > 0 && needsPaint(look.beforeStrokePaint, look.afterStrokePaint);
+        const bool outer = look.stroke2Width > 0 && needsPaint(look.beforeStroke2Paint, look.afterStroke2Paint);
+        if (!needsPaint(look.beforeFillPaint, look.afterFillPaint) && !outline && !outer) continue;
         domain.paintIndex = int(line.roleBodyPaints.size());
         ::subtitle::skia::BodyPaint prepared;
-        const PaintStyle* states[]{&look.beforeFillPaint, &look.afterFillPaint};
-        for (int phase = 0; phase < 2; ++phase) {
-            const auto& paint = *states[phase];
+        const auto prepare = [&](const PaintStyle& paint, ::subtitle::skia::ImageFill& image, bool stroke) {
+            if (paint.mode == "solid") return sk_sp<SkShader>{};
+            const bool verticalGradient = paint.mode == "gradient_vertical" || paint.mode == "split_vertical";
+            if (stroke && !outlinePaints && !(outlineGradients && verticalGradient))
+                throw BackendError("Skia 角色正文画笔暂不支持此描边");
             if (paint.mode == "image") {
-                prepared.images[phase] = images.fill(paint, scale);
-            } else if (paint.mode != "solid") {
-                // Horizontal gradients span the role's glyphs. Vertical
-                // gradients and discrete bands span the entire line and pen.
-                const auto& ink = paint.mode == "gradient_horizontal" ? domain.ink : bounds.line;
-                prepared.gradients[phase] = ::subtitle::skia::lineGradient(paint, ink, bounds.outlinePad);
+                image = images.fill(paint, scale);
+                return sk_sp<SkShader>{};
             }
-        }
-        if (paintedOutline) {
-            const auto gradient = [&](const PaintStyle& paint) {
-                return ::subtitle::skia::lineGradient(paint, bounds.line, bounds.outlinePad);
-            };
-            prepared.outlineGradients = {gradient(look.beforeStrokePaint), gradient(look.afterStrokePaint)};
-            prepared.outerGradients = {gradient(look.beforeStroke2Paint), gradient(look.afterStroke2Paint)};
-        }
+            const auto& ink = paint.mode == "gradient_horizontal" ? domain.ink : bounds.line;
+            return ::subtitle::skia::lineGradient(paint, ink, bounds.outlinePad);
+        };
+        prepared.gradients = {prepare(look.beforeFillPaint, prepared.images.body[0], false),
+                              prepare(look.afterFillPaint, prepared.images.body[1], false)};
+        if (outline)
+            prepared.outlineGradients = {prepare(look.beforeStrokePaint, prepared.images.outline[0], true),
+                                         prepare(look.afterStrokePaint, prepared.images.outline[1], true)};
+        if (outer)
+            prepared.outerGradients = {prepare(look.beforeStroke2Paint, prepared.images.outer[0], true),
+                                       prepare(look.afterStroke2Paint, prepared.images.outer[1], true)};
         line.roleBodyPaints.push_back(std::move(prepared));
     }
     for (std::size_t index = 0; index < line.cells.size(); ++index)
