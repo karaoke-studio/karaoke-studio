@@ -986,6 +986,51 @@ def test_custom_shape_signal_countdown(binary, project, target, shape):
     assert np.array_equal(lamps[0], lamps[-1]) and np.array_equal(lamps[0], replay[0])
 
 
+def test_custom_shape_signal_shares_line_fade(binary, project):
+    track, style = project
+    line = track.lines[0]
+    line = replace(line, chars=[replace(char, start_ms=char.start_ms + 1000) for char in line.chars],
+                   end_ms=line.end_ms + 1000, display_start_override_ms=0, display_end_override_ms=3400)
+    track = replace(track, lines=[line])
+    style = replace(style, entry_anim='fade', entry_lead_ms=600, exit_anim='fade', exit_fade_ms=400,
+                    lit_enabled=True, lit_appearance_mode='custom', lit_style='square', lit_number=1,
+                    lit_size=24, lit_offset_y=-36, lit_fill_color='#FF00FF', lit_stroke_width=0,
+                    lit_edge_brightness_pct=0, lit_shadow=False)
+    ir = ir_for(binary, (track, style))
+    source, = ir['track']['lines']
+    assert source['entry_duration_ms'] == 600 and source['exit_duration_ms'] == 400
+    times = [250, 650, 3000, 3200]
+
+    def lamp_alpha(frame):
+        lamp = (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245)
+        return np.where(lamp, frame[..., 3], 0)
+
+    results = []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        results.append([lamp_alpha(np.frombuffer(frame, np.uint8).reshape(360, 640, 4)) for frame in raw])
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        results.append([lamp_alpha(frame) for frame in frames])
+
+    for lamps in results:
+        entry, full, before_exit, exit = [int(frame.max()) for frame in lamps]
+        assert 0 < entry < full == before_exit and 0 < exit < before_exit
+    for lamps in results[1:]:
+        for time, expected, actual in zip(times, results[0], lamps, strict=True):
+            assert abs(int(expected.max()) - int(actual.max())) <= 2, time
+            expected_pixels = np.argwhere(expected > expected.max() // 2)
+            actual_pixels = np.argwhere(actual > actual.max() // 2)
+            assert abs(expected_pixels.min(axis=0) - actual_pixels.min(axis=0)).max() <= 1, time
+            assert abs(expected_pixels.max(axis=0) - actual_pixels.max(axis=0)).max() <= 1, time
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id,appearance', [
     ('lit_appearance_custom', None), ('lamp_shape_image', 'custom'),

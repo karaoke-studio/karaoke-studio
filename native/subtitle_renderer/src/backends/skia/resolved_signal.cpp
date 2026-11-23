@@ -28,10 +28,14 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
             return value.isDouble() && std::isfinite(value.toDouble()) && std::abs(value.toDouble()) <= 1e6;
         }))
         throw BackendError("Skia 指示灯缺少有效的最终锚点");
-    if (line.entryAnimation != "none" || line.exitAnimation != "none"
-        || (style.litTransitionMode != "none" && style.litTransitionMode != "fade"
-            && style.litTransitionMode != "slide"))
-        throw BackendError("Skia 自定义指示灯的入退场组合或过渡模式尚未支持");
+    if (style.litTransitionMode != "none" && style.litTransitionMode != "fade"
+        && style.litTransitionMode != "slide")
+        throw BackendError("Skia 指示灯的熄灭过渡模式尚未支持");
+    const auto eligibleLineFade = [&](const std::string& animation) {
+        return animation == "none" || (animation == "fade" && style.litAppearanceMode == "custom");
+    };
+    if (!eligibleLineFade(line.entryAnimation) || !eligibleLineFade(line.exitAnimation))
+        throw BackendError("Skia 尚未接通此指示灯外观的行级出入场变换");
     if (std::max({style.litSize, style.litTracking, std::abs(style.litOffsetX),
             std::abs(style.litOffsetY), style.litStrokeWidth, style.litStrokeSoften,
             style.litTransitionDistance}) > 8192.f)
