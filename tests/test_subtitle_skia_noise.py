@@ -81,13 +81,26 @@ def test_noise_with_glowing_ruby_preserves_wipe_and_previous_scene(binary, readi
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('dpr', [1, 1.5])
-def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr):
+@pytest.mark.parametrize('dpr,content', [(1, 'plain'), (1.5, 'plain'), (1, 'guide'), (1, 'role')])
+def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr, content):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_vector_guides import SQUARE
 
     track, style = transform_source(project, 'noise', 'noise')
+    line, = track.lines
+    if content == 'guide':
+        line = replace(line, inline_guide_symbols={1: SQUARE})
+    elif content == 'role':
+        chars = [line.chars[0], replace(line.chars[1], role_label='lead'), *line.chars[2:]]
+        line = replace(line, chars=chars)
+        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
+            font_family=style.font_family, font_size_px=60, karaoke_colors=colors('#FF00FF', '#00BBFF'))})
+    track = replace(track, lines=[line])
+    times = TIMES if content == 'plain' else [0, 159, 650, 2650, 3000]
     with NativeRendererProcess() as process:
-        _, raw = _render_g1_frames(process, style, tuple(TIMES), force_warp=False, track=track,
+        _, raw = _render_g1_frames(process, style, tuple(times), force_warp=False, track=track,
                                    width=640, height=360, dpr=dpr, realization_enabled=False)
     shape = (round(360*dpr), round(640*dpr), 4)
     reference = [np.frombuffer(p, np.uint8).reshape(shape) for p in raw]
@@ -96,9 +109,9 @@ def test_noise_matches_actual_d2d_and_gpu_raster(binary, project, dpr):
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
-            frames, _ = collect(process, TIMES)
+            frames, _ = collect(process, times)
         results.append(frames)
-    for t, d2d, gpu, raster in zip(TIMES, reference, *results, strict=True):
+    for t, d2d, gpu, raster in zip(times, reference, *results, strict=True):
         for name, a, b in (('d2d', d2d, gpu), ('raster', gpu, raster)):
             pa, pb = premultiplied(a), premultiplied(b)
             assert (pa[..., 3].any() == pb[..., 3].any()), (t, name, 'visibility')

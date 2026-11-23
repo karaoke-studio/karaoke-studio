@@ -634,8 +634,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (source.scanlineEnabled && ((cell.vectorGlyph && !(prefixFadedScanline || staticScanlineCells))
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
-            if (noise && (cell.vectorGlyph || &cellStyle != &resolved))
-                throw BackendError("Skia 噪声出入场暂不支持导唱符或行内角色");
             if (!source.fxBursts.empty() && ((cell.vectorGlyph && !prefixGuideParticles) || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))

@@ -158,8 +158,7 @@ def _validate_noise_transition(track, style, lines):
                 or entry not in {'noise', 'none'} or exit_ not in {'noise', 'none'}
                 or line.get('karaoke_anim') not in {'none', 'utopia'} or (line.get('zoom_pulse') and not track.rubies)
                 or line.get('scanline') or line.get('stroke_flash') or line.get('fx_bursts')
-                or uses_authored_decoration(look, 'shadow')
-                or any(c.role_label is not None or c.vector_glyph is not None for c in source.chars)):
+                or uses_authored_decoration(look, 'shadow')):
             raise ValueError('Skia 噪声出入场当前仅支持正向横排实色正文')
         composed = (composed or bool(track.rubies) or line.get('karaoke_anim') == 'utopia'
                     or uses_authored_decoration(look, 'glow'))
