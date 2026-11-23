@@ -997,6 +997,10 @@ macOS [双架构复验](https://github.com/karaoke-studio/karaoke-studio/actions
 
 第九十一批补齐唱字涟漪沿扩散半径的渐变与分层取色。用原有 1/32 分段选色，Vulkan 与 Raster 在逐环叠合前统一透明度取整。两种取色各采样 7 帧 1080p，三后端通过原画质预算，Windows 相关 7 项通过。包含第九十批与竖排测试修订的 [macOS 双架构 CI](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45161644401) 已启动。
 
+该 macOS 复验在 `f36cc270` 全部通过。arm64 和 x64 各完成 2,467 项产品测试及 57 项浮窗测试，跨架构度量和两项应用包验证也通过。Metal 来自托管虚拟设备。
+
+第九十二批补齐正向横排普通走字的唱字火焰、闪电继承配色方案。保留既有粒子层和时间，通过独立纵向渐变、双描边及只关闭描边、只替换渐变的 D2D 对照，两种效果各 7 帧 1080p 通过三后端原画质预算。Windows 相关 6 项通过。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）

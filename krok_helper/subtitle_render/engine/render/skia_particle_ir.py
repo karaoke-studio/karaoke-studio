@@ -125,6 +125,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     ruby_scanline = ruby_band_singing = painted_singing = False
     painted_sprites = sprite_shadows = sprite_line_gradients = sprite_images = False
     painted_ripples = False
+    painted_energy = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -258,9 +259,10 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                       and not (paint['stroke_width_px'] or paint['stroke2_width_px'] or paint.get('decor'))):
                     painted_sprites = painted_ripples = True
                     sprite_line_gradients |= paint['fill']['mode'] == 'gradient_horizontal'
-                elif static_sprite_paint and kind in _PAINTED_SPRITES and _supports_singing_particle_paint(
+                elif static_sprite_paint and kind in (_PAINTED_SPRITES | _ENERGY_PARTICLES) and _supports_singing_particle_paint(
                         paint, local_sprite=True):
                     painted_sprites = True
+                    painted_energy |= kind in _ENERGY_PARTICLES
                     decor = paint.get('decor')
                     modes = _sprite_layer_modes(paint)
                     sprite_shadows |= decor is not None and decor['kind'] == 'shadow'
@@ -345,6 +347,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_singing_sprite_images')
     if painted_ripples:
         ir['required_features'].append('p07_ripple_singing_paints')
+    if painted_energy:
+        ir['required_features'].append('p07_energy_singing_paints')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:

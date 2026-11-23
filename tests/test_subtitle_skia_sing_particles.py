@@ -128,8 +128,11 @@ def test_rtl_singing_particles_follow_resolved_cell_anchors(binary, project):
         assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
 
 
-@pytest.mark.parametrize('appearance', ['outlines', 'shadow', 'horizontal', 'image'])
-def test_singing_note_uses_inherited_particle_paint_layers(binary, project, tmp_path, appearance):
+@pytest.mark.parametrize(('kind', 'appearance'), [
+    ('note', 'outlines'), ('note', 'shadow'), ('note', 'horizontal'), ('note', 'image'),
+    ('flame', 'outlines'), ('lightning', 'outlines'),
+])
+def test_singing_sprites_use_inherited_particle_paint_layers(binary, project, tmp_path, kind, appearance):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -152,7 +155,7 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project, tmp_
                                  stroke_width_px=6, stroke2_enabled=True, stroke2_width_px=4)
     if shadow:
         scheme = replace(scheme, decoration_kind='shadow', shadow_offset_x=17, shadow_offset_y=-13)
-    style = replace(style, karaoke_colors=colors('#00000000', '#00000000'), sing_fx='note',
+    style = replace(style, karaoke_colors=colors('#00000000', '#00000000'), sing_fx=kind,
                     fx_particle_size_em=.72, fx_particle_color_mode='role', fx_particle_role_name='particle',
                     fx_particle_color_layers='all' if shadow else 'stroke', custom_style_schemes={'particle': scheme})
     if shadow:
@@ -176,6 +179,7 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project, tmp_
             assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p07_singing_sprite_paints' in ir['required_features']
+    assert ('p07_energy_singing_paints' in ir['required_features']) == (kind in {'flame', 'lightning'})
     assert ('p07_singing_sprite_shadows' in ir['required_features']) == shadow
     assert ('p07_singing_sprite_line_gradients' in ir['required_features']) == (appearance == 'horizontal')
     assert ('p07_singing_sprite_images' in ir['required_features']) == (appearance == 'image')
@@ -186,7 +190,7 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project, tmp_
     if shadow:
         assert any(np.count_nonzero((frame[..., 1] > np.maximum(frame[..., 0], frame[..., 2]))
                                     & (frame[..., 3] > 30)) > 100 for frame in gpu)
-    assert_glow_parity(times, refs[0] if refs else gpu, gpu, raster, ('note_particle_paint_layers', appearance),
+    assert_glow_parity(times, refs[0] if refs else None, gpu, raster, (kind, appearance),
                        check_p00_edges=True)
 
 

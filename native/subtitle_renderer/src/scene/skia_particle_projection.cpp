@@ -173,9 +173,13 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             || (version >= 10 && animated && fx.kind == "sparkle");
         const bool assemblySprite = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
+        const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
+        const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
+                                            || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
+        const bool paintedEnergy = (lightning || flame) && features.contains("p07_energy_singing_paints");
         const bool fadedPaint = fadedBand && features.contains("p07_faded_scanline_particle_paint")
             && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0 && spritePaint(fx.fill);
-        const bool localPaint = paintedSprites && (star || symbol || falling) && spriteLayerPaint(fx.fill)
+        const bool localPaint = paintedSprites && (star || symbol || falling || paintedEnergy) && spriteLayerPaint(fx.fill)
             && spriteStroke(fx.strokeWidthPx, fx.stroke) && spriteStroke(fx.stroke2WidthPx, fx.stroke2);
         const bool ringPaint = paintedSprites && ripple && ripplePaints
             && (spritePaint(fx.fill) || fx.fill.mode == "split_vertical"
@@ -193,9 +197,6 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
         const bool impact = version >= 11 && animated
             && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
-        const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
-        const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
-                                            || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
         const int singingFlameSweep = fx.kind == "flame" || fx.kind == "flame_alt" ? 2 : 0;
         const bool validSweep = animated
             ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))
