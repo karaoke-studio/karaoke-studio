@@ -115,6 +115,10 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
         "p05_vector_guides", "p05_vector_guide_composition", "p07_faded_scanline_prefix_guides",
         "p05_role_vector_guides", "p06_latin_primary_outline"
     };
+    static const QJsonArray titleFeatures{
+        "p05_vector_guides", "p08_bitmap_guides", "p08_animated_title_guides", "p08_title_role_outlines",
+        "p06_role_shadow_paints", "p06_body_gradient_shadow", "p06_body_image_shadow"
+    };
     for (const auto& feature : sourceFeatures)
         if (!allowed.contains(feature)
             && !(vertical && verticalAllowed.contains(feature))
@@ -122,9 +126,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
             && !(prefixGuides && prefixGuideFeatures.contains(feature))
             && !(kind != SourceKind::Title && sourceFeatures.contains("p08_inline_bitmap_guides")
                  && feature == QJsonValue("p08_bitmap_guides"))
-            && !(kind == SourceKind::Title && (feature == QJsonValue("p05_vector_guides") || feature == QJsonValue("p08_bitmap_guides")
-                           || feature == QJsonValue("p08_animated_title_guides")
-                           || feature == QJsonValue("p08_title_role_outlines"))))
+            && !(kind == SourceKind::Title && titleFeatures.contains(feature)))
             throw BackendError("Skia 多轨暂不支持此绘制能力 " + feature.toString().toStdString());
     const auto layout = source.value("skia_layout").toObject().value("lines").toArray();
     if ((size.lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");

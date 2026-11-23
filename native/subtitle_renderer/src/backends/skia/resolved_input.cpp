@@ -807,6 +807,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
         const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");
         const bool hasBitmapGuide = std::ranges::any_of(prepared.cells, [](const auto& cell) { return bool(cell.bitmap); });
+        const bool inlineStaticShadow = roleStaticShadow && hasInlineRoles && !annotated && !vectorGuides && !hasBitmapGuide
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse && line.karaokeAnimation == "none"
+            && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
+            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         prepared.shadow = skiaStaticShadow(style);
         const auto prepareShadow = [&](auto& state, const PaintStyle& paint, bool after) {
             if (!state.enabled || paint.mode == "solid") return;
@@ -814,7 +818,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (!(imagePaint ? bodyShadowImages : bodyShadowGradients) || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.karaokeAnimation != "none" || line.entryAnimation != "none" || line.exitAnimation != "none"
                 || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-                || hasInlineRoles || vectorGuides
+                || (hasInlineRoles && !inlineStaticShadow) || vectorGuides
                 || (hasBitmapGuide && (staticTitle || !(imagePaint ? bitmapGuideImageShadow : bitmapGuideGradientShadow))))
                 throw BackendError("Skia 正文渐变或图片阴影暂只支持静态正向横排");
             if (imagePaint) {
@@ -822,7 +826,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 state.color = argb(paint.color);
             } else {
                 if (!hasVisibleGradientStops(paint)) return;
-                auto ink = rolePaintBounds->line;
+                auto ink = inlineStaticShadow && paint.mode == "gradient_horizontal"
+                    ? rolePaintBounds->forRole(-1) : rolePaintBounds->line;
                 if (hasBitmapGuide && ink.isEmpty()) throw BackendError("Skia 图片导唱符渐变阴影需要同一行存在正文");
                 if (paint.mode == "gradient_horizontal") {
                     // Bitmap artwork extends the horizontal paint span only.
@@ -878,10 +883,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleGuideShadow = lineAnimation && (!hasInlineRoles || roleSinging)
             && roleVectorGuides && features.contains("p06_static_shadow") && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
-        const bool inlineStaticShadow = roleStaticShadow && hasInlineRoles && !annotated && !vectorGuides && !hasBitmapGuide
-            && !style.vertical && !style.rightToLeft && !line.wipeReverse && line.karaokeAnimation == "none"
-            && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
-            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         if ((roleGuideShadow && hasInlineRoles) || inlineStaticShadow)
             resolveRoleShadows(prepared, line, projected.charStyles,
                                roleShadowPaints && inlineStaticShadow ? &*rolePaintBounds : nullptr,

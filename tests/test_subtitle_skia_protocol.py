@@ -259,6 +259,42 @@ def test_title_role_decoration_matches_actual_d2d_gpu(binary, decoration):
         binary, SimpleNamespace(track=track, style=style, case_id=f'title_role_{decoration}'), times)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_textured_shadows_match_actual_d2d_gpu(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+
+    track, base = role_title(outlined=True)
+    tile = write_png(tmp_path / 'title-shadow.png', pattern('transparent'))
+    title, = base.title_overlays
+    title = replace(title, decoration_kind='shadow', shadow=image_paint(tile, 112),
+                    shadow_offset_x=10, shadow_offset_y=7)
+    accent = base.custom_style_schemes['accent']
+    palette = accent.karaoke_colors
+    gradient = PaintFill(mode='gradient_horizontal', start_color='#D03D49DF', end_color='#A0FAA62C')
+    state = replace(palette.after, shadow=gradient)
+    accent = replace(accent, decoration_kind='shadow', shadow_offset_x=-9, shadow_offset_y=11,
+                     karaoke_colors=replace(palette, before=state, after=state))
+    style = replace(base, title_overlays=[title], custom_style_schemes={'accent': accent})
+    solid = replace(state, shadow=PaintFill(color='#FFAB3070'))
+    controls = (
+        replace(style, title_overlays=[replace(title, shadow=PaintFill(color='#FF2932BB'))]),
+        replace(style, custom_style_schemes={'accent': replace(
+            accent, karaoke_colors=replace(palette, before=solid, after=solid))}),
+    )
+    times = (299, 400, 500, 900, 1000, 1400, 1750, 1801)
+    refs = []
+    for look in (style, *controls):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track, realization_enabled=False)
+        refs.append(raw)
+    assert all(any(a != b for a, b in zip(refs[0], control, strict=True)) for control in refs[1:])
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_textured_shadows'), times)
+
+
 def painted_title(tmp_path, mode):
     from test_subtitle_skia_image_fills import pattern, write_png
 
