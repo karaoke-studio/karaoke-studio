@@ -54,15 +54,19 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         return SkRect::MakeXYWH(origin.x() + index * pitch + (active ? state.dx : 0.f),
                                origin.y() + (active ? state.dy : 0.f), size, size);
     };
-    sk_sp<SkShader> fillGradient;
-    if (decoration && decoration->unitFillGradient) {
+    GradientBrushes gradients;
+    if (decoration && !decoration->unitGradients.empty()) {
         // Include every slot so extinguishing a lamp cannot change its neighbours' colors.
         SkRect bounds = boxAt(0);
         for (int index = 1; index < clock.count; ++index) bounds.join(boxAt(index));
         // The existing GPU applies the group brush in the translated coordinates of a vector lamp.
         if (path) bounds.offset(-decoration->glyphPaintOrigin.x(), -decoration->glyphPaintOrigin.y());
-        fillGradient = decoration->unitFillGradient->makeWithLocalMatrix(
-            SkMatrix::RectToRect(SkRect::MakeWH(1, 1), bounds));
+        const auto mapping = SkMatrix::RectToRect(SkRect::MakeWH(1, 1), bounds);
+        const auto fit = [&](const sk_sp<SkShader>& brush) {
+            return brush ? brush->makeWithLocalMatrix(mapping) : nullptr;
+        };
+        const auto& unit = decoration->unitGradients;
+        gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke)};
     }
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
@@ -122,7 +126,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
                 drawShape(shadowBox, decoration->shadow, 0);
             }
             if (decoration->outerWidth > 0 && SkColorGetA(decoration->outerStroke))
-                drawShape(box, decoration->outerStroke, strokeWidth + decoration->outerWidth);
+                drawShape(box, decoration->outerStroke, strokeWidth + decoration->outerWidth, gradients.outerStroke);
         } else if (shape != Shape::Image) {
             if (shadow) drawShape(box.makeOffset(shadowOffset, shadowOffset), SkColorSetA(SK_ColorBLACK, 89), 0);
             if (strokeWidth > 0 && strokeSoften > 0) {
@@ -133,9 +137,9 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         if (!decoration)
             drawShape(box, fill, 0);
         if (strokeWidth > 0 && SkColorGetA(stroke) > 0)
-            drawShape(box, stroke, strokeWidth);
+            drawShape(box, stroke, strokeWidth, gradients.stroke);
         if (decoration)
-            drawShape(box, fill, 0, fillGradient);
+            drawShape(box, fill, 0, gradients.fill);
         if (highlight > 0 && (decoration || shape != Shape::Image)) {
             paint.setShader(nullptr);
             paint.setColor(SK_ColorWHITE);

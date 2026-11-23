@@ -15,12 +15,16 @@ namespace subtitle::skia {
 struct SignalTransition;
 struct ShapeSignal {
     enum class Shape { Circle, Square, Rounded, Image };
+    struct GradientBrushes {
+        sk_sp<SkShader> fill, stroke, outerStroke;
+        bool empty() const { return !fill && !stroke && !outerStroke; }
+    };
     struct Decoration {
         SkColor outerStroke = 0, shadow = 0;
         float outerWidth = 0;
         float shadowX = 0, shadowY = 0;
         std::vector<PreparedGlow> glow;
-        sk_sp<SkShader> unitFillGradient;
+        GradientBrushes unitGradients;
         SkPoint glyphPaintOrigin = SkPoint::Make(0, 0);
     };
     krok::subtitle::native::ShapeSignalClock clock;

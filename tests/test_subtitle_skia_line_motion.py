@@ -1818,6 +1818,44 @@ def test_decorated_volume_columns_use_the_same_split_height(binary, project):
         assert not np.any(np.all(frames[-1][..., :3] == [37, 71, 232], axis=-1) & (frames[-1][..., 3] > 250))
 
 
+def test_decorated_lamp_uses_the_gradient_for_each_outline(binary, project):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    line, = track.lines
+    track = replace(track, lines=[replace(line, display_start_override_ms=0)])
+    palette = colors('#EEEEEE', '#EEEEEE')
+    inner = PaintFill(mode='gradient_vertical', start_color='#EA111C', end_color='#F6860C')
+    outer = PaintFill(mode='gradient_horizontal', start_color='#1034ED', end_color='#046DC1')
+    palette = SubtitleStyleScheme(font_size_px=48, stroke_width_px=8, stroke2_enabled=True, stroke2_width_px=12,
+                                  karaoke_colors=replace(palette, after=replace(palette.after, stroke=inner, stroke2=outer)))
+    style = replace(style, karaoke_colors=colors('#BBBBBB', '#BBBBBB'), lit_enabled=True, lit_style='square',
+                    lit_appearance_mode='role', lit_role_name='outlined-signal', lit_size=34, lit_number=3,
+                    lit_edge_brightness_pct=0, lit_offset_y=-42, lit_time_offset_ms=1200,
+                    signals_duration_ms=1200, lit_transition_mode='none',
+                    custom_style_schemes={'outlined-signal': palette})
+    times, dpr = (260, 650, 1000), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, 'decorated_lamp_gradient_outlines', check_p00_edges=True)
+    for frames in (gpu, raster):
+        r, g, b, a = np.moveaxis(frames[0], -1, 0)
+        outline_pixels = a > 250
+        assert len(np.unique(g[outline_pixels & (r > 180) & (b < 60)])) > 10
+        assert len(np.unique(g[outline_pixels & (b > 140) & (r < 80)])) > 10
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source
