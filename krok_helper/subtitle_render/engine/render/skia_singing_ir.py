@@ -119,6 +119,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                     and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
                 or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12
+                    and 'p07_plain_scaled_singing_particles' not in ir['required_features']
                     and not faded_band_singing_particles(source, style))
                 or (inline_roles and not role_scale)):
             raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')

@@ -54,7 +54,14 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     const bool scanlineWithSinging = shapedSinging || bandSinging;
     const bool rubyScanline = features.contains("p07_ruby_scanline_particles") || scanlineWithSinging;
     const bool composedTransition = rubyParticles && allowsSkiaRubyParticleTransition(entry, exit, features);
-    const bool scaledSinging = fadedBand || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
+    const bool plainScale = features.contains("p07_plain_scaled_singing_particles")
+        && cfg.rubies.empty() && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+        && source.karaokeAnimation == "utopia" && source.entryAnimation == "none" && source.exitAnimation == "none"
+        && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.scanlineEnabled
+        && protocol::decorationKindForState(style, false) == "none"
+        && protocol::decorationKindForState(style, true) == "none";
+    const bool scaledSinging = fadedBand || plainScale
+        || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     const bool verticalStars = features.contains("p07_vertical_sing_twinkle");

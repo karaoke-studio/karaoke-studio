@@ -30,6 +30,35 @@ def twinkle_source(project, kind='plain'):
     return track, replace(style, sing_fx='twinkle', fx_particle_color='#0000FF', fx_particle_color2=color2)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_plain_utopia_particles_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, base = twinkle_source(project, 'two_colors')
+    style = replace(base, karaoke_anim='utopia')
+    times, dpr = (250, 400, 750, 1100, 1500, 1820, 2200), 3
+    refs = []
+    for look in (style, replace(style, sing_fx='none'), base):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    feature = 'p07_plain_scaled_singing_particles'
+    assert feature in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    for time, d2d, vulkan, cpu in zip(times, refs[0], gpu, raster, strict=True):
+        assert_particle_region(d2d, vulkan, ('utopia', time))
+        assert_particle_region(vulkan, cpu, ('utopia', time, 'raster'))
+        assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
+    ir['required_features'].remove(feature)
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, ir)
+
+
 RUBY_PARTICLE_TIMES = [150, 450, 550, 899, 950, 1100, 1400, 1700, 2100, 2650, 3200]
 
 
