@@ -166,7 +166,7 @@ def write_body_gradient_bounds(ir, plan):
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
         static_vertical = static_paints and look.vertical
         directional_solid_outline |= (static_directional and outlined and modes == {'solid'}
-                                      and all(c.role_label is None and c.vector_glyph is None
+                                      and all(c.role_label is None and not guide_symbol_is_bitmap(c.vector_glyph)
                                               for c in item.render_line.chars))
         ruby_modes = set()
         if annotated:
@@ -210,8 +210,9 @@ def write_body_gradient_bounds(ir, plan):
         singing = (source.get('karaoke_anim') == 'utopia'
                    and (annotated or faded_band or palette_band or moving or unannotated_singing)
                    and (not source.get('zoom_pulse') or zoom_paints))
-        ordinary_vector_paint = (not (look.vertical or directional) and source.get('karaoke_anim') == 'none'
-                                 and (animations == {'none'} or paint_fade))
+        ordinary_vector_paint = (static_directional
+                                 or (not (look.vertical or directional) and source.get('karaoke_anim') == 'none'
+                                     and (animations == {'none'} or paint_fade)))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or (look.vertical and not static_vertical)
                 or (directional and not (static_directional or static_vertical or (singing and unannotated_singing)))

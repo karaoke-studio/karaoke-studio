@@ -1029,12 +1029,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
-        const bool staticPaintStack = !hasDecoration && !hasBitmapGuide && !vectorGuides
+        const bool staticPaintStack = !hasDecoration && !hasBitmapGuide
             && !anyReadings && !hasInlineRoles && line.karaokeAnimation == "none" && line.entryAnimation == "none"
             && line.exitAnimation == "none" && !line.zoomPulseEnabled && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
         const bool staticDirectional = staticPaintStack && !style.vertical && style.rightToLeft != line.wipeReverse;
-        const bool verticalPaints = staticPaintStack && style.vertical && features.contains("p06_vertical_body_paints");
+        const bool verticalPaints = staticPaintStack && style.vertical && !vectorGuides
+            && features.contains("p06_vertical_body_paints");
         const bool directionalPaints = staticDirectional && features.contains("p06_directional_body_paints");
         const bool directionalOutlines = directionalPaints
             || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));

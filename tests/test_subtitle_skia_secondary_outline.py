@@ -28,8 +28,8 @@ def two_outlines(project, *, inner=8, outer=6, body_alpha=False, inner_alpha=Fal
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('direction', ['reverse', 'rtl'])
-def test_directional_solid_outlines_match_actual_d2d_gpu(binary, project, direction):
+@pytest.mark.parametrize('direction,guide', [('reverse', False), ('rtl', False), ('reverse', True)])
+def test_directional_solid_outlines_match_actual_d2d_gpu(binary, project, direction, guide):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
@@ -37,6 +37,11 @@ def test_directional_solid_outlines_match_actual_d2d_gpu(binary, project, direct
 
     track, style = two_outlines(project, body_alpha=True, inner_alpha=True)
     track = replace(track, lines=[replace(line, wipe_reverse=direction == 'reverse') for line in track.lines])
+    if guide:
+        from test_subtitle_skia_vector_guides import CURVES
+
+        line, = track.lines
+        track = replace(track, lines=[replace(line, inline_guide_symbols={1: CURVES})])
     style = replace(style, right_to_left=direction == 'rtl')
     times, dpr = (250, 450, 750, 1100, 1400, 1750, 2200), 3
     refs = []
@@ -50,7 +55,8 @@ def test_directional_solid_outlines_match_actual_d2d_gpu(binary, project, direct
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p06_directional_solid_outline' in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, ('directional_solid_outlines', direction), check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('directional_solid_outlines', direction, guide),
+                       check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

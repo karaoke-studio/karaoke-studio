@@ -124,14 +124,19 @@ def test_plain_singing_body_paints_match_actual_d2d_gpu(binary, project, images,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('direction', ['reverse', 'rtl'])
-def test_directional_body_paints_match_actual_d2d_gpu(binary, project, images, direction):
+@pytest.mark.parametrize('direction,guide', [('reverse', False), ('rtl', False), ('rtl', True)])
+def test_directional_body_paints_match_actual_d2d_gpu(binary, project, images, direction, guide):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = image_source(project, images, 'mixed')
     track = replace(track, lines=[replace(line, wipe_reverse=direction == 'reverse') for line in track.lines])
+    if guide:
+        from test_subtitle_skia_vector_guides import CURVES
+
+        line, = track.lines
+        track = replace(track, lines=[replace(line, inline_guide_symbols={1: CURVES})])
     style = replace(style, right_to_left=direction == 'rtl')
     color = style.karaoke_colors
     plain = replace(style, karaoke_colors=replace(color,
@@ -149,7 +154,7 @@ def test_directional_body_paints_match_actual_d2d_gpu(binary, project, images, d
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p06_directional_body_paints' in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, ('directional_body_paints', direction), check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('directional_body_paints', direction, guide), check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
