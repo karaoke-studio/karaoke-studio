@@ -255,6 +255,36 @@ def test_static_cell_band_matches_actual_d2d_gpu(binary, project):
     assert_glow_parity(times, reference, gpu, raster, 'static_scanline_cells', check_p00_edges=True)
 
 
+def test_scanline_image_keeps_front_over_styled_cells(binary, project, tmp_path):
+    from test_subtitle_skia_bitmap_guides import image
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = static_guide_and_role_band(project)
+    asset = image(tmp_path / 'scanline.png', width=14, height=22)
+    style = replace(style, scanline_shape='image', scanline_image_path=asset,
+                    scanline_image_scale_pct=300, scanline_image_offset_y_px=-45)
+    plain = replace(style, scanline_enabled=False)
+    times = (350, 550, 710, 850)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        frames = []
+        for look in (style, plain):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, realization_enabled=False)
+            frames.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+        reference, bare = frames
+        assert all(np.count_nonzero(a != b) > 100 for a, b in zip(reference, bare, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    if reference is None:
+        bare, _ = render_skia(binary, ir_for(binary, (track, plain)), times)
+        assert all(np.count_nonzero(a != b) > 100 for a, b in zip(gpu, bare, strict=True))
+    assert_glow_parity(times, reference, gpu, raster, 'scanline_image_with_styled_cells', check_p00_edges=True)
+
+
 def directional_scanline_image(project, tmp_path, reverse):
     from test_subtitle_skia_image_fills import pattern, write_png
 

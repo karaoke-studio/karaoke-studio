@@ -71,7 +71,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     composed = role_layers = line_motion = False
     unscaled_line_motion = faded_band_particles = False
     inline_role_fade = prefix_guide_fade = False
-    static_cell_band = False
+    static_cell_scanline = False
     transform_band = False
     utopia_entry_bands = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
@@ -192,7 +192,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         role_fade = inline_roles and fixed_fade
         prefix_fade = (vector_guides and not inline_roles and vector_guides_form_prefix(chars)
                        and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'})))
-        static_cells = ((inline_roles or vector_guides) and ordinary and look.scanline_shape == 'band'
+        fixed_image = basic_image and look.scanline_mode == 'color'
+        static_cells = ((inline_roles or vector_guides) and ordinary and (look.scanline_shape == 'band' or fixed_image)
                         and look.scanline_mode != 'role' and line.get('karaoke_anim') == 'none'
                         and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                                  or track.rubies or with_zoom_or_flash or bursts))
@@ -222,7 +223,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
         rtl_band |= rtl_scanline
         shadow_band |= static_shadow_band
-        static_cell_band |= static_cells
+        static_cell_scanline |= static_cells
         role_gradient |= (role_fill is not None
                           and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
                           and ordinary and not (track.rubies or bursts or with_zoom_or_flash or utopia or inline_roles))
@@ -266,7 +267,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_original_scanline_image_palette')
     if inline_role_fade:
         features.append('p07_inline_role_faded_scanline')
-    if static_cell_band:
+    if static_cell_scanline:
         features.append('p07_scanline_static_cells')
     if transform_band:
         features.append('p07_scanline_character_transform')

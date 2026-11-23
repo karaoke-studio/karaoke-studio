@@ -550,10 +550,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled && source.fxBursts.empty();
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
+        const bool fixedImage = basicImage && scanlineShape && resolved.scanlineMode == "color";
         const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
             && !features.contains("p05_lower_ruby") && source.karaokeAnimation == "none"
-            && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
+            && (resolved.scanlineShape == "band" || fixedImage) && resolved.scanlineMode != "role"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool prefixGuideParticles = prefixFadedScanline
             && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
