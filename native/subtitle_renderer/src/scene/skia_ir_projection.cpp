@@ -250,7 +250,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             || (allowCharacterFade && animation == "char_fade")
             || (allowCharacterTransform && transformAnimation(animation, entry));
     };
-    for (const auto& source : cfg.lines) {
+    const auto layoutLines = ir.value("skia_layout").toObject().value("lines").toArray();
+    for (std::size_t lineIndex = 0; lineIndex < cfg.lines.size(); ++lineIndex) {
+        const auto& source = cfg.lines[lineIndex];
+        const auto rubyGroups = layoutLines.at(qsizetype(lineIndex)).toObject().value("ruby_groups").toArray();
+        const bool hasLowerReading = std::ranges::any_of(rubyGroups, [](const auto& group) {
+            return group.toObject().value("lower").toBool();
+        });
         const bool singingScale = source.karaokeAnimation == "utopia" && features.contains("p07_singing_scale");
         if (source.annotationBaselineY
             || !supportedAnimation(source.entryAnimation, true)
@@ -665,7 +671,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
             if (cell.bitmapGuide) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
-                if (features.contains("p08_bitmap_lower_ruby")
+                if (hasLowerReading
                     && (cfg.rightToLeft || source.wipeReverse || !guideRubyAnimation
                         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "utopia")
                         || source.scanlineEnabled || source.zoomPulseEnabled

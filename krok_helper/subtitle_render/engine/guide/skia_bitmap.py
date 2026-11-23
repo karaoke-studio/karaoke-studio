@@ -189,8 +189,9 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
         if rtl_singing:
             features.append('p08_rtl_bitmap_singing')
     if 'p05_lower_ruby' in features:
-        for item in plan_lines:
-            if not has_bitmap_guides((item.render_line,)):
+        for item, final in zip(plan_lines, ir['skia_layout']['lines'], strict=True):
+            if (not has_bitmap_guides((item.render_line,))
+                    or not any(group.get('lower') for group in final.get('ruby_groups', ()))):
                 continue
             source = ir['track']['lines'][item.track_index]
             if (item.layout_style.right_to_left or item.line.wipe_reverse
