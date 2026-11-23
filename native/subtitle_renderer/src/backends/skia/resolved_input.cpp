@@ -782,7 +782,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient")
             || features.contains("p06_ruby_gradient_shadow"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
-                                                     projected.layoutReferenceScale);
+                                                     projected.layoutReferenceScale, staticTitle && roleBodyPaints);
         if (rolePaintBounds && volumeBandLeft) {
             if (auto first = rolePaintBounds->roles.find(*leftmostVolumeRole); first != rolePaintBounds->roles.end())
                 first->second.ink.fLeft = std::min(first->second.ink.left(), *volumeBandLeft);

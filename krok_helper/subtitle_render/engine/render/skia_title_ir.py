@@ -64,7 +64,7 @@ def title_style(title):
                    or (paint['stroke_width_px'] > 0 and paint['stroke']['mode'] != 'solid')
                    or (paint['stroke2_width_px'] > 0 and paint['stroke2']['mode'] != 'solid')
                    for paint in paints)
-    if textured and ((bitmaps and roles) or any(paint['decoration_kind'] != 'none' for paint in paints)):
+    if textured and any(paint['decoration_kind'] != 'none' for paint in paints):
         return None
     if bitmaps and roles and any(paint['decoration_kind'] != 'none' for paint in paints):
         return None

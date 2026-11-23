@@ -53,10 +53,14 @@ RolePaintBounds collectRolePaintBounds(const ::subtitle::skia::ResolvedLine& lin
     RolePaintBounds bounds;
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
         const auto& cell = line.cells[index];
-        if (cell.path.isEmpty() && !(includeBitmaps && cell.bitmap)) continue;
         const int role = source.chars[index].styleIndex;
+        if (cell.path.isEmpty()) {
+            // Bitmap guides participate in the role's horizontal paint span.
+            if (includeBitmaps && cell.bitmap) bounds.roles[role].ink.join(cell.bitmap->box);
+            continue;
+        }
         const auto& look = role < 0 ? base : styles[role];
-        const auto ink = includeBitmaps && cell.bitmap ? cell.bitmap->box : cell.path.computeTightBounds();
+        const auto ink = cell.path.computeTightBounds();
         bounds.roles[role].ink.join(ink);
         bounds.line.join(ink);
         bounds.outlinePad = std::max(bounds.outlinePad,

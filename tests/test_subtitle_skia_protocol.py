@@ -615,6 +615,29 @@ def test_title_bitmap_guides_preserve_text_gradient_domains(binary, tmp_path):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_bitmap_guides_share_only_their_roles_horizontal_paint_span(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = bitmap_guide_title(tmp_path, inline=True)
+    title = style.title_overlays[0]
+    fill = PaintFill(mode='gradient_horizontal', start_color='#C63405', end_color='#09AD15')
+    stroke = PaintFill(mode='gradient_vertical', start_color='#4920A0', end_color='#FCEC29')
+    paints = KaraokeColorState(text=fill, stroke=stroke)
+    role = SubtitleStyleScheme(font_family=style.font_family, font_size_px=67, stroke_width_px=3,
+                               karaoke_colors=KaraokeColors(before=paints, after=paints))
+    prefix = replace(title.guide_symbols[0], role_labels=('accent',), bitmap_margin_bottom_px=48)
+    title = replace(title, guide_symbols={0: prefix}, char_role_labels=[[None, 'accent', None, None]])
+    style = replace(style, title_overlays=[title], custom_style_schemes={'accent': role})
+    source = ir_for(binary, (track, style))['skia_titles'][0]['source']
+    assert {'p08_bitmap_guides', 'p06_role_body_paints', 'p06_role_outline_paints'} <= set(source['required_features'])
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_bitmap_role_paints'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def mixed_guide_title(tmp_path):
     track, style = bitmap_guide_title(tmp_path)
     _, vector = vector_guide_title()
