@@ -16,7 +16,6 @@ from test_subtitle_skia_rtl_flow import colors, rtl_source
 from test_subtitle_skia_secondary_outline import two_outlines
 from test_subtitle_skia_sing_particles import assert_particle_region, blue_coverage
 from test_subtitle_skia_vector_guides import guide_source
-from test_subtitle_skia_vertical import vertical_ruby_source
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, reading, upper_source, upper_ir, bands
 from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
@@ -168,14 +167,9 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
     assert 'p07_scanline_band' not in ir['required_features']
 
 
-@pytest.mark.parametrize('case', ['vertical_shape', 'utopia_entry', 'utopia_reverse'])
-def test_unproven_scanline_combinations_are_rejected(binary, project, case):
+def test_unproven_reverse_utopia_scanline_is_rejected(binary, project):
     track, style = scanline_source(project)
-    if case == 'vertical_shape':
-        track, style = vertical_ruby_source(project)
-        style = replace(band(style), scanline_shape='flame')
-    elif case == 'utopia_entry': style = replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600)
-    else: track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
+    track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
     with pytest.raises(ValueError, match='扫字线|Utopia'):
         ir_for(binary, (track, style))
 
@@ -525,6 +519,44 @@ def role_singing_scanline_source(reading, project, zoom):
     source = SubtitleStyleScheme(karaoke_colors=colors('#AA2240', '#20C0EE'))
     return track, replace(style, scanline_mode='role', scanline_role_name='highlight',
                           custom_style_schemes={'highlight': source}, karaoke_anim='zoom_pulse' if zoom else 'utopia')
+
+
+def utopia_entry_scanline_source(project):
+    track, style = scanline_source(project)
+    return track, replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600, scanline_glow_px=4)
+
+
+def test_utopia_entry_scanline_keeps_scene_after_missing_capability(binary, project):
+    ir = ir_for(binary, utopia_entry_scanline_source(project))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_utopia_entry')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [350, 620, 1100])
+        with pytest.raises(NativeRendererError, match='扫字线'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 620, 350], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_utopia_entry_scanline_matches_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = utopia_entry_scanline_source(project)
+    times = (275, 335, 399, 451, 521, 620, 750, 1100)
+    references = []
+    for look in (style, replace(style, scanline_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, bare = references
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:5], bare[:5], strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'utopia_entry_scanline', check_p00_edges=True)
 
 
 def test_role_singing_scanline_requires_its_capability(binary, reading, project):

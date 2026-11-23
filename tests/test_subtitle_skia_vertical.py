@@ -61,7 +61,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
 
 
 @pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'rtl',
-                                    'dual_ruby_zoom_flame', 'dual_alt_grid', 'offset'])
+                                    'dual_alt_grid', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
     track, style = vertical_source(project)
@@ -69,10 +69,6 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     if change in texts:
         track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text=texts[change]), *line.chars[1:]])])
     elif change == 'rtl': style = replace(style, right_to_left=True)
-    elif change == 'dual_ruby_zoom_flame':
-        track, style = vertical_ruby_source(project)
-        style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
-                        karaoke_anim='zoom_pulse_scanline', scanline_shape='flame')
     elif change == 'dual_alt_grid':
         track = replace(track, lines=[replace(line, layout_index=1)])
         style = replace(style, dual_line_layout=True, line_alignments=['left', 'right'],
@@ -294,12 +290,44 @@ def test_reverse_vertical_no_wipe_keeps_shadow_overhang_before_first_unit(binary
     assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 
 
-def test_vertical_column_decoration_rejects_ruby_with_shaped_scanline(binary, project):
+def test_vertical_column_decoration_keeps_ruby_when_ignoring_shaped_scanline(binary, project):
     track, style, _ = decorated_columns(project, 'glow')
     track = replace(track, rubies=[RubyAnnotation('字', '字', pos_start_ms=200, pos_end_ms=360, target_line_index=0,
                                                   target_char_start=0, target_char_end=1)])
-    with pytest.raises(ValueError, match='竖排扫字线'):
-        ir_for(binary, (track, replace(style, karaoke_anim='scanline', scanline_enabled=True, scanline_shape='flame')))
+    flame = replace(style, karaoke_anim='scanline', scanline_enabled=True,
+                    scanline_shape='flame', scanline_effect='sakura')
+    ir = ir_for(binary, (track, flame))
+    control = ir_for(binary, (track, style))
+    assert not any(line.get('scanline') or line.get('fx_bursts') for line in ir['track']['lines'])
+    assert ir['skia_layout']['lines'] == control['skia_layout']['lines']
+    assert any(line['ruby_groups'] for line in ir['skia_layout']['lines'])
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, control)
+        frames, _ = collect(process, [260, 540])
+        configure(process, ir)
+        replay, _ = collect(process, [540, 260], generation=2)
+    assert any(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+def test_unsupported_vertical_scanline_shape_is_ignored_like_d2d(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_scanline import band
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = vertical_source(project)
+    flame = replace(band(style), scanline_shape='flame', scanline_effect='sakura')
+    times = (300, 520, 750, 1100, 1550, 1780)
+    draws = []
+    for look in (style, flame):
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                          width=640, height=360, realization_enabled=False)
+        draws.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in pixels])
+    assert np.array_equal(*draws)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, flame)), times)
+    assert_glow_parity(times, draws[0], gpu, raster, 'inactive_vertical_scanline', check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
@@ -973,7 +1001,7 @@ def test_vertical_roles_and_lower_reading_match_actual_d2d_gpu(binary, project):
     assert_glow_parity(times, reference, gpu, raster, 'vertical_inline_roles', check_p00_edges=True)
 
 
-@pytest.mark.parametrize('change', ['emoji_cluster', 'overlap_groups', 'reverse_utopia_flame'])
+@pytest.mark.parametrize('change', ['emoji_cluster', 'overlap_groups'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
     reading = '👩‍💻' if change == 'emoji_cluster' else '字'
     extra = None
@@ -983,9 +1011,6 @@ def test_unproven_vertical_ruby_stays_gated(binary, project, change):
         other, _ = vertical_ruby_source(project, span=(1, 3))
         extra = other.rubies
     track, style = vertical_ruby_source(project, reading=reading, span=span, extra=extra)
-    if change == 'reverse_utopia_flame':
-        track = replace(track, lines=[replace(track.lines[0], wipe_reverse=True)])
-        style = replace(style, reverse_karaoke_anim='utopia_scanline', scanline_shape='flame')
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
 

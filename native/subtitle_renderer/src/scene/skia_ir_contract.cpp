@@ -195,6 +195,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_scanline_shadow",
         "p07_scanline_static_cells",
         "p07_scanline_character_transform",
+        "p07_scanline_utopia_entry",
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
         "p07_vertical_mixed_scanline",
@@ -984,6 +985,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_scanline_band") || scanlineVersion < 5
             || !features.contains("p07_utopia_line_animation")))
         throw BackendError("Skia 整行出入场扫字线缺少高亮带或 Utopia 行动画能力声明");
+    if (features.contains("p07_scanline_utopia_entry")
+        && (!features.contains("p07_scanline_band") || !features.contains("p07_utopia_transition")
+            || !features.contains("p07_singing_scale") || features.contains("p05_resolved_ruby")
+            || scanlineVersion < 5))
+        throw BackendError("Skia Utopia 入场缺少高亮带或逐字入场能力声明");
     if (features.contains("p07_scanline_unscaled_line_animation")
         && (!features.contains("p07_scanline_band") || scanlineVersion < 3
             || !(features.contains("p07_line_fade") || features.contains("p07_line_motion"))))

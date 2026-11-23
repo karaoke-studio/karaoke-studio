@@ -9,15 +9,20 @@ from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 
 
-def suppress_no_wipe_bands(ir, plan):
+def suppress_inactive_scanline_bands(ir, plan):
     for item in plan.lines:
         line = ir['track']['lines'][item.track_index]
-        if line.get('karaoke_anim') != 'no_wipe' or not line.get('scanline'):
+        if not line.get('scanline'):
             continue
-        # Whole-unit color changes have no moving highlight strip. Horizontal
-        # scanline particles still have independent clocks in the source IR.
+        look = item.layout_style
+        inactive_vertical_shape = look.vertical and (
+            look.scanline_shape != 'band' or look.scanline_mode not in {'color', 'brighten', 'follow_before', 'follow_after'})
+        if line.get('karaoke_anim') != 'no_wipe' and not inactive_vertical_shape:
+            continue
+        # Unsupported vertical shapes have no paint path. Horizontal
+        # whole-unit coloring keeps the separate scanline particle clocks.
         line['scanline'] = False
-        if item.layout_style.vertical and line.get('fx_bursts'):
+        if look.vertical and line.get('fx_bursts'):
             line['fx_bursts'] = [burst for burst in line['fx_bursts'] if burst['kind'] != 'scanline']
 
 
@@ -40,6 +45,15 @@ def transformed_cell_band(line, style):
                      or line.get('stroke_flash') or line.get('zoom_pulse') or line.get('fx_bursts')))
 
 
+def utopia_entry_band(line, style):
+    return (line.get('scanline') and line.get('entry_anim') == 'utopia' and line.get('exit_anim') == 'none'
+            and line.get('karaoke_anim') == 'utopia' and style.scanline_shape == 'band'
+            and style.scanline_mode in {'default', 'color'}
+            and not (style.vertical or style.right_to_left or style.lower_ruby_enabled or line.get('wipe_reverse')
+                     or line.get('stroke_flash') or line.get('zoom_pulse') or line.get('fx_bursts')
+                     or any(uses_authored_decoration(style, kind) for kind in ('shadow', 'glow'))))
+
+
 def scanline_features(track, style, lines, particle_band_tracks, vertical_singing_tracks):
     """Validate scanline modes and their supported compositions."""
     composed = role_layers = line_motion = False
@@ -47,6 +61,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     inline_role_fade = prefix_guide_fade = False
     static_cell_band = False
     transform_band = False
+    utopia_entry_bands = False
     vertical_band = reverse_vertical_band = moving_vertical_band = vertical_singing_band = vertical_palette_band = False
     reverse_vertical_palette = False
     singing_vertical_palette = False
@@ -123,8 +138,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                   and not (line.get('zoom_pulse') or line.get('stroke_flash'))
                   and (not bursts or faded_band))
         shape = solid_shape and (ordinary or motion or image_during_transition)
+        entering_utopia = not track.rubies and utopia_entry_band(line, look)
+        utopia_entry_bands |= entering_utopia
         utopia = (line.get('karaoke_anim') == 'utopia' and not source.wipe_reverse
-                  and (ordinary or motion or particle_entry))
+                  and (ordinary or motion or particle_entry or entering_utopia))
         with_zoom_or_flash = line.get('zoom_pulse') or line.get('stroke_flash')
         lower_particles = faded_band and look.scanline_mode in {'default', 'color'}
         lower_band = (look.lower_ruby_enabled and (ordinary or motion) and look.scanline_shape == 'band'
@@ -216,6 +233,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_scanline_static_cells')
     if transform_band:
         features.append('p07_scanline_character_transform')
+    if utopia_entry_bands:
+        features.append('p07_scanline_utopia_entry')
     if prefix_guide_fade:
         features.append('p07_faded_scanline_prefix_guides')
     if vertical_band:

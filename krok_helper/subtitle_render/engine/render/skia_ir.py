@@ -36,7 +36,7 @@ from .skia_line_animation_ir import (
     declare_line_animations, is_noise_animation, ordinary_line_animation, write_line_animation_schemas)
 from .skia_singing_ir import vertical_singing_lines, write_utopia_pivots
 from .skia_scanline_ir import (
-    declare_vertical_scanline_viewport, scanline_features, suppress_no_wipe_bands, transformed_cell_band,
+    declare_vertical_scanline_viewport, scanline_features, suppress_inactive_scanline_bands, transformed_cell_band,
     write_scanline_schema,
 )
 from .skia_outline_ir import declare_outline_layers
@@ -285,7 +285,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
 
     ir = build_render_ir(track, style, layout_plan_builder=build_plan,
                          serialize_source_baselines=False, vertical_scanline_particles=True, **kwargs)
-    suppress_no_wipe_bands(ir, prepared[0].plan)
+    suppress_inactive_scanline_bands(ir, prepared[0].plan)
     vertical_singing = vertical_singing_lines(ir, prepared[0].plan) if style.vertical else set()
     vertical_ruby = None
     if prepared[0].vertical_readings is not None:
