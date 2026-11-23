@@ -546,7 +546,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool verticalVectorGuide = cfg.vertical && features.contains("p05_vertical_vector_guides")
-            && staticScanline && !source.scanlineEnabled
+            && guideWholeLineAnimation && !source.scanlineEnabled
             && (source.karaokeAnimation == "none" || source.karaokeAnimation == "no_wipe")
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && ((!features.contains("p06_static_shadow") && !features.contains("p06_static_glow"))
@@ -592,7 +592,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && ((rubyGroups.isEmpty() && source.karaokeAnimation == "none") || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
-            && staticScanline && !source.scanlineEnabled
+            && guideWholeLineAnimation && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && source.fxBursts.empty() && (features.contains("p08_vertical_bitmap_decoration")
                 || (!features.contains("p06_static_shadow") && !features.contains("p06_static_glow")));

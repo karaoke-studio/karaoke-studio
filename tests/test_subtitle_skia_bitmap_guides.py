@@ -754,6 +754,35 @@ def test_vertical_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_path,
     assert_glow_parity(times, reference, gpu, raster, 'vertical_bitmap_guide', check_p00_edges=True)
 
 
+@pytest.mark.parametrize('kind,entry,exit_', [('bitmap', 'fade', 'fade'), ('vector', 'slide_in', 'rise')])
+def test_vertical_guide_reuses_whole_line_animation(binary, project, tmp_path, kind, entry, exit_):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import vertical_vector_guide
+
+    track, style = (vertical_bitmap_guide(project, tmp_path) if kind == 'bitmap' else vertical_vector_guide(project))
+    line, = track.lines
+    line = replace(line, chars=[replace(char, start_ms=char.start_ms + 600) for char in line.chars],
+                   end_ms=line.end_ms + 600, display_start_override_ms=0, display_end_override_ms=3000,
+                   animation_override=LineAnimationOverride(entry_anim=entry, entry_duration_ms=450,
+                                                            exit_anim=exit_, exit_duration_ms=600))
+    track = replace(track, lines=[line])
+    ir = ir_for(binary, (track, style))
+    assert ('p07_line_fade' if kind == 'bitmap' else 'p07_line_motion') in ir['required_features']
+    assert ir['track']['lines'][0]['entry_duration_ms'] == 450
+    times = (150, 300, 500, 780, 1150, 2650, 2850)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('vertical_guide_line_animation', kind), check_p00_edges=True)
+
+
 def vertical_guide_with_inactive_singing_effects(project, tmp_path):
     track, style = vertical_bitmap_guide(project, tmp_path)
     effects = replace(style, karaoke_anim='zoom_pulse_scanline', scanline_shape='flame', scanline_enabled=True,

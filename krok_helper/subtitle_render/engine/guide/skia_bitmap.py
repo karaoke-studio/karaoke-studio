@@ -139,9 +139,9 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     for item in vertical_lines:
         source = ir['track']['lines'][item.track_index]
         if (static_title or source.get('karaoke_anim') != 'none'
-                or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                or not ordinary_line_animation(source)
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-            raise ValueError('Skia 竖排图片导唱符需要静态实色和普通走字')
+            raise ValueError('Skia 竖排图片导唱符需要整行出入场和普通走字')
     if vertical_lines:
         features.append('p08_vertical_bitmap_guides')
         if {'p06_vertical_shadow', 'p06_vertical_glow'}.intersection(features):
