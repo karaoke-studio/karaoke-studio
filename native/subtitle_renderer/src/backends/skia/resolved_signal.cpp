@@ -19,7 +19,7 @@ bool supportsSignalAnimation(const TextLine& line, bool entryOnly) {
             || animation == "glow_in" || animation == "glow_out");
     };
     return !requiresHalo(line.entryAnimation, line.entryDurationMs)
-        && (entryOnly || (line.exitAnimation != "utopia" && !requiresHalo(line.exitAnimation, line.exitDurationMs)));
+        && (entryOnly || !requiresHalo(line.exitAnimation, line.exitDurationMs));
 }
 }
 
@@ -128,6 +128,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         throw BackendError("Skia 音量柱参数超限");
     using namespace ::subtitle::skia;
     VolumeSignal signal{clock};
+    signal.singingStartMs = line.startMs;
     signal.opacity = style.volumeEnabled ? style.volumeOpacity : style.litOpacity;
     signal.strokeWidth = geometry.strokeExtent;
     signal.palette = {{{argb(style.volumeFill), argb(style.volumeStroke)},

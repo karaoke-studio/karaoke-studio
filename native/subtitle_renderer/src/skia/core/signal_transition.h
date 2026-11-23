@@ -11,6 +11,7 @@ struct SignalTransition {
     const UtopiaTransition& utopia;
     std::optional<float> lineCenter;
     int startMs, endMs;
+    int volumeSingingStartMs;
 
     CharacterTransformState at(int time, int index, int count, float x, float y, bool entryOnly = false) const {
         auto group = fade;
@@ -26,6 +27,12 @@ struct SignalTransition {
                                entryOnly ? std::nullopt : lineCenter, entryOnly);
         if (utopia.inEntryWindow(time, startMs))
             return UtopiaTransition::entryAt(time, startMs, index, count, x, y);
+        if (!entryOnly && utopia.leave) {
+            const auto span = std::max(fade.singingEnd - volumeSingingStartMs, 0);
+            const int done = volumeSingingStartMs + int(float(std::int64_t(span) * index) / std::max(count - 1, 1));
+            if (time > done)
+                return utopia.exitAt(time - done, pivot, 1.f, UtopiaTransition::ExitMatrix::Signal);
+        }
         return {};
     }
 

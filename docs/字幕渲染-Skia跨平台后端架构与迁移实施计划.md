@@ -1085,6 +1085,8 @@ macOS [双架构复验](https://github.com/karaoke-studio/karaoke-studio/actions
 
 Utopia 入场曲线由歌词、指示灯和音量柱共享。信号各按自己的单元数计算错峰，围绕各自的几何中心缩放。Windows 13 项专项通过，含两种信号的入场和既有歌词 Utopia 动画。
 
+音量柱复用 Utopia 的旋转、缩放和位移曲线，按柱数把退场起点均分在演唱时间内。柱体围绕自身中心缩放后旋转。Windows 7 项专项通过，含柱体退场、灯柱入场和既有歌词动画。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）

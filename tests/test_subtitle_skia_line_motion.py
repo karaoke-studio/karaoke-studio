@@ -1495,6 +1495,33 @@ def test_signal_utopia_entry_uses_the_unit_center(binary, project, signal):
     _assert_signal_entry(binary, project, signal, 'utopia')
 
 
+def test_volume_utopia_exit_uses_the_columns_own_singing_intervals(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    line, = track.lines
+    track = replace(track, lines=[replace(line, display_start_override_ms=0, display_end_override_ms=2750)])
+    style = replace(style, entry_anim='none', exit_anim='utopia', exit_fade_ms=750,
+                    volume_enabled=True, volume_appearance_mode='custom', volume_column_count=3,
+                    volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF',
+                    volume_duration_ms=1200, volume_stroke_width=0, volume_flash_times=0)
+    times, dpr = (190, 360, 950, 1500, 2050, 2250), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, 'volume_utopia_exit', check_p00_edges=True)
+    for frames in (gpu, raster):
+        coverage = [int(frame[..., 3][np.all(frame[..., :3] == [255, 0, 255], axis=-1)].sum()) for frame in frames]
+        assert all(first > second > 0 for first, second in zip(coverage, coverage[1:]))
+
+
 def _assert_signal_entry(binary, project, signal, entry):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity

@@ -21,6 +21,7 @@ struct VolumeSignal {
         std::vector<PreparedGlow> glow;
     };
     krok::subtitle::native::VolumeSignalClock clock;
+    int singingStartMs = 0;
     float opacity = 1;
     float strokeWidth = 0, outerWidth = 0;
     float textOriginX = 0, groupLeft = 0, groupRight = 0;
