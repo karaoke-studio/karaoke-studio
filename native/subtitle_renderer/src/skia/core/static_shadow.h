@@ -30,8 +30,8 @@ struct StaticShadow {
 
     template <class Cell> void draw(SkCanvas& canvas, const std::vector<Cell>& cells, int time, const SkRect& ink,
                                    bool vertical = false, bool reverse = false, float opacity = 1.f,
-                                   bool noWipe = false) const {
-        if (!visible() || ink.isEmpty()) return;
+                                   bool noWipe = false, std::span<const StaticShadow> cellShadows = {}) const {
+        if ((!visible() && cellShadows.empty()) || ink.isEmpty()) return;
         const bool complete = lineWipeComplete(cells, time);
         const float low = vertical ? ink.top() : ink.left(), high = vertical ? ink.bottom() : ink.right();
         // A reverse vertical before-only shadow keeps its first cell's
@@ -40,14 +40,38 @@ struct StaticShadow {
             && !cells.empty() && time < wipeStart(cells.front());
         const float edge = initialReverseShadow ? wipeCoordinate(cells.front(), time, reverse, vertical, noWipe)
             : lineWipeFront(cells, time, reverse ? high : low, secondaryWidth / 2 + .5f, reverse, vertical, noWipe);
-        drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f, vertical, reverse, opacity);
+        drawAt(canvas, cells, ink, edge, complete, outlineWidth + secondaryWidth + 4.f,
+               vertical, reverse, opacity, nullptr, cellShadows);
     }
 
     template <class Cell>
     void drawAt(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
                 float edge, bool complete, float beforePad, bool vertical = false, bool reverse = false,
-                float opacity = 1.f, float* previousReadingOffset = nullptr) const {
+                float opacity = 1.f, float* previousReadingOffset = nullptr,
+                std::span<const StaticShadow> cellShadows = {}) const {
+        const auto silhouette = [&](const Cell& cell, const SkPaint& brush) {
+            if (cell.outerOutline) canvas.drawPath(cell.outerOutline->path, brush);
+            else if (cell.outline) canvas.drawPath(cell.outline->path, brush);
+            canvas.drawPath(cell.path, brush);
+        };
         const auto paint = [&](bool sung, const SkRect* clip) {
+            if (!cellShadows.empty()) {
+                SkAutoCanvasRestore keep(&canvas, clip != nullptr);
+                if (clip) canvas.clipRect(*clip, SkClipOp::kIntersect, true);
+                SkPaint brush;
+                brush.setAntiAlias(true);
+                for (std::size_t index = 0; index < cells.size(); ++index) {
+                    const auto& shadow = cellShadows[index];
+                    const auto& state = sung ? shadow.after : shadow.before;
+                    if (!state.visible() || cells[index].path.isEmpty()) continue;
+                    SkAutoCanvasRestore positioned(&canvas, true);
+                    canvas.translate(state.x, state.y);
+                    brush.setColor(state.color);
+                    brush.setAlphaf(brush.getAlphaf() * opacity);
+                    silhouette(cells[index], brush);
+                }
+                return;
+            }
             const auto& state = sung ? after : before;
             float clipOffset = 0;
             if (previousReadingOffset && state.enabled && (state.x != 0 || state.y != 0)) {
@@ -68,11 +92,7 @@ struct StaticShadow {
             brush.setColor(shader ? SK_ColorWHITE : state.color);
             brush.setShader(std::move(shader));
             if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
-            for (const auto& cell : cells) {
-                if (cell.outerOutline) canvas.drawPath(cell.outerOutline->path, brush);
-                else if (cell.outline) canvas.drawPath(cell.outline->path, brush);
-                canvas.drawPath(cell.path, brush);
-            }
+            for (const auto& cell : cells) silhouette(cell, brush);
         };
         const auto band = [vertical](float low, float high) {
             return vertical ? SkRect::MakeLTRB(-1e6f, low, 1e6f, high)

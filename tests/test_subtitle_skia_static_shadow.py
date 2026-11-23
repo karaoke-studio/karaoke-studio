@@ -14,7 +14,7 @@ from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_outline_ruby import (
     annotated, mixed, pages, reading, upper_source, upper_ir, annotated_paint, render_skia, UPPER_TIMES,
 )
-from krok_helper.subtitle_render.domain.models import LyricsLayout
+from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -22,6 +22,44 @@ from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS
 
 
 _LINE_MOTIONS = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_inline_role_shadows_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_reverse import source
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = source(project)
+    line, = track.lines
+    chars = [replace(c, role_label='lead') if i in (1, 2) else c for i, c in enumerate(line.chars)]
+    track = replace(track, lines=[replace(line, chars=chars, wipe_reverse=False)])
+    palette = colors('#FFF4E7C0', '#FF177FDC')
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#A044AA40')),
+                      after=replace(palette.after, shadow=PaintFill(color='#D0E040FF')))
+    role = SubtitleStyleScheme(decoration_kind='shadow', decoration_before_sync=True, karaoke_colors=palette,
+                               shadow_before_offset_x=-13, shadow_before_offset_y=10,
+                               shadow_offset_x=12, shadow_offset_y=13)
+    style = replace(style, decoration_kind='none', custom_style_schemes={'lead': role})
+    times, dpr = (250, 450, 725, 1050, 1375, 1600, 2100), 3
+    refs = []
+    for appearance in (role, replace(role, decoration_kind='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, replace(style, custom_style_schemes={'lead': appearance}),
+                                       times, force_warp=False, track=track, width=640, height=360, dpr=dpr,
+                                       realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
+               for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p06_role_static_shadow' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'inline_role_shadows', check_p00_edges=True)
+    ir['required_features'].remove('p06_role_static_shadow')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, ir)
 
 
 def animated_shadow_style(style, effect, entry, exit_, body, ruby):

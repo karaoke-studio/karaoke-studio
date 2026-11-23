@@ -110,11 +110,11 @@ def _inline_role_labels(item):
             if cell.role_label in item.layout_style.custom_style_schemes}
 
 
-def _uses_role_glow(item):
+def _uses_role_decoration(item, kind):
     look = item.layout_style
     labels = _inline_role_labels(item)
-    return bool(labels) and (uses_authored_decoration(look, 'glow') or any(
-        uses_authored_decoration(style_for_role_in_layout(look, label), 'glow') for label in labels
+    return bool(labels) and (uses_authored_decoration(look, kind) or any(
+        uses_authored_decoration(style_for_role_in_layout(look, label), kind) for label in labels
     ))
 
 
@@ -585,10 +585,20 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_scanline')
     decorations = [kind for kind in ('shadow', 'glow') if any(
         uses_authored_decoration(item.layout_style, kind) for item in plan.lines)]
-    if role_vector_guides and 'shadow' not in decorations and any(
-            uses_authored_decoration(style_for_role_in_layout(item.layout_style, label), 'shadow')
-            for item in plan.lines for label in _inline_role_labels(item)):
+    role_shadow_lines = [item for item in plan.lines if _uses_role_decoration(item, 'shadow')]
+    if role_shadow_lines and 'shadow' not in decorations:
         decorations.append('shadow')
+    if role_shadow_lines and not role_vector_guides:
+        for item in role_shadow_lines:
+            look = item.layout_style
+            source = ir['track']['lines'][item.track_index]
+            if (look.vertical or look.right_to_left or item.line.wipe_reverse or track.rubies or look.lower_ruby_enabled
+                    or source.get('karaoke_anim') != 'none'
+                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                    or any(char.vector_glyph is not None for char in item.render_line.chars)):
+                raise ValueError('Skia 行内角色阴影当前需要静态正向横排普通走字')
+        ir['required_features'].append('p06_role_static_shadow')
     ir['required_features'].extend(f'p06_static_{kind}' for kind in decorations)
     if decorations and not (style.vertical or style.right_to_left):
         decorated_reverse = [item for item in plan.lines if item.line.wipe_reverse
@@ -608,7 +618,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             if any({ir['track']['lines'][item.track_index].get(phase) for phase in ('entry_anim', 'exit_anim')} != {'none'}
                    for item in decorated_reverse):
                 ir['required_features'].append('p07_reverse_decoration_line_animation')
-    if any(_uses_role_glow(item) for item in plan.lines):
+    if any(_uses_role_decoration(item, 'glow') for item in plan.lines):
         ir['required_features'].append('p06_role_static_glow')
     ruby_decorations = vertical_ruby is not None and any(
         vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('shadow', 'glow'))

@@ -611,7 +611,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             }, line.vertical, reverse, line.cellShadows);
     } else {
         line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft,
-                         titleOpacity, line.noWipe);
+                         titleOpacity, line.noWipe, line.cellShadows);
     }
     float previousReadingShadowOffset = 0.f;
     for (const auto& group : line.rubyGroups)

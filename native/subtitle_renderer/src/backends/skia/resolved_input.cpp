@@ -75,6 +75,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         : features.contains("p06_primary_solid_outline") ? 1 : 0;
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
+    const bool roleStaticShadow = features.contains("p06_role_static_shadow");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
     const bool gradientGlowWithoutTexturedRoles = features.contains("p06_gradient_glow");
     const auto glowPaints = (gradientGlowWithoutTexturedRoles || features.contains("p06_role_gradient_glow"))
@@ -102,7 +103,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .staticLineBand = features.contains("p08_static_line_band"),
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
-        .roleStaticShadow = roleVectorGuides && features.contains("p06_static_shadow"),
+        .roleStaticShadow = roleStaticShadow || (roleVectorGuides && features.contains("p06_static_shadow")),
         .roleStaticGlow = roleStaticGlow, .bodyShadowGradients = bodyShadowGradients,
         .bodyShadowImages = bodyShadowImages, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
@@ -876,7 +877,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleGuideShadow = lineAnimation && (!hasInlineRoles || roleSinging)
             && roleVectorGuides && features.contains("p06_static_shadow") && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
-        if (roleGuideShadow && hasInlineRoles) {
+        const bool inlineStaticShadow = roleStaticShadow && hasInlineRoles && !annotated && !vectorGuides && !hasBitmapGuide
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse && line.karaokeAnimation == "none"
+            && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
+            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        if ((roleGuideShadow && hasInlineRoles) || inlineStaticShadow) {
             prepared.cellShadows.reserve(line.chars.size());
             for (const auto& cell : line.chars) {
                 const auto& look = cell.styleIndex < 0 ? style : projected.charStyles[cell.styleIndex];
@@ -973,7 +978,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.scanlineEnabled && !(scanlineGlow || scanlineShadow || verticalScanlineDecoration))
                 || (!line.bursts.empty() && !(particleGlow || (verticalParticleDecoration && verticalDecoration)))
                 || (line.strokeFlashEnabled && !flashGlow)
-                || (hasInlineRoles && !roleGuideShadow) || ((gradient || image) && !paintedDecoration)
+                || (hasInlineRoles && !(roleGuideShadow || inlineStaticShadow)) || ((gradient || image) && !paintedDecoration)
                 || (hasGlow && utopia && !singingGlow)
                 || (vectorGuides && !features.contains("p05_vector_guide_composition"))))
             throw BackendError("Skia 静态装饰当前仅支持正向横排实色正文");
