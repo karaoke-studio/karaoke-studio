@@ -414,6 +414,30 @@ def test_image_shadows_match_actual_d2d_gpu(binary, reading, tmp_path):
     assert_glow_parity(times, refs[0], gpu, raster, 'image_shadows', check_p00_edges=True)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_multitrack_image_shadows_match_actual_d2d_gpu(binary, reading, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, controls = image_shadow_source(reading, tmp_path)
+    other = replace(track, meta=replace(track.meta, offset_ms=620))
+    times, dpr = (275, 450, 900, 1150, 1550, 2300, 2850), 3
+    viewport = dict(width=640, height=360, dpr=dpr)
+    refs = []
+    for look in (style, *controls):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       extra_tracks=[other], realization_enabled=False, **viewport)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    for control in refs[1:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr, extra_tracks=[other])
+    features = {'p06_body_image_shadow', 'p06_ruby_image_shadow'}
+    assert all(features <= set(source['required_features']) for source in (ir, *ir['skia_extra_sources']))
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'multitrack_image_shadows', check_p00_edges=True)
+
+
 def test_gradient_shadows_require_corresponding_capabilities(binary, reading):
     track, style, _ = gradient_shadow_source(reading)
     ir = upper_ir(binary, (track, style), 1)
