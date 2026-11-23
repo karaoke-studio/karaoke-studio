@@ -32,6 +32,34 @@ def ir_for(binary, source, **kwargs):
     return ir
 
 
+@pytest.mark.parametrize('lower', [False, True], ids=['upper', 'lower'])
+def test_reading_and_vector_guide_share_line_fade(binary, source, lower):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style, resolve = source
+    line, = track.lines
+    chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
+    line = replace(line, chars=chars, end_ms=line.end_ms + 1000,
+                   display_start_override_ms=0, display_end_override_ms=3500,
+                   guide_symbol=SQUARE if lower else None,
+                   inline_guide_symbols={} if lower else {1: SQUARE})
+    rubies = [replace(ruby, pos_start_ms=ruby.pos_start_ms + 1000, pos_end_ms=ruby.pos_end_ms + 1000)
+              for ruby in track.rubies]
+    track = replace(track, lines=[line], rubies=rubies)
+    style = replace(style, entry_anim='fade', entry_lead_ms=600, lower_ruby_enabled=lower,
+                    ruby_karaoke_colors=colors('#FF00FF', '#FF00FF'))
+    ir = ir_for(binary, (track, style, resolve))
+    assert ir['track']['lines'][0]['entry_duration_ms'] == 600
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert any(bool(group.get('lower')) == lower for group in groups)
+    times = (250, 650)
+    gpu, raster = render_skia(binary, ir, times)
+    assert 0 < gpu[0][..., 3].max() < gpu[1][..., 3].max()
+    assert_glow_parity(times, None, gpu, raster, ('vector_guide_reading_fade', lower), check_p00_edges=True)
+
+
 @pytest.fixture
 def independent(source):
     track, style, resolve = source
