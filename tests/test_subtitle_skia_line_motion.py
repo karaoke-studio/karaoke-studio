@@ -464,6 +464,35 @@ def test_line_band_character_transition_matches_actual_gpu(binary, application, 
     assert_ruby_transition_gpu_parity(binary, case, case.timestamps_ms)
 
 
+def test_line_band_uses_its_opacity_curve_during_noise(binary, project, tmp_path):
+    from test_subtitle_skia_character_transform import transform_source
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = transform_source(project, 'noise', 'noise')
+    style = replace(solid_line_band(style, tmp_path), entry_anim='noise', exit_anim='noise',
+                    line_band_pad_left_px=28, line_band_pad_top_px=28)
+    times = (100, 300, 650, 2700, 2920)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    ir = ir_for(binary, (track, style))
+    assert 'p08_line_band_transition' in ir['required_features']
+    left, top, _, _ = ir['skia_layout']['lines'][0]['line_band_rect']
+    x, y = round(left + 4), round(top + 4)
+    gpu, raster = render_skia(binary, ir, times)
+    expected = [int(frame[y, x, 3]) for frame in reference or gpu]
+    assert 0 < expected[0] < expected[1] < expected[2] == 255
+    assert abs(expected[1] - expected[3]) <= 1 and 0 < expected[4] < expected[3]
+    for frames in (gpu, raster):
+        alpha = [int(frame[y, x, 3]) for frame in frames]
+        assert max(abs(a - b) for a, b in zip(alpha, expected, strict=True)) <= 1
+
+
 def transparent_band_image(tmp_path):
     from test_subtitle_skia_image_fills import write_png
 
@@ -1191,6 +1220,33 @@ def test_line_band_uses_text_ink_with_guides_and_roles(binary, project, tmp_path
         if content == 'bitmap':
             magenta = np.all(frame[..., :3] == [255, 0, 255], axis=-1)
             assert np.count_nonzero(magenta[:box[0, 0]]) > 100
+
+
+def test_custom_bmp_line_band_uses_existing_image_decoder(binary, project, tmp_path):
+    from PyQt6.QtGui import QImage
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    style = solid_line_band(style, tmp_path)
+    asset = tmp_path / 'band.bmp'
+    assert QImage(style.line_band_image).save(str(asset))
+    bmp = replace(style, line_band_image=str(asset))
+    times = (500,)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, bmp, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(raw[0], np.uint8).reshape(360, 640, 4)]
+        solid_band_box(reference[0])
+    gpu, raster = render_skia(binary, ir_for(binary, (track, bmp)), times)
+    png_gpu, png_raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert np.array_equal(gpu, png_gpu) and np.array_equal(raster, png_raster)
+    solid_band_box(gpu[0])
+    assert_glow_parity(times, reference, gpu, raster, 'custom_bmp_line_band', check_p00_edges=True)
 
 
 def test_rtl_line_band_follows_the_resolved_text_box(binary, project, tmp_path):

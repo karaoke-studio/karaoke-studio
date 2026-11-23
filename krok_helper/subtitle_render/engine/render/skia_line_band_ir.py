@@ -6,8 +6,7 @@ from ...domain.band_presets import band_preset, preset_id_for_image
 from ..layout.line.skia_placement import legacy_ruby_allowance
 from ..ruby.style_semantics import ruby_stroke2_width, ruby_stroke_width
 from ..style.style_semantics import style_for_role_in_layout
-
-_BAND_TRANSITIONS = {'char_fade', 'flame', 'lightning'}
+from .skia_line_animation_ir import ordinary_line_animation
 
 
 def _reading_ink_top(group, ink_top):
@@ -57,25 +56,17 @@ def write_line_band(ir, style, prepared, *, width, height):
     glow = style.line_band_glow_enabled and style.line_band_glow_size_px > 0
     geometry = prepared.geometry
     ruby = geometry.ruby
-    if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
+    if ((not preset and preset_id is not None)
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.line_band_edge_kind != 'none'
             or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})):
-        raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')
+        raise ValueError('Skia 行背景带的预设、填充或描边配置无效')
     if preset and not material:
         raise ValueError('Skia 行背景带无法读取预设图片')
     if staff and any(not ir['style'].get(key) for key in
                      ('line_band_image', 'line_band_lines_image', 'line_band_clef_image')):
         raise ValueError('Skia 五线谱背景带缺少预设图层')
-    transitions = _BAND_TRANSITIONS
-    if 'p07_ruby_petal_scanline_image' in ir['required_features']:
-        transitions = transitions | {'petal', 'note'}
-    if any(source.get('entry_anim') not in ({'none', 'fade', 'slide_in', 'rise'} | transitions)
-           or source.get('exit_anim') not in ({'none', 'fade', 'slide_out', 'rise'} | transitions)
-           for source in ir['track']['lines']):
-        raise ValueError('Skia 行背景带缺少对应行出入场能力')
-    if any({source.get('entry_anim'), source.get('exit_anim')} & transitions
-           for source in ir['track']['lines']):
+    if any(not ordinary_line_animation(source) for source in ir['track']['lines']):
         ir['required_features'].append('p08_line_band_transition')
     if any(source.get('scanline') or source.get('fx_bursts') for source in ir['track']['lines']):
         ir['required_features'].append('p08_line_band_with_effects')

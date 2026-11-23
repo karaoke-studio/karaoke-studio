@@ -118,7 +118,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         : band.linesPath.isEmpty() && band.clefPath.isEmpty();
     const bool webp = band.imagePath.endsWith(".webp", Qt::CaseInsensitive);
     const bool bandImageSupported = customBandSequence ? webp || band.imagePath.endsWith(".gif", Qt::CaseInsensitive)
-        : animatedBand ? webp : isPng(band.imagePath);
+        : animatedBand ? webp : !staffBand || isPng(band.imagePath);
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     const bool bandEnabled = band.enabled && !cfg.vertical && !band.imagePath.isEmpty();
@@ -130,7 +130,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             || !bandLayersSupported || band.edgeKind != "none" || blurBand != hasBlurBand
             || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")
                 || band.stroke.sizePx > 512)))))
-        throw BackendError("Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设");
+        throw BackendError("Skia 行背景带的素材、布局或画笔声明无效");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
     if (viewport && (!features.contains("p08_viewport") || cfg.rightToLeft
@@ -243,11 +243,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         return animation == "none" || (allowFade && animation == "fade")
             || (allowMotion && (animation == (entry ? "slide_in" : "slide_out") || animation == "rise"));
     };
-    const auto bandAnimation = [&](const QString& animation, bool entry) {
-        return plainLineAnimation(animation, entry) || (bandTransition
-            && (animation == "char_fade" || isSkiaEnergyTransition(animation)
-                || (features.contains("p07_ruby_petal_scanline_image") && animation == (entry ? "petal" : "note"))));
-    };
     const auto supportedAnimation = [&](const QString& animation, bool entry) {
         return plainLineAnimation(animation, entry)
             || (features.contains("p07_utopia_transition") && animation == "utopia")
@@ -267,10 +262,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             throw BackendError("Skia P04: unsupported line feature");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
-        if (staticBand && (!bandAnimation(source.entryAnimation, true)
-                || !bandAnimation(source.exitAnimation, false)
-                || ((source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)))
+        if (staticBand && !bandTransition && (!plainLineAnimation(source.entryAnimation, true)
+                || !plainLineAnimation(source.exitAnimation, false)))
             throw BackendError("Skia 行背景带缺少对应行出入场能力");
+        if (staticBand && (source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)
+            throw BackendError("Skia 行背景带缺少对应扫字线或粒子能力声明");
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
         const bool composedNoise = features.contains("p07_noise_composition");
         if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse

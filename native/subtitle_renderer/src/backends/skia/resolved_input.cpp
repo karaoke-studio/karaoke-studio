@@ -217,14 +217,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const auto px = [&](int i) { return float(rect[i].toDouble() * glyphs.dpr); };
             prepared.lineBand = SkRect::MakeLTRB(px(0), px(1), px(2), px(3));
             if (features.contains("p08_line_band_transition")) {
-                const bool particlePair = features.contains("p07_ruby_petal_scanline_image");
-                const auto duration = [particlePair](const std::string& kind, int value) {
-                    if (kind != "char_fade" && kind != "flame" && kind != "lightning"
-                        && !(particlePair && (kind == "petal" || kind == "note"))) return 0;
+                const auto duration = [](const std::string& kind, bool entry, int value) {
+                    if (kind == "none" || kind == "fade" || kind == "rise"
+                        || kind == (entry ? "slide_in" : "slide_out")) return 0;
                     return value > 0 ? value : 600;
                 };
-                prepared.lineBandTransition = {duration(line.entryAnimation, line.entryDurationMs),
-                                               duration(line.exitAnimation, line.exitDurationMs)};
+                prepared.lineBandTransition = {duration(line.entryAnimation, true, line.entryDurationMs),
+                                               duration(line.exitAnimation, false, line.exitDurationMs)};
             }
         } else if (source.contains("line_band_rect")) {
             throw BackendError("Skia 行背景带缺少能力声明");
