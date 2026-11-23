@@ -6,6 +6,7 @@
 #include "vertical_text.h"
 #include "../render_backend.h"
 #include "../text_semantics.h"
+#include "../../scene/paint_projection.h"
 #include <QtCore/QJsonArray>
 #include <algorithm>
 #include <cmath>
@@ -13,10 +14,11 @@
 
 namespace krok::subtitle::native {
 namespace {
-int integer(const QJsonValue& value, int minimum, int maximum) {
+int integer(const QJsonValue& value, int minimum, int maximum,
+            const char* failure = "Skia 注音最终时钟或样式索引无效") {
     const double n = value.toDouble();
     if (!value.isDouble() || !std::isfinite(n) || std::floor(n) != n || n < minimum || n > maximum)
-        throw BackendError("Skia 注音最终时钟或样式索引无效");
+        throw BackendError(failure);
     return int(n);
 }
 double pivotCoordinate(const QJsonValue& value) {
@@ -120,6 +122,19 @@ PaintStyle lowerGradient(const QJsonObject& authored, const char* phase, const Q
         previous = position;
     }
     return fill;
+}
+PaintStyle lowerImage(const QJsonObject& payload, const char* phase) {
+    const auto value = payload.value(phase);
+    const auto image = value.toObject();
+    const auto path = image.value("path");
+    if (!value.isObject() || image.size() != 2 || !path.isString() || path.toString().size() > 32768
+        || path.toString().contains(QChar(u'\0')))
+        throw BackendError("Skia 下方注音图片画笔参数无效");
+    protocol::PaintFillSpec fill;
+    fill.mode = QStringLiteral("image");
+    fill.imagePath = path.toString();
+    fill.imageScalePct = integer(image.value("scale_pct"), 1, 1000, "Skia 下方注音图片画笔缩放参数无效");
+    return scene::projectPaint(fill, QStringLiteral("#FFFFFF"));
 }
 ::subtitle::skia::GlowState lowerGlowState(const QJsonObject& glow, const char* phase, double dpr) {
     if (!glow.contains(phase)) return {};
@@ -358,10 +373,20 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变范围缺少画笔");
         auto lowerBefore = lowerGradient(staticLowerGradients, "before", lowerGradients);
         auto lowerAfter = lowerGradient(staticLowerGradients, "after", lowerGradients);
+        if (object.contains("static_fill_image")) {
+            const auto payload = object.value("static_fill_image").toObject();
+            if (!lower || !allowLowerDecoration || !staticLine || line.scanlineEnabled || line.karaokeAnimation != "none"
+                || !features.contains("p06_lower_ruby_static_image") || !validPhases(payload)
+                || (payload.contains("before") && lowerBefore.mode != "solid")
+                || (payload.contains("after") && lowerAfter.mode != "solid"))
+                throw BackendError("Skia 下方注音图片画笔缺少对应布局能力或与其他画笔重叠");
+            if (payload.contains("before")) lowerBefore = lowerImage(payload, "before");
+            if (payload.contains("after")) lowerAfter = lowerImage(payload, "after");
+        }
         const auto& beforeFill = lower ? lowerBefore : paint.rubyBeforeFillPaint;
         const auto& afterFill = lower ? lowerAfter : paint.rubyAfterFillPaint;
         const bool gradientFill = rubyFillGradientMode(beforeFill) || rubyFillGradientMode(afterFill);
-        const bool imageFill = !lower && (paint.rubyBeforeFillPaint.mode == "image" || paint.rubyAfterFillPaint.mode == "image");
+        const bool imageFill = beforeFill.mode == "image" || afterFill.mode == "image";
         const bool allowFillPaint = !vertical && (staticLine || roleLineFade) && lowerWipe && line.karaokeAnimation != "no_wipe"
             && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
             && line.bursts.empty();
@@ -638,8 +663,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         std::array<::subtitle::skia::ImageFill, 2> images;
         if (imageFill) {
-            images[0] = imageCache.fill(paint.rubyBeforeFillPaint, scene.layoutReferenceScale);
-            images[1] = imageCache.fill(paint.rubyAfterFillPaint, scene.layoutReferenceScale);
+            images[0] = imageCache.fill(beforeFill, scene.layoutReferenceScale);
+            images[1] = imageCache.fill(afterFill, scene.layoutReferenceScale);
         }
         ::subtitle::skia::ScanlineGradients scanlineGradients;
         if (!lower && brightenedScanlineGradient && (gradientFill || gradientOutlines)) {

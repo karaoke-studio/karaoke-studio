@@ -234,6 +234,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_lower_ruby_scanline_singing_particles",
         "p06_lower_ruby_fill_gradient",
         "p06_lower_ruby_static_gradient",
+        "p06_lower_ruby_static_image",
         "p07_ruby_scanline_particles",
         "p07_character_transform",
         "p07_translucent_character_outline",
@@ -778,7 +779,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray shadowAllowed{"p08_bitmap_guide_shadow", "p06_static_shadow", "p06_ruby_shadow"};
         static const QJsonArray lowerRubyAllowed{
             "p08_bitmap_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
-            "p06_lower_ruby_glow", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient", "p06_lower_ruby_static_gradient"
+            "p06_lower_ruby_glow", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient", "p06_lower_ruby_static_gradient",
+            "p06_lower_ruby_static_image"
         };
         if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
             throw BackendError("Skia 图片导唱符布局版本无效");
@@ -1232,6 +1234,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_lower_ruby_static_gradient")
         && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_static_gradient_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音渐变缺少版本化布局");
+    if (features.contains("p06_lower_ruby_static_image")
+        && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_static_image_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音图片画笔缺少版本化布局");
     const bool animatedSingingGradient = features.contains("p06_animated_singing_gradient_fill");
     const bool rubySingingPaint = features.contains("p06_ruby_main_paint") && features.contains("p07_ruby_singing_scale");
     if (features.contains("p06_utopia_main_paint")

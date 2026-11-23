@@ -760,6 +760,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p06_lower_ruby_fill_gradient')
         if 'lower_ruby_static_gradient_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_static_gradient')
+        if 'lower_ruby_static_image_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_static_image')
         if 'lower_ruby_shadow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow')
         if 'lower_ruby_shadow_gradient_schema' in ir['skia_layout']:

@@ -148,6 +148,7 @@ RTL_BITMAP_GUIDE_FEATURES = frozenset({
 LOWER_RUBY_BITMAP_FEATURES = frozenset({
     'p08_bitmap_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_lower_ruby_glow', 'p06_lower_ruby_shadow', 'p06_lower_ruby_shadow_gradient', 'p06_lower_ruby_static_gradient',
+    'p06_lower_ruby_static_image',
 })
 VERTICAL_BITMAP_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p08_vertical_bitmap_guides'}
 

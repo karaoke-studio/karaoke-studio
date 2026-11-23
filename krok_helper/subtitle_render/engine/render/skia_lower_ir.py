@@ -35,13 +35,16 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     colors = effective_ruby_karaoke_colors(style)
     result = {'paint': {'before': list(rgba(colors.before.text.color)),
                         'after': list(rgba(colors.after.text.color))}}
-    gradients, static_gradients = {}, {}
+    gradients, static_gradients, images = {}, {}, {}
     for phase, palette in (('before', colors.before), ('after', colors.after)):
         fill = palette.text
         if fill.mode == 'solid':
             continue
+        if fill.mode == 'image':
+            images[phase] = {'path': str(fill.image_path or ''), 'scale_pct': fill.image_scale_pct}
+            continue
         if fill.mode not in _GRADIENT_MODES:
-            raise ValueError('Skia 下方注音文字当前仅支持实色或渐变')
+            raise ValueError('Skia 下方注音文字画笔类型不支持')
         gradient = _gradient_payload(fill)
         if legacy_vertical_gradient and fill.mode == 'gradient_vertical':
             gradients[phase] = gradient['stops']
@@ -52,6 +55,8 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     if static_gradients:
         result['static_fill_gradient'] = static_gradients
         result['fill_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
+    if images:
+        result['static_fill_image'] = images
     glow, shadow, shadow_gradients = {}, {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':

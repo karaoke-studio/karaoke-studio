@@ -591,6 +591,61 @@ def lower_gradient_style(style, shared):
     })
 
 
+def lower_image_style(style, path):
+    return replace(style, lower_ruby_follow_upper=False, lower_ruby_style={
+        'ruby_colors_follow_main': False,
+        'ruby_karaoke_colors': {
+            'before': {'text': {'mode': 'image', 'image_path': str(path),
+                                'image_scale_pct': 138, 'color': '#FFD06030'}},
+            'after': {'text': {'mode': 'solid', 'color': '#FF70CCF0'}},
+        },
+    })
+
+
+def test_lower_reading_image_rejects_invalid_phase_and_preserves_scene(binary, independent, tmp_path):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style, resolve = independent
+    tile = write_png(tmp_path / 'ローマ音.png', pattern('transparent'))
+    ir = ir_for(binary, (track, lower_image_style(style, tile), resolve))
+    missing = copy.deepcopy(ir)
+    missing['required_features'].remove('p06_lower_ruby_static_image')
+    invalid = copy.deepcopy(ir)
+    group = next(g for g in invalid['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower'))
+    group['static_fill_image']['before']['scale_pct'] = 0
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 950])
+        for bad in (missing, invalid):
+            with pytest.raises(NativeRendererError, match='下方注音图片画笔|参数'):
+                configure(process, bad)
+        replay, _ = collect(process, [950, 450], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_lower_reading_image_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    case = next(c for c in build_cases(tmp_path / 'assets') if c.case_id == 'lower_ruby')
+    style = replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    tile = write_png(tmp_path / 'ローマ音.png', pattern('transparent'))
+    textured = lower_image_style(style, tile)
+    control = lower_image_style(style, tmp_path / 'missing.png')
+    times = (1550, 2600, 4110, 4280)
+    reference = []
+    for look in (textured, control):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=case.track,
+                                       realization_enabled=False)
+        reference.append(raw)
+    assert any(left != right for left, right in zip(*reference, strict=True))
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=textured), times)
+
+
 def test_lower_reading_gradient_keeps_existing_scene_after_invalid_paint(binary, independent):
     track, style, resolve = independent
     valid = ir_for(binary, (track, lower_gradient_style(style, True), resolve))
