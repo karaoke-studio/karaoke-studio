@@ -88,10 +88,11 @@ void PreparedBitmapGuide::draw(SkCanvas& canvas, bool after, float opacity, int 
         SkPaint paint;
         paint.setAlphaf(opacity);
         const auto destination = box_.makeOffset(shadow.x, shadow.y);
-        if (shadow.shader) {
+        auto shader = shadow.image ? shadow.image.shaderAt(canvas.getTotalMatrix()) : shadow.shader;
+        if (shader) {
             const auto mapping = SkMatrix::RectToRect(imageRect, destination);
             auto mask = image->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, linear, mapping);
-            paint.setShader(SkShaders::Blend(SkBlendMode::kDstIn, shadow.shader, std::move(mask)));
+            paint.setShader(SkShaders::Blend(SkBlendMode::kDstIn, std::move(shader), std::move(mask)));
             canvas.drawRect(destination, paint);
         } else {
             paint.setColorFilter(SkColorFilters::Blend(shadow.color, SkBlendMode::kSrcIn));

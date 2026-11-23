@@ -789,6 +789,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill || brightenedScanlineGradient)
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
+        const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");
         const bool hasBitmapGuide = std::ranges::any_of(prepared.cells, [](const auto& cell) { return bool(cell.bitmap); });
         prepared.shadow = skiaStaticShadow(style);
         const auto prepareShadow = [&](auto& state, const PaintStyle& paint, bool after) {
@@ -797,29 +798,30 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if (!(imagePaint ? bodyShadowImages : bodyShadowGradients) || style.vertical || style.rightToLeft || line.wipeReverse
                 || line.karaokeAnimation != "none" || line.entryAnimation != "none" || line.exitAnimation != "none"
                 || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-                || hasInlineRoles || vectorGuides || (hasBitmapGuide && (imagePaint || !bitmapGuideGradientShadow || staticTitle)))
+                || hasInlineRoles || vectorGuides
+                || (hasBitmapGuide && (staticTitle || !(imagePaint ? bitmapGuideImageShadow : bitmapGuideGradientShadow))))
                 throw BackendError("Skia 正文渐变或图片阴影暂只支持静态正向横排");
             if (imagePaint) {
                 state.image = imageCache.fill(paint, projected.layoutReferenceScale);
                 state.color = argb(paint.color);
-                return;
+            } else {
+                if (!hasVisibleGradientStops(paint)) return;
+                auto ink = rolePaintBounds->line;
+                if (hasBitmapGuide && ink.isEmpty()) throw BackendError("Skia 图片导唱符渐变阴影需要同一行存在正文");
+                if (paint.mode == "gradient_horizontal") {
+                    // Bitmap artwork extends the horizontal paint span only.
+                    for (const auto& cell : prepared.cells)
+                        if (cell.bitmap) {
+                            ink.fLeft = std::min(ink.fLeft, cell.bitmap->box.left());
+                            ink.fRight = std::max(ink.fRight, cell.bitmap->box.right());
+                        }
+                }
+                if (ink.isEmpty()) return;
+                state.shader = ::subtitle::skia::lineGradient(paint, ink, rolePaintBounds->outlinePad);
             }
-            if (!hasVisibleGradientStops(paint)) return;
-            auto ink = rolePaintBounds->line;
-            if (hasBitmapGuide && ink.isEmpty()) throw BackendError("Skia 图片导唱符渐变阴影需要同一行存在正文");
-            if (paint.mode == "gradient_horizontal") {
-                // Bitmap artwork extends the horizontal paint span only.
-                for (const auto& cell : prepared.cells)
-                    if (cell.bitmap) {
-                        ink.fLeft = std::min(ink.fLeft, cell.bitmap->box.left());
-                        ink.fRight = std::max(ink.fRight, cell.bitmap->box.right());
-                    }
-            }
-            if (ink.isEmpty()) return;
-            state.shader = ::subtitle::skia::lineGradient(paint, ink, rolePaintBounds->outlinePad);
             if (hasBitmapGuide)
                 for (auto& cell : prepared.cells)
-                    if (cell.bitmap && cell.bitmap->shadow[after].enabled) cell.bitmap->shadow[after].shader = state.shader;
+                    if (cell.bitmap && cell.bitmap->shadow[after].enabled) cell.bitmap->shadow[after] = state;
         };
         prepareShadow(prepared.shadow.before, style.beforeDecorPaint, false);
         prepareShadow(prepared.shadow.after, style.afterDecorPaint, true);

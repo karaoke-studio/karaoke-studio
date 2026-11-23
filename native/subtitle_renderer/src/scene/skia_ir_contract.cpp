@@ -97,6 +97,7 @@ const QJsonArray& skiaIrProfiles() {
         "p08_rtl_bitmap_guides",
         "p08_bitmap_guide_shadow",
         "p08_bitmap_guide_gradient_shadow",
+        "p08_bitmap_guide_image_shadow",
         "p08_animated_title_guides",
         "p08_animated_bitmap_guides",
         "p08_static_line_band",
@@ -776,8 +777,11 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 右至左图片导唱符缺少方向或布局能力声明");
     const bool bitmapGuideShadow = features.contains("p08_bitmap_guide_shadow");
     const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
+    const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");
     if (bitmapGuideGradientShadow && (!bitmapGuideShadow || !features.contains("p06_body_gradient_shadow")))
         throw BackendError("Skia 图片导唱符渐变阴影缺少画笔或布局能力声明");
+    if (bitmapGuideImageShadow && (!bitmapGuideShadow || !features.contains("p06_body_image_shadow")))
+        throw BackendError("Skia 图片导唱符纹理阴影缺少画笔或布局能力声明");
     if (bitmapGuideShadow && !features.contains("p08_bitmap_guides"))
         throw BackendError("Skia 图片导唱符阴影缺少布局能力声明");
     if (features.contains("p08_bitmap_guides")) {
@@ -829,6 +833,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                     || verticalGuideLayout.contains(feature)))
                 && !(bitmapGuideGradientShadow && (feature == QJsonValue("p08_bitmap_guide_gradient_shadow")
                     || feature == QJsonValue("p06_body_gradient_shadow")))
+                && !(bitmapGuideImageShadow && (feature == QJsonValue("p08_bitmap_guide_image_shadow")
+                    || feature == QJsonValue("p06_body_image_shadow")))
                 && !(bitmapGuideShadow && shadowAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
     }

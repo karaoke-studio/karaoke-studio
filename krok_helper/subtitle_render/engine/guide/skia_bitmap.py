@@ -208,5 +208,8 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
         if 'p06_body_gradient_shadow' in features:
             features.append('p08_bitmap_guide_gradient_shadow')
             allowed |= {'p08_bitmap_guide_gradient_shadow', 'p06_body_gradient_shadow'}
+        if 'p06_body_image_shadow' in features:
+            features.append('p08_bitmap_guide_image_shadow')
+            allowed |= {'p08_bitmap_guide_image_shadow', 'p06_body_image_shadow'}
     if not set(features) <= allowed:
         raise ValueError('Skia 图片导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')
