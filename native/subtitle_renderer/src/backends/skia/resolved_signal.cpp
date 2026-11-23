@@ -137,6 +137,9 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     const auto& palette = decorStyle ? *decorStyle : style;
     StaticGlow glow;
     if (signal.decorated) {
+        const auto verticalBrush = [](const PaintStyle& paint) {
+            return paint.mode == "solid" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical";
+        };
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
         signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maximum);
@@ -146,11 +149,11 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (fill.mode != "solid" && fill.mode != "gradient_vertical" && fill.mode != "split_vertical")
+            if (!verticalBrush(fill))
                 throw BackendError("Skia 音量柱当前支持实色、纵向渐变或上下分色填充");
-            if ((signal.strokeWidth > 0 && stroke.mode != "solid")
-                || (signal.outerWidth > 0 && outer.mode != "solid"))
-                throw BackendError("Skia 音量柱描边当前仅支持实色");
+            if ((signal.strokeWidth > 0 && !verticalBrush(stroke))
+                || (signal.outerWidth > 0 && !verticalBrush(outer)))
+                throw BackendError("Skia 音量柱描边当前支持实色、纵向渐变或上下分色");
             auto& paint = signal.palette[after];
             paint = {argb(fill.color), argb(stroke.color), argb(outer.color)};
             const auto kind = palette.decorationKindForState(after);
@@ -188,8 +191,14 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     if (signal.decorated) {
         SkRect bounds = SkRect::MakeEmpty();
         for (const auto& bar : signal.bars) bounds.join(bar.rect.rect());
-        signal.fillGradients[0] = lineGradient(palette.beforeFillPaint, bounds, 0);
-        signal.fillGradients[1] = lineGradient(palette.afterFillPaint, bounds, 0);
+        for (const bool after : {false, true}) {
+            auto& brush = signal.palette[after];
+            brush.fillGradient = lineGradient(after ? palette.afterFillPaint : palette.beforeFillPaint, bounds, 0);
+            if (signal.strokeWidth > 0)
+                brush.strokeGradient = lineGradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint, bounds, 0);
+            if (signal.outerWidth > 0)
+                brush.outerGradient = lineGradient(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint, bounds, 0);
+        }
     }
     return signal;
 }

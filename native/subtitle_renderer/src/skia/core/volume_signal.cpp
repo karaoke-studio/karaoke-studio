@@ -74,12 +74,12 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
                 if (strokeWidth + outerWidth > 0) draw(shadow, color.shadow, strokeWidth + outerWidth);
                 draw(shadow, color.shadow, 0);
             }
-            if (outerWidth > 0) draw(rect, color.outerStroke, strokeWidth + outerWidth);
+            if (outerWidth > 0) draw(rect, color.outerStroke, strokeWidth + outerWidth, color.outerGradient);
         } else {
             draw(rect, color.fill, 0);
         }
-        if (strokeWidth > 0) draw(rect, color.stroke, strokeWidth);
-        if (decorated) draw(rect, color.fill, 0, fillGradients[filled]);
+        if (strokeWidth > 0) draw(rect, color.stroke, strokeWidth, color.strokeGradient);
+        if (decorated) draw(rect, color.fill, 0, color.fillGradient);
     };
     for (int index = state.activeIndex + 1; index < clock.count; ++index) column(index, false);
     for (int index = 0; index <= state.activeIndex; ++index) column(index, true);
