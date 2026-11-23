@@ -260,10 +260,9 @@ def test_directional_character_transform_matches_actual_d2d_gpu(binary, project,
     assert_glow_parity(times, reference, gpu, raster, direction, check_p00_edges=True)
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('kind', ['roles', 'outlined_role', 'inline_guide', 'outlined_inline_guide', 'prefix_guide'])
+@pytest.mark.parametrize('kind', ['roles', 'outlined_role', 'inline_guide', 'outlined_inline_guide',
+                                  'outlined_guide_with_hole', 'prefix_guide'])
 def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind):
-    from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_roles import role_outline_palette
     from test_subtitle_skia_static_glow import assert_glow_parity
@@ -281,28 +280,44 @@ def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind
                                  karaoke_colors=role_outline_palette())
         style = replace(style, custom_style_schemes={'lead': appearance})
         line = replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])
-    elif kind in {'inline_guide', 'outlined_inline_guide'}:
-        line = replace(line, inline_guide_symbols={1: SQUARE})
-        if kind == 'outlined_inline_guide':
+    elif kind in {'inline_guide', 'outlined_inline_guide', 'outlined_guide_with_hole'}:
+        symbol = SQUARE
+        if kind == 'outlined_guide_with_hole':
+            # An inset hole and a disjoint contour with the opposite winding.
+            symbol = replace(SQUARE, path_commands=(
+                ('M', 100, -700), ('L', 520, -700), ('L', 520, 0), ('L', 100, 0), ('Z',),
+                ('M', 200, -530), ('L', 200, -190), ('L', 420, -190), ('L', 420, -530), ('Z',),
+                ('M', 650, -700), ('L', 650, 0), ('L', 900, 0), ('L', 900, -700), ('Z',),
+            ))
+        line = replace(line, inline_guide_symbols={1: symbol})
+        if kind != 'inline_guide':
             style = replace(style, exit_anim='spin_flip', stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=3,
                             karaoke_colors=role_outline_palette())
     else:
         line = replace(line, guide_symbol=SQUARE)
     track = replace(track, lines=[line])
     times, dpr = (65, 125, 159, 200, 260, 400, 700, 1200), 3
-    if kind == 'outlined_inline_guide':
+    if kind in {'outlined_inline_guide', 'outlined_guide_with_hole'}:
         times += (2490, 2559, 2650, 2750, 2850, 3000)
-    refs = []
-    for look in (style, replace(style, entry_anim='none')):
-        with NativeRendererProcess() as process:
-            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
-                                       width=640, height=360, dpr=dpr, realization_enabled=False)
-        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
-    reference, plain = refs
-    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:4], plain[:4], strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p07_character_transform_cells' in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
+    still = replace(style, entry_anim='none', exit_anim='none')
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        refs = []
+        for look in (style, still):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, dpr=dpr, realization_enabled=False)
+            refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+        reference, plain = refs
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[:4], plain[:4], strict=True))
+    else:
+        plain, _ = render_skia(binary, ir_for(binary, (track, still), dpr=dpr), times[:4])
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(gpu[:4], plain, strict=True))
     assert_glow_parity(times, reference, gpu, raster, kind, check_p00_edges=True)
 
 
