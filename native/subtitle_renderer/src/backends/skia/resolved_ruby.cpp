@@ -228,6 +228,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (staticLine || verticalFade || decorationMotion.upper || decorationMotion.singingGradient
             || (roleLineFade && features.contains("p05_role_vector_guides"))
             || (verticalSingingShadow && features.contains("p07_vertical_singing_line_animation")));
+    const bool allowShadowGradient = features.contains("p06_ruby_gradient_shadow")
+        && roleBounds && !vertical && !rtl && !line.wipeReverse && staticLine && line.karaokeAnimation == "none"
+        && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool zoom = !vertical && line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
@@ -324,9 +327,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             if (lower || kind == "none" || kind == "glow") return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
-            if (!allowShadow || kind != "shadow" || decor.mode != "solid" || !std::isfinite(x) || !std::isfinite(y))
-                throw BackendError("Skia 上注音实色阴影缺少对应布局能力");
-            return {true, x, y, argb(decor.color)};
+            if (!allowShadow || kind != "shadow" || !supportsSkiaShadowPaint(decor, allowShadowGradient)
+                || !std::isfinite(x) || !std::isfinite(y))
+                throw BackendError("Skia 上注音阴影缺少对应布局或画笔能力");
+            return {true, x, y, decor.mode == "solid" ? argb(decor.color) : 0u};
         };
         ::subtitle::skia::StaticShadow shadow{
             shadowState(false), shadowState(true), paint.rubyStrokeWidth, paint.rubyStroke2Width};
@@ -456,13 +460,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变阴影范围缺少画笔");
         const auto beforeShadow = lowerGradient(lowerShadowGradients, "before");
         const auto afterShadow = lowerGradient(lowerShadowGradients, "after");
-        const auto applyShadowAlpha = [](auto& phase, const PaintStyle& paint) {
-            if (paint.stops.empty()) return;
-            phase.color = std::ranges::any_of(paint.stops, [](const auto& stop) { return stop.color.alpha > 0; })
-                ? 0xff000000 : 0;
-        };
-        applyShadowAlpha(shadow.before, beforeShadow);
-        applyShadowAlpha(shadow.after, afterShadow);
+        const auto* beforeShadowPaint = lower ? &beforeShadow : &paint.rubyBeforeDecorPaint;
+        const auto* afterShadowPaint = lower ? &afterShadow : &paint.rubyAfterDecorPaint;
+        const bool beforeShadowGradient = shadow.before.enabled && hasVisibleGradientStops(*beforeShadowPaint);
+        const bool afterShadowGradient = shadow.after.enabled && hasVisibleGradientStops(*afterShadowPaint);
+        if (lowerShadowGradients.contains("before")) shadow.before.color = 0u;
+        if (lowerShadowGradients.contains("after")) shadow.after.color = 0u;
         const double wipePad = (primary.width / 2) / glyphs.dpr;
         std::vector<::subtitle::skia::ResolvedCell> cells;
         double inkTop = std::numeric_limits<double>::infinity();
@@ -594,14 +597,19 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
         SkRect ink = SkRect::MakeEmpty();
-        if (gradientFill || gradientOutlines || !lowerShadowGradients.isEmpty()
+        if (gradientFill || gradientOutlines || beforeShadowGradient || afterShadowGradient
             || (hasGlow && glowPaints != GlowPaintSupport::Solid))
             for (const auto& cell : cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
         const auto outlinePad = ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr));
-        auto shadowGradients = lowerShadowGradients.isEmpty() ? std::array<sk_sp<SkShader>, 2>{}
-            : rubyGradients({&beforeShadow, &afterShadow}, shadowWithMain.toBool(), source, ink, outlinePad,
-                            glyphs.dpr, &roleBounds->line);
+        if (beforeShadowGradient || afterShadowGradient) {
+            auto shaders = rubyGradients({beforeShadowGradient ? beforeShadowPaint : nullptr,
+                                          afterShadowGradient ? afterShadowPaint : nullptr},
+                lower ? shadowWithMain.toBool() : paint.rubyHorizontalGradientWithMain, source, ink, outlinePad,
+                glyphs.dpr, lower ? &roleBounds->line : &roleBounds->forRole(role));
+            shadow.before.shader = std::move(shaders[0]);
+            shadow.after.shader = std::move(shaders[1]);
+        }
         const bool shareHorizontalFill = lower ? shareLowerGradient.toBool() : paint.rubyHorizontalGradientWithMain;
         const auto* sharedFillBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
             : (allowRoleFill || independentFill) ? &roleBounds->forRole(role) : nullptr;
@@ -644,11 +652,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 if (layers[i])
                     scanlineGradients[i / 2][i % 2] = ::subtitle::skia::scanlineGradient(*layers[i], ink, outlinePad, highlight);
         }
-        groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
+        groups.push_back({std::move(cells), std::move(shadow), hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
                           roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner,
                           std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients),
-                          dripComposition, std::move(shadowGradients)});
+                          dripComposition});
     }
     return groups;
 }

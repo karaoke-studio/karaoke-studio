@@ -69,9 +69,14 @@ def _has_textured_upper_ruby(layout, plan):
     return False
 
 
-def _glow_paints(palette, before, after):
+def _decoration_paints(palette, before, after, decoration):
     return {state.shadow.mode for state, kind in ((palette.before, before), (palette.after, after))
-            if kind == 'glow'}
+            if kind == decoration}
+
+
+def _body_decoration_kinds(style):
+    after = style.decoration_kind
+    return after if style.decoration_before_sync else (style.decoration_kind_before or after), after
 
 
 def _gradient_glow_paints(layout, plan):
@@ -80,11 +85,9 @@ def _gradient_glow_paints(layout, plan):
         base = item.layout_style
         labels = {cell.role_label for cell in item.render_line.chars if cell.role_label in base.custom_style_schemes}
         for look in (base, *(style_for_role_in_layout(base, label) for label in labels)):
-            before = look.decoration_kind if look.decoration_before_sync else (
-                look.decoration_kind_before or look.decoration_kind)
-            modes.update(_glow_paints(effective_karaoke_colors(look), before, look.decoration_kind))
+            modes.update(_decoration_paints(effective_karaoke_colors(look), *_body_decoration_kinds(look), 'glow'))
     for look in _upper_reading_styles(layout, plan):
-        modes.update(_glow_paints(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look)))
+        modes.update(_decoration_paints(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look), 'glow'))
     return modes & _GRADIENTS
 
 
@@ -97,8 +100,18 @@ def write_body_gradient_bounds(ir, plan):
     Image paints need no line domain: the existing GPU tiles them on the canvas.
     """
     glow_features = {'p06_static_glow', 'p06_role_static_glow', 'p06_ruby_glow'}
-    glow_paints = (_gradient_glow_paints(ir['skia_layout'], plan)
-                   if glow_features.intersection(ir['required_features']) else set())
+    features = ir['required_features']
+    layout = ir['skia_layout']
+    glow_paints = _gradient_glow_paints(layout, plan) if glow_features.intersection(features) else set()
+    if 'p06_static_shadow' in features and any(
+            _decoration_paints(effective_karaoke_colors(item.layout_style),
+                               *_body_decoration_kinds(item.layout_style), 'shadow') & _GRADIENTS
+            for item in plan.lines):
+        features.append('p06_body_gradient_shadow')
+    if 'p06_ruby_shadow' in features and any(
+            _decoration_paints(effective_ruby_karaoke_colors(look), *ruby_decoration_kinds(look), 'shadow') & _GRADIENTS
+            for look in _upper_reading_styles(layout, plan)):
+        features.append('p06_ruby_gradient_shadow')
     if _declare_role_body_paints(ir, plan):
         if _has_textured_upper_ruby(ir['skia_layout'], plan):
             ir['required_features'].append('p06_ruby_role_paints')

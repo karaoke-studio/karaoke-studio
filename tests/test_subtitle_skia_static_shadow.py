@@ -299,6 +299,61 @@ def shaded_ruby(reading, utopia, separate):
                           karaoke_anim='utopia' if utopia else 'none')
 
 
+def gradient_shadow_source(reading):
+    track, style = shaded_ruby(reading, False, True)
+    horizontal = PaintFill(mode='gradient_horizontal', start_color='#D0EC3010', end_color='#A05030D0')
+    vertical = PaintFill(mode='gradient_vertical', start_color='#A000DD40', end_color='#EF2030C0')
+
+    def shaded(palette, before, after):
+        return replace(palette, before=replace(palette.before, shadow=before),
+                       after=replace(palette.after, shadow=after))
+
+    body, ruby = style.karaoke_colors, style.ruby_karaoke_colors
+    style = replace(style, decoration_before_sync=True,
+                    karaoke_colors=shaded(body, horizontal, vertical),
+                    ruby_karaoke_colors=shaded(ruby, vertical, horizontal),
+                    ruby_horizontal_gradient_with_main=True)
+    return track, style, (
+        replace(style, karaoke_colors=body), replace(style, ruby_karaoke_colors=ruby),
+    )
+
+
+def test_gradient_shadows_require_corresponding_capabilities(binary, reading):
+    track, style, _ = gradient_shadow_source(reading)
+    ir = upper_ir(binary, (track, style), 1)
+    times = [550, 1100, 2300]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        initial, _ = collect(process, times)
+        for feature in ('p06_body_gradient_shadow', 'p06_ruby_gradient_shadow'):
+            bad = copy.deepcopy(ir)
+            bad['required_features'].remove(feature)
+            with pytest.raises(NativeRendererError):
+                configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in initial) and np.array_equal(initial, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_gradient_shadows_match_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, solid_controls = gradient_shadow_source(reading)
+    times = (450, 550, 1100, 1550, 2300)
+    references = []
+    for look in (style, *solid_controls):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, *controls = references
+    for control in controls:
+        assert any(np.count_nonzero(a[..., :3] != b[..., :3]) > 100 for a, b in zip(reference, control, strict=True))
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), 1), times)
+    assert_glow_parity(times, reference, gpu, raster, 'gradient_shadows', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('utopia', [False, True])
 def test_ruby_shadow_keeps_clocks_and_seeks(binary, reading, target, utopia, tmp_path):

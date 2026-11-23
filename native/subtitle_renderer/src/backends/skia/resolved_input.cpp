@@ -83,6 +83,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool outlineGradients = features.contains("p06_outline_gradient") || roleOutlineGradients || roleOutlinePaints;
     const bool inlineAvatars = features.contains("p08_inline_bitmap_guides");
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
+    const bool bodyShadowGradients = features.contains("p06_body_gradient_shadow");
     validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
         .outlineGradients = outlineGradients, .imageFills = imageFills,
         .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow"),
@@ -95,7 +96,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
         .roleStaticShadow = roleVectorGuides && features.contains("p06_static_shadow"),
-        .roleStaticGlow = roleStaticGlow, .glowPaints = glowPaints});
+        .roleStaticGlow = roleStaticGlow, .bodyShadowGradients = bodyShadowGradients, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
     const bool scriptStylesOnly = projected.charStyles.empty()
         && (latinSecondaryOutline || (latinPrimaryOutline && features.contains("p05_vector_guide_composition")
@@ -695,9 +696,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         std::optional<RolePaintBounds> rolePaintBounds;
         const bool gradientScanlineRole = line.scanlineEnabled && style.scanlineMode == "role"
             && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
-        if (roleBodyPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole
+        if (roleBodyPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole || bodyShadowGradients
             || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient")
-            || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient"))
+            || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient")
+            || features.contains("p06_ruby_gradient_shadow"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale);
         if (gradientScanlineRole && !rolePaintBounds->line.isEmpty()) {
@@ -751,6 +753,20 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill || brightenedScanlineGradient)
             && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
         prepared.shadow = skiaStaticShadow(style);
+        const auto prepareShadow = [&](auto& state, const PaintStyle& paint) {
+            if (!state.enabled || paint.mode == "solid") return;
+            if (!bodyShadowGradients || style.vertical || style.rightToLeft || line.wipeReverse
+                || line.karaokeAnimation != "none" || line.entryAnimation != "none" || line.exitAnimation != "none"
+                || line.scanlineEnabled || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()
+                || hasInlineRoles || vectorGuides || std::ranges::any_of(line.chars, [](const auto& cell) {
+                    return bool(cell.bitmapGuide);
+                }))
+                throw BackendError("Skia 正文渐变阴影暂只支持静态正向横排");
+            if (hasVisibleGradientStops(paint) && !rolePaintBounds->line.isEmpty())
+                state.shader = ::subtitle::skia::lineGradient(paint, rolePaintBounds->line, rolePaintBounds->outlinePad);
+        };
+        prepareShadow(prepared.shadow.before, style.beforeDecorPaint);
+        prepareShadow(prepared.shadow.after, style.afterDecorPaint);
         prepared.glow = skiaStaticGlow(style);
         const bool baseOwnsText = std::ranges::any_of(line.chars, [](const auto& cell) {
             return cell.styleIndex < 0 && !cell.bitmapGuide;

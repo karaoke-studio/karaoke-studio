@@ -21,9 +21,12 @@ struct SkiaPaintCapabilities {
     bool roleBodyPaints = false;
     bool roleStaticShadow = false;
     bool roleStaticGlow = false;
+    bool bodyShadowGradients = false;
     GlowPaintSupport glowPaints = GlowPaintSupport::Solid;
 };
 bool supportsSkiaGlowPaint(const PaintStyle&, GlowPaintSupport);
+bool supportsSkiaShadowPaint(const PaintStyle&, bool gradients);
+bool hasVisibleGradientStops(const PaintStyle&);
 bool usesFadedUtopiaScanline(const TextLine&, const TextStyle&);
 void validateSkiaScene(const RenderScene&, bool canonical = false, SkiaPaintCapabilities = {});
 SkMatrix skiaViewport(const RenderScene&);

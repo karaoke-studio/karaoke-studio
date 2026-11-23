@@ -1,5 +1,6 @@
 #include "scene_input.h"
 #include "../render_backend.h"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -42,7 +43,7 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
         if (kind == "none") return true;
         if (kind == "shadow")
-            return caps.staticShadow && paint.mode == "solid"
+            return caps.staticShadow && supportsSkiaShadowPaint(paint, caps.bodyShadowGradients)
                 && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
         // Ganesh's pinned blur image filter clamps larger sigmas.
         const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;
@@ -96,6 +97,15 @@ bool supportsSkiaGlowPaint(const PaintStyle& paint, GlowPaintSupport support) {
     if (paint.stops.empty() || support == GlowPaintSupport::Solid) return false;
     return paint.mode == "gradient_vertical" || (support == GlowPaintSupport::LineGradients
         && (paint.mode == "gradient_horizontal" || paint.mode == "split_vertical"));
+}
+
+bool supportsSkiaShadowPaint(const PaintStyle& paint, bool gradients) {
+    return supportsSkiaGlowPaint(paint, gradients ? GlowPaintSupport::LineGradients : GlowPaintSupport::Solid);
+}
+
+bool hasVisibleGradientStops(const PaintStyle& paint) {
+    return paint.mode != "solid" && supportsSkiaShadowPaint(paint, true)
+        && std::ranges::any_of(paint.stops, [](const auto& stop) { return stop.color.alpha > 0; });
 }
 
 bool usesFadedUtopiaScanline(const TextLine& line, const TextStyle& style) {
@@ -164,7 +174,8 @@ SkMatrix skiaViewport(const RenderScene& scene) {
     const auto state = [&](bool after) {
         const auto& paint = after ? style.afterDecorPaint : style.beforeDecorPaint;
         return ::subtitle::skia::ShadowState{style.decorationKindForState(after) == "shadow",
-            style.shadowOffsetXForState(after), style.shadowOffsetYForState(after), argb(paint.color)};
+            style.shadowOffsetXForState(after), style.shadowOffsetYForState(after),
+            paint.mode == "solid" ? argb(paint.color) : 0u};
     };
     return {state(false), state(true), style.strokeWidth, style.stroke2Width};
 }
