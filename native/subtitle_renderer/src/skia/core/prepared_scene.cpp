@@ -17,7 +17,18 @@ namespace subtitle::skia {
 namespace {
 void includeCellPaint(SkRect& bounds, const ResolvedCell& cell) {
     bounds.join(cell.path.getBounds());
-    if (cell.bitmap) bounds.join(cell.bitmap->box);
+    if (const auto& bitmap = cell.bitmap) {
+        bounds.join(bitmap->box);
+        if (bitmap->decorate) {
+            const int radius = std::max(bitmap->glow.before.radius, bitmap->glow.after.radius);
+            if (radius > 0) {
+                const float pad = std::ceil(radius * 3.5f) + 2.f;
+                bounds.join(bitmap->box.makeOutset(pad, pad));
+            }
+            for (const auto& state : bitmap->shadow)
+                if (state.visible()) bounds.join(bitmap->box.makeOffset(state.x, state.y));
+        }
+    }
     if (cell.outline) bounds.join(cell.outline->path.getBounds());
     if (cell.outerOutline) bounds.join(cell.outerOutline->path.getBounds());
 }
@@ -251,6 +262,14 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
+        if (source.vertical && std::ranges::any_of(source.cells, [](const auto& cell) {
+                return cell.bitmap && cell.bitmap->decorate;
+            })) {
+            for (const auto& cell : line.cells) {
+                if (cell.bitmap) line.verticalBitmapClipInk.join(cell.bitmap->box());
+                else if (!cell.path.isEmpty()) line.verticalBitmapClipInk.join(cell.path.computeTightBounds());
+            }
+        }
         if (std::ranges::any_of(line.cells, [](const auto& cell) {
                 return cell.bitmap && cell.bitmap->wipes() && cell.bitmap->usesLineFront();
             })) {

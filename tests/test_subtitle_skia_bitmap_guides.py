@@ -103,12 +103,11 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['vertical_decorated', 'rtl', 'reverse_utopia', 'missing'])
+@pytest.mark.parametrize('change', ['rtl', 'reverse_utopia', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
-    if change == 'vertical_decorated': style = replace(style, vertical=True)
-    elif change == 'rtl': style = replace(style, right_to_left=True)
+    if change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse_utopia': line = replace(line, wipe_reverse=True)
     else:
         line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
@@ -420,6 +419,36 @@ def test_vertical_guide_ignores_singing_effects_like_actual_d2d_gpu(binary, proj
     assert np.array_equal(*refs)
     gpu, raster = render_skia(binary, ir_for(binary, (track, effects)), times)
     assert_glow_parity(times, refs[0], gpu, raster, 'vertical_guide_inactive_singing', check_p00_edges=True)
+
+
+@GPU
+@pytest.mark.parametrize('decoration,reverse', [('glow', False), ('shadow', True)])
+def test_vertical_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp_path, decoration, reverse):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    bare, style = vertical_bitmap_guide(project, tmp_path, reverse=reverse)
+    line, = bare.lines
+    track = replace(bare, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=False))])
+    palette = style.karaoke_colors
+    palette = replace(palette, before=replace(palette.before, shadow=PaintFill(color='#D0FC4022')),
+                      after=replace(palette.after, shadow=PaintFill(color='#D0E030FF')))
+    style = replace(style, decoration_before_sync=True, decoration_kind=decoration, line_y_margin_px=60,
+                    glow_before_radius_px=5, glow_after_radius_px=5, shadow_offset_x=9, shadow_offset_y=8,
+                    karaoke_colors=palette)
+    times, dpr = (250, 450, 750, 1100, 1550, 1750), 3
+    refs = []
+    for source in (track, bare):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 30 for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p08_vertical_bitmap_decoration' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, ('vertical_guide', decoration), check_p00_edges=True)
 
 
 def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path):

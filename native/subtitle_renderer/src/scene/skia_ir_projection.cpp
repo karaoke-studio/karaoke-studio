@@ -545,7 +545,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
             && staticScanline && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
-            && source.fxBursts.empty() && !features.contains("p06_static_shadow") && !features.contains("p06_static_glow");
+            && source.fxBursts.empty() && (features.contains("p08_vertical_bitmap_decoration")
+                || (!features.contains("p06_static_shadow") && !features.contains("p06_static_glow")));
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
             && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
             && source.entryAnimation == "none" && source.exitAnimation == "none"

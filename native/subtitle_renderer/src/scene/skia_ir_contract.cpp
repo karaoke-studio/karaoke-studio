@@ -89,6 +89,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_vector_guide_shadow",
         "p08_bitmap_guides",
         "p08_vertical_bitmap_guides",
+        "p08_vertical_bitmap_decoration",
         "p08_bitmap_lower_ruby",
         "p08_inline_bitmap_guides",
         "p08_inline_bitmap_decoration",
@@ -759,8 +760,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool mixedReverseBitmapGuides = features.contains("p08_mixed_reverse_bitmap_guides");
     const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
     const bool verticalBitmapGuides = features.contains("p08_vertical_bitmap_guides");
+    const bool verticalBitmapDecoration = features.contains("p08_vertical_bitmap_decoration");
     if (verticalBitmapGuides && (!features.contains("p08_bitmap_guides") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排图片导唱符缺少竖排或图片布局能力");
+    if (verticalBitmapDecoration && (!verticalBitmapGuides
+        || !(features.contains("p06_vertical_shadow") || features.contains("p06_vertical_glow"))))
+        throw BackendError("Skia 竖排图片导唱符装饰缺少布局或绘制能力声明");
     const bool lowerRubyBitmapGuides = features.contains("p08_bitmap_lower_ruby");
     if (lowerRubyBitmapGuides != (features.contains("p08_bitmap_guides") && features.contains("p05_lower_ruby")))
         throw BackendError("Skia 图片导唱符与下方注音缺少组合能力声明");
@@ -817,6 +822,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
         };
         static const QJsonArray shadowAllowed{"p08_bitmap_guide_shadow", "p06_static_shadow", "p06_ruby_shadow"};
+        static const QJsonArray verticalBitmapDecorAllowed{
+            "p08_vertical_bitmap_decoration", "p06_static_shadow", "p06_ruby_shadow",
+            "p06_vertical_shadow", "p06_vertical_glow", "p06_vertical_ruby_decoration",
+            "p06_vertical_reverse_shadow", "p06_vertical_reverse_glow"};
         static const QJsonArray lowerRubyAllowed{
             "p08_bitmap_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_lower_ruby_glow", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient", "p06_lower_ruby_static_gradient",
@@ -832,6 +841,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))
                 && !(verticalBitmapGuides && (feature == QJsonValue("p08_vertical_bitmap_guides")
                     || verticalGuideLayout.contains(feature)))
+                && !(verticalBitmapDecoration && verticalBitmapDecorAllowed.contains(feature))
                 && !(bitmapGuideGradientShadow && (feature == QJsonValue("p08_bitmap_guide_gradient_shadow")
                     || feature == QJsonValue("p06_body_gradient_shadow")))
                 && !(bitmapGuideImageShadow && (feature == QJsonValue("p08_bitmap_guide_image_shadow")

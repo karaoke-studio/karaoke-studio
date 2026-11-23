@@ -151,6 +151,11 @@ LOWER_RUBY_BITMAP_FEATURES = frozenset({
     'p06_lower_ruby_static_image',
 })
 VERTICAL_BITMAP_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p08_vertical_bitmap_guides'}
+VERTICAL_BITMAP_DECORATION_FEATURES = frozenset({
+    'p08_vertical_bitmap_decoration', 'p06_static_shadow', 'p06_ruby_shadow',
+    'p06_vertical_shadow', 'p06_vertical_glow', 'p06_vertical_ruby_decoration',
+    'p06_vertical_reverse_shadow', 'p06_vertical_reverse_glow',
+})
 
 
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
@@ -167,12 +172,14 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
         source = ir['track']['lines'][item.track_index]
         if (static_title or source.get('karaoke_anim') != 'none'
                 or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                or any(uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow'))):
+                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
             raise ValueError('Skia 竖排图片导唱符需要静态实色和普通走字')
     if vertical_lines:
         features.append('p08_vertical_bitmap_guides')
         allowed |= VERTICAL_BITMAP_GUIDE_FEATURES
+        if {'p06_vertical_shadow', 'p06_vertical_glow'}.intersection(features):
+            features.append('p08_vertical_bitmap_decoration')
+            allowed |= VERTICAL_BITMAP_DECORATION_FEATURES
     if 'p08_inline_bitmap_guides' in features:
         allowed |= INLINE_BITMAP_GUIDE_FEATURES
         for item in plan_lines:

@@ -264,6 +264,22 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         }
         const auto phase = states[index].phase;
         if (!guide.wipes() || phase != Phase::Wiping) {
+            if (guide.wipes() && phase == Phase::Before && !line.verticalBitmapClipInk.isEmpty()
+                && tMs > wipeStart(line.cells.front())) {
+                // Before tiles are still bounded by the owner's wipe once
+                // singing has started in another cell of this column.
+                const auto& ink = line.verticalBitmapClipInk;
+                const float pad = guide.clipPad();
+                const float start = line.wipeRightToLeft ? ink.bottom() : ink.top();
+                const float edge = lineWipeFront(line.cells, tMs, start, line.scanline.restingPad,
+                                                 line.wipeRightToLeft, true);
+                const auto clip = SkRect::MakeLTRB(ink.left() - pad, line.wipeRightToLeft ? -1e6f : edge,
+                                                  ink.right() + pad, line.wipeRightToLeft ? edge : 1e6f);
+                SkAutoCanvasRestore keep(&canvas, true);
+                canvas.clipRect(clip, SkClipOp::kIntersect, true);
+                guide.draw(canvas, false, titleOpacity, tMs);
+                return;
+            }
             guide.draw(canvas, guide.wipes() && phase == Phase::After, titleOpacity, tMs);
             return;
         }
