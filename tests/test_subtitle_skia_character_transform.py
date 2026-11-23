@@ -92,7 +92,7 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
 
 
 @pytest.mark.parametrize('case', ['rtl',
-                                  'reverse', 'vertical', 'roles', 'guide', 'no_wipe'])
+                                  'reverse', 'vertical', 'roles', 'guide'])
 def test_unverified_combinations_are_rejected(binary, project, case):
     track, style = transform_source(project)
     if case == 'rtl': style = replace(style, right_to_left=True)
@@ -104,7 +104,6 @@ def test_unverified_combinations_are_rejected(binary, project, case):
         track = replace(track, lines=[replace(track.lines[0], chars=[
             replace(track.lines[0].chars[0], role_label='lead'), *track.lines[0].chars[1:]])])
     elif case == 'guide': track, style = guide_source(project)
-    elif case == 'no_wipe': style = replace(style, karaoke_anim='no_wipe')
     if case in {'vertical', 'guide'}:
         style = replace(style, entry_anim='char_drip', entry_lead_ms=600)
     with pytest.raises(ValueError, match='逐字滴落/翻转'):
@@ -235,6 +234,28 @@ def singing_overlap(project, effect, handoff=False):
     if handoff:
         chars[0] = replace(chars[0], pause_release_ms=140)
     return replace(track, lines=[replace(line, chars=chars, end_ms=1200)]), style
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_animated_whole_cell_color_changes_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = singing_overlap(project, 'char_drip')
+    whole = replace(style, karaoke_anim='no_wipe')
+    times = (100, 125, 159, 200, 260, 400, 700, 1200)
+    dpr = 3
+    references = []
+    for look in (whole, style):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    expected, control = references
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(expected[:4], control[:4], strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, whole), dpr=dpr), times)
+    assert_glow_parity(times, expected, gpu, raster, 'animated_whole_cell_colors', check_p00_edges=True)
 
 
 def test_character_transform_scanline_keeps_scene_without_capability(binary, project):

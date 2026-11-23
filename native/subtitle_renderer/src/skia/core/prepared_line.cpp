@@ -242,8 +242,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             owner = index + 1;
         const auto& cell = line.cells[owner];
         const auto& transform = states[owner].transform;
+        const bool useCellProgress = line.noWipe || (utopia && tMs <= wipeEnd(cell));
         const float ratio = transform.utopiaExit ? 1.f
-            : utopia && tMs <= wipeEnd(cell) ? rawProgress(cell)
+            : useCellProgress ? rawProgress(cell)
             : transformedWipeRatio(cell.wipePoints, cell.adjustedWipeEnd, wipeStart(cell), wipeEnd(cell), tMs);
         const float origin = utopia && !line.rubyGroups.empty()
             ? line.rubySingingOrigin : line.cells.front().pivot.layoutLeft;

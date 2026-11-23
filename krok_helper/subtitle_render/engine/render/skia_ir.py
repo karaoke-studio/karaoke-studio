@@ -174,6 +174,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
     version = 3
     translucent_outlines = False
     energy_outlines = False
+    whole_cell_transform = False
     for index, item in enumerate(plan.lines):
         source = ir['track']['lines'][item.track_index]
         animations = {source.get('entry_anim'), source.get('exit_anim')}
@@ -187,9 +188,11 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         elif geometry:
             version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
         line, look = track.lines[item.track_index], item.layout_style
+        whole_cell = (source.get('karaoke_anim') == 'no_wipe' and not track.rubies
+                      and animations <= {'char_drip', 'spin_flip', 'none'})
         if (look.vertical or look.right_to_left or line.wipe_reverse
                 or (index not in character_warp_lines and index not in composed_geometry_lines
-                    and (source.get('karaoke_anim') != 'none' or track.rubies))
+                    and ((source.get('karaoke_anim') != 'none' and not whole_cell) or track.rubies))
                 or (source.get('scanline') and item.track_index not in particle_band_tracks
                     and not transformed_cell_band(source, look)) or look.lower_ruby_enabled
                 or any(c.role_label is not None or c.vector_glyph is not None
@@ -199,6 +202,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
         if not (entry or exit_):
             continue
+        whole_cell_transform |= whole_cell
         outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
         if geometry and outlined and index not in composed_geometry_lines:
             if not track.rubies and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
@@ -221,6 +225,8 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         ir['required_features'].append('p07_translucent_character_outline')
     if energy_outlines:
         ir['required_features'].append('p07_energy_transition_outlines')
+    if whole_cell_transform:
+        ir['required_features'].append('p07_no_wipe_character_transform')
     return version
 
 
