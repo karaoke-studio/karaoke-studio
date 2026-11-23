@@ -591,6 +591,30 @@ def test_title_bitmap_guides_use_per_image_decoration(binary, tmp_path, decorati
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_bitmap_guides_preserve_text_gradient_domains(binary, tmp_path):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = bitmap_guide_title(tmp_path, inline=True)
+    title = style.title_overlays[0]
+    prefix = replace(title.guide_symbols[0], bitmap_margin_bottom_px=58)
+    title = replace(title, guide_symbols={0: prefix}, stroke_width_px=4,
+                    fill=PaintFill(mode='gradient_horizontal', start_color='#E4481A', end_color='#209EEB'),
+                    stroke=PaintFill(mode='gradient_vertical', start_color='#002140', end_color='#CA14A2'))
+    style = replace(style, title_overlays=[title])
+    source = ir_for(binary, (track, style))['skia_titles'][0]['source']
+    line, = source['skia_layout']['lines']
+    avatar = line['cells'][0]
+    left, top, _, _ = avatar['metrics']['ink']
+    assert line['body_gradient_bounds'][0] == avatar['origin_x'] + left
+    assert line['body_gradient_bounds'][1] > avatar['baseline_y'] + top
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_bitmap_text_paints'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def mixed_guide_title(tmp_path):
     track, style = bitmap_guide_title(tmp_path)
     _, vector = vector_guide_title()

@@ -170,6 +170,7 @@ def write_body_gradient_bounds(ir, plan):
                          and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
         static_vertical = static_paints and look.vertical
+        static_bitmap_paints = static_paints and not (look.vertical or directional)
         directional_solid_outline |= (static_directional and outlined and modes == {'solid'}
                                       and all(c.role_label is None and not guide_symbol_is_bitmap(c.vector_glyph)
                                               for c in item.render_line.chars))
@@ -227,9 +228,12 @@ def write_body_gradient_bounds(ir, plan):
                 or (source.get('karaoke_anim') not in {'none', 'no_wipe'} and not singing)
                 or (look.lower_ruby_enabled and not (particle_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
-                or any(c.role_label is not None or (c.vector_glyph is not None
-                       and (not (ordinary_vector_paint or moving or vector_band) or guide_symbol_is_bitmap(c.vector_glyph)))
-                       for c in item.render_line.chars)):
+                or any(c.role_label is not None for c in item.render_line.chars)
+                or (not static_bitmap_paints and any(guide_symbol_is_bitmap(c.vector_glyph)
+                                                     for c in item.render_line.chars))
+                or (not (ordinary_vector_paint or moving or vector_band)
+                    and any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
+                            for c in item.render_line.chars))):
             raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
         ruby_paint |= annotated or (moving and upper_ruby)
         singing_paint |= singing and (annotated or moving)
@@ -250,14 +254,18 @@ def write_body_gradient_bounds(ir, plan):
         images = images or 'image' in modes
         if not modes & _GRADIENTS:
             continue
-        boxes = []
+        boxes, bitmap_boxes = [], []
         for cell in final['cells']:
-            left, top, right, bottom = cell['metrics']['ink']
+            metrics = cell['metrics']
+            left, top, right, bottom = metrics['ink']
             if left < right and top < bottom:
                 x, y = cell['origin_x'], cell['baseline_y']
-                boxes.append((x + left, y + top, x + right, y + bottom))
+                target = bitmap_boxes if metrics.get('bitmap_guide') else boxes
+                target.append((x + left, y + top, x + right, y + bottom))
         if boxes:
-            left, top, right, bottom = zip(*boxes, strict=True)
+            _, top, _, bottom = zip(*boxes, strict=True)
+            # Images occupy the horizontal paint span without stretching the glyph ink vertically.
+            left, _, right, _ = zip(*boxes, *bitmap_boxes, strict=True)
             line_top, line_bottom = (final['cells'][0]['wipe_top'], final['cells'][-1]['wipe_bottom']
                                      ) if static_vertical else (min(top), max(bottom))
             final['body_gradient_bounds'] = [min(left), line_top, max(right), line_bottom]
