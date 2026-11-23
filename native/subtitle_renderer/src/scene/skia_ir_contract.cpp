@@ -259,6 +259,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_singing_sprite_images",
         "p07_ripple_singing_paints",
         "p07_energy_singing_paints",
+        "p07_singing_sprite_split_paints",
         "p07_scanline_unscaled_line_animation",
         "p07_scanline_shape",
         "p07_scanline_shape_line_animation",
@@ -1387,6 +1388,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 唱字涟漪缺少粒子画笔能力声明");
     if (features.contains("p07_energy_singing_paints") && !features.contains("p07_singing_sprite_paints"))
         throw BackendError("Skia 唱字火焰或闪电缺少粒子画笔能力声明");
+    if (features.contains("p07_singing_sprite_split_paints") && !features.contains("p07_singing_sprite_paints"))
+        throw BackendError("Skia 唱字粒子分层画笔缺少精灵画笔能力声明");
     if (features.contains("p06_outline_ruby")
         && (!features.contains("p06_primary_solid_outline") || !features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 描边正文与注音组合缺少描边或注音能力声明");

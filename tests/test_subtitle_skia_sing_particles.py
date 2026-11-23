@@ -129,7 +129,7 @@ def test_rtl_singing_particles_follow_resolved_cell_anchors(binary, project):
 
 
 @pytest.mark.parametrize(('kind', 'appearance'), [
-    ('note', 'outlines'), ('note', 'shadow'), ('note', 'horizontal'), ('note', 'image'),
+    ('note', 'outlines'), ('note', 'shadow'), ('note', 'horizontal'), ('note', 'image'), ('note', 'split'),
     ('flame', 'outlines'), ('lightning', 'outlines'),
 ])
 def test_singing_sprites_use_inherited_particle_paint_layers(binary, project, tmp_path, kind, appearance):
@@ -141,7 +141,9 @@ def test_singing_sprites_use_inherited_particle_paint_layers(binary, project, tm
     shadow = appearance == 'shadow'
     mode = 'gradient_horizontal' if appearance == 'horizontal' else 'gradient_vertical'
     fill = PaintFill(mode=mode, start_color='#FF2020FF', end_color='#FF15FFF0')
-    if appearance == 'image':
+    if appearance == 'split':
+        fill = PaintFill(mode='split_vertical', split_stops=[(0, '#FF2020FF'), (30, '#FF15FFF0'), (68, '#FF3289D1')])
+    elif appearance == 'image':
         from test_subtitle_skia_image_fills import image_paint, pattern, write_png
 
         image_path = write_png(tmp_path / 'note.png', pattern('opaque'))
@@ -183,6 +185,7 @@ def test_singing_sprites_use_inherited_particle_paint_layers(binary, project, tm
     assert ('p07_singing_sprite_shadows' in ir['required_features']) == shadow
     assert ('p07_singing_sprite_line_gradients' in ir['required_features']) == (appearance == 'horizontal')
     assert ('p07_singing_sprite_images' in ir['required_features']) == (appearance == 'image')
+    assert ('p07_singing_sprite_split_paints' in ir['required_features']) == (appearance == 'split')
     assert any(paint['stroke_width_px'] > 0 and paint['stroke2_width_px'] > 0
                for paint in ir['fx_paint_table'])
     gpu, raster = render_skia(binary, ir, times)

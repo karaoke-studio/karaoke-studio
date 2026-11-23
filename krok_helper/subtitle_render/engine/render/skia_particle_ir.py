@@ -48,7 +48,7 @@ _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 's
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
 _PAINTED_SPRITES = {'twinkle', 'twinkle_classic', 'note', 'heart'} | FALLING_PARTICLES
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
-_LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'image'}
+_LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical', 'image'}
 _RIPPLE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical'}
 
 
@@ -100,7 +100,7 @@ def _supports_singing_particle_paint(paint, *, local_sprite=False):
             not local_sprite and (paint['stroke_width_px'] or paint['stroke2_width_px'])):
         return False
     kinds = {'glow', 'shadow'} if local_sprite else {'glow'}
-    decor_modes = _SPRITE_PAINT_MODES | {'image'} if local_sprite else _SPRITE_PAINT_MODES
+    decor_modes = _LOCAL_SPRITE_PAINT_MODES - {'gradient_horizontal'} if local_sprite else _SPRITE_PAINT_MODES
     return decor is None or (decor['kind'] in kinds and decor['fill']['mode'] in decor_modes)
 
 
@@ -126,6 +126,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     painted_sprites = sprite_shadows = sprite_line_gradients = sprite_images = False
     painted_ripples = False
     painted_energy = False
+    sprite_split_paints = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -268,6 +269,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                     sprite_shadows |= decor is not None and decor['kind'] == 'shadow'
                     sprite_line_gradients |= 'gradient_horizontal' in modes
                     sprite_images |= 'image' in modes or (decor is not None and decor['fill']['mode'] == 'image')
+                    sprite_split_paints |= 'split_vertical' in modes or (
+                        decor is not None and decor['fill']['mode'] == 'split_vertical')
                 else:
                     raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
             if (kind not in _PARTICLES
@@ -349,6 +352,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_ripple_singing_paints')
     if painted_energy:
         ir['required_features'].append('p07_energy_singing_paints')
+    if sprite_split_paints:
+        ir['required_features'].append('p07_singing_sprite_split_paints')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:
