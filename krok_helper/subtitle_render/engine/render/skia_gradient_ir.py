@@ -162,7 +162,7 @@ def write_body_gradient_bounds(ir, plan):
                          and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash'))
                          and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
-        static_vertical = static_paints and look.vertical and not outlined
+        static_vertical = static_paints and look.vertical
         directional_solid_outline |= (static_directional and outlined and modes == {'solid'}
                                       and all(c.role_label is None and c.vector_glyph is None
                                               for c in item.render_line.chars))

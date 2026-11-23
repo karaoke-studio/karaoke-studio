@@ -34,17 +34,17 @@ def vertical_source(project, kind='plain', *, reverse=False, effect='none', text
 
 
 @GPU
-@pytest.mark.parametrize('columns', [False, True], ids=['single', 'mixed_columns'])
-def test_vertical_body_paints_match_actual_d2d_gpu(binary, project, tmp_path, columns):
+@pytest.mark.parametrize('case', ['single', 'mixed_columns', 'outlined'])
+def test_vertical_body_paints_match_actual_d2d_gpu(binary, project, tmp_path, case):
     from krok_helper.subtitle_render.domain.paint import PaintFill
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_image_fills import image_paint, pattern, write_png
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    track, base = vertical_column_offsets(project) if columns else vertical_source(project, position='center')
+    track, base = vertical_column_offsets(project) if case == 'mixed_columns' else vertical_source(project, position='center')
     colors = base.karaoke_colors
-    if columns:
+    if case == 'mixed_columns':
         main, reverse = track.lines
         track = replace(track, lines=[main, replace(reverse, wipe_reverse=True)])
         gradient = PaintFill(mode='split_vertical', split_stops=[(0, '#FFE12D20'), (47, '#FF285BDE')])
@@ -55,6 +55,14 @@ def test_vertical_body_paints_match_actual_d2d_gpu(binary, project, tmp_path, co
         after = image_paint(tile, 137)
     style = replace(base, karaoke_colors=replace(colors,
         before=replace(colors.before, text=gradient), after=replace(colors.after, text=after)))
+    if case == 'outlined':
+        from test_subtitle_skia_outline_ruby import outlined
+
+        base = outlined(base, 2, body_alpha='B0')
+        palette = base.karaoke_colors
+        style = replace(base, karaoke_colors=replace(palette,
+            before=replace(palette.before, stroke=gradient),
+            after=replace(palette.after, stroke2=after)))
     times, dpr = (175, 350, 550, 750, 1100, 1550, 2200), 3
     refs = []
     for look in (style, base):
@@ -67,7 +75,7 @@ def test_vertical_body_paints_match_actual_d2d_gpu(binary, project, tmp_path, co
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p06_vertical_body_paints' in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, ('vertical_body_paints', columns), check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('vertical_body_paints', case), check_p00_edges=True)
 
 
 @pytest.mark.parametrize('reverse', [False, True])

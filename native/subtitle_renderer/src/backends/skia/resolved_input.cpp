@@ -980,8 +980,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.exitAnimation == "none" && !line.zoomPulseEnabled && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
         const bool staticDirectional = staticPaintStack && !style.vertical && style.rightToLeft != line.wipeReverse;
-        const bool verticalPaints = staticPaintStack && style.vertical
-            && !primaryOutline && !secondaryOutline && features.contains("p06_vertical_body_paints");
+        const bool verticalPaints = staticPaintStack && style.vertical && features.contains("p06_vertical_body_paints");
         const bool directionalPaints = staticDirectional && features.contains("p06_directional_body_paints");
         const bool directionalOutlines = directionalPaints
             || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));
@@ -1064,8 +1063,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     ink.fRight = placedInk.right();
                 }
                 // Every layer shares the line's visual pad at the layout reference scale.
-                const float pad = ::subtitle::skia::outlineVisualPad(style.strokeWidth, style.stroke2Width,
-                                                                    projected.layoutReferenceScale);
+                const float pad = verticalPaints ? 0.f : ::subtitle::skia::outlineVisualPad(
+                    style.strokeWidth, style.stroke2Width, projected.layoutReferenceScale);
                 using ::subtitle::skia::lineGradient;
                 prepared.beforeGradient = lineGradient(style.beforeFillPaint, ink, pad);
                 prepared.afterGradient = lineGradient(style.afterFillPaint, ink, pad);
