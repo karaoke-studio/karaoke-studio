@@ -242,7 +242,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (annotated and animated and index not in composed_lines)
                 or (not (annotated or vertical_particles or faded_band or outlined_energy
                          or outlined_singing or unscaled_outline) and outlined)
-                or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
+                or (not static_sprite_paint and any(
+                    c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars))):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         horizontal_line_motion |= unscaled_motion
         plain_scaled_singing |= plain_scale

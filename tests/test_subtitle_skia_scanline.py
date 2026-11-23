@@ -255,15 +255,17 @@ def test_static_cell_band_matches_actual_d2d_gpu(binary, project):
     assert_glow_parity(times, reference, gpu, raster, 'static_scanline_cells', check_p00_edges=True)
 
 
-def test_scanline_image_keeps_front_over_styled_cells(binary, project, tmp_path):
+@pytest.mark.parametrize('shape', ['image', 'flame'])
+def test_fixed_scanline_shape_keeps_front_over_styled_cells(binary, project, tmp_path, shape):
     from test_subtitle_skia_bitmap_guides import image
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = static_guide_and_role_band(project)
-    asset = image(tmp_path / 'scanline.png', width=14, height=22)
-    style = replace(style, scanline_shape='image', scanline_image_path=asset,
-                    scanline_image_scale_pct=300, scanline_image_offset_y_px=-45)
+    style = replace(style, scanline_shape=shape)
+    if shape == 'image':
+        asset = image(tmp_path / 'scanline.png', width=14, height=22)
+        style = replace(style, scanline_image_path=asset, scanline_image_scale_pct=300, scanline_image_offset_y_px=-45)
     plain = replace(style, scanline_enabled=False)
     times = (350, 550, 710, 850)
     reference = None
@@ -282,7 +284,7 @@ def test_scanline_image_keeps_front_over_styled_cells(binary, project, tmp_path)
     if reference is None:
         bare, _ = render_skia(binary, ir_for(binary, (track, plain)), times)
         assert all(np.count_nonzero(a != b) > 100 for a, b in zip(gpu, bare, strict=True))
-    assert_glow_parity(times, reference, gpu, raster, 'scanline_image_with_styled_cells', check_p00_edges=True)
+    assert_glow_parity(times, reference, gpu, raster, ('scanline_with_styled_cells', shape), check_p00_edges=True)
 
 
 def directional_scanline_image(project, tmp_path, reverse):

@@ -135,6 +135,39 @@ def test_rtl_singing_particles_follow_resolved_cell_anchors(binary, project):
         assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
 
 
+@pytest.mark.parametrize('content', ['vector', 'role'])
+def test_singing_particles_use_styled_cell_anchors(binary, project, content):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style = twinkle_source(project, 'two_colors')
+    line, = track.lines
+    if content == 'vector':
+        line = replace(line, inline_guide_symbols={1: SQUARE})
+    else:
+        chars = [line.chars[0], replace(line.chars[1], role_label='lead'), *line.chars[2:]]
+        line = replace(line, chars=chars)
+        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
+            font_family=style.font_family, font_size_px=70, karaoke_colors=colors('#FF0040', '#00FF40'))})
+    track = replace(track, lines=[line])
+    times, dpr = (660, 750, 850, 1100), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert ir['track']['lines'][0]['fx_bursts']
+    gpu, raster = render_skia(binary, ir, times)
+    assert any(np.count_nonzero(blue_coverage(frame) > 35) > 30 for frame in gpu)
+    for time, vulkan, cpu, oracle in zip(times, gpu, raster, reference or gpu, strict=True):
+        assert_particle_region(oracle, vulkan, (content, time, 'gpu'), check_contour=content != 'vector')
+        assert_particle_region(vulkan, cpu, (content, time, 'raster'))
+
+
 @pytest.mark.parametrize(('kind', 'appearance'), [
     ('note', 'outlines'), ('note', 'shadow'), ('note', 'horizontal'), ('note', 'image'), ('note', 'split'),
     ('flame', 'outlines'), ('lightning', 'outlines'),

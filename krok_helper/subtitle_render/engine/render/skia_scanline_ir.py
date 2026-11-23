@@ -192,8 +192,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         role_fade = inline_roles and fixed_fade
         prefix_fade = (vector_guides and not inline_roles and vector_guides_form_prefix(chars)
                        and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'})))
-        fixed_image = basic_image and look.scanline_mode == 'color'
-        static_cells = ((inline_roles or vector_guides) and ordinary and (look.scanline_shape == 'band' or fixed_image)
+        fixed_shape = shape and look.scanline_mode == 'color' and look.scanline_shape in {'image', 'flame'}
+        static_cells = ((inline_roles or vector_guides) and ordinary and (look.scanline_shape == 'band' or fixed_shape)
                         and look.scanline_mode != 'role' and line.get('karaoke_anim') == 'none'
                         and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                                  or track.rubies or with_zoom_or_flash or bursts))

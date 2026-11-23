@@ -551,15 +551,19 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled && source.fxBursts.empty();
         const bool roleFadedScanline = features.contains("p07_inline_role_faded_scanline");
         const bool prefixFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
-        const bool fixedImage = basicImage && scanlineShape && resolved.scanlineMode == "color";
+        const bool fixedShape = scanlineShape && resolved.scanlineMode == "color"
+            && (resolved.scanlineShape == "image" || resolved.scanlineShape == "flame");
         const bool staticScanlineCells = features.contains("p07_scanline_static_cells") && staticScanline
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
             && !features.contains("p05_lower_ruby") && source.karaokeAnimation == "none"
-            && (resolved.scanlineShape == "band" || fixedImage) && resolved.scanlineMode != "role"
+            && (resolved.scanlineShape == "band" || fixedShape) && resolved.scanlineMode != "role"
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool prefixGuideParticles = prefixFadedScanline
             && (resolved.scanlineMode == "default" || resolved.scanlineMode == "color")
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
+        const bool staticCellParticles = staticScanline && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse
+            && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !source.scanlineEnabled
+            && source.karaokeAnimation == "none" && !source.zoomPulseEnabled && !source.strokeFlashEnabled;
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
         const bool rtlBitmapSinging = features.contains("p08_rtl_bitmap_singing") && utopiaSinging
@@ -630,7 +634,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (source.scanlineEnabled && ((cell.vectorGlyph && !(prefixFadedScanline || staticScanlineCells))
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
-            if (!source.fxBursts.empty() && ((cell.vectorGlyph && !prefixGuideParticles) || &cellStyle != &resolved))
+            if (!source.fxBursts.empty() && !staticCellParticles
+                && ((cell.vectorGlyph && !prefixGuideParticles) || &cellStyle != &resolved))
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved)
