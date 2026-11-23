@@ -212,7 +212,7 @@ def test_raw_annotations_without_complete_final_layout_are_rejected_and_keep_sce
 
 
 @pytest.mark.parametrize('change', [
-    {'entry_anim': 'noise', 'karaoke_anim': 'zoom_pulse'}, {'karaoke_anim': 'zoom_pulse', 'entry_anim': 'fade'},
+    {'entry_anim': 'noise', 'karaoke_anim': 'zoom_pulse'},
     {'vertical': True}])
 def test_unsupported_upper_ruby_combinations_fail_and_keep_previous_scene(binary, reading, change):
     track, style = reading
@@ -223,6 +223,48 @@ def test_unsupported_upper_ruby_combinations_fail_and_keep_previous_scene(binary
             process.configure(track, replace(style, **change), width=640, height=360, fps=60)
         after, _ = collect(process, [550], generation=2)
     assert np.array_equal(before[0], after[0])
+
+
+def animated_upper_reading(reading):
+    track, style = reading
+    return track, replace(style, karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=150,
+                          entry_anim='fade', entry_lead_ms=600, exit_anim='rise', exit_fade_ms=600)
+
+
+def test_upper_reading_zoom_with_line_animation_requires_capability(binary, reading):
+    track, animated = animated_upper_reading(reading)
+    ir = product_ir(binary, (track, animated))
+    forged = {**ir, 'required_features': [f for f in ir['required_features'] if f != 'p07_ruby_zoom_line_animation']}
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 4850])
+        with pytest.raises(NativeRendererError, match='Utopia'):
+            configure(process, forged)
+        replay, _ = collect(process, [4850, 450], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_upper_reading_zoom_with_line_animation_matches_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = animated_upper_reading(reading)
+    times, dpr = (125, 325, 450, 550, 620, 1300, 2200, 4600, 4850), 3
+    refs = []
+    for look in (style, replace(style, entry_anim='none', exit_anim='none'), replace(style, karaoke_anim='utopia')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    reference, still, utopia = refs
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, still, strict=True))
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference[1:4], utopia[1:4], strict=True))
+    ir = product_ir(binary, (track, style), dpr=dpr)
+    assert 'p07_ruby_zoom_line_animation' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'upper_reading_zoom_line_animation', check_p00_edges=True)
 
 
 def test_old_group_only_sidecar_cannot_silently_accept_product_upper_ruby(monkeypatch, tmp_path):

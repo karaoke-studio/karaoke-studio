@@ -432,7 +432,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.bursts.empty() && fadedUtopiaScanline;
         const bool fadedScanlineGradientFill = fixedFadedScanline && (fadedScanlineParticles || prefixFadedScanline)
             && features.contains("p06_faded_scanline_gradient_fill");
-        const bool lineAnimation = verticalSingingAnimation || (singingScale && !line.zoomPulseEnabled
+        const bool rubyZoomLineAnimation = annotated && features.contains("p07_ruby_zoom_line_animation")
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse && !hasInlineRoles && !vectorGuides
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        const bool lineAnimation = verticalSingingAnimation || (singingScale && (!line.zoomPulseEnabled || rubyZoomLineAnimation)
             && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation);
         const bool movingSingingGradientFill = lineAnimation && singingScale && !style.vertical
             && (line.entryAnimation != "none" || line.exitAnimation != "none")

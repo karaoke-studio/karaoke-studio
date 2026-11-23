@@ -57,6 +57,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                            or ('p07_scanline_utopia_entry' in ir['required_features'] and utopia_entry_band(source, style))
                            or item.track_index in particle_band_tracks)
         ruby_zoom = 'p07_ruby_zoom_pulse' in ir['required_features']
+        ruby_zoom_motion = annotated and 'p07_ruby_zoom_line_animation' in ir['required_features']
         inline_roles = any(c.role_label is not None for c in item.render_line.chars)
         reverse_scale = (not annotated and not inline_roles and 'p05_resolved_ruby' not in ir['required_features']
                          and reverse_singing_scale(source, style)
@@ -75,7 +76,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                                    or (animations != {'none'} and not (line_animation or with_character_transition or with_noise))))
                 or (not (line_animation or with_character_transition or with_noise) and not animations <= {'none', 'utopia'})
                 or source.get('karaoke_anim') not in {'none', 'utopia'}
-                or (line_animation and source.get('zoom_pulse'))
+                or (line_animation and source.get('zoom_pulse') and not ruby_zoom_motion)
                 or (source.get('scanline') and ((animations != {'none'} and not scanline_motion) or (source.get('zoom_pulse')
                     and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])

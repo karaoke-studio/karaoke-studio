@@ -705,8 +705,12 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             index for index, (line, geometry_line) in enumerate(zip(ir['track']['lines'], geometry.ruby.lines, strict=True))
             if line.get('zoom_pulse') and geometry_line.rubies
             and not lower_enabled and not markers
-            and {line.get('entry_anim'), line.get('exit_anim')} == {'none'}
+            and (line.get('entry_anim') == line.get('exit_anim') == 'none'
+                 or (ordinary_line_animation(line)
+                     and not any(line.get(flag) for flag in ('scanline', 'stroke_flash', 'fx_bursts'))))
         }
+        zoom_motion = any({ir['track']['lines'][i].get(phase) for phase in ('entry_anim', 'exit_anim')} != {'none'}
+                          for i in zoom_lines)
         singing_lines = {
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
@@ -749,6 +753,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                 ir['required_features'].append('p07_rtl_ruby_singing_scale')
         if zoom_lines:
             ir['required_features'].append('p07_ruby_zoom_pulse')
+        if zoom_motion:
+            ir['required_features'].append('p07_ruby_zoom_line_animation')
         if 'p07_scanline_band' in ir['required_features']:
             ir['required_features'].append('p07_ruby_scanline')
         if markers:
