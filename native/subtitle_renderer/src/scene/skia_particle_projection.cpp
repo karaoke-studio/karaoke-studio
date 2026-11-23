@@ -64,6 +64,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && protocol::decorationKindForState(style, true) == "none";
     const bool scaledSinging = fadedBand || plainScale
         || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
+    const bool outlinedPlainScale = plainScale && !source.wipeReverse && !source.zoomPulseEnabled
+        && features.contains("p07_horizontal_outlined_singing_particles");
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     const bool verticalStars = features.contains("p07_vertical_sing_twinkle");
@@ -141,7 +143,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
-        || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines
+        || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines && !outlinedPlainScale
             && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)

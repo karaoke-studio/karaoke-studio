@@ -50,13 +50,19 @@ def test_reverse_utopia_particles_keep_their_clock_after_seek(binary, project):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case', ['forward', 'reverse', 'zoom'])
+@pytest.mark.parametrize('case', ['forward', 'reverse', 'zoom', 'outlined'])
 def test_plain_utopia_particles_match_actual_d2d_gpu(binary, project, case):
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     track, base = twinkle_source(project, 'two_colors')
     if case == 'reverse':
         track = replace(track, lines=[replace(line, wipe_reverse=True) for line in track.lines])
+    if case == 'outlined':
+        palette = base.karaoke_colors
+        before = replace(palette.before, stroke=PaintFill(color='#FF422200'), stroke2=PaintFill(color='#FF301000'))
+        after = replace(palette.after, stroke=PaintFill(color='#FF543400'), stroke2=PaintFill(color='#FF180800'))
+        base = replace(base, karaoke_colors=replace(palette, before=before, after=after),
+                       stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=3)
     style = replace(base, karaoke_anim='zoom_pulse' if case == 'zoom' else 'utopia',
                     reverse_karaoke_anim='utopia', zoom_pulse_peak_pct=150)
     times, dpr = (250, 400, 750, 1100, 1500, 1820, 2200), 3
@@ -69,14 +75,27 @@ def test_plain_utopia_particles_match_actual_d2d_gpu(binary, project, case):
     for control in refs[1:]:
         assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
-    feature = 'p07_plain_zoom_singing_particles' if case == 'zoom' else 'p07_plain_scaled_singing_particles'
+    feature = {
+        'zoom': 'p07_plain_zoom_singing_particles',
+        'outlined': 'p07_horizontal_outlined_singing_particles',
+    }.get(case, 'p07_plain_scaled_singing_particles')
     assert feature in ir['required_features']
     assert ('p07_reverse_singing_particles' in ir['required_features']) == (case == 'reverse')
     gpu, raster = render_skia(binary, ir, times)
     for time, d2d, vulkan, cpu in zip(times, refs[0], gpu, raster, strict=True):
-        assert_particle_region(d2d, vulkan, ('utopia', case, time))
-        assert_particle_region(vulkan, cpu, ('utopia', case, time, 'raster'))
+        assert_particle_region(d2d, vulkan, ('utopia', case, time), check_contour=case != 'outlined')
+        assert_particle_region(vulkan, cpu, ('utopia', case, time, 'raster'), check_contour=case != 'outlined')
+        if case == 'outlined':
+            # A sprite tip blended over an opaque stroke can straddle 60/255 by three levels.
+            coverage = [blue_coverage(frame) for frame in (d2d, vulkan, cpu)]
+            for a, b in zip(coverage, coverage[1:]):
+                edge = (np.minimum(a, b) == 60) & (np.maximum(a, b) <= 63)
+                assert within_one_pixel((a > 60) | edge, (b > 60) | edge), (case, time)
         assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
+    if case == 'outlined':
+        from test_subtitle_skia_static_glow import assert_glow_parity
+
+        assert_glow_parity(times, refs[0], gpu, raster, 'plain_utopia_outlined_particles', check_p00_edges=True)
     ir['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         with pytest.raises(NativeRendererError):
