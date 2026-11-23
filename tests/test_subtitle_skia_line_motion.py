@@ -1193,6 +1193,31 @@ def test_line_band_uses_text_ink_with_guides_and_roles(binary, project, tmp_path
             assert np.count_nonzero(magenta[:box[0, 0]]) > 100
 
 
+def test_rtl_line_band_follows_the_resolved_text_box(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_rtl_flow import rtl_source
+
+    track, style = rtl_source(project)
+    style = replace(solid_line_band(style, tmp_path), line_band_pad_left_px=28, line_band_pad_right_px=9)
+    times = (300, 750)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        reference = [solid_band_box(np.frombuffer(frame, np.uint8).reshape(360, 640, 4)) for frame in raw]
+    ir = ir_for(binary, (track, style))
+    assert ir['skia_layout']['lines'][0]['text_flow'] == 'rtl'
+    gpu, raster = render_skia(binary, ir, times)
+    boxes = [solid_band_box(frame) for frame in gpu]
+    assert np.array_equal(*boxes)
+    for frames in (gpu, raster):
+        for frame, expected in zip(frames, reference or boxes, strict=True):
+            assert abs(solid_band_box(frame) - expected).max() <= 1
+
+
 def test_shape_signal_draws_above_line_band(binary, project, tmp_path):
     track, style = project
     style = replace(style, entry_anim='none', exit_anim='none',

@@ -125,7 +125,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     if (bandEnabled != staticBand
         || (staticBand && (!bandFitSupported
             || !bandImageSupported
-            || cfg.rightToLeft || (tintedBand == band.tint.isEmpty())
+            || (tintedBand == band.tint.isEmpty())
             || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
             || !bandLayersSupported || band.edgeKind != "none" || blurBand != hasBlurBand
             || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")

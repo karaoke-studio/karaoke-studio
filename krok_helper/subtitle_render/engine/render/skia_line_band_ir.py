@@ -59,7 +59,6 @@ def write_line_band(ir, style, prepared, *, width, height):
     ruby = geometry.ruby
     if ((not preset and (preset_id is not None or not (sequence or material.lower().endswith('.png'))))
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
-            or style.right_to_left
             or style.line_band_edge_kind != 'none'
             or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})):
         raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')
