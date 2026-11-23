@@ -59,13 +59,14 @@ def title_style(title):
            and paint['glow_radius_px'] > 0 for paint in paints):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
+    bitmaps = any(guide['kind'] == 'bitmap' for guide in guides)
     textured = any(paint['fill']['mode'] != 'solid'
                    or (paint['stroke_width_px'] > 0 and paint['stroke']['mode'] != 'solid')
                    or (paint['stroke2_width_px'] > 0 and paint['stroke2']['mode'] != 'solid')
                    for paint in paints)
-    if textured and (guides or any(paint['decoration_kind'] != 'none' for paint in paints)):
+    if textured and (bitmaps or any(paint['decoration_kind'] != 'none' for paint in paints)):
         return None
-    if guides and (roles or title['decoration_kind'] != 'none'):
+    if guides and (any(paint['decoration_kind'] != 'none' for paint in paints) or (bitmaps and roles)):
         return None
     if roles and any(paint['letter_spacing_px'] != title['letter_spacing_px']
                      or (paint['font_family_latin'] is None and title['font_family_latin'] is not None)
@@ -142,7 +143,9 @@ def _title_lines(title, rows):
             if not 1 <= prefix['count'] <= 64:
                 raise ValueError('Skia 标题的行首导唱符数量超限')
             symbol = _title_guide(prefix)
-            chars.extend(TimingChar('\uFFFC', row, vector_glyph=symbol) for _ in range(prefix['count']))
+            labels = prefix['role_labels']
+            chars.extend(TimingChar('\uFFFC', row, role_label=labels[index] if index < len(labels) else None,
+                                    vector_glyph=symbol) for index in range(prefix['count']))
         for column, (unit, label) in enumerate(cells):
             inline = replacements.get((row, column))
             if inline:

@@ -443,6 +443,31 @@ def test_title_vector_guides_match_actual_d2d_gpu(binary, outlined):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_vector_guides_can_use_role_and_title_paints(binary):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_resolved import ir_for
+
+    track, style = vector_guide_title()
+    title = style.title_overlays[0]
+    ramp = PaintFill(mode='gradient_horizontal', start_color='#F83408', end_color='#08A3F8')
+    role_paint = KaraokeColorState(text=PaintFill(color='#CC16AD'), stroke=ramp)
+    role = SubtitleStyleScheme(font_family=style.font_family, font_size_px=62, stroke_width_px=3,
+                               karaoke_colors=KaraokeColors(before=role_paint, after=role_paint))
+    first_guide = replace(title.guide_symbols[0], role_labels=('accent', None))
+    title = replace(title, fill=ramp, guide_symbols={0: first_guide},
+                    char_role_labels=[[None, None, 'accent', None]])
+    style = replace(style, title_overlays=[title], custom_style_schemes={'accent': role})
+    source = ir_for(binary, (track, style))['skia_titles'][0]['source']
+    assert {'p05_vector_guides', 'p06_role_body_paints', 'p08_title_role_outlines'} <= set(source['required_features'])
+    chars = source['track']['lines'][0]['chars']
+    assert [index for index, cell in enumerate(chars) if cell.get('role_label') == 'accent'] == [0, 4]
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id='title_vector_guide_role_paint'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def bitmap_guide_title(tmp_path, inline=False):
     from test_subtitle_skia_image_fills import write_png
 
