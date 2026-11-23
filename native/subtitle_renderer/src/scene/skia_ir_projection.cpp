@@ -469,6 +469,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             line.placementWindows.push_back({window.startMs + offset, window.endMs + offset,
                 window.offsetX * float(cfg.dpr), window.offsetY * float(cfg.dpr)});
         const bool composedGuide = features.contains("p05_vector_guide_composition");
+        const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");
         const bool roleVectorGuides = composedGuide && features.contains("p05_role_vector_guides")
             && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
@@ -481,6 +482,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && hasFadedScanlineSingingParticles(cfg, source, resolved, features);
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
+        const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
+            && cfg.rubies.empty();
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
             && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
             && source.entryAnimation == "none" && source.exitAnimation == "none"
@@ -524,9 +527,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved))
                 throw BackendError("Skia 逐字变换暂不支持导唱符或行内角色");
-            // vector_guide_schema=1: solid horizontal LTR main text without roles. Ruby and
-            // outlines need the verified composition profile.
-            if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical || cfg.rightToLeft
+            // Ruby and outlines use their own composition profile.
+            if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || cfg.vertical
+                || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !roleVectorGuides)
                 || ((!cfg.rubies.empty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
@@ -534,7 +537,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (cell.bitmapGuide) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
-                    || cfg.rightToLeft || (source.wipeReverse && !reverseBitmapLine)
+                    || (cfg.rightToLeft && (!rtlBitmap || !cell.bitmapGuide->noDecor))
+                    || (source.wipeReverse && !reverseBitmapLine)
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
             }

@@ -531,18 +531,49 @@ def test_invalid_lower_contract_keeps_previous_scene(binary, independent, mutati
     assert np.array_equal(before[0], after[0])
 
 
-def test_unsupported_independent_lower_appearance_is_explicit(binary, independent):
-    track, style, _ = independent
-    change = {'ruby_decoration_kind': 'shadow',
-              'ruby_karaoke_colors': {'before': {'shadow': {'mode': 'gradient_horizontal'}}}}
-    style = replace(style, lower_ruby_style={**style.lower_ruby_style, **change})
+def lower_gradient_shadow_style(style):
+    style = lower_shadow_style(style, 'after')
+    lower = style.lower_ruby_style
+    colors = lower['ruby_karaoke_colors']
+    return replace(style, lower_ruby_style={
+        **lower, 'ruby_decoration_kind_before': 'shadow', 'ruby_horizontal_gradient_with_main': False,
+        'ruby_shadow_before_offset_x': lower['ruby_shadow_offset_x'],
+        'ruby_shadow_before_offset_y': lower['ruby_shadow_offset_y'],
+        'ruby_karaoke_colors': {
+            'before': {**colors['before'], 'shadow': {'mode': 'gradient_horizontal',
+                                                      'start_color': '#9EFA4040', 'end_color': '#E02030E0'}},
+            'after': {**colors['after'], 'shadow': {'mode': 'gradient_vertical',
+                                                    'start_color': '#FF40C090', 'end_color': '#A0202050'}},
+        },
+    })
+
+
+def test_lower_gradient_shadow_rejects_forged_paint_without_replacing_scene(binary, independent):
+    track, style, resolve = independent
+    ir = ir_for(binary, (track, lower_gradient_shadow_style(style), resolve))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_lower_ruby_shadow_gradient')
+    invalid = copy.deepcopy(ir)
+    group = next(group for group in invalid['skia_layout']['lines'][0]['ruby_groups'] if group.get('lower'))
+    group['lower_shadow_gradient']['before']['stops'][0][0] = -1
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        process.configure(independent[0], independent[1], width=900, height=600, fps=60)
-        before, _ = collect(process, [400])
-        with pytest.raises(NativeRendererError, match='实色|描边|装饰'):
-            process.configure(track, style, width=900, height=600, fps=60)
-        after, _ = collect(process, [400], generation=2)
-    assert np.array_equal(before[0], after[0])
+        configure(process, ir)
+        before, _ = collect(process, [400, 950])
+        for rejected in (bad, invalid):
+            with pytest.raises(NativeRendererError, match='下方注音渐变'):
+                configure(process, rejected)
+        after, _ = collect(process, [950, 400], generation=2)
+    assert np.array_equal(before, after[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_lower_gradient_shadow_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    style = lower_gradient_shadow_style(replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none'))
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), (1550, 2600, 4110, 4280))
 
 
 def lower_gradient_style(style, shared):

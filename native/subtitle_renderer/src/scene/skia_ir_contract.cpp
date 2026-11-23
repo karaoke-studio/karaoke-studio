@@ -77,12 +77,14 @@ const QJsonArray& skiaIrProfiles() {
         "p05_vertical_shifted_ruby",
         "p05_vertical_rotated_ruby",
         "p05_vector_guides",
+        "p05_rtl_vector_guides",
         "p05_role_vector_guides",
         "p05_vector_guide_composition",
         "p08_bitmap_guides",
         "p08_inline_bitmap_guides",
         "p08_inline_bitmap_decoration",
         "p08_reverse_bitmap_guides",
+        "p08_rtl_bitmap_guides",
         "p08_animated_title_guides",
         "p08_animated_bitmap_guides",
         "p08_static_line_band",
@@ -148,6 +150,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_role_glow",
         "p06_lower_ruby_glow",
         "p06_lower_ruby_shadow",
+        "p06_lower_ruby_shadow_gradient",
         "p07_line_fade",
         "p07_role_line_fade",
         "p07_line_motion",
@@ -618,6 +621,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p05_vector_guides")
         && layout.value("vector_guide_schema").toDouble(-1) != 1)
         throw BackendError("Skia 导唱符布局版本无效");
+    const bool rtlVectorGuides = features.contains("p05_rtl_vector_guides");
+    if (rtlVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_horizontal_rtl")))
+        throw BackendError("Skia 右至左导唱符缺少方向或布局能力声明");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
     if (roleVectorGuides && (!features.contains("p05_vector_guide_composition")
         || !features.contains("p07_role_singing_scale") || !features.contains("p07_role_line_fade")))
@@ -651,6 +657,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_role_vector_guides", "p06_role_solid_outlines", "p06_role_static_glow", "p06_ruby_role_glow",
             "p06_static_shadow", "p06_ruby_shadow",
             "p07_role_singing_scale", "p07_role_singing_glow", "p07_role_line_fade"};
+        static const QJsonArray rtlGuides{
+            "p05_rtl_vector_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
+            "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks",
+            "p05_reverse_wipe", "p05_reverse_overlap"};
         const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
         const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
         const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
@@ -662,7 +672,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
                 && !(useLineMotion && lineMotion.contains(feature))
                 && !(useFadedScanline && fadedScanline.contains(feature))
                 && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature))
-                && !(roleVectorGuides && roleGuides.contains(feature)))
+                && !(roleVectorGuides && roleGuides.contains(feature)) && !(rtlVectorGuides && rtlGuides.contains(feature)))
                 throw BackendError("Skia 导唱符组合包含未验证能力");
     }
     if (features.contains("p07_faded_scanline_prefix_guides")
@@ -671,6 +681,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 前置导唱符扫字线缺少淡化或导唱符布局能力声明");
     const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides");
     const bool reverseBitmapGuides = features.contains("p08_reverse_bitmap_guides");
+    const bool rtlBitmapGuides = features.contains("p08_rtl_bitmap_guides");
     if (reverseBitmapGuides && (!inlineBitmapGuides || !features.contains("p05_reverse_overlap")))
         throw BackendError("Skia 反向头像缺少图片或走字布局能力声明");
     if (inlineBitmapGuides && !features.contains("p08_bitmap_guides"))
@@ -679,6 +690,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 行内图片装饰缺少行内头像布局能力");
     if (features.contains("p08_animated_bitmap_guides") && !features.contains("p08_bitmap_guides"))
         throw BackendError("Skia 动态图片导唱符缺少图片导唱符布局能力");
+    if (rtlBitmapGuides && (!features.contains("p08_bitmap_guides") || !features.contains("p05_horizontal_rtl")))
+        throw BackendError("Skia 右至左图片导唱符缺少方向或布局能力声明");
     if (features.contains("p08_bitmap_guides")) {
         // Verified line-prefix image guides with Utopia, upper ruby, solid outlines and glow only.
         static const QJsonArray allowed{
@@ -703,11 +716,16 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray reverseAllowed{
             "p08_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_static_shadow"
         };
+        static const QJsonArray rtlAllowed{
+            "p08_rtl_bitmap_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
+            "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
+        };
         if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
             throw BackendError("Skia 图片导唱符布局版本无效");
         for (const auto& feature : features)
             if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature))
-                && !(reverseBitmapGuides && reverseAllowed.contains(feature)))
+                && !(reverseBitmapGuides && reverseAllowed.contains(feature))
+                && !(rtlBitmapGuides && rtlAllowed.contains(feature)))
                 throw BackendError("Skia 图片导唱符组合包含未验证能力");
     }
     if (features.contains("p07_line_fade")
@@ -1038,6 +1056,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_lower_ruby_shadow")
         && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_shadow_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音阴影缺少版本化布局或注音能力声明");
+    if (features.contains("p06_lower_ruby_shadow_gradient")
+        && (!features.contains("p06_lower_ruby_shadow")
+            || layout.value("lower_ruby_shadow_gradient_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音渐变阴影缺少版本化布局或阴影能力声明");
     if (features.contains("p07_lower_ruby_decoration_line_animation")
         && (!features.contains("p07_utopia_line_animation") || !features.contains("p07_ruby_line_animation")
             || !(features.contains("p06_lower_ruby_glow") || features.contains("p06_lower_ruby_shadow"))))

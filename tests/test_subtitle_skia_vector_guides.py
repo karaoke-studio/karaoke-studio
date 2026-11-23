@@ -105,7 +105,7 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'rtl', 'ruby', 'lower', 'role', 'stroke', 'shadow'])
+@pytest.mark.parametrize('change', ['bitmap', 'vertical', 'ruby', 'lower', 'role', 'stroke', 'shadow'])
 def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     # Ruby and outlines are verified only with a line-level prefix guide.
     track, style = guide_source(project, 'inline' if change in {'ruby', 'stroke'} else 'prefix')
@@ -114,7 +114,6 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
         track = replace(track, lines=[replace(line, guide_symbol=replace(SQUARE, kind='bitmap', path_commands=(),
                                                                          bitmap_before_path='missing.png'))])
     elif change == 'vertical': style = replace(style, vertical=True)
-    elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'ruby':
         track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=600, pos_end_ms=900, target_line_index=0,
                                                       target_char_start=1, target_char_end=2)])
@@ -126,6 +125,39 @@ def test_unvalidated_guide_combinations_stay_gated(binary, project, change):
     else: style = replace(style, stroke_width_px=4)
     with pytest.raises(ValueError):
         ir_for(binary, (track, style))
+
+
+def test_rtl_vector_guide_preserves_signal_and_scene(binary, project):
+    track, style = guide_source(project, 'inline')
+    style = replace(style, right_to_left=True)
+    ir = ir_for(binary, (track, style))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p05_rtl_vector_guides')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [250, 750, 1100])
+        with pytest.raises(NativeRendererError, match='导唱符'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 750, 250], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kind', ['prefix', 'inline'])
+def test_rtl_vector_guide_matches_d2d_gpu(binary, project, kind):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = guide_source(project, kind)
+    style = replace(style, right_to_left=True)
+    times = (250, 550, 750, 1100, 1550)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, ('rtl_vector_guide', kind), check_p00_edges=True)
 
 
 def p00_guide(tmp_path, count=1):

@@ -93,11 +93,12 @@ def validate_vector_guides(track, style):
         appearance = style_for_line(style, line)
         if any(guide_symbol_is_bitmap(c.vector_glyph) or not c.vector_glyph.path_commands for c in cells):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
-        if appearance.vertical or appearance.right_to_left or appearance.lower_ruby_enabled:
+        if appearance.vertical or appearance.lower_ruby_enabled:
             raise ValueError('Skia 导唱符仅支持已验证的横排实色正文子集')
         labels = {c.role_label for c in cells if c.role_label is not None}
         if labels:
-            if line.wipe_reverse or not vector_guides_form_prefix(chars) or not labels <= appearance.custom_style_schemes.keys():
+            if (line.wipe_reverse or appearance.right_to_left or not vector_guides_form_prefix(chars)
+                    or not labels <= appearance.custom_style_schemes.keys()):
                 raise ValueError('Skia 角色导唱符需要正向前置替换符和匹配的角色样式')
             role_guides = True
     return role_guides
@@ -114,6 +115,11 @@ VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
     'p06_outline_ruby', 'p06_primary_solid_outline', 'p06_ruby_glow', 'p06_ruby_solid_outline',
     'p06_secondary_solid_outline', 'p06_static_glow', 'p07_ruby_singing_scale', 'p07_singing_glow',
     'p07_singing_scale'})
+RTL_VECTOR_GUIDE_FEATURES = frozenset({
+    'p05_rtl_vector_guides', 'p05_horizontal_rtl', 'p05_horizontal_rtl_cells',
+    'p05_horizontal_rtl_kana_cells', 'p05_horizontal_rtl_kana_marks',
+    'p05_reverse_wipe', 'p05_reverse_overlap',
+})
 VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
@@ -158,6 +164,8 @@ def compose_vector_guides(track, features):
         if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
             raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
     allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
+    if 'p05_rtl_vector_guides' in features:
+        allowed |= RTL_VECTOR_GUIDE_FEATURES
     if animated_gradient or faded_scanline:
         allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES
     if animated_gradient or faded_scanline or line_motion:

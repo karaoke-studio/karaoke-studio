@@ -92,7 +92,7 @@ std::array<sk_sp<SkShader>, 2> rubyGradients(const std::array<const PaintStyle*,
 bool validPhases(const QJsonObject& layer) {
     return !layer.isEmpty() && layer.size() == int(layer.contains("before")) + int(layer.contains("after"));
 }
-PaintStyle lowerFillGradient(const QJsonObject& legacy, const QJsonObject& authored, const char* phase) {
+PaintStyle lowerGradient(const QJsonObject& authored, const char* phase, const QJsonObject& legacy = {}) {
     PaintStyle fill;
     QJsonArray stops;
     if (authored.contains(phase)) {
@@ -353,8 +353,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变缺少对应布局或画笔能力");
         if (!object.contains("static_fill_gradient") && object.contains("fill_gradient_with_main"))
             throw BackendError("Skia 下方注音渐变范围缺少画笔");
-        auto lowerBefore = lowerFillGradient(lowerGradients, staticLowerGradients, "before");
-        auto lowerAfter = lowerFillGradient(lowerGradients, staticLowerGradients, "after");
+        auto lowerBefore = lowerGradient(staticLowerGradients, "before", lowerGradients);
+        auto lowerAfter = lowerGradient(staticLowerGradients, "after", lowerGradients);
         const auto& beforeFill = lower ? lowerBefore : paint.rubyBeforeFillPaint;
         const auto& afterFill = lower ? lowerAfter : paint.rubyAfterFillPaint;
         const bool gradientFill = rubyFillGradientMode(beforeFill) || rubyFillGradientMode(afterFill);
@@ -434,8 +434,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 同行下方注音当前仅支持相同的光晕样式");
             lowerGlowSpec = glow;
         }
+        const auto lowerShadow = object.value("lower_shadow").toObject();
         if (object.contains("lower_shadow")) {
-            const auto lowerShadow = object.value("lower_shadow").toObject();
             if (!lower || !allowLowerDecoration || !features.contains("p06_lower_ruby_shadow") || !validPhases(lowerShadow)
                 || (lowerGlow.contains("before") && lowerShadow.contains("before"))
                 || (lowerGlow.contains("after") && lowerShadow.contains("after")))
@@ -443,6 +443,26 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             shadow = {lowerShadowState(lowerShadow, "before", glyphs.dpr),
                       lowerShadowState(lowerShadow, "after", glyphs.dpr), innerWidth, secondaryWidth};
         }
+        const auto lowerShadowGradients = object.value("lower_shadow_gradient").toObject();
+        const auto shadowWithMain = object.value("shadow_gradient_with_main");
+        if (object.contains("lower_shadow_gradient")
+            && (!lower || !roleBounds || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled
+                || !features.contains("p06_lower_ruby_shadow_gradient") || !validPhases(lowerShadowGradients)
+                || !shadowWithMain.isBool()
+                || (lowerShadowGradients.contains("before") && !lowerShadow.contains("before"))
+                || (lowerShadowGradients.contains("after") && !lowerShadow.contains("after"))))
+            throw BackendError("Skia 下方注音渐变阴影缺少对应布局或画笔能力");
+        if (!object.contains("lower_shadow_gradient") && object.contains("shadow_gradient_with_main"))
+            throw BackendError("Skia 下方注音渐变阴影范围缺少画笔");
+        const auto beforeShadow = lowerGradient(lowerShadowGradients, "before");
+        const auto afterShadow = lowerGradient(lowerShadowGradients, "after");
+        const auto applyShadowAlpha = [](auto& phase, const PaintStyle& paint) {
+            if (paint.stops.empty()) return;
+            phase.color = std::ranges::any_of(paint.stops, [](const auto& stop) { return stop.color.alpha > 0; })
+                ? 0xff000000 : 0;
+        };
+        applyShadowAlpha(shadow.before, beforeShadow);
+        applyShadowAlpha(shadow.after, afterShadow);
         const double wipePad = (primary.width / 2) / glyphs.dpr;
         std::vector<::subtitle::skia::ResolvedCell> cells;
         double inkTop = std::numeric_limits<double>::infinity();
@@ -574,10 +594,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
         SkRect ink = SkRect::MakeEmpty();
-        if (gradientFill || gradientOutlines || (hasGlow && glowPaints != GlowPaintSupport::Solid))
+        if (gradientFill || gradientOutlines || !lowerShadowGradients.isEmpty()
+            || (hasGlow && glowPaints != GlowPaintSupport::Solid))
             for (const auto& cell : cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
         const auto outlinePad = ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr));
+        auto shadowGradients = lowerShadowGradients.isEmpty() ? std::array<sk_sp<SkShader>, 2>{}
+            : rubyGradients({&beforeShadow, &afterShadow}, shadowWithMain.toBool(), source, ink, outlinePad,
+                            glyphs.dpr, &roleBounds->line);
         const bool shareHorizontalFill = lower ? shareLowerGradient.toBool() : paint.rubyHorizontalGradientWithMain;
         const auto* sharedFillBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
             : (allowRoleFill || independentFill) ? &roleBounds->forRole(role) : nullptr;
@@ -623,7 +647,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         groups.push_back({std::move(cells), shadow, hasGlow ? std::optional(glow) : std::nullopt,
                           fadeOwner, spinPivot, affineComposition, lower, std::move(gradients), std::move(images),
                           roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner,
-                          std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients), dripComposition});
+                          std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients),
+                          dripComposition, std::move(shadowGradients)});
     }
     return groups;
 }

@@ -7,6 +7,14 @@ from .effects.fills import gradient_stops
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
+_GRADIENT_MODES = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+
+
+def _gradient_payload(fill):
+    return {'mode': fill.mode,
+            'stops': [[position, list(rgba(color))] for position, color in gradient_stops(fill)]}
+
+
 def lower_sources(prepared):
     sources, indices = [], {}
     for line_index, local in enumerate(prepared.geometry.ruby.lines):
@@ -32,19 +40,19 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         fill = palette.text
         if fill.mode == 'solid':
             continue
-        if fill.mode not in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}:
+        if fill.mode not in _GRADIENT_MODES:
             raise ValueError('Skia 下方注音文字当前仅支持实色或渐变')
-        stops = [[position, list(rgba(color))] for position, color in gradient_stops(fill)]
+        gradient = _gradient_payload(fill)
         if legacy_vertical_gradient and fill.mode == 'gradient_vertical':
-            gradients[phase] = stops
+            gradients[phase] = gradient['stops']
         else:
-            static_gradients[phase] = {'mode': fill.mode, 'stops': stops}
+            static_gradients[phase] = gradient
     if gradients:
         result['fill_gradient'] = gradients
     if static_gradients:
         result['static_fill_gradient'] = static_gradients
         result['fill_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
-    glow, shadow = {}, {}
+    glow, shadow, shadow_gradients = {}, {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':
             continue
@@ -54,7 +62,9 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
             continue
         layer = getattr(colors, phase).shadow
         if layer.mode != 'solid':
-            raise ValueError('Skia 下方注音装饰当前仅支持实色')
+            if kind != 'shadow' or layer.mode not in _GRADIENT_MODES:
+                raise ValueError('Skia 下方注音装饰当前不支持此画笔')
+            shadow_gradients[phase] = _gradient_payload(layer)
         color = list(rgba(layer.color))
         if kind == 'glow':
             glow[phase] = {'radius': radius, 'color': color,
@@ -68,4 +78,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         result['lower_glow'] = glow
     if shadow:
         result['lower_shadow'] = shadow
+    if shadow_gradients:
+        result['lower_shadow_gradient'] = shadow_gradients
+        result['shadow_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     return result

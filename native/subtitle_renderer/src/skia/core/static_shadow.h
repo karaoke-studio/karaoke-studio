@@ -5,6 +5,8 @@
 #include "solid_outline.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkShader.h"
+#include <array>
 #include <cstdint>
 #include <span>
 
@@ -41,8 +43,9 @@ struct StaticShadow {
     template <class Cell>
     void drawAt(SkCanvas& canvas, const std::vector<Cell>& cells, const SkRect& ink,
                 float edge, bool complete, float beforePad, bool vertical = false, bool reverse = false,
-                float opacity = 1.f) const {
-        const auto paint = [&](const ShadowState& state, const SkRect* clip) {
+                float opacity = 1.f, const std::array<sk_sp<SkShader>, 2>& shaders = {}) const {
+        const auto paint = [&](bool sung, const SkRect* clip) {
+            const auto& state = sung ? after : before;
             if (!state.visible()) return;
             SkAutoCanvasRestore restore(&canvas, true);
             // The front clips the silhouette in the line's coordinates
@@ -51,7 +54,9 @@ struct StaticShadow {
             canvas.translate(state.x, state.y);
             SkPaint brush;
             brush.setAntiAlias(true);
-            brush.setColor(state.color);
+            const auto& shader = shaders[sung];
+            brush.setShader(shader);
+            brush.setColor(shader ? SK_ColorWHITE : state.color);
             if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
             for (const auto& cell : cells) {
                 if (cell.outerOutline) canvas.drawPath(cell.outerOutline->path, brush);
@@ -68,15 +73,15 @@ struct StaticShadow {
         if (before.enabled && !after.enabled) {
             if (!complete) {
                 const auto clip = reverse ? band(start - beforePad, edge) : band(edge, end + beforePad);
-                paint(before, &clip);
+                paint(false, &clip);
             }
         } else {
-            paint(before, nullptr);
+            paint(false, nullptr);
         }
         if (reverse ? edge < end : edge > start) {
             const float afterPad = std::max(stroke, 2.f) + 4.f;
             const auto clip = reverse ? band(edge, end + afterPad) : band(start - afterPad, edge);
-            paint(after, complete ? nullptr : &clip);
+            paint(true, complete ? nullptr : &clip);
         }
     }
 

@@ -688,7 +688,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
         if (roleBodyPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole
             || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient")
-            || features.contains("p06_independent_ruby_fill"))
+            || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale);
         if (gradientScanlineRole && !rolePaintBounds->line.isEmpty()) {

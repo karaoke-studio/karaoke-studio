@@ -203,6 +203,47 @@ def test_animated_lyric_guides_match_actual_d2d_gpu(binary, application, tmp_pat
     assert_ruby_transition_gpu_parity(binary, case, animated_guide_times(ir))
 
 
+def rtl_bitmap_guide(project, tmp_path):
+    from test_subtitle_skia_rtl_flow import rtl_source
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+
+    track, style = rtl_source(project)
+    line, = track.lines
+    guide = GuideSymbol(kind='bitmap', bitmap_no_decor=True, count=1, bitmap_fix_size=True,
+                        bitmap_before_path=image(tmp_path / 'before.png', 32, 24, '#F06C23'),
+                        bitmap_after_path=image(tmp_path / 'after.png', 32, 24, '#51C9F5'))
+    return replace(track, lines=[replace(line, guide_symbol=guide, inline_guide_symbols={2: guide})]), style
+
+
+def test_rtl_bitmap_guide_keeps_scene_after_missing_capability(binary, project, tmp_path):
+    ir = ir_for(binary, rtl_bitmap_guide(project, tmp_path))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p08_rtl_bitmap_guides')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [250, 750, 1100])
+        with pytest.raises(NativeRendererError, match='图片导唱符'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 750, 250], generation=2)
+    assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
+
+
+@GPU
+def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = rtl_bitmap_guide(project, tmp_path)
+    times = (250, 550, 750, 1100, 1550)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_guide', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_bitmap_guide_out_of_order_seek_is_deterministic(binary, project, tmp_path, target):
     case, track = p00_guide(tmp_path, family=project[1].font_family)

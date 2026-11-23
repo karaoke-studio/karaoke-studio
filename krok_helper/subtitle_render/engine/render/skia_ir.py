@@ -721,6 +721,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p06_lower_ruby_static_gradient')
         if 'lower_ruby_shadow_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow')
+        if 'lower_ruby_shadow_gradient_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_shadow_gradient')
         spin_sources = [ir['track']['lines'][plan.lines[index].track_index] for index in spin_lines]
         for phase in ('entry', 'exit'):
             if any(source.get(f'{phase}_anim') == 'spin_flip' and source[f'{phase}_duration_ms'] > 0
@@ -772,6 +774,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p07_ruby_petal_entry_flame_singing')
     if style.right_to_left:
         ir['required_features'].append('p05_horizontal_rtl')
+        if 'p05_vector_guides' in ir['required_features']:
+            ir['required_features'].append('p05_rtl_vector_guides')
         ir['skia_layout']['horizontal_rtl_schema'] = 1
         for final in ir['skia_layout']['lines']:
             final['text_flow'] = 'rtl'

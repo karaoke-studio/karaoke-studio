@@ -59,6 +59,7 @@ struct ResolvedRubyGroup {
     std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
     ScanlineGradients scanlineGradients;
     bool drip = false;
+    std::array<sk_sp<SkShader>, 2> shadowGradients;
 };
 enum class ParticleEntryGlow { None, Standard, SampledSymbols };
 

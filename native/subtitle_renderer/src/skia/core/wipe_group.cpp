@@ -93,7 +93,7 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
       drip_(group.drip),
       fillGradients_(group.fillGradients), fillImages_(group.fillImages),
       outlineGradients_(group.outlineGradients), outerOutlineGradients_(group.outerOutlineGradients),
-      scanlineGradients_(group.scanlineGradients) {
+      scanlineGradients_(group.scanlineGradients), shadowGradients_(group.shadowGradients) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -222,7 +222,7 @@ void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingSc
     const bool complete = lineWipeComplete(cells_, timeMs);
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
     if (!scale.active) {
-        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_, rightToLeft_);
+        shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_, rightToLeft_, 1.f, shadowGradients_);
         return;
     }
     shadow_.drawAnimated(canvas, cells_, bounds_, edge, complete, pad, [&](std::size_t index) {
