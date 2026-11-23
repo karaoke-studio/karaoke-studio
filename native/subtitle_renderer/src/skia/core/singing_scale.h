@@ -13,7 +13,7 @@ struct SingingScale {
         return active ? matrix(pivot, zoomPulse ? float(peakPercent) / 100.f : 1.15f) : SkMatrix::I();
     }
 
-    CharacterTransformState at(int time, int start, int end, const CharacterPivot& pivot) const {
+    CharacterTransformState at(std::int64_t time, std::int64_t start, std::int64_t end, const CharacterPivot& pivot) const {
         if (!active || end <= start || time <= start) return {};
         float scale = 1.f;
         if (zoomPulse && time < end + 300) {
@@ -25,7 +25,7 @@ struct SingingScale {
         } else if (!zoomPulse && time < end) {
             const int ramp = std::min(int(float(end - start) * .25f), 100);
             if (ramp == 0) return {};
-            const int peak = start + ramp;
+            const auto peak = start + ramp;
             const float progress = time <= peak ? float(time - start) / ramp : float(end - time) / (end - peak);
             scale = 1.f + .15f * progress;
         }

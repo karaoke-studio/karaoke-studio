@@ -38,8 +38,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const auto animation = textVisible ? line.animation.at(tMs, line.startMs, line.endMs)
                                        : LineAnimation::State{1.f, 0.f, 0.f};
     const auto placement = line.translationAt(tMs);
-    const SignalTransition signalTransition{line.characterFade, line.characterGeometry, line.inkCenter,
-                                            line.startMs, line.endMs};
+    const SignalTransition signalTransition{line.characterFade, line.characterGeometry, line.singingScale,
+                                            line.characterMotionCenter, line.startMs, line.endMs};
     const bool decoratedLamp = line.shapeSignal && line.shapeSignal->decoration;
     const auto drawDecoratedLamp = [&] {
         const auto entry = line.animation.entryAt(tMs, line.startMs);
@@ -232,7 +232,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             }
             if (geometry && line.characterFade.side(tMs, line.startMs, line.endMs) == 0)
                 return line.characterGeometry.at(tMs, line.startMs, line.endMs,
-                                                 int(index), int(line.cells.size()), cell.pivot, line.inkCenter);
+                                                 int(index), int(line.cells.size()), cell.pivot,
+                                                 line.characterMotionCenter);
             return characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
                                         int(index), int(line.cells.size()), cell.pivot);
         }();

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "character_geometry.h"
+#include "singing_scale.h"
 
 namespace subtitle::skia {
 struct SignalTransition {
     const CharacterFade& fade;
     const CharacterGeometry& geometry;
+    const SingingScale& singingScale;
     std::optional<float> lineCenter;
     int startMs, endMs;
 
@@ -19,6 +21,14 @@ struct SignalTransition {
                                entryOnly ? std::nullopt : lineCenter, entryOnly);
         // Lamps and bars shear about their own centers.
         return characterTransformAt(group, time, startMs, endMs, index, count, pivot);
+    }
+
+    void applyZoomPulse(CharacterTransformState& pose, std::int64_t elapsed, std::int64_t start, std::int64_t end,
+                        float x, float y) const {
+        const auto pulse = singingScale.at(elapsed, start, end, {x, x, y});
+        if (!pulse.transformed) return;
+        pose.matrix.preConcat(pulse.matrix);
+        pose.transformed = true;
     }
 };
 }

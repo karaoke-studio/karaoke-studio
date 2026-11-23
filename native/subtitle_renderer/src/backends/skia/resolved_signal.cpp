@@ -18,6 +18,7 @@ bool supportsSignalAnimation(const TextLine& line) {
         return animation == "none" || animation == "fade" || animation == "rise" || animation == "noise"
             || animation == (entry ? "slide_in" : "slide_out")
             || (entry && (animation == "tracking_in" || animation == "wave_in"))
+            || (!entry && (animation == "scatter_out" || animation == "converge_out"))
             || animation == "char_fade" || animation == "char_drip" || animation == "spin_flip";
     };
     return supported(line.entryAnimation, true) && supported(line.exitAnimation, false);
@@ -66,8 +67,6 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     };
     signal.path = ::subtitle::skia::signalPath(style.litStyle, signal.size);
     if (style.litAppearanceMode == "custom") return signal;
-    if (line.zoomPulseEnabled)
-        throw BackendError("Skia 装饰指示灯暂不支持逐灯整字放大");
     const auto& palette = decorStyle ? *decorStyle : style;
     const auto solid = [](const auto& paint) { return paint.mode == "solid"; };
     if (!solid(palette.afterFillPaint) || !solid(palette.afterStrokePaint)
@@ -133,8 +132,6 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     const auto& palette = decorStyle ? *decorStyle : style;
     StaticGlow glow;
     if (signal.decorated) {
-        if (line.zoomPulseEnabled)
-            throw BackendError("Skia 装饰音量柱暂不支持逐柱整字放大");
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
         signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maximum);
@@ -163,7 +160,10 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         }
         glow.outlineWidth = signal.strokeWidth + signal.outerWidth;
     }
-    const float x = float(xy[0].toDouble() * dpr) + style.volumeOffsetX - geometry.groupWidth + geometry.strokeExtent;
+    signal.textOriginX = float(xy[0].toDouble() * dpr);
+    signal.groupRight = signal.textOriginX + style.volumeOffsetX;
+    signal.groupLeft = signal.groupRight - geometry.groupWidth;
+    const float x = signal.groupLeft + geometry.strokeExtent;
     const float y = float(xy[1].toDouble() * dpr) + style.volumeOffsetY - geometry.size * .5f + geometry.alignBaseShift;
     for (int index = 0; index < geometry.count; ++index) {
         const float height = std::max(geometry.frontHeight + index * geometry.heightDelta, 1.f);

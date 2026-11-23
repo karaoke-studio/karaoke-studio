@@ -293,9 +293,17 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     line.inkStart = line.scanline.rightToLeft ? ink.right() : ink.left();
             }
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
-            if (!ink.isEmpty()) line.inkCenter = ink.centerX();
+            if (!ink.isEmpty()) line.characterMotionCenter = ink.centerX();
             if (line.shadow.visible() || !line.cellShadows.empty()) line.decorationInk = ink;
             line.bodyInk = ink;
+        }
+        if (line.volumeSignal && line.characterGeometry.exit == "converge_out") {
+            const auto& signal = *line.volumeSignal;
+            // The convergence target includes the complete column group and the lyric layout.
+            const float left = std::min(signal.groupLeft, signal.textOriginX);
+            float right = std::max(signal.groupRight, signal.textOriginX + 1.f);
+            for (const auto& cell : line.cells) right = std::max(right, cell.pivot.layoutRight);
+            line.characterMotionCenter = (left + right) * .5f;
         }
         if (line.scanline.shape)
             for (const auto& group : source.rubyGroups)

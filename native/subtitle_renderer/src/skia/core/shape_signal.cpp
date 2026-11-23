@@ -53,9 +53,16 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         const float x = origin.x() + index * pitch + (active ? state.dx : 0.f);
         const float y = origin.y() + (active ? state.dy : 0.f);
         const auto box = SkRect::MakeXYWH(x, y, size, size);
-        const auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY(), true);
+        auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY(), true);
         const float alpha = pose.opacity * (active ? state.activeOpacity : 1.f);
         if (alpha <= 0) continue;
+        if (decoration && transition.singingScale.zoomPulse) {
+            const auto duration = std::int64_t(clock.activeDurationMs);
+            const auto elapsed = std::max(time - (clock.endMs - duration), std::int64_t{0});
+            const auto start = duration * (clock.count - index - 1) / clock.count;
+            const auto end = duration * (clock.count - index) / clock.count;
+            transition.applyZoomPulse(pose, elapsed, start, end, box.centerX(), box.centerY());
+        }
         SkAutoCanvasRestore restore(&canvas, pose.transformed);
         if (pose.transformed) canvas.concat(pose.matrix);
         if (alpha < 1) {

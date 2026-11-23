@@ -188,15 +188,17 @@ VolumeSignalState volumeSignalState(const VolumeSignalClock &clock, int tMs) {
     const float flashRatio = clock.flashRatio;
     state.visible = true;
     state.opacity = 1.0f;
-    int fillElapsed = elapsed;
+    state.fillElapsedMs = elapsed;
+    state.fillDurationMs = static_cast<float>(activeDuration);
     int fillDuration = activeDuration;
     if (times > 0 && flashRatio > 0.0f) {
-        const float fillDurationFloat = static_cast<float>(activeDuration)
+        state.fillDurationMs = static_cast<float>(activeDuration)
             / (static_cast<float>(times) * flashRatio + 1.0f);
         const float flashDuration = std::max(
-            static_cast<float>(activeDuration) - fillDurationFloat, 0.0f
+            static_cast<float>(activeDuration) - state.fillDurationMs, 0.0f
         );
         if (static_cast<float>(elapsed) < flashDuration) {
+            state.fillElapsedMs = 0;
             state.activeIndex = -1;
             state.opacity = volumeFlashAlpha(
                 elapsed,
@@ -205,10 +207,10 @@ VolumeSignalState volumeSignalState(const VolumeSignalClock &clock, int tMs) {
             );
             return state;
         }
-        fillElapsed = std::max(static_cast<int>(elapsed - flashDuration), 0);
-        fillDuration = std::max(static_cast<int>(fillDurationFloat), 1);
+        state.fillElapsedMs = std::max(static_cast<int>(elapsed - flashDuration), 0);
+        fillDuration = std::max(static_cast<int>(state.fillDurationMs), 1);
     }
-    const float raw = static_cast<float>(std::int64_t(count) * fillElapsed)
+    const float raw = static_cast<float>(std::int64_t(count) * state.fillElapsedMs)
         / static_cast<float>(std::max(fillDuration, 1));
     state.activeIndex = std::clamp(static_cast<int>(raw), 0, count - 1);
     return state;

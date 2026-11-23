@@ -11,7 +11,13 @@ void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& tran
     if (state.opacity < 1) canvas.saveLayerAlphaf(nullptr, state.opacity);
     const auto poseAt = [&](int index) {
         const auto& box = bars[index].rect.rect();
-        return transition.at(time, index, clock.count, box.centerX(), box.centerY());
+        auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY());
+        if (decorated && transition.singingScale.zoomPulse) {
+            const auto start = std::int64_t(state.fillDurationMs * index / clock.count);
+            const auto end = std::int64_t(state.fillDurationMs * (index + 1) / clock.count);
+            transition.applyZoomPulse(pose, state.fillElapsedMs, start, end, box.centerX(), box.centerY());
+        }
+        return pose;
     };
     for (int index = 0; index < clock.count; ++index) {
         const auto pose = poseAt(index);

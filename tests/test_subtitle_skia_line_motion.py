@@ -1538,6 +1538,90 @@ def test_signal_units_follow_their_own_staggered_entry(binary, project, signal, 
         assert (widths[2] < widths[3]) == (entry == 'spin_flip')
 
 
+@pytest.mark.parametrize('signal,exit_', [('lamp', 'scatter_out'), ('volume', 'converge_out')])
+def test_signal_geometry_departure_matches_device_policy(binary, project, signal, exit_):
+    from test_subtitle_skia_character_transform import transform_source
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = transform_source(project, 'none', exit_)
+    if signal == 'lamp':
+        style = replace(style, lit_enabled=True, lit_style='square', lit_size=20, lit_number=3,
+                        lit_appearance_mode='custom', lit_fill_color='#FF00FF', lit_offset_y=-30,
+                        lit_edge_brightness_pct=0, lit_stroke_width=0, lit_shadow=False,
+                        signals_duration_ms=5000, lit_time_offset_ms=7000, lit_transition_mode='none')
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='custom', volume_column_count=3,
+                        volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF',
+                        volume_stroke_width=0, volume_flash_times=0)
+    times, dpr = (2390, 2500, 2680, 2850), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, (signal, exit_), check_p00_edges=True)
+    for frames in (gpu, raster):
+        signal_coverage = [
+            int(frame[..., 3][np.all(frame[..., :3] == [255, 0, 255], axis=-1)].sum())
+            for frame in frames
+        ]
+        assert signal_coverage[0] > 100
+        if signal == 'lamp':
+            assert len(set(signal_coverage)) == 1
+        else:
+            assert signal_coverage[0] > signal_coverage[1] > signal_coverage[-1]
+
+
+@pytest.mark.parametrize('signal', ['lamp', 'volume'])
+def test_decorated_signal_zoom_pulses_on_its_own_countdown(binary, project, signal):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    line, = track.lines
+    shift = 1000
+    chars = [replace(char, start_ms=char.start_ms + shift) for char in line.chars]
+    track = replace(track, lines=[replace(line, chars=chars, end_ms=line.end_ms + shift,
+                                         display_start_override_ms=0, display_end_override_ms=3400)])
+    palette = SubtitleStyleScheme(font_size_px=50, karaoke_colors=colors('#FF00FF', '#FF00FF'))
+    style = replace(style, karaoke_anim='zoom_pulse', zoom_pulse_peak_pct=165,
+                    entry_anim='none', exit_anim='none', custom_style_schemes={'signal-palette': palette})
+    if signal == 'lamp':
+        style = replace(style, lit_enabled=True, lit_style='square', lit_size=34, lit_number=3,
+                        lit_appearance_mode='role', lit_role_name='signal-palette',
+                        lit_edge_brightness_pct=0, lit_stroke_width=0, lit_shadow=False,
+                        signals_duration_ms=1200, lit_time_offset_ms=0, lit_transition_mode='none')
+        times = (95, 260, 399, 620, 950)
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='role',
+                        volume_role_name='signal-palette', volume_column_count=3, volume_duration_ms=1200,
+                        volume_flash_times=2, volume_flash_duration_ratio=.5, volume_time_offset_ms=0)
+        times = (150, 540, 710, 860, 1110)
+    reference, dpr = None, 3
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, (signal, 'zoom_pulse'), check_p00_edges=True)
+    plain = ir_for(binary, (track, replace(style, karaoke_anim='utopia')), dpr=dpr)
+    still, _ = render_skia(binary, plain, times)
+    active = len(times) // 2
+    assert all(np.count_nonzero(frames[active] != still[active]) > 100 for frames in (gpu, raster))
+    if signal == 'volume':
+        assert np.array_equal(gpu[0], still[0])  # The preceding flash interval must not grow a column.
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source

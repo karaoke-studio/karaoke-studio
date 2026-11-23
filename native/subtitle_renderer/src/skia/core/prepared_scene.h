@@ -97,7 +97,7 @@ private:
         float rubySingingOrigin = 0;
         UtopiaTransition utopiaTransition;
         std::vector<int> followingDone;
-        std::optional<float> inkCenter;
+        std::optional<float> characterMotionCenter;
         std::optional<float> bitmapLineFrontOrigin;
         SkRect verticalBitmapClipInk = SkRect::MakeEmpty();
         bool transformedWipe = false;

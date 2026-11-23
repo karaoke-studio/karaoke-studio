@@ -23,6 +23,8 @@ struct VolumeSignalState {
     bool visible = false;
     int activeIndex = -1;
     float opacity = 0.0f;
+    int fillElapsedMs = 0;
+    float fillDurationMs = 0.0f;
 };
 
 struct VolumeSignalClock {

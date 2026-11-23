@@ -23,6 +23,7 @@ struct VolumeSignal {
     krok::subtitle::native::VolumeSignalClock clock;
     float opacity = 1;
     float strokeWidth = 0, outerWidth = 0;
+    float textOriginX = 0, groupLeft = 0, groupRight = 0;
     bool decorated = false;
     std::array<Palette, 2> palette;
     std::array<sk_sp<SkShader>, 2> fillGradients;
