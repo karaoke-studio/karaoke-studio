@@ -58,7 +58,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && cfg.rubies.empty() && !cfg.vertical && !cfg.rightToLeft
         && (!source.wipeReverse || features.contains("p07_reverse_singing_particles"))
         && source.karaokeAnimation == "utopia" && source.entryAnimation == "none" && source.exitAnimation == "none"
-        && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.scanlineEnabled
+        && (!source.zoomPulseEnabled || (!source.wipeReverse && features.contains("p07_plain_zoom_singing_particles")))
+        && !source.strokeFlashEnabled && !source.scanlineEnabled
         && protocol::decorationKindForState(style, false) == "none"
         && protocol::decorationKindForState(style, true) == "none";
     const bool scaledSinging = fadedBand || plainScale

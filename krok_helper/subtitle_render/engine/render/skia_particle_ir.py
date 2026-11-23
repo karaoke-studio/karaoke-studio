@@ -123,6 +123,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     no_wipe_horizontal_singing = False
     horizontal_line_motion = False
     plain_scaled_singing = False
+    plain_zoom_singing = False
     energy_line_motion = energy_singing_stars = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
@@ -174,7 +175,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ruby_band_singing = ruby_band_singing or singing_under_band
         plain_scale = (source.get('karaoke_anim') == 'utopia' and (entry, exit_) == ('none', 'none')
                        and not (annotated or look.vertical or look.right_to_left
-                                or band or outlined or source.get('zoom_pulse') or source.get('stroke_flash')
+                                or band or outlined or source.get('stroke_flash')
+                                or (item.line.wipe_reverse and source.get('zoom_pulse'))
                                 or any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))))
         scaled_singing = (faded_band or plain_scale
                           or (annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')))
@@ -212,6 +214,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         horizontal_line_motion |= unscaled_motion
         plain_scaled_singing |= plain_scale
+        plain_zoom_singing |= plain_scale and bool(source.get('zoom_pulse'))
         reverse_horizontal_singing |= reverse_singing
         no_wipe_horizontal_singing |= no_wipe_singing
         energy_line_motion |= energy_motion
@@ -295,6 +298,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:
         ir['required_features'].append('p07_plain_scaled_singing_particles')
+    if plain_zoom_singing:
+        ir['required_features'].append('p07_plain_zoom_singing_particles')
     if reverse_horizontal_singing:
         ir['required_features'].append('p07_reverse_singing_particles')
     if no_wipe_horizontal_singing:

@@ -502,7 +502,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !features.contains("p07_composed_stroke_flash")))
             || (!line.bursts.empty() && !verticalScaledParticles
                 && ((!rubyParticles && !fadedScanlineParticles && !features.contains("p07_plain_scaled_singing_particles"))
-                    || utopiaEntry || utopiaExit || line.zoomPulseEnabled))
+                    || utopiaEntry || utopiaExit
+                    || (line.zoomPulseEnabled && !features.contains("p07_plain_zoom_singing_particles"))))
             || (line.scanlineEnabled && ((utopiaEntry && !features.contains("p07_scanline_utopia_entry")) || utopiaExit
                 || (line.zoomPulseEnabled && !features.contains(style.vertical
                     ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
