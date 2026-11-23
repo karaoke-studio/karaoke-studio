@@ -117,7 +117,7 @@ VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
 VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
     'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
-    'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient',
+    'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient', 'p06_ruby_horizontal_outline',
     'p06_static_shadow', 'p06_ruby_shadow', 'p06_gradient_glow', 'p06_animated_singing_gradient_fill'})
 VECTOR_GUIDE_LINE_MOTION_FEATURES = frozenset({
     'p06_multi_lane_outline', 'p06_latin_primary_outline', 'p06_latin_secondary_outline',

@@ -48,11 +48,12 @@ OutlinePaint outlinePaint(const QJsonObject& outlines, const char* key) {
             rgbaPaint(layer.value("before")), rgbaPaint(layer.value("after"))};
 }
 bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const PaintStyle& after,
-                    float width, double dpr, bool allowGradient, bool allowSplit) {
+                    float width, double dpr, bool allowGradient, bool allowHorizontal, bool allowSplit) {
     if (std::abs(outline.width * dpr - width) > 1e-4) return false;
-    const auto supported = [allowGradient, allowSplit](const PaintStyle& paint) {
+    const auto supported = [allowGradient, allowHorizontal, allowSplit](const PaintStyle& paint) {
         return paint.mode == "solid" || (allowGradient
-            && (paint.mode == "gradient_vertical" || (allowSplit && paint.mode == "split_vertical")));
+            && (paint.mode == "gradient_vertical" || (allowHorizontal && paint.mode == "gradient_horizontal")
+                || (allowSplit && paint.mode == "split_vertical")));
     };
     return !outline.width || (supported(before) && supported(after)
         && outline.before == argb(before.color) && outline.after == argb(after.color));
@@ -190,6 +191,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && !vertical && !rtl && !line.wipeReverse && !line.zoomPulseEnabled && !line.strokeFlashEnabled
         && (!line.scanlineEnabled || fixedScanlinePaint || brightenedScanlineGradient) && (scene.charStyles.empty() || avatarOutline)
         && transition == RubyTransition::None;
+    const bool allowHorizontalOutline = roleBounds && features.contains("p06_ruby_horizontal_outline");
     const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
         && features.contains("p07_ruby_line_animation");
     const bool verticalNoWipe = line.karaokeAnimation == "no_wipe"
@@ -385,9 +387,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const float width = latin ? paint.rubyLatinStrokeWidth : paint.rubyStrokeWidth;
             const float width2 = latin ? paint.rubyLatinStroke2Width : paint.rubyStroke2Width;
             if (!matchesOutline(primary, paint.rubyBeforeStrokePaint, paint.rubyAfterStrokePaint,
-                                width, glyphs.dpr, allowOutlineGradient, avatarOutline)
+                                width, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, avatarOutline)
                 || !matchesOutline(secondary, paint.rubyBeforeStroke2Paint, paint.rubyAfterStroke2Paint,
-                                   width2, glyphs.dpr, allowOutlineGradient, avatarOutline))
+                                   width2, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, avatarOutline))
                 throw BackendError("Skia 上注音描边与样式或画笔能力不一致");
         }
         using ::subtitle::skia::paintNeedsBodyProtection;
@@ -558,12 +560,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             allowRoleFill ? &roleBounds->forRole(role) : nullptr)
             : std::array<sk_sp<SkShader>, 2>{};
         std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
+        const auto* outlineBounds = allowHorizontalOutline ? &roleBounds->forRole(role) : nullptr;
+        const bool sharedHorizontalOutline = outlineBounds && paint.rubyHorizontalGradientWithMain;
         if (gradientOutlines && primary.width)
             outlineGradients = rubyGradients({&paint.rubyBeforeStrokePaint, &paint.rubyAfterStrokePaint},
-                                           false, source, ink, outlinePad, glyphs.dpr, nullptr);
+                                           sharedHorizontalOutline, source, ink, outlinePad, glyphs.dpr, outlineBounds);
         if (gradientOutlines && secondary.width)
             outerOutlineGradients = rubyGradients({&paint.rubyBeforeStroke2Paint, &paint.rubyAfterStroke2Paint},
-                                                false, source, ink, outlinePad, glyphs.dpr, nullptr);
+                                                sharedHorizontalOutline, source, ink, outlinePad, glyphs.dpr, outlineBounds);
         ::subtitle::skia::GlowGradients glowGradients;
         if (hasGlow && glowPaints != GlowPaintSupport::Solid) {
             glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeDecorPaint : nullptr,

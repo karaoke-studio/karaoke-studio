@@ -246,13 +246,50 @@ def annotated_paint(style, layers, translucent=False):
                    ruby_stroke_width_px=3, ruby_stroke2_enabled=layers == 2, ruby_stroke2_width_px=4)
 
 
-def test_non_solid_annotation_outlines_remain_explicitly_gated(binary, reading):
-    track, style = upper_source(reading, 1)
-    style = annotated_paint(style, 1)
-    colors_ = style.ruby_karaoke_colors
-    before = replace(colors_.before, stroke=PaintFill(mode='gradient_horizontal', start_color='#FF0000', end_color='#0000FF'))
-    with pytest.raises(ValueError, match='注音描边'):
-        upper_ir(binary, (track, replace(style, ruby_karaoke_colors=replace(colors_, before=before))), 1)
+def horizontal_ruby_outline(reading, shared):
+    track, style = upper_source(reading, 2)
+    style = annotated_paint(style, 2)
+    colors = style.ruby_karaoke_colors
+    before = replace(colors.before, stroke=PaintFill(
+        mode='gradient_horizontal', start_color='#FF0000', end_color='#0000FF'))
+    after = replace(colors.after, stroke2=PaintFill(
+        mode='gradient_horizontal', start_color='#00CCCC', end_color='#DDDD00'))
+    return track, replace(style, ruby_karaoke_colors=replace(colors, before=before, after=after),
+                          ruby_horizontal_gradient_with_main=shared)
+
+
+def test_horizontal_annotation_outlines_share_the_authored_domain(binary, reading):
+    times = [550, 1100, 2300]
+    local = upper_ir(binary, horizontal_ruby_outline(reading, False), 1)
+    shared = upper_ir(binary, horizontal_ruby_outline(reading, True), 1)
+    invalid = copy.deepcopy(shared)
+    invalid['required_features'].remove('p06_ruby_horizontal_outline')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, shared)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='注音描边'):
+            configure(process, invalid)
+        replay, _ = collect(process, times[::-1], generation=2)
+        configure(process, local)
+        local_frames, _ = collect(process, times, generation=3)
+    assert np.array_equal(frames, replay[::-1])
+    assert all(not np.array_equal(a, b) for a, b in zip(frames, local_frames, strict=True))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shared', [False, True], ids=['local', 'body'])
+def test_horizontal_annotation_outline_matches_actual_d2d_gpu(binary, reading, shared):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = horizontal_ruby_outline(reading, shared)
+    times = (550, 1100, 1700, 2300)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(360, 640, 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), 1), times)
+    assert_annotated_parity(times, refs, gpu, ('horizontal_ruby_outline', shared), 2)
+    assert_annotated_parity(times, gpu, raster, ('horizontal_ruby_outline', shared, 'raster'), 2)
 
 
 def test_vertical_gradient_on_both_annotation_outline_layers(binary, reading):

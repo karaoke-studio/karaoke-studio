@@ -39,7 +39,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     run_offset = len(measured.runs)
     lines = []
     has_outlines, has_shadow, has_glow = False, False, False
-    has_gradient_outline = False
+    outline_gradients = set()
     has_lower_glow = False
     has_lower_shadow = False
     has_lower_gradient = False
@@ -70,9 +70,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 continue
             indices = group.target.indices
             style_cell = next((i for i in indices if item.render_line.chars[i].role_label), indices[0])
-            outlines, gradient_outline = ruby_outlines(group.target.style,
-                allow_vertical_gradient=not (rtl or group.target.lower), allow_split=inline_bitmaps)
-            has_gradient_outline |= gradient_outline
+            outlines, gradients = ruby_outlines(group.target.style,
+                allow_gradients=not (rtl or group.target.lower), allow_split=inline_bitmaps)
+            outline_gradients.update(gradients)
             # The existing GPU floors a half-width in reference pixels, then
             # uses that integer directly in the physical annotation clip.
             wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
@@ -141,7 +141,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'lower_ruby_schema': 1} if lower_source_indices is not None else {}),
             **({'lower_ruby_fill_gradient_schema': 1} if has_lower_gradient else {}),
             **({'ruby_solid_outline_schema': 1} if has_outlines else {}),
-            **({'ruby_outline_gradient_schema': 1} if has_gradient_outline else {}),
+            **({'ruby_outline_gradient_schema': 1} if outline_gradients else {}),
+            **({'ruby_horizontal_outline_schema': 1} if 'gradient_horizontal' in outline_gradients else {}),
             **({'ruby_shadow_schema': 1} if has_shadow else {}),
             **({'ruby_glow_schema': 1} if has_glow else {}),
             **({'lower_ruby_glow_schema': 1} if has_lower_glow else {}),

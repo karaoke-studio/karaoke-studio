@@ -11,7 +11,7 @@ from PyQt6.QtGui import QImage
 
 from test_subtitle_skia_line_fade import application, binary, project, ir_for, collect, configure, selection
 from test_subtitle_skia_gradients import TIMES, assert_text_parity, gradient_source, layer_paint
-from krok_helper.subtitle_render.domain.models import LyricsLayout, SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import LyricsLayout
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -208,17 +208,10 @@ def test_invalid_image_fill_keeps_previous_scene(binary, project, images, mutati
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
 
-@pytest.mark.parametrize('change', ['role_outline_image', 'fade', 'scanline'])
+@pytest.mark.parametrize('change', ['fade', 'scanline'])
 def test_unverified_image_fill_combinations_are_rejected(binary, project, images, change):
     track, style = image_source(project, images, 'body')
-    if change == 'role_outline_image':
-        colors = style.karaoke_colors
-        role_colors = replace(colors, before=replace(colors.before, stroke=image_paint(images['opaque'])))
-        scheme = SubtitleStyleScheme(font_size_px=70, stroke_width_px=3, karaoke_colors=role_colors)
-        style = replace(style, custom_style_schemes={'lead': scheme})
-        line = track.lines[0]
-        track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])])
-    elif change == 'fade':
+    if change == 'fade':
         style = replace(style, entry_anim='fade', entry_lead_ms=400)
     else:
         style = replace(style, scanline_enabled=True, scanline_forward_enabled=True, scanline_glow_px=0)

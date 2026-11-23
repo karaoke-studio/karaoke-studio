@@ -120,6 +120,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_outline_ruby",
         "p06_ruby_solid_outline",
         "p06_ruby_outline_gradient",
+        "p06_ruby_horizontal_outline",
         "p06_role_outline_gradient",
         "p06_role_outline_paints",
         "p06_animated_singing_gradient_fill",
@@ -617,7 +618,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         static const QJsonArray animatedGradient{
             "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_body_gradient", "p06_outline_gradient", "p06_ruby_main_paint",
-            "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient",
+            "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient", "p06_ruby_horizontal_outline",
             "p06_static_shadow", "p06_ruby_shadow", "p06_gradient_glow", "p06_animated_singing_gradient_fill"};
         static const QJsonArray lineMotion{
             "p06_multi_lane_outline", "p06_latin_primary_outline", "p06_latin_secondary_outline",
@@ -672,7 +673,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
             "p06_role_solid_outlines", "p06_multi_lane_outline", "p06_role_body_paints",
             "p06_ruby_role_paints", "p06_role_static_glow", "p06_ruby_role_glow",
-            "p06_role_outline_gradient", "p06_role_outline_paints", "p06_ruby_outline_gradient",
+            "p06_role_outline_gradient", "p06_role_outline_paints", "p06_ruby_outline_gradient", "p06_ruby_horizontal_outline",
             "p06_static_shadow", "p06_ruby_shadow",
             "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
             "p07_role_singing_scale", "p07_role_singing_glow", "p07_line_fade", "p07_role_line_fade",
@@ -977,6 +978,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_ruby_solid_outline") || !features.contains("p05_upper_ruby")
             || layout.value("ruby_outline_gradient_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音渐变描边缺少版本化布局或注音能力声明");
+    if (features.contains("p06_ruby_horizontal_outline")
+        && (!features.contains("p06_ruby_outline_gradient")
+            || layout.value("ruby_horizontal_outline_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 注音横向渐变描边缺少版本化布局或注音能力声明");
     if (features.contains("p06_role_outline_gradient")
         && (!inlineBitmapGuides || !features.contains("p06_role_body_paints")
             || !features.contains("p06_primary_solid_outline")))
@@ -1148,6 +1153,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         };
         static const QJsonArray avatarFeatures{
             "p08_bitmap_guides", "p08_inline_bitmap_guides", "p06_role_outline_gradient", "p06_ruby_outline_gradient",
+            "p06_ruby_horizontal_outline",
             "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
         };
         static const QJsonArray roleGuideFeatures{

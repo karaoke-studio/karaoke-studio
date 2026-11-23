@@ -668,7 +668,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             rubyTransition = RubyTransition::Affine;
         if (rubyUtopiaExit) rubyTransition = RubyTransition::UtopiaExit;
         std::optional<RolePaintBounds> rolePaintBounds;
-        if (roleBodyPaints || gradientGlowWithoutTexturedRoles)
+        if (roleBodyPaints || gradientGlowWithoutTexturedRoles || features.contains("p06_ruby_horizontal_outline"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale);
         if (roleBodyPaints) {
