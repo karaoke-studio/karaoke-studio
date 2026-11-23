@@ -957,14 +957,19 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty() && !vectorGuides;
-        const bool directionalPaints = features.contains("p06_directional_body_paints") && !style.vertical
+        const bool staticDirectional = !style.vertical
             && style.rightToLeft != line.wipeReverse && !hasDecoration && !hasBitmapGuide && !vectorGuides
-            && !anyReadings && line.karaokeAnimation == "none" && line.entryAnimation == "none"
+            && !anyReadings && !hasInlineRoles && line.karaokeAnimation == "none" && line.entryAnimation == "none"
             && line.exitAnimation == "none" && !line.zoomPulseEnabled && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
-        if (line.wipeReverse && !style.vertical && (primaryOutline || secondaryOutline)
-            && !(reverseHorizontalDecoration || reverseBitmapLine || mixedReverseBitmaps || directionalPaints))
-            throw BackendError("Skia 横排反向走字的描边缺少对应能力");
+        const bool directionalPaints = staticDirectional && features.contains("p06_directional_body_paints");
+        const bool directionalOutlines = directionalPaints
+            || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));
+        if (!style.vertical && (primaryOutline || secondaryOutline)
+            && ((line.wipeReverse && !(reverseHorizontalDecoration || reverseBitmapLine || mixedReverseBitmaps
+                                      || directionalOutlines))
+                || (style.rightToLeft && !(rtlRuby || directionalOutlines))))
+            throw BackendError("Skia 横排反向或右至左走字的描边缺少对应能力");
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
         const bool rtlBitmapDecoration = style.rightToLeft && hasBitmapGuide
             && features.contains("p08_rtl_bitmap_guide_decoration") && !annotated && !hasInlineRoles

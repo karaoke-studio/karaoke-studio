@@ -27,6 +27,32 @@ def two_outlines(project, *, inner=8, outer=6, body_alpha=False, inner_alpha=Fal
     return track, replace(style, stroke2_enabled=True, stroke2_width_px=outer, karaoke_colors=colors)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('direction', ['reverse', 'rtl'])
+def test_directional_solid_outlines_match_actual_d2d_gpu(binary, project, direction):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcess
+
+    track, style = two_outlines(project, body_alpha=True, inner_alpha=True)
+    track = replace(track, lines=[replace(line, wipe_reverse=direction == 'reverse') for line in track.lines])
+    style = replace(style, right_to_left=direction == 'rtl')
+    times, dpr = (250, 450, 750, 1100, 1400, 1750, 2200), 3
+    refs = []
+    for look in (style, replace(style, stroke_width_px=0, stroke2_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, track=track, force_warp=False,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw])
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
+               for a, b in zip(*refs, strict=True))
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert 'p06_directional_solid_outline' in ir['required_features']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, ('directional_solid_outlines', direction), check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_outer_ring_preserves_inner_alpha(binary, project, target, tmp_path):
     track, style = two_outlines(project, body_alpha=True, inner_alpha=True)

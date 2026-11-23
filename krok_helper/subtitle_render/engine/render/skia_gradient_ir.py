@@ -146,6 +146,7 @@ def write_body_gradient_bounds(ir, plan):
     unscaled_paint_fade = False
     unscaled_paint_scanline = False
     directional_paints = False
+    directional_solid_outline = False
     independent_ruby_fill = False
     upper_ruby = 'p05_upper_ruby' in ir['required_features']
     for final, item in zip(ir['skia_layout']['lines'], plan.lines, strict=True):
@@ -154,6 +155,16 @@ def write_body_gradient_bounds(ir, plan):
         source = ir['track']['lines'][item.track_index]
         animations = {source.get('entry_anim'), source.get('exit_anim')}
         annotated = bool(final.get('ruby_groups'))
+        directional = look.right_to_left or item.line.wipe_reverse
+        static_directional = (not look.vertical and look.right_to_left != item.line.wipe_reverse
+                              and animations == {'none'} and source.get('karaoke_anim') == 'none'
+                              and not (look.lower_ruby_enabled or ir['track'].get('rubies') or upper_ruby or annotated)
+                              and not any(source.get(flag) for flag in (
+                                  'scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash'))
+                              and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
+        directional_solid_outline |= (static_directional and outlined and modes == {'solid'}
+                                      and all(c.role_label is None and c.vector_glyph is None
+                                              for c in item.render_line.chars))
         ruby_modes = set()
         if annotated:
             colors = effective_ruby_karaoke_colors(look)
@@ -190,12 +201,6 @@ def write_body_gradient_bounds(ir, plan):
                   and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse'))
         singing = (source.get('karaoke_anim') == 'utopia' and (annotated or faded_band or palette_band or moving)
                    and not source.get('zoom_pulse'))
-        directional = look.right_to_left or item.line.wipe_reverse
-        static_directional = (directional and not (look.right_to_left and item.line.wipe_reverse)
-                              and animations == {'none'} and source.get('karaoke_anim') == 'none'
-                              and not (source.get('scanline') or source.get('fx_bursts') or source.get('zoom_pulse')
-                                       or upper_ruby or annotated
-                                       or any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))))
         if (not modes <= (_GRADIENTS | {'solid', 'image'})
                 or look.vertical or (directional and not static_directional)
                 or (not (faded_band or palette_band or moving or paint_fade or paint_scanline) and (animations != {'none'}
@@ -247,6 +252,7 @@ def write_body_gradient_bounds(ir, plan):
         (unscaled_paint_fade, 'p06_unscaled_paint_fade'),
         (unscaled_paint_scanline, 'p06_unscaled_paint_scanline'),
         (directional_paints, 'p06_directional_body_paints'),
+        (directional_solid_outline, 'p06_directional_solid_outline'),
         (independent_ruby_fill, 'p06_independent_ruby_fill'),
     ):
         if enabled_feature:
