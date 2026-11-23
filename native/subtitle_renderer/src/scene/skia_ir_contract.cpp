@@ -744,14 +744,6 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 导唱符布局版本无效");
     const bool rtlVectorGuides = features.contains("p05_rtl_vector_guides");
     const bool verticalVectorGuides = features.contains("p05_vertical_vector_guides");
-    static const QJsonArray verticalGuideLayout{
-        "p05_vertical_solid", "p05_vertical_japanese_glyphs", "p05_vertical_text_cells", "p05_vertical_columns",
-        "p05_vertical_column_offsets",
-        "p05_reverse_wipe", "p05_reverse_overlap",
-        "p06_vertical_outline", "p06_vertical_columns_outline", "p06_vertical_reverse_outline",
-        "p05_vertical_ruby", "p05_vertical_ruby_groups", "p05_vertical_ruby_extended_units", "p05_ruby_units",
-        "p05_vertical_shifted_ruby", "p05_vertical_rotated_ruby", "p06_vertical_ruby_outline",
-        "p06_vertical_ruby_group_paint", "p05_vertical_reverse_ruby_track", "p05_vertical_columns_ruby"};
     if (verticalVectorGuides && (!features.contains("p05_vector_guides") || !features.contains("p05_vertical_solid")))
         throw BackendError("Skia 竖排矢量导唱符缺少竖排或导唱符布局能力");
     const bool verticalVectorDecoration = features.contains("p06_vertical_vector_guide_decoration");
@@ -850,81 +842,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 图片导唱符纹理阴影缺少画笔或布局能力声明");
     if (bitmapGuideShadow && !features.contains("p08_bitmap_guides"))
         throw BackendError("Skia 图片导唱符阴影缺少布局能力声明");
-    if (features.contains("p08_bitmap_guides")) {
-        // Verified line-prefix image guides with Utopia, upper ruby, solid outlines and glow only.
-        static const QJsonArray allowed{
-            "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
-            "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
-            "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
-            "p05_upper_ruby", "p05_vector_guides", "p08_bitmap_guides", "p08_mixed_guide_kinds",
-            "p08_animated_title_guides", "p08_animated_bitmap_guides",
-            "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
-            "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
-            "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale"};
-        static const QJsonArray inlineAllowed{
-            "p08_inline_bitmap_guides", "p08_inline_bitmap_decoration", "p05_font_fallback", "p05_mixed_fonts",
-            "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
-            "p06_role_solid_outlines", "p06_multi_lane_outline", "p06_role_body_paints",
-            "p06_ruby_role_paints", "p06_role_static_glow", "p06_ruby_role_glow",
-            "p06_role_outline_gradient", "p06_role_outline_paints", "p06_ruby_outline_gradient", "p06_ruby_horizontal_outline",
-            "p06_static_shadow", "p06_ruby_shadow",
-            "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
-            "p07_role_singing_scale", "p07_role_singing_glow", "p07_line_fade", "p07_role_line_fade",
-            "p07_ruby_line_animation", "p07_utopia_line_animation"
-        };
-        static const QJsonArray reverseAllowed{
-            "p08_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_static_shadow"
-        };
-        static const QJsonArray mixedReverseAllowed{
-            "p08_mixed_reverse_bitmap_guides", "p05_reverse_wipe", "p05_reverse_overlap", "p06_reverse_decoration"
-        };
-        static const QJsonArray rtlAllowed{
-            "p08_rtl_bitmap_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
-            "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks"
-        };
-        static const QJsonArray shadowAllowed{"p08_bitmap_guide_shadow", "p06_static_shadow", "p06_ruby_shadow"};
-        static const QJsonArray rtlUpperRubyAllowed{
-            "p08_rtl_bitmap_upper_ruby", "p05_horizontal_rtl_ruby", "p05_rtl_ruby_without_body_stroke"};
-        static const QJsonArray verticalBitmapDecorAllowed{
-            "p08_vertical_bitmap_decoration", "p06_static_shadow", "p06_ruby_shadow",
-            "p06_vertical_shadow", "p06_vertical_glow", "p06_vertical_ruby_decoration",
-            "p06_vertical_reverse_shadow", "p06_vertical_reverse_glow"};
-        static const QJsonArray lowerRubyAllowed{
-            "p08_bitmap_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
-            "p06_lower_ruby_glow", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient", "p06_lower_ruby_static_gradient",
-            "p06_lower_ruby_static_image"
-        };
-        if (layout.value("bitmap_guide_schema").toDouble(-1) != 1)
-            throw BackendError("Skia 图片导唱符布局版本无效");
-        for (const auto& feature : features)
-            if (!allowed.contains(feature) && !(inlineBitmapGuides && inlineAllowed.contains(feature))
-                && !(reverseBitmapGuides && reverseAllowed.contains(feature))
-                && !(mixedReverseBitmapGuides && mixedReverseAllowed.contains(feature))
-                && !(reverseBitmapSinging && (feature == QJsonValue("p08_reverse_bitmap_singing")
-                    || feature == QJsonValue("p07_horizontal_reverse_singing")))
-                && !(reverseBitmapSingingOutline && (feature == QJsonValue("p08_reverse_bitmap_singing_outline")
-                    || feature == QJsonValue("p07_reverse_singing_outline")))
-                && !(reverseBitmapSingingGlow && (feature == QJsonValue("p08_reverse_bitmap_singing_glow")
-                    || feature == QJsonValue("p07_reverse_singing_glow")))
-                && !(rtlBitmapGuides && rtlAllowed.contains(feature))
-                && !(rtlBitmapUpperRuby && rtlUpperRubyAllowed.contains(feature))
-                && !(rtlBitmapSinging && (feature == QJsonValue("p08_rtl_bitmap_singing")
-                    || feature == QJsonValue("p07_rtl_ruby_singing_scale")))
-                && !(rtlBitmapDecoration && (feature == QJsonValue("p08_rtl_bitmap_guide_decoration")
-                    || feature == QJsonValue("p06_static_shadow")))
-                && !(lowerRubyBitmapGuides && lowerRubyAllowed.contains(feature))
-                && !(verticalBitmapGuides && (feature == QJsonValue("p08_vertical_bitmap_guides")
-                    || verticalGuideLayout.contains(feature)))
-                && !(verticalBitmapDecoration && verticalBitmapDecorAllowed.contains(feature))
-                && !(bitmapGuideGradientShadow && (feature == QJsonValue("p08_bitmap_guide_gradient_shadow")
-                    || feature == QJsonValue("p06_body_gradient_shadow")))
-                && !(bitmapGuideGradientGlow && (feature == QJsonValue("p08_bitmap_guide_gradient_glow")
-                    || feature == QJsonValue("p06_gradient_glow")))
-                && !(bitmapGuideImageShadow && (feature == QJsonValue("p08_bitmap_guide_image_shadow")
-                    || feature == QJsonValue("p06_body_image_shadow")))
-                && !(bitmapGuideShadow && shadowAllowed.contains(feature)))
-                throw BackendError("Skia 图片导唱符组合包含未验证能力");
-    }
+    if (features.contains("p08_bitmap_guides")
+        && layout.value("bitmap_guide_schema").toDouble(-1) != 1)
+        throw BackendError("Skia 图片导唱符布局版本无效");
     if (features.contains("p07_line_fade")
         && layout.value("line_fade_schema").toDouble(-1) != 1)
         throw BackendError("Skia 出入场淡化布局版本无效");

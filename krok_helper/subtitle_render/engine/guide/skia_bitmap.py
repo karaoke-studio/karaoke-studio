@@ -15,7 +15,6 @@ import math
 
 from PyQt6.QtGui import QImageReader
 
-from ..layout.line.skia_vertical import VERTICAL_GUIDE_LAYOUT_FEATURES
 from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
 from .metrics import bitmap_guide_image, vector_glyph_width
 from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
@@ -117,47 +116,6 @@ def validate_bitmap_guides(track, style, *, static_title=False):
     return animated
 
 
-# Verified with the P00 line-prefix bitmap guide: Utopia singing, upper ruby,
-# solid double outlines and glow. Other capabilities stay rejected.
-BITMAP_GUIDE_FEATURES = frozenset({
-    'p05_fixed_row_grid', 'p05_inline_roles', 'p05_overlap_wipe', 'p05_page_collisions',
-    'p05_resolved_horizontal', 'p05_resolved_ruby', 'p05_segmented_wipe', 'p05_single_line_placement',
-    'p05_smart_horizontal', 'p05_upper_ruby', 'p08_bitmap_guides',
-    'p06_outline_ruby', 'p06_primary_solid_outline', 'p06_ruby_glow', 'p06_ruby_solid_outline',
-    'p06_secondary_solid_outline', 'p06_static_glow', 'p07_ruby_singing_scale', 'p07_singing_glow',
-    'p07_singing_scale'})
-INLINE_BITMAP_GUIDE_FEATURES = frozenset({
-    'p08_inline_bitmap_guides', 'p08_inline_bitmap_decoration', 'p05_font_fallback', 'p05_mixed_fonts',
-    'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
-    'p06_role_solid_outlines', 'p06_multi_lane_outline', 'p06_role_body_paints',
-    'p06_ruby_role_paints', 'p06_role_static_glow', 'p06_ruby_role_glow',
-    'p06_role_outline_gradient', 'p06_role_outline_paints', 'p06_ruby_outline_gradient', 'p06_ruby_horizontal_outline',
-    'p06_static_shadow', 'p06_ruby_shadow', 'p06_gradient_glow',
-    'p06_vertical_gradient_glow', 'p06_role_gradient_glow',
-    'p07_role_singing_scale', 'p07_role_singing_glow', 'p07_line_fade',
-    'p07_role_line_fade', 'p07_ruby_line_animation', 'p07_utopia_line_animation'})
-REVERSE_BITMAP_GUIDE_FEATURES = frozenset({
-    'p08_reverse_bitmap_guides', 'p05_reverse_wipe', 'p05_reverse_overlap', 'p06_static_shadow'})
-MIXED_REVERSE_BITMAP_GUIDE_FEATURES = frozenset({
-    'p08_mixed_reverse_bitmap_guides', 'p05_reverse_wipe', 'p05_reverse_overlap', 'p06_reverse_decoration',
-})
-RTL_BITMAP_GUIDE_FEATURES = frozenset({
-    'p08_rtl_bitmap_guides', 'p05_horizontal_rtl', 'p05_horizontal_rtl_cells',
-    'p05_horizontal_rtl_kana_cells', 'p05_horizontal_rtl_kana_marks',
-})
-LOWER_RUBY_BITMAP_FEATURES = frozenset({
-    'p08_bitmap_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
-    'p06_lower_ruby_glow', 'p06_lower_ruby_shadow', 'p06_lower_ruby_shadow_gradient', 'p06_lower_ruby_static_gradient',
-    'p06_lower_ruby_static_image',
-})
-VERTICAL_BITMAP_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p08_vertical_bitmap_guides'}
-VERTICAL_BITMAP_DECORATION_FEATURES = frozenset({
-    'p08_vertical_bitmap_decoration', 'p06_static_shadow', 'p06_ruby_shadow',
-    'p06_vertical_shadow', 'p06_vertical_glow', 'p06_vertical_ruby_decoration',
-    'p06_vertical_reverse_shadow', 'p06_vertical_reverse_glow',
-})
-
-
 def _has_bitmap_gradient_glow(item):
     style = item.layout_style
     colors = effective_karaoke_colors(style)
@@ -171,16 +129,14 @@ def _has_bitmap_gradient_glow(item):
 
 
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
-    """Append p08_bitmap_guides, or reject an unverified combination."""
+    """Declare capabilities for the bitmap cells present in this source."""
     if not has_bitmap_guides(item.render_line for item in plan_lines):
         return
     features = ir['required_features']
     features.append('p08_bitmap_guides')
     ir['skia_layout']['bitmap_guide_schema'] = 1
-    allowed = BITMAP_GUIDE_FEATURES | {'p05_vector_guides'} if static_title else BITMAP_GUIDE_FEATURES
     if not static_title and 'p05_vector_guides' in features:
         features.append('p08_mixed_guide_kinds')
-        allowed |= {'p05_vector_guides', 'p08_mixed_guide_kinds'}
     vertical_lines = [item for item in plan_lines
                       if item.layout_style.vertical and has_bitmap_guides((item.render_line,))]
     for item in vertical_lines:
@@ -191,30 +147,16 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
             raise ValueError('Skia 竖排图片导唱符需要静态实色和普通走字')
     if vertical_lines:
         features.append('p08_vertical_bitmap_guides')
-        allowed |= VERTICAL_BITMAP_GUIDE_FEATURES
         if {'p06_vertical_shadow', 'p06_vertical_glow'}.intersection(features):
             features.append('p08_vertical_bitmap_decoration')
-            allowed |= VERTICAL_BITMAP_DECORATION_FEATURES
     if 'p08_inline_bitmap_guides' in features:
-        allowed |= INLINE_BITMAP_GUIDE_FEATURES
         for item in plan_lines:
             cells = [cell for cell in item.render_line.chars if guide_symbol_is_bitmap(cell.vector_glyph)]
             if _needs_inline_bitmap_profile(item.line, cells) and any(not cell.vector_glyph.bitmap_no_decor for cell in cells):
                 features.append('p08_inline_bitmap_decoration')
                 break
-    if 'p08_reverse_bitmap_guides' in features:
-        allowed |= REVERSE_BITMAP_GUIDE_FEATURES
-    if 'p08_mixed_reverse_bitmap_guides' in features:
-        allowed |= MIXED_REVERSE_BITMAP_GUIDE_FEATURES
-        if 'p08_reverse_bitmap_singing' in features:
-            allowed |= {'p08_reverse_bitmap_singing', 'p07_horizontal_reverse_singing'}
-        if 'p08_reverse_bitmap_singing_outline' in features:
-            allowed |= {'p08_reverse_bitmap_singing_outline', 'p07_reverse_singing_outline'}
-        if 'p08_reverse_bitmap_singing_glow' in features:
-            allowed |= {'p08_reverse_bitmap_singing_glow', 'p07_reverse_singing_glow'}
     if 'p05_horizontal_rtl' in features:
         features.append('p08_rtl_bitmap_guides')
-        allowed |= RTL_BITMAP_GUIDE_FEATURES
         rtl_guides = [item for item in plan_lines if item.layout_style.right_to_left
                       and has_bitmap_guides((item.render_line,))]
         decorated = {item.track_index for item in rtl_guides if any(
@@ -241,13 +183,10 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                 rtl_singing |= singing
         if decorated:
             features.append('p08_rtl_bitmap_guide_decoration')
-            allowed |= {'p08_rtl_bitmap_guide_decoration', 'p06_static_shadow'}
         if rtl_upper:
             features.append('p08_rtl_bitmap_upper_ruby')
-            allowed |= {'p08_rtl_bitmap_upper_ruby', 'p05_horizontal_rtl_ruby', 'p05_rtl_ruby_without_body_stroke'}
         if rtl_singing:
             features.append('p08_rtl_bitmap_singing')
-            allowed |= {'p08_rtl_bitmap_singing', 'p07_rtl_ruby_singing_scale'}
     if 'p05_lower_ruby' in features:
         for item in plan_lines:
             if not has_bitmap_guides((item.render_line,)):
@@ -259,22 +198,15 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
                 raise ValueError('Skia 图片导唱符与下方注音需要静态正向横排')
         features.append('p08_bitmap_lower_ruby')
-        allowed |= LOWER_RUBY_BITMAP_FEATURES
     if any(uses_authored_decoration(item.layout_style, 'shadow')
            and any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
                    for cell in item.render_line.chars)
            for item in plan_lines):
         features.append('p08_bitmap_guide_shadow')
-        allowed |= {'p08_bitmap_guide_shadow', 'p06_static_shadow', 'p06_ruby_shadow'}
         if 'p06_body_gradient_shadow' in features:
             features.append('p08_bitmap_guide_gradient_shadow')
-            allowed |= {'p08_bitmap_guide_gradient_shadow', 'p06_body_gradient_shadow'}
         if 'p06_body_image_shadow' in features:
             features.append('p08_bitmap_guide_image_shadow')
-            allowed |= {'p08_bitmap_guide_image_shadow', 'p06_body_image_shadow'}
     if (not static_title and 'p06_gradient_glow' in features
             and any(_has_bitmap_gradient_glow(item) for item in plan_lines)):
         features.append('p08_bitmap_guide_gradient_glow')
-        allowed |= {'p08_bitmap_guide_gradient_glow', 'p06_gradient_glow'}
-    if not set(features) <= allowed:
-        raise ValueError('Skia 图片导唱符组合仅支持已验证的 Utopia、上注音、实色描边与光晕')

@@ -48,7 +48,9 @@ def test_vector_guide_and_line_fade_share_the_same_render_path(binary, project):
     track, style = guide_source(project)
     style = replace(style, stroke_width_px=3, karaoke_anim='none', entry_anim='none', exit_anim='none')
     guide, = track.lines
-    guide = replace(guide, track_line_index=0, display_start_override_ms=0, display_end_override_ms=3000)
+    guide = replace(guide, track_line_index=0, display_start_override_ms=0, display_end_override_ms=3000,
+                    chars=[replace(char, start_ms=char.start_ms + 800) for char in guide.chars],
+                    end_ms=guide.end_ms + 800)
     fade = LineAnimationOverride(entry_anim='fade', entry_duration_ms=600, karaoke_anim='none')
     next_line = replace(guide, guide_symbol=None, track_line_index=1, break_before='page',
                         chars=[replace(char, start_ms=char.start_ms + 3000) for char in guide.chars],
@@ -62,9 +64,11 @@ def test_vector_guide_and_line_fade_share_the_same_render_path(binary, project):
         source = replace(track, lines=lines)
         ir = ir_for(binary, (source, style))
         assert {'p05_vector_guide_composition', 'p07_line_fade'} <= set(ir['required_features'])
-        assert [line['entry_anim'] == 'fade' for line in ir['track']['lines']] == expected_fade
+        assert [line['entry_duration_ms'] == 600 for line in ir['track']['lines']] == expected_fade
         gpu, raster = render_skia(binary, ir, times)
         assert all(frame.any() for frame in gpu)
+        if len(lines) == 1:
+            assert 0 < gpu[0][..., 3].sum() < gpu[-1][..., 3].sum()
 
         reference = None
         if sys.platform == 'win32':

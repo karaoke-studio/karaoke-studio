@@ -13,16 +13,6 @@ import unicodedata
 from krok_helper.subtitle_render.domain.timing import TimingTrack, remap_track_role_labels
 from .alignment import lane_offset_x
 
-VERTICAL_GUIDE_LAYOUT_FEATURES = frozenset({
-    'p05_vertical_solid', 'p05_vertical_japanese_glyphs', 'p05_vertical_text_cells', 'p05_vertical_columns',
-    'p05_vertical_column_offsets',
-    'p05_reverse_wipe', 'p05_reverse_overlap',
-    'p06_vertical_outline', 'p06_vertical_columns_outline', 'p06_vertical_reverse_outline',
-    'p05_vertical_ruby', 'p05_vertical_ruby_groups', 'p05_vertical_ruby_extended_units', 'p05_ruby_units',
-    'p05_vertical_shifted_ruby', 'p05_vertical_rotated_ruby', 'p06_vertical_ruby_outline',
-    'p06_vertical_ruby_group_paint', 'p05_vertical_reverse_ruby_track', 'p05_vertical_columns_ruby',
-})
-
 _SMALL_KANA = frozenset('ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ')
 _CORNER_PUNCTUATION = frozenset('、。')
 _ROTATED_PUNCTUATION = frozenset('「」『』ー〜')

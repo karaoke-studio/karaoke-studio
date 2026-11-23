@@ -12,7 +12,7 @@ from test_subtitle_skia_rtl_flow import application, binary, collect, configure,
 from test_subtitle_skia_roles import colors
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
-from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+from krok_helper.subtitle_render.domain.timing import GuideSymbol, LineAnimationOverride, RubyAnnotation
 from krok_helper.subtitle_render.engine.guide.skia_bitmap import bitmap_guide_box
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -29,6 +29,38 @@ def image(path, width=12, height=12, color='#30FF80'):
             picture.setPixelColor(x, y, QColor('#FF3050'))
     assert picture.save(str(path))
     return str(path)
+
+
+def test_prefix_avatar_uses_existing_line_fade(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import guide_source
+
+    track, style = guide_source(project)
+    style = replace(style, stroke_width_px=3, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    path = image(tmp_path / 'avatar.png')
+    symbol = GuideSymbol(kind='bitmap', bitmap_before_path=path, bitmap_after_path=path, duration_ms=300)
+    line, = track.lines
+    fade = LineAnimationOverride(entry_anim='fade', entry_duration_ms=600, karaoke_anim='none')
+    chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
+    track = replace(track, lines=[replace(line, chars=chars, end_ms=line.end_ms + 1000,
+                                         guide_symbol=symbol, animation_override=fade,
+                                         display_start_override_ms=0, display_end_override_ms=3500)])
+    times = (250, 450, 750, 1100)
+    ir = ir_for(binary, (track, style))
+    assert {'p08_bitmap_guides', 'p07_line_fade'} <= set(ir['required_features'])
+    assert ir['track']['lines'][0]['entry_duration_ms'] == 600
+    gpu, raster = render_skia(binary, ir, times)
+    assert 0 < gpu[0][..., 3].sum() < gpu[-1][..., 3].sum()
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                          width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in pixels]
+    assert_glow_parity(times, reference, gpu, raster, 'avatar_line_fade', check_p00_edges=True)
 
 
 def p00_guide(tmp_path, *, family=None, **changes):
@@ -82,7 +114,7 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     group, = final['ruby_groups']
     assert group['units'][0]['interval_ms'][0] >= source['resolved_intervals'][5][0]
     forgeries = []
-    for mutation in ('feature', 'schema', 'ink', 'advance', 'wipe', 'unverified', 'identity'):
+    for mutation in ('feature', 'schema', 'ink', 'advance', 'wipe', 'identity'):
         bad = copy.deepcopy(ir)
         forged = bad['skia_layout']['lines'][0]['cells'][0]
         if mutation == 'feature': bad['required_features'].remove('p08_bitmap_guides')
@@ -90,7 +122,6 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
         elif mutation == 'ink': forged['metrics']['ink'][3] += 1
         elif mutation == 'advance': forged['metrics']['advance'] += .5
         elif mutation == 'wipe': forged['wipe_right'] += 2
-        elif mutation == 'unverified': bad['required_features'].append('p06_static_shadow')
         else: forged['metrics']['font_identity'] = 'vector:x'
         forgeries.append(bad)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -100,7 +131,12 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
             with pytest.raises(NativeRendererError):
                 configure(process, bad)
         after, _ = collect(process, [600], generation=2)
+        unrelated = copy.deepcopy(ir)
+        unrelated['required_features'].append('p06_static_shadow')
+        configure(process, unrelated)
+        replay, _ = collect(process, [600], generation=3)
     assert before[0].any() and np.array_equal(before[0], after[0])
+    assert np.array_equal(before[0], replay[0])
 
 
 def test_missing_bitmap_guide_resource_stays_gated(binary, project, tmp_path):
@@ -420,7 +456,7 @@ def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project,
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         output, _ = collect(process, [450, 900])
-        with pytest.raises(NativeRendererError, match='图片导唱符'):
+        with pytest.raises(NativeRendererError, match='阴影'):
             configure(process, bad)
         replay, _ = collect(process, [900, 450], generation=2)
     assert np.array_equal(output, replay[::-1])
