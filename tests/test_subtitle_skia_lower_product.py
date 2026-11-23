@@ -546,6 +546,63 @@ def lower_gradient_shadow_style(style):
     })
 
 
+def lower_image_shadow_style(style, path):
+    style = lower_shadow_style(style, 'after')
+    lower = style.lower_ruby_style
+    palette = lower['ruby_karaoke_colors']
+    return replace(style, lower_ruby_style={
+        **lower, 'ruby_decoration_kind_before': 'shadow',
+        'ruby_karaoke_colors': {
+            phase: {**palette[phase], 'shadow': {'mode': 'image', 'image_path': str(path),
+                                                 'image_scale_pct': scale, 'color': '#CF3039A0'}}
+            for phase, scale in (('before', 137), ('after', 109))
+        },
+    })
+
+
+def test_lower_image_shadow_validates_each_paint_before_replacing_scene(binary, independent, tmp_path):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style, resolve = independent
+    style = lower_image_shadow_style(style, write_png(tmp_path / 'shadow.png', pattern('transparent')))
+    ir = ir_for(binary, (track, style, resolve))
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p06_lower_ruby_shadow_image')
+    invalid = copy.deepcopy(ir)
+    group = next(group for group in invalid['skia_layout']['lines'][0]['ruby_groups'] if group.get('lower'))
+    group['lower_shadow_image']['before']['scale_pct'] = 0
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [400, 950])
+        for rejected in (bad, invalid):
+            with pytest.raises(NativeRendererError, match='下方注音图片'):
+                configure(process, rejected)
+        after, _ = collect(process, [950, 400], generation=2)
+    assert all(frame.any() for frame in before) and np.array_equal(before, after[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_lower_image_shadow_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    base = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'lower_ruby')
+    style = replace(base.style, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    tile = write_png(tmp_path / 'shadow.png', pattern('transparent'))
+    case = replace(base, style=lower_image_shadow_style(style, tile))
+    times = (1550, 2600, 4110, 4280)
+    references = []
+    for path in (tile, tmp_path / 'missing.png'):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, lower_image_shadow_style(style, path), times,
+                                       force_warp=False, track=case.track, realization_enabled=False)
+        references.append(raw)
+    assert any(a != b for a, b in zip(*references, strict=True))
+    assert_ruby_transition_gpu_parity(binary, case, times)
+
+
 def test_lower_gradient_shadow_rejects_forged_paint_without_replacing_scene(binary, independent):
     track, style, resolve = independent
     ir = ir_for(binary, (track, lower_gradient_shadow_style(style), resolve))

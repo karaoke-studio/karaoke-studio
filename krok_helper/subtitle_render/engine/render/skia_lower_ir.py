@@ -15,6 +15,10 @@ def _gradient_payload(fill):
             'stops': [[position, list(rgba(color))] for position, color in gradient_stops(fill)]}
 
 
+def _image_payload(fill):
+    return {'path': str(fill.image_path or ''), 'scale_pct': fill.image_scale_pct}
+
+
 def lower_sources(prepared):
     sources, indices = [], {}
     for line_index, local in enumerate(prepared.geometry.ruby.lines):
@@ -41,7 +45,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         if fill.mode == 'solid':
             continue
         if fill.mode == 'image':
-            images[phase] = {'path': str(fill.image_path or ''), 'scale_pct': fill.image_scale_pct}
+            images[phase] = _image_payload(fill)
             continue
         if fill.mode not in _GRADIENT_MODES:
             raise ValueError('Skia 下方注音文字画笔类型不支持')
@@ -57,7 +61,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         result['fill_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     if images:
         result['static_fill_image'] = images
-    glow, shadow, shadow_gradients = {}, {}, {}
+    glow, shadow, shadow_gradients, shadow_images = {}, {}, {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':
             continue
@@ -66,7 +70,9 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         if kind == 'glow' and radius <= 0:
             continue
         layer = getattr(colors, phase).shadow
-        if layer.mode != 'solid':
+        if kind == 'shadow' and layer.mode == 'image':
+            shadow_images[phase] = _image_payload(layer)
+        elif layer.mode != 'solid':
             if kind != 'shadow' or layer.mode not in _GRADIENT_MODES:
                 raise ValueError('Skia 下方注音装饰当前不支持此画笔')
             shadow_gradients[phase] = _gradient_payload(layer)
@@ -86,4 +92,6 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     if shadow_gradients:
         result['lower_shadow_gradient'] = shadow_gradients
         result['shadow_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
+    if shadow_images:
+        result['lower_shadow_image'] = shadow_images
     return result

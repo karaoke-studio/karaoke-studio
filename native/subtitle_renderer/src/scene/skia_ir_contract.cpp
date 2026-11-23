@@ -168,6 +168,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_lower_ruby_glow",
         "p06_lower_ruby_shadow",
         "p06_lower_ruby_shadow_gradient",
+        "p06_lower_ruby_shadow_image",
         "p07_line_fade",
         "p07_role_line_fade",
         "p07_line_motion",
@@ -1249,6 +1250,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p06_lower_ruby_shadow")
             || layout.value("lower_ruby_shadow_gradient_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音渐变阴影缺少版本化布局或阴影能力声明");
+    if (features.contains("p06_lower_ruby_shadow_image")
+        && (!features.contains("p06_lower_ruby_shadow") || layout.value("lower_ruby_shadow_image_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音图片阴影缺少对应布局版本");
     if (features.contains("p07_lower_ruby_decoration_line_animation")
         && (!features.contains("p07_utopia_line_animation") || !features.contains("p07_ruby_line_animation")
             || !(features.contains("p06_lower_ruby_glow") || features.contains("p06_lower_ruby_shadow"))))

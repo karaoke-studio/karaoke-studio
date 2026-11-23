@@ -479,6 +479,20 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                       lowerShadowState(lowerShadow, "after", glyphs.dpr), innerWidth, secondaryWidth};
         }
         const auto lowerShadowGradients = object.value("lower_shadow_gradient").toObject();
+        if (object.contains("lower_shadow_image")) {
+            const auto images = object.value("lower_shadow_image").toObject();
+            if (!lower || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled
+                || !features.contains("p06_lower_ruby_shadow_image") || !validPhases(images))
+                throw BackendError("Skia 下方注音图片阴影缺少对应布局或画笔能力");
+            const auto prepareImage = [&](auto& state, const char* phase) {
+                if (!images.contains(phase)) return;
+                if (!lowerShadow.contains(phase) || lowerShadowGradients.contains(phase))
+                    throw BackendError("Skia 下方注音图片阴影阶段无效");
+                state.image = imageCache.fill(lowerImage(images, phase), scene.layoutReferenceScale);
+            };
+            prepareImage(shadow.before, "before");
+            prepareImage(shadow.after, "after");
+        }
         const auto shadowWithMain = object.value("shadow_gradient_with_main");
         if (object.contains("lower_shadow_gradient")
             && (!lower || !roleBounds || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled

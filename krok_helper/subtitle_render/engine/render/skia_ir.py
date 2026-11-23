@@ -808,6 +808,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p06_lower_ruby_shadow')
         if 'lower_ruby_shadow_gradient_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow_gradient')
+        if 'lower_ruby_shadow_image_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_shadow_image')
         spin_sources = [ir['track']['lines'][plan.lines[index].track_index] for index in spin_lines]
         for phase in ('entry', 'exit'):
             if any(source.get(f'{phase}_anim') == 'spin_flip' and source[f'{phase}_duration_ms'] > 0
