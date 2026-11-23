@@ -12,6 +12,7 @@ from test_subtitle_skia_line_fade import (
 )
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_sing_particles import assert_particle_region, assert_thin_particle_contours, blue_coverage
+from krok_helper.subtitle_render.domain.timing import LineAnimationOverride
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
 
@@ -141,6 +142,43 @@ def symbol_window_samples(ir):
     last = max(b['end_ms'] for b in source['fx_bursts'])
     return sorted({start-100, start-40, start-1, start, start+45, start+200, start+450,
                    2100, end-150, end-1, end, end+45, end+120, end+300, max(last, end)+1})
+
+
+def test_particle_transition_rows_keep_independent_clocks(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = symbol_source(project, 'note', 'heart')
+    first, = track.lines
+    shift = 4000
+    second = replace(first, track_line_index=1, break_before='page',
+                     chars=[replace(char, start_ms=char.start_ms + shift) for char in first.chars],
+                     end_ms=first.end_ms + shift, display_start_override_ms=first.display_start_override_ms + shift,
+                     display_end_override_ms=first.display_end_override_ms + shift,
+                     animation_override=LineAnimationOverride(entry_anim='petal', exit_anim='petal',
+                                                             entry_duration_ms=600, exit_duration_ms=600))
+    track = replace(track, lines=[first, second])
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert ir['skia_layout']['sing_twinkle_schema'] == 10
+    bursts = [line['fx_bursts'] for line in ir['track']['lines']]
+    assert [{burst['kind'] for burst in row} for row in bursts] == [{'note', 'heart'}, {'petal'}]
+    assert max(burst['end_ms'] for burst in bursts[0]) < min(burst['start_ms'] for burst in bursts[1])
+    times = (950, 1100, 1600, 2970, 3200, 4100, 4850, 5050, 5550, 7020, 7150)
+    gpu, raster = render_skia(binary, ir, times)
+    assert any(blue_coverage(frame).max() > 20 for frame in gpu[:5])
+    assert any(blue_coverage(frame).max() > 20 for frame in gpu[6:])
+    assert not gpu[5].any()
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    for index, time in enumerate(times):
+        assert_particle_region(gpu[index], raster[index], ('particle_rows', time, 'raster'), check_contour=False)
+        if reference is not None:
+            assert_particle_region(reference[index], gpu[index], ('particle_rows', time), check_contour=False)
 
 
 @pytest.mark.parametrize('entry,exit_,kinds', SYMBOL_MODES)

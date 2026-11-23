@@ -145,7 +145,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (!verticalParticles && !fadedBand && !horizontalMotion && !energyLineMotion
             && ((source.entryAnimation != "none" && entry.isEmpty())
             || (source.exitAnimation != "none" && exit.isEmpty())))
-        || (animated && (cfg.lines.size() != 1 || (source.scanlineEnabled && !petalWithBand)))
+        || (animated && source.scanlineEnabled && !petalWithBand)
         || (noteExit && !petalWithBand)
         || (annotated && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))

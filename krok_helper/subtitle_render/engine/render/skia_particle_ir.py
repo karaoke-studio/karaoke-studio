@@ -239,7 +239,7 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                     and entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
                 or (not (vertical_particles or faded_band or unscaled_motion or energy_motion)
                     and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
-                or (animated and (len(plan.lines) != 1 or (band and not petal_with_band)
+                or (animated and ((band and not petal_with_band)
                                   or (look.sing_fx != 'none' and not (petal_with_flame or energy_stars))))
                 or (has_lower and not (faded_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
@@ -315,12 +315,13 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                 version = max(version, 8 if vertical_particles else 7)
                 ruby_scanline |= annotated and not vertical_particles
             elif band:
-                version = 8
+                version = max(version, 8)
         if animated:
             falling_only = all(not kind or kind in FALLING_PARTICLES for kind in (entry_kind, exit_kind))
-            version = 9 if falling_only else 10
             if {entry_kind, exit_kind} & ENERGY_TRANSITIONS:
-                version = 11
+                version = max(version, 11)
+            else:
+                version = max(version, 9 if falling_only else 10)
         if not vertical_particles:
             metrics = measured.lines[item.track_index]
             write_horizontal_pivots(final['cells'], metrics)
