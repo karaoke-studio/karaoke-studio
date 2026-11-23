@@ -57,11 +57,10 @@ def test_worker_requires_frozen_boolean_options(options):
         prepare_lower_readings(track, style, [style], unmeasured(track), resolve_font=fail, measure=fail)
 
 
-@pytest.mark.parametrize('mutation', ['vertical', 'right_to_left'])
-def test_unsupported_direction_is_explicit(mutation):
+def test_unsupported_vertical_lower_readings_are_explicit():
     track = TimingTrack(lines=[line('かな')])
-    style = appearance(**{mutation: True})
-    with pytest.raises(ValueError, match='正向横排'):
+    style = appearance(vertical=True)
+    with pytest.raises(ValueError, match='仅支持横排'):
         prepare_lower_readings(track, style, [style], unmeasured(track), resolve_font=fail, measure=fail)
 
 

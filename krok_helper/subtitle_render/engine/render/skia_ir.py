@@ -476,6 +476,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['required_features'].append('p05_vertical_rotated_ruby')
         if prepared[0].vertical_readings.extended:
             ir['required_features'].append('p05_vertical_ruby_extended_units')
+        if 'ruby_unit_schema' in vertical_ruby:
+            ir['required_features'].append('p05_ruby_units')
         if vertical_ruby.get('ruby_solid_outline_schema'):
             ir['required_features'] += ['p06_ruby_solid_outline', 'p06_vertical_ruby_outline']
         ir['required_features'].extend(f'p06_ruby_{kind}' for kind in ('shadow', 'glow')

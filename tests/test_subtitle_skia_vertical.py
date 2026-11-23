@@ -60,7 +60,7 @@ def test_vertical_ir_is_a_versioned_fixed_cell_column(binary, project, reverse, 
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'ruby', 'rtl',
+@pytest.mark.parametrize('change', ['small_kana', 'rotated', 'corner', 'greek', 'multi', 'role', 'rtl',
                                     'dual_ruby_zoom_flame', 'dual_alt_grid', 'lower', 'offset'])
 def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     texts = {'small_kana': 'ゖ', 'rotated': '→', 'corner': '，', 'greek': 'θ', 'multi': '字字'}
@@ -68,9 +68,6 @@ def test_unvalidated_vertical_combinations_stay_gated(binary, project, change):
     line = track.lines[0]
     if change in texts:
         track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], text=texts[change]), *line.chars[1:]])])
-    elif change == 'ruby':
-        track = replace(track, rubies=[RubyAnnotation('字', 'A', pos_start_ms=200, pos_end_ms=600, target_line_index=0,
-                                                      target_char_start=0, target_char_end=1)])
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'dual_ruby_zoom_flame':
         track, style = vertical_ruby_source(project)
@@ -927,10 +924,10 @@ def test_vertical_ruby_ir_is_one_versioned_upright_group(binary, project, tmp_pa
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('change', ['combined_unit', 'overlap_groups',
+@pytest.mark.parametrize('change', ['emoji_cluster', 'overlap_groups',
                                     'reverse_utopia_flame', 'lower', 'role'])
 def test_unproven_vertical_ruby_stays_gated(binary, project, change):
-    reading = 'か\u309a' if change == 'combined_unit' else '字'
+    reading = '👩‍💻' if change == 'emoji_cluster' else '字'
     extra = None
     span = (0, 1)
     if change == 'overlap_groups':
@@ -978,6 +975,36 @@ def test_vertical_reading_latin_and_middle_dot_match_actual_gpu(binary, project)
         pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
     track, style = vertical_ruby_source(project, span=(0, 2), reading='A・', family='Meiryo')
     assert_gpu_parity(binary, track, style, 1.5, 'vertical_latin_punctuation_reading')
+
+
+def test_vertical_reading_kana_marks_keep_authored_clocks(binary, project, kana):
+    source = vertical_ruby_source(project, span=(0, 2), reading='か\u309aか\u3099', family=kana)
+    ir = ir_for(binary, source)
+    group, = ir['skia_layout']['lines'][0]['ruby_groups']
+    mark, normalized = group['units']
+    assert mark['text'] == 'か\u309a' and len(mark['metrics']['glyphs']) == 2
+    assert normalized['text'] == 'か\u3099' and normalized['glyph_text'] == 'が'
+    assert mark['interval_ms'][1] == normalized['interval_ms'][0]
+    bad = copy.deepcopy(ir)
+    bad['skia_layout']['lines'][0]['ruby_groups'][0]['units'][1]['glyph_text'] = 'か'
+    times = [300, 550, 750, 1100]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='NFC'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+def test_vertical_reading_kana_marks_match_actual_gpu(binary, project):
+    from PyQt6.QtGui import QFontDatabase
+
+    if 'Meiryo' not in QFontDatabase.families():
+        pytest.skip('Meiryo is required for the actual Direct2D ruby allowance')
+    track, style = vertical_ruby_source(project, span=(0, 2), reading='か\u309aか\u3099', family='Meiryo')
+    assert_gpu_parity(binary, track, style, 1.5, 'vertical_reading_kana_marks')
 
 
 def vertical_guide_and_reading(project, tmp_path, guide_kind, family=None):

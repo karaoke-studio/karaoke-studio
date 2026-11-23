@@ -25,11 +25,14 @@ def _reading_units(reading, clock, ruby_column, reading_top, span_height, run_of
         x = ruby_column + glyph_offset - cell_width / 2 + font_size * shift
         cell_top = reading_top + index * span_height / len(reading.cells)
         baseline = cell_top + ascent - font_height * shift
-        unit = {'text': name, 'metrics': metrics, 'run_index': run_offset + run,
+        source_text = clock.units[index]
+        unit = {'text': source_text, 'metrics': metrics, 'run_index': run_offset + run,
                 'origin_x': x, 'baseline_y': baseline, 'wipe_left': x + left - wipe_pad,
                 'wipe_right': x + right + wipe_pad,
                 'wipe_top': baseline + ink_top, 'wipe_bottom': baseline + ink_bottom,
                 'wipe_end_position': 1.0, 'interval_ms': list(interval)}
+        if source_text != name:
+            unit['glyph_text'] = name
         if vertical_glyph_rotates(name):
             pivot_y = baseline - ascent + font_height / 2
             unit['vertical_rotation_pivot'] = [ruby_column, pivot_y]
@@ -103,6 +106,8 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
         result['vertical_ruby_shift_schema'] = 1
     if readings.rotated:
         result['vertical_ruby_rotation_schema'] = 1
+    if readings.authored_units:
+        result['ruby_unit_schema'] = 1
     if outlined:
         result['ruby_solid_outline_schema'] = 1
     result.update({f'ruby_{kind}_schema': 1 for kind in decorations})

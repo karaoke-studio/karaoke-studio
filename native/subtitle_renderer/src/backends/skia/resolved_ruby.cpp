@@ -545,8 +545,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 const auto scalar = scalars.size() == 1 ? scalars.front() : char32_t{};
                 const bool rotated = allowVerticalRotation && verticalRotatedScalar(scalar);
                 const bool shifted = allowVerticalShift && verticalShiftedScalar(scalar);
-                const bool extended = scalars.size() == 1 && features.contains("p05_vertical_ruby_extended_units")
-                    && (scalar == 0x30fb || isLatinText(drawingText.toStdWString()));
+                const bool kanaMark = scalars.size() == 2 && (scalars[1] == 0x3099 || scalars[1] == 0x309a)
+                    && ((scalars[0] >= 0x3041 && scalars[0] <= 0x3096)
+                        || (scalars[0] >= 0x30a1 && scalars[0] <= 0x30fa));
+                const bool extended = features.contains("p05_vertical_ruby_extended_units")
+                    && (kanaMark || (scalars.size() == 1 && (scalar == 0x30fb || isLatinText(drawingText.toStdWString()))));
                 if (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
                     || (verticalSchema != 1 && verticalSchema != 2)
                     || (verticalSchema == 1 && units.toArray().size() != 1)
