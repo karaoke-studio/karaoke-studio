@@ -1058,6 +1058,59 @@ def test_signal_follows_its_line_animation(binary, project, signal, entry_anim, 
             assert abs(signal_bounds(expected) - signal_bounds(actual)).max() <= 1, time
 
 
+def test_line_band_covers_inline_volume_geometry(binary, project, tmp_path):
+    from PyQt6.QtGui import QImage
+
+    track, style = project
+    asset = tmp_path / 'band.png'
+    image = QImage(4, 4, QImage.Format.Format_ARGB32)
+    image.fill(0xFF38DF54)
+    assert image.save(str(asset))
+    style = replace(style, entry_anim='none', exit_anim='none', line_band_enabled=True,
+                    line_band_image=str(asset), line_band_fill_mode='stretch', line_band_opacity_pct=100,
+                    line_band_pad_left_px=4, line_band_pad_right_px=4,
+                    line_band_pad_top_px=4, line_band_pad_bottom_px=4,
+                    volume_enabled=True, volume_appearance_mode='custom', volume_size=84,
+                    volume_offset_x=-8, volume_offset_y=-16, volume_stroke_width=2,
+                    volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF',
+                    volume_stroke_color='#FF00FF', volume_overlay_stroke_color='#FF00FF',
+                    volume_flash_times=0, volume_column_count=3, volume_duration_ms=1200, volume_time_offset_ms=800)
+    times = (250, 650)
+    results = []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        results.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    ir = ir_for(binary, (track, style))
+    line, = ir['skia_layout']['lines']
+    assert 'volume_signal_anchor' in line and 'line_band_rect' in line
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        results.append(frames)
+
+    def band_box(frame):
+        mask = np.all(frame[..., :3] == [56, 223, 84], axis=-1) & (frame[..., 3] > 250)
+        points = np.argwhere(mask)
+        assert len(points) > 1000
+        low, high = points.min(axis=0), points.max(axis=0)
+        volume = np.argwhere((frame[..., 0] > 245) & (frame[..., 1] < 10)
+                             & (frame[..., 2] > 245) & (frame[..., 3] > 245))
+        assert len(volume) > 100
+        assert np.all(low < volume.min(axis=0)) and np.all(high > volume.max(axis=0))
+        return np.array([low, high])
+
+    reference = [band_box(frame) for frame in results[0]]
+    assert np.array_equal(*reference)
+    for frames in results[1:]:
+        for frame, box in zip(frames, reference, strict=True):
+            assert abs(band_box(frame) - box).max() <= 1
+
+
 def test_shape_signal_draws_above_line_band(binary, project, tmp_path):
     track, style = project
     style = replace(style, entry_anim='none', exit_anim='none',

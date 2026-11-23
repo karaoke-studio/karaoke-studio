@@ -40,8 +40,9 @@ class SkiaCollisionGeometry:
                        else tuple(local_line_geometry(m, s) for m, s in zip(measured.lines, styles, strict=True)))
         heads = volume_signal_head_context(track, style) or frozenset()
         basis = auto_appearance_basis(style, track) if heads else None
-        self.volume_widths = tuple(self._volume_width(resolve_volume_appearance(s, auto_basis=basis)) if i in heads else 0
+        self.volume_styles = tuple(resolve_volume_appearance(s, auto_basis=basis) if i in heads else None
                                    for i, s in enumerate(self.styles))
+        self.volume_widths = tuple(self._volume_width(s) if s is not None else 0 for s in self.volume_styles)
         anchors = None
         if any(self.volume_widths):
             anchors = tuple(self._horizontal_anchor(i) for i in range(len(self.locals)))

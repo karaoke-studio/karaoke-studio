@@ -39,8 +39,6 @@ def write_line_band(ir, style, prepared, *, width, height):
             or any(char.role_label or char.vector_glyph is not None
                    for item in prepared.plan.lines for char in item.render_line.chars)):
         raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')
-    if style.volume_enabled or (style.lit_enabled and style.lit_style == 'volume'):
-        raise ValueError('Skia 行背景带尚未包含行内音量柱的布局范围')
     if preset and not material:
         raise ValueError('Skia 行背景带无法读取预设图片')
     if staff and any(not ir['style'].get(key) for key in
@@ -69,7 +67,16 @@ def write_line_band(ir, style, prepared, *, width, height):
         look = item.layout_style
         pad = math.ceil((max(look.stroke_width_px, 0)
                          + (max(look.stroke2_width_px, 0) if look.stroke2_enabled else 0)) / 2)
-        if local.ink and local.ink[3] - local.ink[1] + 2 * pad >= (bottom - top) / 2:
+        volume_width = geometry.volume_widths[item.track_index]
+        if volume_width:
+            volume = geometry.volume_styles[item.track_index]
+            volume_stroke = volume.volume_stroke_width if volume.volume_enabled else volume.lit_stroke_width
+            left = min(left, volume.volume_offset_x - volume_width)
+            right = max(right, volume.volume_offset_x)
+            center = final['volume_signal_anchor'][1] - at.baseline_y + volume.volume_offset_y
+            half_height = max(volume.volume_size, 1) / 2 + max(volume_stroke, 0)
+            top, bottom = min(top, center - half_height), max(bottom, center + half_height)
+        elif local.ink and local.ink[3] - local.ink[1] + 2 * pad >= (bottom - top) / 2:
             left, top, right, bottom = (local.ink[0] - pad, local.ink[1] - pad,
                                        local.ink[2] + pad, local.ink[3] + pad)
         readings = ruby.lines[item.track_index].rubies if ruby is not None else ()
