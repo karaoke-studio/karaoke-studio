@@ -20,13 +20,17 @@ struct ShapeSignal {
         sk_sp<SkShader> fill, stroke, outerStroke, shadow, glow;
         bool empty() const { return !fill && !stroke && !outerStroke && !shadow && !glow; }
     };
+    struct ImageBrushes {
+        ImageFill fill, stroke, outerStroke, shadow, glow;
+        bool empty() const { return !fill && !stroke && !outerStroke && !shadow && !glow; }
+    };
     struct Decoration {
         SkColor outerStroke = 0, shadow = 0;
         float outerWidth = 0;
         float shadowX = 0, shadowY = 0;
         std::vector<PreparedGlow> glow;
         GradientBrushes unitGradients;
-        ImageFill fillImage;
+        ImageBrushes images;
         SkPoint glyphPaintOrigin = SkPoint::Make(0, 0);
     };
     krok::subtitle::native::ShapeSignalClock clock;

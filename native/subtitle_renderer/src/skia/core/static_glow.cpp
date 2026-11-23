@@ -156,13 +156,14 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     }
 }
 
-void PreparedGlow::drawCellWithGradient(SkCanvas& canvas, std::size_t index, bool after,
-                                        const sk_sp<SkShader>& shader) const {
+void PreparedGlow::drawCellWithShader(SkCanvas& canvas, std::size_t index, bool after,
+                                     const sk_sp<SkShader>& shader, float opacity) const {
     const auto& path = cells_[index].path;
     if (!shader || (phase_ && *phase_ != after) || path.isEmpty()) return;
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setShader(shader);
+    paint.setAlphaf(opacity);
     canvas.drawPath(path, paint);
 }
 

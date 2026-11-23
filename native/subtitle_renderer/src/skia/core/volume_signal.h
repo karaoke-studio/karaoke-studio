@@ -17,7 +17,7 @@ struct VolumeSignal {
         SkColor fill = 0, stroke = 0, outerStroke = 0, shadow = 0;
         float shadowX = 0, shadowY = 0;
         sk_sp<SkShader> fillGradient, strokeGradient, outerGradient, shadowGradient;
-        ImageFill fillImage;
+        ImageFill fillImage, strokeImage, outerImage, shadowImage, glowImage;
     };
     struct Bar {
         SkRRect rect;

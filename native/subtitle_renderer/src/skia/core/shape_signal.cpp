@@ -69,10 +69,18 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         const auto& unit = decoration->unitGradients;
         gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke), fit(unit.shadow), fit(unit.glow)};
     }
-    auto fillShader = gradients.fill;
-    if (decoration && decoration->fillImage) {
+    if (decoration && !decoration->images.empty()) {
         const auto base = path ? decoration->glyphPaintOrigin : SkPoint::Make(0, 0);
-        fillShader = decoration->fillImage.shaderAt(SkMatrix::Translate(base.x() + paintShift.x(), base.y() + paintShift.y()));
+        const auto brushOrigin = SkMatrix::Translate(base.x() + paintShift.x(), base.y() + paintShift.y());
+        const auto applyImage = [&](sk_sp<SkShader>& shader, const ImageFill& imageFill) {
+            if (imageFill) shader = imageFill.shaderAt(brushOrigin);
+        };
+        const auto& images = decoration->images;
+        applyImage(gradients.fill, images.fill);
+        applyImage(gradients.stroke, images.stroke);
+        applyImage(gradients.outerStroke, images.outerStroke);
+        applyImage(gradients.shadow, images.shadow);
+        applyImage(gradients.glow, images.glow);
     }
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
@@ -115,7 +123,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
                 auto source = layer.createSource(canvas);
                 if (!source.surface) continue;
                 auto& target = *source.surface->getCanvas();
-                if (glowBrush) layer.drawCellWithGradient(target, 0, true, glowBrush);
+                if (glowBrush) layer.drawCellWithShader(target, 0, true, glowBrush);
                 else layer.drawCell(target, 0, true, std::nullopt);
                 layer.composite(canvas, source);
             }
@@ -149,7 +157,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         if (strokeWidth > 0 && SkColorGetA(stroke) > 0)
             drawShape(box, stroke, strokeWidth, gradients.stroke);
         if (decoration)
-            drawShape(box, fill, 0, fillShader);
+            drawShape(box, fill, 0, gradients.fill);
         if (highlight > 0 && (decoration || shape != Shape::Image)) {
             paint.setShader(nullptr);
             paint.setColor(SK_ColorWHITE);

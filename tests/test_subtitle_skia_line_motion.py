@@ -1918,7 +1918,15 @@ def test_signal_glow_uses_its_authored_gradient(binary, project, signal):
     _assert_signal_decoration_gradient(binary, project, signal, 'glow')
 
 
-def _assert_signal_decoration_gradient(binary, project, signal, decoration):
+@pytest.mark.parametrize('signal,decoration', [('lamp', 'glow'), ('volume', 'shadow')])
+def test_signal_texture_decorates_the_actual_outline_and_halo(binary, project, tmp_path, signal, decoration):
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+
+    texture = image_paint(write_png(tmp_path / 'signal-decor.png', pattern('opaque')), scale=165)
+    _assert_signal_decoration_gradient(binary, project, signal, decoration, texture=texture)
+
+
+def _assert_signal_decoration_gradient(binary, project, signal, decoration, *, texture=None):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from krok_helper.subtitle_render.domain.paint import PaintFill
     from test_subtitle_skia_outline_ruby import render_skia
@@ -1927,11 +1935,16 @@ def _assert_signal_decoration_gradient(binary, project, signal, decoration):
 
     track, style = project
     neutral = colors('#BBBBBB', '#BBBBBB')
-    decor = PaintFill(mode='gradient_vertical', start_color='#D52C36', end_color='#2FC82A')
+    decor = texture or PaintFill(mode='gradient_vertical', start_color='#D52C36', end_color='#2FC82A')
+    appearance = neutral
+    if texture:
+        appearance = replace(neutral, before=replace(neutral.before, stroke=texture, stroke2=texture),
+                              after=replace(neutral.after, stroke=texture, stroke2=texture))
     palette = SubtitleStyleScheme(font_size_px=50, decoration_kind=decoration, shadow_offset_x=13, shadow_offset_y=9,
                                   glow_before_radius_px=9, glow_after_radius_px=9, glow_concentration_level=1,
-                                  karaoke_colors=replace(neutral, before=replace(neutral.before, shadow=decor),
-                                                         after=replace(neutral.after, shadow=decor)))
+                                  stroke_width_px=3 if texture else 0, stroke2_enabled=bool(texture), stroke2_width_px=5,
+                                  karaoke_colors=replace(appearance, before=replace(appearance.before, shadow=decor),
+                                                         after=replace(appearance.after, shadow=decor)))
     style = replace(style, karaoke_colors=neutral, custom_style_schemes={'signal-shadow': palette})
     if signal == 'lamp':
         style = replace(style, lit_enabled=True, lit_style='square', lit_appearance_mode='role',

@@ -66,20 +66,20 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maxStroke);
     decoration.outerStroke = argb(palette.afterStroke2Paint.color);
     decoration.outerWidth = std::clamp(palette.stroke2Width * ratio, 0.f, maxStroke);
-    const auto gradient = [&](const PaintStyle& paint, const char* error) {
-        auto shader = ::subtitle::skia::lineGradient(paint, SkRect::MakeWH(1, 1), 0);
-        if (!solid(paint) && !shader) throw BackendError(error);
-        return shader;
+    const auto prepareBrush = [&](const PaintStyle& paint, sk_sp<SkShader>& gradient, ::subtitle::skia::ImageFill& image) {
+        if (paint.mode == "image") {
+            image = context.images.fill(paint, context.layoutScale);
+        } else {
+            gradient = ::subtitle::skia::lineGradient(paint, SkRect::MakeWH(1, 1), 0);
+            if (!solid(paint) && !gradient) throw BackendError("Skia 指示灯画笔不受支持");
+        }
     };
     if (!signal.image) {
-        if (palette.afterFillPaint.mode == "image")
-            decoration.fillImage = context.images.fill(palette.afterFillPaint, context.layoutScale);
-        else
-            decoration.unitGradients.fill = gradient(palette.afterFillPaint, "Skia 指示灯填充画笔不受支持");
+        prepareBrush(palette.afterFillPaint, decoration.unitGradients.fill, decoration.images.fill);
         if (signal.strokeWidth > 0 && SkColorGetA(signal.stroke))
-            decoration.unitGradients.stroke = gradient(palette.afterStrokePaint, "Skia 指示灯当前支持实色或渐变描边");
+            prepareBrush(palette.afterStrokePaint, decoration.unitGradients.stroke, decoration.images.stroke);
         if (decoration.outerWidth > 0 && SkColorGetA(decoration.outerStroke))
-            decoration.unitGradients.outerStroke = gradient(palette.afterStroke2Paint, "Skia 指示灯当前支持实色或渐变外描边");
+            prepareBrush(palette.afterStroke2Paint, decoration.unitGradients.outerStroke, decoration.images.outerStroke);
     }
     const auto kind = palette.decorationKindForState(true);
     if (!signal.image && kind == "shadow") {
@@ -87,7 +87,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         decoration.shadowY = palette.shadowOffsetYForState(true) * ratio;
         if (decoration.shadowX || decoration.shadowY) {
             decoration.shadow = argb(palette.afterDecorPaint.color);
-            decoration.unitGradients.shadow = gradient(palette.afterDecorPaint, "Skia 指示灯当前支持实色或渐变阴影");
+            prepareBrush(palette.afterDecorPaint, decoration.unitGradients.shadow, decoration.images.shadow);
         }
     }
     if (kind == "glow") {
@@ -95,16 +95,16 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         const auto radius = std::lround(std::max(0.f, palette.glowAfterRadius * ratio));
         if (radius > 256) throw BackendError("Skia 指示灯的光晕半径超限");
         if (radius > 0)
-            decoration.unitGradients.glow = gradient(palette.afterDecorPaint, "Skia 指示灯当前支持实色或渐变光晕");
+            prepareBrush(palette.afterDecorPaint, decoration.unitGradients.glow, decoration.images.glow);
         const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color)};
         const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
         decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
         for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
     }
-    if (signal.path && (!decoration.unitGradients.empty() || decoration.fillImage)) {
+    if (signal.path && (!decoration.unitGradients.empty() || !decoration.images.empty())) {
         const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
         if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
-            throw BackendError("Skia 矢量指示灯渐变缺少有效的基线");
+            throw BackendError("Skia 矢量指示灯画笔缺少有效的基线");
         decoration.glyphPaintOrigin = SkPoint::Make(float(xy[0].toDouble() * dpr), float(baseline.toDouble() * dpr));
     }
     signal.decoration = std::move(decoration);
@@ -146,7 +146,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     if (signal.decorated) {
         const auto supportedBrush = [](const PaintStyle& paint) {
             return paint.mode == "solid" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical"
-                || paint.mode == "gradient_horizontal";
+                || paint.mode == "gradient_horizontal" || paint.mode == "image";
         };
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
@@ -157,7 +157,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (!supportedBrush(fill) && fill.mode != "image")
+            if (!supportedBrush(fill))
                 throw BackendError("Skia 未支持音量柱当前填充画笔");
             if ((signal.strokeWidth > 0 && !supportedBrush(stroke))
                 || (signal.outerWidth > 0 && !supportedBrush(outer)))
@@ -169,14 +169,14 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                 paint.shadowX = palette.shadowOffsetXForState(after) * ratio;
                 paint.shadowY = palette.shadowOffsetYForState(after) * ratio;
                 if (paint.shadowX || paint.shadowY) {
-                    if (!supportedBrush(decor)) throw BackendError("Skia 音量柱当前支持实色或渐变阴影");
+                    if (!supportedBrush(decor)) throw BackendError("Skia 音量柱阴影画笔不受支持");
                     paint.shadow = argb(decor.color);
                 }
             }
             if (kind == "glow" && palette.glowConcentrationForState(after) >= 0) {
                 const auto radius = std::lround(std::max(0.f, (after ? palette.glowAfterRadius : palette.glowBeforeRadius) * ratio));
                 if (radius > 256) throw BackendError("Skia 音量柱的光晕半径超限");
-                if (radius > 0 && !supportedBrush(decor)) throw BackendError("Skia 音量柱当前支持实色或渐变光晕");
+                if (radius > 0 && !supportedBrush(decor)) throw BackendError("Skia 音量柱光晕画笔不受支持");
                 (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(decor.color)};
             }
         }
@@ -204,22 +204,23 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             horizontalBounds.fLeft = std::min(bounds.left(), firstRoleInk.left());
             horizontalBounds.fRight = std::max(bounds.right(), firstRoleInk.right());
         }
-        const auto gradient = [&](const PaintStyle& paint) {
-            return lineGradient(paint, paint.mode == "gradient_horizontal" ? horizontalBounds : bounds, 0);
+        const auto prepareBrush = [&](const PaintStyle& paint, sk_sp<SkShader>& gradient, ImageFill& image) {
+            if (paint.mode == "image") image = context.images.fill(paint, context.layoutScale);
+            else gradient = lineGradient(paint, paint.mode == "gradient_horizontal" ? horizontalBounds : bounds, 0);
         };
         GlowGradients glowGradients;
         for (const bool after : {false, true}) {
             auto& brush = signal.palette[after];
             const auto& fill = after ? palette.afterFillPaint : palette.beforeFillPaint;
-            if (fill.mode == "image") brush.fillImage = context.images.fill(fill, context.layoutScale);
-            else brush.fillGradient = gradient(fill);
+            prepareBrush(fill, brush.fillGradient, brush.fillImage);
             if (signal.strokeWidth > 0)
-                brush.strokeGradient = gradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint);
+                prepareBrush(after ? palette.afterStrokePaint : palette.beforeStrokePaint, brush.strokeGradient, brush.strokeImage);
             if (signal.outerWidth > 0)
-                brush.outerGradient = gradient(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint);
+                prepareBrush(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint, brush.outerGradient, brush.outerImage);
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (brush.shadowX || brush.shadowY) brush.shadowGradient = gradient(decor);
-            if ((after ? glow.after : glow.before).radius > 0) glowGradients[after] = gradient(decor);
+            if (brush.shadowX || brush.shadowY) prepareBrush(decor, brush.shadowGradient, brush.shadowImage);
+            if ((after ? glow.after : glow.before).radius > 0)
+                prepareBrush(decor, glowGradients[after], brush.glowImage);
         }
         for (auto& bar : signal.bars)
             for (auto& layer : bar.glow)
