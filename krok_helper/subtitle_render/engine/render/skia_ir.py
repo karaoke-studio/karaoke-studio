@@ -170,9 +170,8 @@ _GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'}
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
-def _character_transforms(track, ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks) -> int:
+def _character_transforms(ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks) -> int:
     """Write canonical cell and glyph pivots and return the required version."""
-    from krok_helper.subtitle_render.engine.guide.semantics import render_line_with_guide_symbols
     version = 3
     translucent_outlines = False
     energy_outlines = False
@@ -191,11 +190,13 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
                 version = 8
         elif geometry:
             version = max(version, 5 if animations & _HALO_TRANSFORMS else 4)
-        line, look = track.lines[item.track_index], item.layout_style
-        chars = render_line_with_guide_symbols(line).chars
-        whole_cell = (source.get('karaoke_anim') == 'no_wipe' and not track.rubies
+        line, look = item.line, item.layout_style
+        chars = item.render_line.chars
+        final = ir['skia_layout']['lines'][index]
+        readings = final.get('ruby_groups', ())
+        whole_cell = (source.get('karaoke_anim') == 'no_wipe' and not readings
                       and animations <= {'char_drip', 'spin_flip', 'none'})
-        simple = (not track.rubies and source.get('karaoke_anim') == 'none'
+        simple = (not readings and source.get('karaoke_anim') == 'none'
                   and animations <= {'char_drip', 'spin_flip', 'none'}
                   and not (any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                            or any(uses_authored_decoration(look, kind) for kind in ('glow', 'shadow'))))
@@ -207,9 +208,10 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
                   and all(not guide_symbol_is_bitmap(c.vector_glyph) or c.vector_glyph.bitmap_no_decor for c in chars))
         if (look.vertical or (reversed_flow and not directional)
                 or (index not in character_warp_lines and index not in composed_geometry_lines
-                    and ((source.get('karaoke_anim') != 'none' and not whole_cell) or track.rubies))
+                    and ((source.get('karaoke_anim') != 'none' and not whole_cell) or readings))
                 or (source.get('scanline') and item.track_index not in particle_band_tracks
-                    and not transformed_cell_band(source, look)) or look.lower_ruby_enabled
+                    and not transformed_cell_band(source, look))
+                or any(group.get('lower') for group in readings)
                 or (styled_cells and not styled)):
             raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排正文')
         entry = source.get('entry_anim') in _TRANSFORMS and source['entry_duration_ms'] > 0
@@ -221,11 +223,11 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
         styled_cell_transform |= styled
         outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
         if geometry and outlined and index not in composed_geometry_lines:
-            if not track.rubies and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
+            if not readings and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
                 energy_outlines = True
             else:
                 raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
-        if not geometry and not track.rubies and (look.stroke_width_px > 0 or look.stroke2_enabled):
+        if not geometry and not readings and (look.stroke_width_px > 0 or look.stroke2_enabled):
             colors = effective_karaoke_colors(look)
             layers = ['text']
             if look.stroke_width_px > 0:
@@ -235,7 +237,7 @@ def _character_transforms(track, ir, plan, measured, character_warp_lines, compo
             if len(layers) > 1:
                 translucent_outlines |= any(rgba(getattr(state, layer).color)[3] < 255
                                             for state in (colors.before, colors.after) for layer in layers)
-        cells, metrics = ir['skia_layout']['lines'][index]['cells'], measured.lines[item.track_index]
+        cells, metrics = final['cells'], measured.lines[item.track_index]
         write_horizontal_pivots(cells, metrics)
     if translucent_outlines:
         ir['required_features'].append('p07_translucent_character_outline')
@@ -931,7 +933,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
             ir['skia_layout']['kana_mark_schema'] = 1
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
-            track, ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks)
+            ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks)
         ir['required_features'].append('p07_character_transform')
     if adjust_position is None and uses_inline_bitmap_guides(plan.lines):
         ir['required_features'].append('p08_inline_bitmap_guides')

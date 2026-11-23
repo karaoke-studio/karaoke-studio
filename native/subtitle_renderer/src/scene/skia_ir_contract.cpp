@@ -1104,8 +1104,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 下方注音扫字线缺少整行出入场能力");
     const auto transformVersion = layout.value("character_transform_schema").toDouble(-1);
     if (features.contains("p07_character_transform_cells")
-        && (!features.contains("p07_character_transform") || transformVersion < 3
-            || features.contains("p05_resolved_ruby")))
+        && (!features.contains("p07_character_transform") || transformVersion < 3))
         throw BackendError("Skia 角色或导唱符缺少逐字变换能力声明");
     if (features.contains("p07_directional_character_transform")
         && (!features.contains("p07_character_transform") || transformVersion < 3

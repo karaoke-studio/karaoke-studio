@@ -567,6 +567,40 @@ def test_rtl_bitmap_decoration_is_local_to_the_guide_row(binary, project, tmp_pa
     assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_decoration_local', check_p00_edges=True)
 
 
+def test_inline_guide_transform_coexists_with_a_separate_reading(binary, lower_source):
+    from test_subtitle_skia_lower_product import ir_for as lower_ir
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style, resolve = lower_source
+    first, = track.lines
+    shift = 4000
+    guide = replace(first, track_line_index=1, break_before='page', display_start_override_ms=shift - 600,
+                    display_end_override_ms=first.end_ms + shift + 600, end_ms=first.end_ms + shift,
+                    chars=[replace(char, text=text, start_ms=char.start_ms + shift)
+                           for char, text in zip(first.chars, '字A字', strict=True)],
+                    inline_guide_symbols={1: SQUARE},
+                    animation_override=LineAnimationOverride(entry_anim='spin_flip', entry_duration_ms=600))
+    track = replace(track, lines=[first, guide])
+    style = replace(style, entry_anim='none', exit_anim='none', stroke_width_px=3)
+    ir = lower_ir(binary, (track, style, resolve))
+    assert {'p07_character_transform_cells', 'p06_inline_vector_guide_outline'} <= set(ir['required_features'])
+    assert any(group.get('lower') for group in ir['skia_layout']['lines'][0]['ruby_groups'])
+    assert not ir['skia_layout']['lines'][1]['ruby_groups']
+    times = (500, 1000, 3660, 3850, 4400)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=900, height=600, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(600, 900, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, 'separate_reading_and_guide_transform', check_p00_edges=True)
+
+
 def gradient_glowing_bitmap_guide(project, tmp_path):
     track, style = shadowed_bitmap_guide(project, tmp_path, paint_mode='gradient')
     style = replace(style, decoration_kind='glow', glow_before_radius_px=6, glow_after_radius_px=7)

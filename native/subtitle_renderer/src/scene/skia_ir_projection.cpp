@@ -543,12 +543,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             return animation == "none" || animation == "char_drip" || animation == "spin_flip";
         };
         const bool styledCellTransform = features.contains("p07_character_transform_cells")
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && cfg.rubies.empty()
+            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && rubyGroups.isEmpty()
             && simpleTransform(source.entryAnimation) && simpleTransform(source.exitAnimation)
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && !source.scanlineEnabled && source.fxBursts.empty();
         const bool outlinedInlineGuide = features.contains("p06_inline_vector_guide_outline")
-            && cfg.rubies.empty() && !features.contains("p05_resolved_ruby") && !cfg.vertical
+            && rubyGroups.isEmpty() && !cfg.vertical
             && source.karaokeAnimation == "none"
             && (guideWholeLineAnimation || styledCellTransform)
             && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled && source.fxBursts.empty();
