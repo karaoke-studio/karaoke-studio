@@ -5,6 +5,7 @@ import math
 from ...domain.band_presets import band_preset, preset_id_for_image
 from ..layout.line.skia_placement import legacy_ruby_allowance
 from ..ruby.style_semantics import ruby_stroke2_width, ruby_stroke_width
+from ..style.style_semantics import style_for_role_in_layout
 
 _BAND_TRANSITIONS = {'char_fade', 'flame', 'lightning'}
 
@@ -14,6 +15,31 @@ def _reading_ink_top(group, ink_top):
     edge2 = int(ruby_stroke2_width(group.target.style))
     # The final horizontal fill bounds use the placed ink and both pens.
     return group.baseline_offset + ink_top - (edge + edge2 + 1) // 2
+
+
+def _text_bounds(item, local, measured):
+    # Avatars advance the row but do not contribute visual ink or font height.
+    boxes, runs = [], []
+    pads = {}
+    for char, cell, run in zip(item.render_line.chars, local.cells, measured.slot_metrics, strict=True):
+        if cell['metrics'].get('bitmap_guide'):
+            continue
+        runs.append(run)
+        if char.role_label not in pads:
+            look = style_for_role_in_layout(item.layout_style, char.role_label)
+            primary = max(look.stroke_width_px, 0)
+            secondary = max(look.stroke2_width_px, 0) if look.stroke2_enabled else 0
+            pads[char.role_label] = math.ceil((primary + secondary) / 2)
+        left, top, right, bottom = cell['metrics']['ink']
+        if left < right and top < bottom:
+            x = cell['origin_x']
+            boxes.append((x + left, top, x + right, bottom))
+    reference = runs or (measured.baseline_metrics,)
+    top = -max(float(run['ascent']) for run in reference)
+    bottom = max(float(run['descent']) for run in reference)
+    ink = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+           max(b[2] for b in boxes), max(b[3] for b in boxes)) if boxes else None
+    return top, bottom, ink, max(pads.values(), default=0)
 
 
 def write_line_band(ir, style, prepared, *, width, height):
@@ -35,9 +61,7 @@ def write_line_band(ir, style, prepared, *, width, height):
             or style.line_band_fill_mode not in {'stretch', 'repeat', 'cover', 'three_slice'}
             or style.vertical or style.right_to_left
             or (sequence and style.line_band_tint) or style.line_band_edge_kind != 'none'
-            or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})
-            or any(char.role_label or char.vector_glyph is not None
-                   for item in prepared.plan.lines for char in item.render_line.chars)):
+            or (stroke and style.line_band_stroke_position not in {'outside', 'inside', 'center'})):
         raise ValueError('Skia 行背景带当前支持横排 PNG、GIF、WebP 和内置预设')
     if preset and not material:
         raise ValueError('Skia 行背景带无法读取预设图片')
@@ -60,13 +84,9 @@ def write_line_band(ir, style, prepared, *, width, height):
         at = geometry.position(item, width, height)
         local = geometry.locals[item.track_index]
         measured = prepared.measured.lines[item.track_index]
-        reference = measured.slot_metrics or (measured.baseline_metrics,)
-        top = -max(float(run['ascent']) for run in reference)
-        bottom = max(float(run['descent']) for run in reference)
+        top, bottom, ink, pad = _text_bounds(item, local, measured)
         left, right = 0, max(local.layout_width, 1)
         look = item.layout_style
-        pad = math.ceil((max(look.stroke_width_px, 0)
-                         + (max(look.stroke2_width_px, 0) if look.stroke2_enabled else 0)) / 2)
         volume_width = geometry.volume_widths[item.track_index]
         if volume_width:
             volume = geometry.volume_styles[item.track_index]
@@ -76,9 +96,8 @@ def write_line_band(ir, style, prepared, *, width, height):
             center = final['volume_signal_anchor'][1] - at.baseline_y + volume.volume_offset_y
             half_height = max(volume.volume_size, 1) / 2 + max(volume_stroke, 0)
             top, bottom = min(top, center - half_height), max(bottom, center + half_height)
-        elif local.ink and local.ink[3] - local.ink[1] + 2 * pad >= (bottom - top) / 2:
-            left, top, right, bottom = (local.ink[0] - pad, local.ink[1] - pad,
-                                       local.ink[2] + pad, local.ink[3] + pad)
+        elif ink and ink[3] - ink[1] + 2 * pad >= (bottom - top) / 2:
+            left, top, right, bottom = ink[0] - pad, ink[1] - pad, ink[2] + pad, ink[3] + pad
         readings = ruby.lines[item.track_index].rubies if ruby is not None else ()
         if style.line_band_include_ruby:
             for group in readings:

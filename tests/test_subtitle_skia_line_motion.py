@@ -1058,18 +1058,29 @@ def test_signal_follows_its_line_animation(binary, project, signal, entry_anim, 
             assert abs(signal_bounds(expected) - signal_bounds(actual)).max() <= 1, time
 
 
-def test_line_band_covers_inline_volume_geometry(binary, project, tmp_path):
+def solid_line_band(style, tmp_path):
     from PyQt6.QtGui import QImage
 
-    track, style = project
     asset = tmp_path / 'band.png'
     image = QImage(4, 4, QImage.Format.Format_ARGB32)
     image.fill(0xFF38DF54)
     assert image.save(str(asset))
-    style = replace(style, entry_anim='none', exit_anim='none', line_band_enabled=True,
-                    line_band_image=str(asset), line_band_fill_mode='stretch', line_band_opacity_pct=100,
-                    line_band_pad_left_px=4, line_band_pad_right_px=4,
-                    line_band_pad_top_px=4, line_band_pad_bottom_px=4,
+    return replace(style, entry_anim='none', exit_anim='none', line_band_enabled=True,
+                   line_band_image=str(asset), line_band_fill_mode='stretch', line_band_opacity_pct=100,
+                   line_band_pad_left_px=4, line_band_pad_right_px=4,
+                   line_band_pad_top_px=4, line_band_pad_bottom_px=4)
+
+
+def solid_band_box(frame):
+    mask = np.all(frame[..., :3] == [56, 223, 84], axis=-1) & (frame[..., 3] > 250)
+    points = np.argwhere(mask)
+    assert len(points) > 1000
+    return np.array([points.min(axis=0), points.max(axis=0)])
+
+
+def test_line_band_covers_inline_volume_geometry(binary, project, tmp_path):
+    track, style = project
+    style = replace(solid_line_band(style, tmp_path),
                     volume_enabled=True, volume_appearance_mode='custom', volume_size=84,
                     volume_offset_x=-8, volume_offset_y=-16, volume_stroke_width=2,
                     volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF',
@@ -1094,10 +1105,7 @@ def test_line_band_covers_inline_volume_geometry(binary, project, tmp_path):
         results.append(frames)
 
     def band_box(frame):
-        mask = np.all(frame[..., :3] == [56, 223, 84], axis=-1) & (frame[..., 3] > 250)
-        points = np.argwhere(mask)
-        assert len(points) > 1000
-        low, high = points.min(axis=0), points.max(axis=0)
+        low, high = solid_band_box(frame)
         volume = np.argwhere((frame[..., 0] > 245) & (frame[..., 1] < 10)
                              & (frame[..., 2] > 245) & (frame[..., 3] > 245))
         assert len(volume) > 100
@@ -1109,6 +1117,51 @@ def test_line_band_covers_inline_volume_geometry(binary, project, tmp_path):
     for frames in results[1:]:
         for frame, box in zip(frames, reference, strict=True):
             assert abs(band_box(frame) - box).max() <= 1
+
+
+@pytest.mark.parametrize('content', ['vector', 'bitmap', 'role'])
+def test_line_band_uses_text_ink_with_guides_and_roles(binary, project, tmp_path, content):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    from test_subtitle_skia_bitmap_guides import image
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors, role_outline_palette
+    from test_subtitle_skia_vector_guides import SQUARE
+
+    track, style = project
+    line, = track.lines
+    if content == 'vector':
+        line = replace(line, guide_symbol=SQUARE)
+    elif content == 'bitmap':
+        avatar = image(tmp_path / 'avatar.png', color='#FF00FF')
+        line = replace(line, guide_symbol=GuideSymbol(kind='bitmap', bitmap_before_path=avatar,
+                                                     bitmap_after_path=avatar, bitmap_zoom_percent=185))
+    else:
+        line = replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])
+        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(
+            font_family=style.font_family, font_size_px=style.font_size_px, stroke_width_px=8,
+            stroke2_enabled=True, stroke2_width_px=4, karaoke_colors=role_outline_palette())})
+    track = replace(track, lines=[line])
+    style = solid_line_band(style, tmp_path)
+    style = replace(style, karaoke_colors=colors('#FFD200', '#FFD200'))
+    times = (500,)
+    results = []
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        results.append(np.frombuffer(raw[0], np.uint8).reshape(360, 640, 4))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    results.extend((gpu[0], raster[0]))
+    reference = solid_band_box(results[0])
+    for frame in results:
+        box = solid_band_box(frame)
+        assert abs(box - reference).max() <= 1, (content, box, reference)
+        if content == 'bitmap':
+            magenta = np.all(frame[..., :3] == [255, 0, 255], axis=-1)
+            assert np.count_nonzero(magenta[:box[0, 0]]) > 100
 
 
 def test_shape_signal_draws_above_line_band(binary, project, tmp_path):

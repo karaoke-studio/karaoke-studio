@@ -625,8 +625,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (staticBand && (cell.vectorGlyph || cell.bitmapGuide || &cellStyle != &resolved))
-                throw BackendError("Skia 行背景带暂不支持导唱符或行内角色");
             if (source.scanlineEnabled && ((cell.vectorGlyph && !(prefixFadedScanline || staticScanlineCells))
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
                 throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
