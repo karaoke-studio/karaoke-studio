@@ -603,6 +603,37 @@ def test_lower_image_shadow_matches_actual_d2d_gpu(binary, application, tmp_path
     assert_ruby_transition_gpu_parity(binary, case, times)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_multitrack_lower_image_shadow_matches_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_image_fills import pattern, write_png
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    case = next(case for case in build_cases(tmp_path / 'assets') if case.case_id == 'lower_ruby')
+    track = case.track
+    other = replace(track, meta=replace(track.meta, offset_ms=900))
+    style = replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none')
+    tile = write_png(tmp_path / 'shadow.png', pattern('transparent'))
+    viewport = dict(width=1920, height=1080)
+    times = (299, 1550, 2600, 4110, 5150, 5750, 6399)
+    references = []
+    for path in (tile, tmp_path / 'missing.png'):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, lower_image_shadow_style(style, path), times,
+                                       track=track, extra_tracks=[other], force_warp=False,
+                                       realization_enabled=False, **viewport)
+        references.append([np.frombuffer(frame, np.uint8).reshape(1080, 1920, 4) for frame in raw])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(*references, strict=True))
+    output = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, lower_image_shadow_style(style, tile), extra_tracks=[other], fps=60, **viewport)
+            frames, _ = collect(process, times)
+        output.append(frames)
+    assert_glow_parity(times, references[0], *output, 'multitrack_lower_image_shadow', check_p00_edges=True)
+
+
 def test_lower_gradient_shadow_rejects_forged_paint_without_replacing_scene(binary, independent):
     track, style, resolve = independent
     ir = ir_for(binary, (track, lower_gradient_shadow_style(style), resolve))
