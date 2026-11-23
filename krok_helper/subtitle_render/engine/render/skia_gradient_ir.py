@@ -193,11 +193,11 @@ def write_body_gradient_bounds(ir, plan):
                        and (fixed_faded_utopia_band(source, look) or particle_band))
         faded_band = (vector_band or particle_band) and modes <= {'solid', 'gradient_vertical'}
         paint_fade = ('fade' in animations and animations <= {'none', 'fade'}
-                      and source.get('karaoke_anim') == 'none' and not (annotated or upper_ruby)
+                      and source.get('karaoke_anim') == 'none' and not annotated
                       and not (source.get('scanline') or source.get('fx_bursts') or source.get('zoom_pulse')))
         paint_scanline = (bool(source.get('scanline')) and look.scanline_shape == 'band'
                           and look.scanline_mode in {'default', 'color'} and animations == {'none'}
-                          and source.get('karaoke_anim') == 'none' and not (annotated or upper_ruby)
+                          and source.get('karaoke_anim') == 'none' and not annotated
                           and not (source.get('fx_bursts') or source.get('zoom_pulse')))
         palette_band = (source.get('scanline') and look.scanline_shape == 'band' and look.scanline_mode == 'brighten'
                         and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')

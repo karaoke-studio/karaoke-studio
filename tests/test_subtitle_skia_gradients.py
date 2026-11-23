@@ -13,6 +13,7 @@ from test_subtitle_skia_line_fade import (
 from test_subtitle_skia_primary_outline import within_one_pixel
 from test_subtitle_skia_reverse import source as clock_source
 from test_subtitle_skia_outline_ruby import annotated, mixed, pages, prepared_source, reading, source, upper_ir
+from krok_helper.subtitle_render.domain.models import LineAnimationOverride
 from krok_helper.subtitle_render.domain.paint import PaintFill
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess
@@ -68,6 +69,52 @@ def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target, 
     assert region.any() and np.array_equal(painted[0][region], ruby[0][region])
     assert np.count_nonzero(painted[0][..., 3] > 16) > np.count_nonzero(region)
     assert np.array_equal(replay[0], painted[0])
+
+
+@pytest.mark.parametrize('effect', ['fade', 'scanline'])
+def test_gradient_effect_on_unannotated_row_works_with_another_rows_ruby(binary, reading, effect):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_scanline import band
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = reading
+    ramp = PaintFill(mode='gradient_vertical', start_color='#FFCC40', end_color='#307AEA')
+    colors = style.karaoke_colors
+    style = replace(style, karaoke_colors=replace(colors, before=replace(colors.before, text=ramp)),
+                    entry_anim='none', exit_anim='none', karaoke_anim='none', scanline_enabled=False)
+    if effect == 'scanline':
+        style = band(style)
+    first, = track.lines
+    first = replace(first, display_end_override_ms=2600, animation_override=LineAnimationOverride(scanline_enabled=False))
+    second = replace(first, track_line_index=1, break_before='page',
+                     chars=[replace(char, start_ms=char.start_ms + 3800) for char in first.chars],
+                     end_ms=5900, display_start_override_ms=3500, display_end_override_ms=6000,
+                     animation_override=LineAnimationOverride(
+                         entry_anim='fade' if effect == 'fade' else 'none',
+                         entry_duration_ms=600 if effect == 'fade' else 0,
+                         scanline_enabled=effect == 'scanline'))
+    track = replace(track, lines=[first, second])
+    ir = upper_ir(binary, (track, style), 1)
+    assert [bool(line['ruby_groups']) for line in ir['skia_layout']['lines']] == [True, False]
+    assert {'p06_ruby_main_paint', f'p06_unscaled_paint_{effect}'} <= set(ir['required_features'])
+    times = (450, 1300, 3600, 3800, 4200, 4850)
+    gpu, raster = render_skia(binary, ir, times)
+
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        without_effect = replace(track, lines=[first, replace(second, animation_override=first.animation_override)])
+        refs = []
+        for source_track in (track, without_effect):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, style, times, force_warp=False, track=source_track,
+                                           width=640, height=360, realization_enabled=False)
+            refs.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+        reference, control = refs
+        assert all(np.array_equal(a, b) for a, b in zip(reference[:2], control[:2], strict=True))
+        assert any(not np.array_equal(a, b) for a, b in zip(reference[2:], control[2:], strict=True))
+    assert_glow_parity(times, reference, gpu, raster, ('gradient_on_unannotated_row', effect), check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
