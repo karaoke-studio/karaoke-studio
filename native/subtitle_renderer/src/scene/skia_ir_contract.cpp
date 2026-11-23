@@ -781,66 +781,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (roleVectorGuides && (!features.contains("p05_vector_guide_composition")
         || !features.contains("p07_role_singing_scale") || !features.contains("p07_role_line_fade")))
         throw BackendError("Skia 角色前置导唱符缺少角色唱字或整行淡化能力声明");
-    if (features.contains("p05_vector_guide_composition")) {
-        // The vector guides are a prefix of the final cells, including lyrics replacements.
-        static const QJsonArray allowed{
-            "p05_fixed_row_grid", "p05_inline_roles", "p05_overlap_wipe",
-            "p05_page_collisions", "p05_resolved_horizontal", "p05_resolved_ruby",
-            "p05_segmented_wipe", "p05_single_line_placement", "p05_smart_horizontal",
-            "p05_upper_ruby", "p05_vector_guides", "p05_vector_guide_composition",
-            "p05_inline_vector_guide_ruby",
-            "p06_outline_ruby", "p06_primary_solid_outline", "p06_ruby_glow",
-            "p06_ruby_solid_outline", "p06_secondary_solid_outline", "p06_static_glow",
-            "p07_ruby_singing_scale", "p07_singing_glow", "p07_singing_scale", "p06_inline_vector_guide_outline"};
-        static const QJsonArray animatedGradient{
-            "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
-            "p06_body_gradient", "p06_outline_gradient", "p06_ruby_main_paint",
-            "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_outline_gradient", "p06_ruby_horizontal_outline",
-            "p06_static_shadow", "p06_ruby_shadow", "p06_gradient_glow", "p06_animated_singing_gradient_fill"};
-        static const QJsonArray lineMotion{
-            "p06_multi_lane_outline", "p06_latin_primary_outline", "p06_latin_secondary_outline",
-            "p07_line_fade", "p07_line_motion",
-            "p07_utopia_line_animation", "p07_ruby_line_animation"};
-        static const QJsonArray fadedScanline{
-            "p06_faded_scanline_gradient_fill", "p07_faded_scanline_prefix_guides",
-            "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation"};
-        static const QJsonArray fadedScanlineParticles{
-            "p07_faded_scanline_singing_particles", "p07_faded_scanline_particle_paint",
-            "p07_sing_twinkle", "p07_ruby_band_singing_particles"};
-        static const QJsonArray roleGuides{
-            "p05_role_vector_guides", "p06_role_solid_outlines", "p06_role_static_glow", "p06_ruby_role_glow",
-            "p06_static_shadow", "p06_ruby_shadow",
-            "p07_role_singing_scale", "p07_role_singing_glow", "p07_role_line_fade"};
-        static const QJsonArray rtlGuides{
-            "p05_rtl_vector_guides", "p05_horizontal_rtl", "p05_horizontal_rtl_cells",
-            "p05_horizontal_rtl_kana_cells", "p05_horizontal_rtl_kana_marks",
-            "p05_reverse_wipe", "p05_reverse_overlap"};
-        static const QJsonArray verticalGuides{"p05_vertical_vector_guides", "p07_no_wipe"};
-        static const QJsonArray verticalVectorDecorations{
-            "p06_vertical_vector_guide_decoration", "p06_static_shadow", "p06_vertical_shadow",
-            "p06_vertical_reverse_shadow", "p06_vertical_glow", "p06_vertical_reverse_glow"};
-        static const QJsonArray lowerGuides{
-            "p05_vector_guide_lower_ruby", "p05_lower_ruby", "p05_ruby_units", "p05_ruby_markers",
-            "p05_standalone_marks", "p06_lower_ruby_glow"};
-        const bool useFadedScanline = features.contains("p07_faded_scanline_prefix_guides");
-        const bool useAnimatedGradients = useFadedScanline || features.contains("p06_animated_singing_gradient_fill");
-        const bool useLineMotion = useAnimatedGradients || features.contains("p07_utopia_line_animation");
-        const bool useFadedScanlineParticles = useFadedScanline && features.contains("p07_faded_scanline_singing_particles");
-        if (!features.contains("p05_vector_guides"))
-            throw BackendError("Skia 导唱符组合缺少导唱符能力");
-        for (const auto& feature : features)
-            if (!allowed.contains(feature) && !(useAnimatedGradients && animatedGradient.contains(feature))
-                && !(useLineMotion && lineMotion.contains(feature))
-                && !(useFadedScanline && fadedScanline.contains(feature))
-                && !(useFadedScanlineParticles && fadedScanlineParticles.contains(feature))
-                && !(roleVectorGuides && roleGuides.contains(feature)) && !(rtlVectorGuides && rtlGuides.contains(feature))
-                && !(lowerVectorGuides && lowerGuides.contains(feature))
-                && !(vectorGuideShadow && (feature == QJsonValue("p06_vector_guide_shadow")
-                    || feature == QJsonValue("p06_static_shadow")))
-                && !(verticalVectorDecoration && verticalVectorDecorations.contains(feature))
-                && !(verticalVectorGuides && (verticalGuides.contains(feature) || verticalGuideLayout.contains(feature))))
-                throw BackendError("Skia 导唱符组合包含未验证能力");
-    }
+    if (features.contains("p05_vector_guide_composition") && !features.contains("p05_vector_guides"))
+        throw BackendError("Skia 导唱符组合缺少导唱符能力");
     if (features.contains("p07_faded_scanline_prefix_guides")
         && (!features.contains("p05_vector_guide_composition") || !features.contains("p07_scanline_line_animation")
             || !features.contains("p07_line_fade")))

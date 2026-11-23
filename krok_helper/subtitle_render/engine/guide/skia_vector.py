@@ -9,7 +9,7 @@ cell's left edge, and advances by the *unrounded* ``size * advance / em``
 from __future__ import annotations
 
 import math
-from ..layout.line.skia_vertical import VERTICAL_GUIDE_LAYOUT_FEATURES
+from ..style.style_semantics import uses_authored_decoration
 
 
 def vector_guide_advance(glyph, size) -> float:
@@ -115,51 +115,6 @@ def project_vector_guide_roles(ir, plan_lines):
                 payload.pop('role_label', None)
 
 
-# Verified with a line-level prefix guide: Utopia singing, upper ruby, solid
-# double outlines and glow. Any other capability keeps the plain subset only.
-VECTOR_GUIDE_COMPOSITION_TRIGGERS = frozenset({
-    'p05_resolved_ruby', 'p06_primary_solid_outline', 'p06_static_glow', 'p06_static_shadow', 'p07_singing_scale'})
-VECTOR_GUIDE_COMPOSITION_FEATURES = frozenset({
-    'p05_fixed_row_grid', 'p05_inline_roles', 'p05_overlap_wipe', 'p05_page_collisions',
-    'p05_resolved_horizontal', 'p05_resolved_ruby', 'p05_segmented_wipe', 'p05_single_line_placement',
-    'p05_smart_horizontal', 'p05_upper_ruby', 'p05_vector_guides', 'p05_vector_guide_composition',
-    'p06_outline_ruby', 'p06_primary_solid_outline', 'p06_ruby_glow', 'p06_ruby_solid_outline',
-    'p06_secondary_solid_outline', 'p06_static_glow', 'p07_ruby_singing_scale', 'p07_singing_glow',
-    'p07_singing_scale'})
-RTL_VECTOR_GUIDE_FEATURES = frozenset({
-    'p05_rtl_vector_guides', 'p05_horizontal_rtl', 'p05_horizontal_rtl_cells',
-    'p05_horizontal_rtl_kana_cells', 'p05_horizontal_rtl_kana_marks',
-    'p05_reverse_wipe', 'p05_reverse_overlap',
-})
-VERTICAL_VECTOR_GUIDE_FEATURES = VERTICAL_GUIDE_LAYOUT_FEATURES | {'p05_vertical_vector_guides', 'p07_no_wipe'}
-VERTICAL_VECTOR_GUIDE_DECORATION_FEATURES = frozenset({
-    'p06_static_shadow', 'p06_vertical_shadow', 'p06_vertical_reverse_shadow',
-    'p06_vertical_glow', 'p06_vertical_reverse_glow',
-})
-LOWER_RUBY_VECTOR_GUIDE_FEATURES = frozenset({
-    'p05_vector_guide_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
-    'p06_lower_ruby_glow',
-})
-VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES = frozenset({
-    'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
-    'p06_body_gradient', 'p06_outline_gradient', 'p06_ruby_main_paint',
-    'p06_utopia_main_paint', 'p06_ruby_fill_gradient', 'p06_ruby_outline_gradient', 'p06_ruby_horizontal_outline',
-    'p06_static_shadow', 'p06_ruby_shadow', 'p06_gradient_glow', 'p06_animated_singing_gradient_fill'})
-VECTOR_GUIDE_LINE_MOTION_FEATURES = frozenset({
-    'p06_multi_lane_outline', 'p06_latin_primary_outline', 'p06_latin_secondary_outline',
-    'p07_line_fade', 'p07_line_motion', 'p07_utopia_line_animation', 'p07_ruby_line_animation'})
-VECTOR_GUIDE_FADED_SCANLINE_FEATURES = frozenset({
-    'p06_faded_scanline_gradient_fill', 'p07_faded_scanline_prefix_guides',
-    'p07_scanline_band', 'p07_ruby_scanline', 'p07_scanline_line_animation'})
-VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES = frozenset({
-    'p07_faded_scanline_singing_particles', 'p07_faded_scanline_particle_paint',
-    'p07_sing_twinkle', 'p07_ruby_band_singing_particles'})
-ROLE_VECTOR_GUIDE_FEATURES = frozenset({
-    'p05_role_vector_guides', 'p06_role_solid_outlines', 'p06_role_static_glow', 'p06_ruby_role_glow',
-    'p06_static_shadow', 'p06_ruby_shadow',
-    'p07_role_singing_scale', 'p07_role_singing_glow', 'p07_role_line_fade'})
-
-
 def vector_guides_form_prefix(chars):
     from .semantics import guide_symbol_is_bitmap
     guides = [c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars]
@@ -167,91 +122,62 @@ def vector_guides_form_prefix(chars):
     return count > 0 and all(guides[:count])
 
 
-def compose_vector_guides(track, ir):
-    """Append p05_vector_guide_composition, or reject an unverified combination."""
-    from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
+def compose_vector_guides(plan_lines, ir):
+    """Declare guide capabilities from the cells and effects that share a line."""
+    from .semantics import guide_symbol_is_bitmap
+
     features = ir['required_features']
-    if 'p05_vector_guides' not in features or not VECTOR_GUIDE_COMPOSITION_TRIGGERS.intersection(features):
+    if 'p05_vector_guides' not in features:
         return
-    animated_gradient = 'p06_animated_singing_gradient_fill' in features
-    faded_scanline = 'p07_faded_scanline_prefix_guides' in features
-    vertical_guides = 'p05_vertical_vector_guides' in features
-    vertical_decoration = vertical_guides and bool({'p06_vertical_shadow', 'p06_vertical_glow'}.intersection(features))
+
+    # These capabilities describe the IR version. The check below uses the
+    # line's actual paint, geometry and timing to decide whether it needs them.
+    required = set()
     lower_reading = 'p05_lower_ruby' in features
-    inline_ruby = ('p05_upper_ruby' in features and not lower_reading and not vertical_guides
-                   and not {'p05_horizontal_rtl', 'p05_reverse_wipe'}.intersection(features))
-    line_motion = 'p07_utopia_line_animation' in features
-    shadow_features = {'p06_static_shadow', 'p06_vector_guide_shadow'}
-    static_shadow = ('p06_static_shadow' in features and not track.rubies
-                     and set(features) <= VECTOR_GUIDE_COMPOSITION_FEATURES | shadow_features)
-    inline_outlines = ('p06_primary_solid_outline' in features
-                       and set(features) <= (VECTOR_GUIDE_COMPOSITION_FEATURES | RTL_VECTOR_GUIDE_FEATURES
-                                             | VERTICAL_VECTOR_GUIDE_FEATURES)
-                       and not (track.rubies or 'p05_resolved_ruby' in features or 'p07_singing_scale' in features
-                                or 'p06_static_glow' in features))
-    has_inline_outlines = False
-    has_inline_ruby = False
-    for line, source in zip(track.lines, ir['track']['lines'], strict=True):
-        chars = render_line_with_guide_symbols(line).chars
+    has_outline_profile = 'p06_primary_solid_outline' in features
+    for item, final in zip(plan_lines, ir['skia_layout']['lines'], strict=True):
+        chars = item.render_line.chars
         if not any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph) for c in chars):
             continue
-        if lower_reading and (vertical_guides or 'p05_rtl_vector_guides' in features or line.wipe_reverse
-                              or source.get('karaoke_anim') != 'none'
-                              or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-                              or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-            raise ValueError('Skia 矢量导唱符与下方注音需要静态正向横排')
-        if static_shadow:
-            if (line.wipe_reverse or source.get('karaoke_anim') != 'none'
-                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                    or any(c.role_label is not None for c in chars)):
+
+        look = item.layout_style
+        line = item.line
+        source = ir['track']['lines'][item.track_index]
+        upper_reading = bool(final.get('ruby_groups'))
+        has_shadow = uses_authored_decoration(look, 'shadow')
+        has_glow = uses_authored_decoration(look, 'glow')
+        singing = source.get('karaoke_anim') == 'utopia'
+        ordinary = (source.get('karaoke_anim') == 'none'
+                    and not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts')))
+        stationary = ordinary and source.get('entry_anim') == source.get('exit_anim') == 'none'
+        forward = not (look.vertical or look.right_to_left or line.wipe_reverse)
+        needs_composition = has_outline_profile or upper_reading or lower_reading or has_shadow or has_glow or singing
+        if not needs_composition:
+            continue
+
+        required.add('p05_vector_guide_composition')
+        if look.vertical and (has_shadow or has_glow):
+            required.add('p06_vertical_vector_guide_decoration')
+        if lower_reading:
+            if not (forward and stationary):
+                raise ValueError('Skia 矢量导唱符与下方注音需要静态正向横排')
+            required.add('p05_vector_guide_lower_ruby')
+        if has_shadow and not (look.vertical or upper_reading or 'p05_role_vector_guides' in features):
+            if not (forward and stationary) or any(c.role_label is not None for c in chars):
                 raise ValueError('Skia 矢量导唱符阴影需要静态正向横排')
+            required.add('p06_vector_guide_shadow')
             continue
-        if (lower_reading or animated_gradient or faded_scanline or line_motion or vertical_guides) and vector_guides_form_prefix(chars):
+        if vector_guides_form_prefix(chars):
             continue
-        if line.inline_guide_symbols or line.guide_symbol is None or line.guide_symbol.replacement_prefix:
-            if inline_ruby and ({source.get('entry_anim'), source.get('exit_anim')} == {'none'}
-                                and source.get('karaoke_anim') == 'none'
-                                and not any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-                has_inline_ruby = True
-                continue
-            if not inline_outlines:
-                raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
-            has_inline_outlines = True
-    allowed = VECTOR_GUIDE_COMPOSITION_FEATURES
-    if 'p05_rtl_vector_guides' in features:
-        allowed |= RTL_VECTOR_GUIDE_FEATURES
-    if vertical_guides:
-        allowed |= VERTICAL_VECTOR_GUIDE_FEATURES
-    if vertical_decoration:
-        allowed |= VERTICAL_VECTOR_GUIDE_DECORATION_FEATURES
-    if animated_gradient or faded_scanline:
-        allowed |= VECTOR_GUIDE_ANIMATED_GRADIENT_FEATURES
-    if animated_gradient or faded_scanline or line_motion:
-        allowed |= VECTOR_GUIDE_LINE_MOTION_FEATURES
-    if faded_scanline:
-        allowed |= VECTOR_GUIDE_FADED_SCANLINE_FEATURES
-        if 'p07_faded_scanline_singing_particles' in features:
-            allowed |= VECTOR_GUIDE_SCANLINE_PARTICLE_FEATURES
-    if 'p05_role_vector_guides' in features:
-        allowed |= ROLE_VECTOR_GUIDE_FEATURES
-    if lower_reading:
-        allowed |= LOWER_RUBY_VECTOR_GUIDE_FEATURES
-    if static_shadow:
-        allowed |= shadow_features
-    if not set(features) <= allowed - {'p05_vector_guide_composition'}:
-        raise ValueError('Skia 暂不支持导唱符与此排版、画笔或动画的组合')
-    features.append('p05_vector_guide_composition')
-    if vertical_decoration:
-        features.append('p06_vertical_vector_guide_decoration')
-    if lower_reading:
-        features.append('p05_vector_guide_lower_ruby')
-    if static_shadow:
-        features.append('p06_vector_guide_shadow')
-    if has_inline_outlines:
-        features.append('p06_inline_vector_guide_outline')
-    if has_inline_ruby:
-        features.append('p05_inline_vector_guide_ruby')
+        if upper_reading and not lower_reading and forward and stationary:
+            required.add('p05_inline_vector_guide_ruby')
+        elif (has_outline_profile and stationary and not look.vertical
+              and not (upper_reading or lower_reading or has_glow or has_shadow)):
+            required.add('p06_inline_vector_guide_outline')
+        else:
+            raise ValueError('Skia 导唱符组合仅支持整行前置导唱符')
+
+    features.extend(sorted(required))
 
 
 def vector_guide_metrics(glyph, size, font_metrics, glyph_id):

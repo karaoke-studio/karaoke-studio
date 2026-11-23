@@ -12,7 +12,7 @@ from test_subtitle_skia_rtl_flow import (application, binary, project, rtl_sourc
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
 from krok_helper.subtitle_render.domain.paint import PaintFill
-from krok_helper.subtitle_render.domain.timing import GuideSymbol, RubyAnnotation
+from krok_helper.subtitle_render.domain.timing import GuideSymbol, LineAnimationOverride, RubyAnnotation
 from krok_helper.subtitle_render.engine.guide.skia_vector import vector_guide_advance, vector_guide_ink
 from krok_helper.subtitle_render.native.backend import NativeRendererError, NativeRendererProcess
 from krok_helper.subtitle_render.native.protocol import VectorGlyphTable
@@ -39,6 +39,43 @@ def guide_source(project, kind='prefix', symbol=SQUARE, *, reverse=False, effect
     else:
         line = replace(line, inline_guide_symbols={1: symbol})
     return replace(track, lines=[line]), replace(style, right_to_left=False, layout_semantics=semantics)
+
+
+def test_vector_guide_and_line_fade_share_the_same_render_path(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = guide_source(project)
+    style = replace(style, stroke_width_px=3, karaoke_anim='none', entry_anim='none', exit_anim='none')
+    guide, = track.lines
+    guide = replace(guide, track_line_index=0, display_start_override_ms=0, display_end_override_ms=3000)
+    fade = LineAnimationOverride(entry_anim='fade', entry_duration_ms=600, karaoke_anim='none')
+    next_line = replace(guide, guide_symbol=None, track_line_index=1, break_before='page',
+                        chars=[replace(char, start_ms=char.start_ms + 3000) for char in guide.chars],
+                        end_ms=guide.end_ms + 3000, display_start_override_ms=3000,
+                        display_end_override_ms=5500, animation_override=fade)
+    cases = (
+        ([guide, next_line], (950, 1100, 3100, 3350, 3650), [False, True]),
+        ([replace(guide, animation_override=fade)], (250, 450, 750, 1100), [True]),
+    )
+    for lines, times, expected_fade in cases:
+        source = replace(track, lines=lines)
+        ir = ir_for(binary, (source, style))
+        assert {'p05_vector_guide_composition', 'p07_line_fade'} <= set(ir['required_features'])
+        assert [line['entry_anim'] == 'fade' for line in ir['track']['lines']] == expected_fade
+        gpu, raster = render_skia(binary, ir, times)
+        assert all(frame.any() for frame in gpu)
+
+        reference = None
+        if sys.platform == 'win32':
+            from test_subtitle_render_gpu_backend import _render_g1_frames
+
+            with NativeRendererProcess() as process:
+                _, pixels = _render_g1_frames(process, style, times, force_warp=False, track=source,
+                                              width=640, height=360, realization_enabled=False)
+            reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in pixels]
+        assert_glow_parity(times, reference, gpu, raster, ('vector_guide_line_fade', len(lines)),
+                           check_p00_edges=True)
 
 
 def test_qt_free_guide_geometry_matches_the_gpu_contract():
@@ -411,16 +448,18 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         before, _ = collect(process, [950])
-        for mutation in ('feature', 'unverified'):
-            bad = copy.deepcopy(ir)
-            if mutation == 'feature':
-                bad['required_features'].remove('p05_vector_guide_composition')
-            else:
-                bad['required_features'].append('p06_static_shadow')
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
+        bad = copy.deepcopy(ir)
+        bad['required_features'].remove('p05_vector_guide_composition')
+        with pytest.raises(NativeRendererError):
+            configure(process, bad)
         after, _ = collect(process, [950], generation=2)
+        # A supported capability elsewhere in the source does not alter this line.
+        unrelated = copy.deepcopy(ir)
+        unrelated['required_features'].append('p06_static_shadow')
+        configure(process, unrelated)
+        replay, _ = collect(process, [950], generation=3)
     assert before[0].any() and np.array_equal(before[0], after[0])
+    assert np.array_equal(before[0], replay[0])
 
 
 @pytest.mark.parametrize('effect', ['gradient', 'scanline', 'gradient_glow', 'scanline_particles', 'scanline_snow'])
