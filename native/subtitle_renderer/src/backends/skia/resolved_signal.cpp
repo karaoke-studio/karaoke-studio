@@ -57,10 +57,11 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     const auto& palette = decorStyle ? *decorStyle : style;
     const auto solid = [](const auto& paint) { return paint.mode == "solid"; };
     Signal::Decoration decoration;
-    decoration.unitFillGradient = ::subtitle::skia::lineGradient(palette.afterFillPaint, SkRect::MakeWH(1, 1), 0);
-    if ((!solid(palette.afterFillPaint) && !decoration.unitFillGradient) || !solid(palette.afterStrokePaint)
-        || !solid(palette.afterStroke2Paint) || !solid(palette.afterDecorPaint))
-        throw BackendError("Skia 自动指示灯当前支持实色或渐变填充、实色描边和装饰");
+    if (!signal.image) {
+        decoration.unitFillGradient = ::subtitle::skia::lineGradient(palette.afterFillPaint, SkRect::MakeWH(1, 1), 0);
+        if (!solid(palette.afterFillPaint) && !decoration.unitFillGradient)
+            throw BackendError("Skia 指示灯当前支持实色或渐变填充");
+    }
     if (signal.path && decoration.unitFillGradient) {
         const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
         if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
@@ -74,16 +75,23 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
     signal.strokeWidth = std::clamp(palette.strokeWidth * ratio, 0.f, maxStroke);
     decoration.outerStroke = argb(palette.afterStroke2Paint.color);
     decoration.outerWidth = std::clamp(palette.stroke2Width * ratio, 0.f, maxStroke);
+    if (!signal.image && ((signal.strokeWidth > 0 && !solid(palette.afterStrokePaint))
+        || (decoration.outerWidth > 0 && !solid(palette.afterStroke2Paint))))
+        throw BackendError("Skia 指示灯描边当前仅支持实色");
     const auto kind = palette.decorationKindForState(true);
     if (!signal.image && kind == "shadow") {
         decoration.shadowX = palette.shadowOffsetXForState(true) * ratio;
         decoration.shadowY = palette.shadowOffsetYForState(true) * ratio;
-        if (decoration.shadowX || decoration.shadowY) decoration.shadow = argb(palette.afterDecorPaint.color);
+        if (decoration.shadowX || decoration.shadowY) {
+            if (!solid(palette.afterDecorPaint)) throw BackendError("Skia 指示灯阴影当前仅支持实色");
+            decoration.shadow = argb(palette.afterDecorPaint.color);
+        }
     }
     if (kind == "glow") {
         using namespace ::subtitle::skia;
         const auto radius = std::lround(std::max(0.f, palette.glowAfterRadius * ratio));
         if (radius > 256) throw BackendError("Skia 指示灯的光晕半径超限");
+        if (radius > 0 && !solid(palette.afterDecorPaint)) throw BackendError("Skia 指示灯光晕当前仅支持实色");
         const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color)};
         const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
         decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
@@ -134,20 +142,26 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if ((fill.mode != "solid" && fill.mode != "gradient_vertical") || stroke.mode != "solid"
-                || outer.mode != "solid" || decor.mode != "solid")
-                throw BackendError("Skia 自动音量柱当前支持实色或纵向渐变填充、实色描边和装饰");
+            if (fill.mode != "solid" && fill.mode != "gradient_vertical")
+                throw BackendError("Skia 音量柱当前支持实色或纵向渐变填充");
+            if ((signal.strokeWidth > 0 && stroke.mode != "solid")
+                || (signal.outerWidth > 0 && outer.mode != "solid"))
+                throw BackendError("Skia 音量柱描边当前仅支持实色");
             auto& paint = signal.palette[after];
             paint = {argb(fill.color), argb(stroke.color), argb(outer.color)};
             const auto kind = palette.decorationKindForState(after);
             if (kind == "shadow") {
                 paint.shadowX = palette.shadowOffsetXForState(after) * ratio;
                 paint.shadowY = palette.shadowOffsetYForState(after) * ratio;
-                if (paint.shadowX || paint.shadowY) paint.shadow = argb(decor.color);
+                if (paint.shadowX || paint.shadowY) {
+                    if (decor.mode != "solid") throw BackendError("Skia 音量柱阴影当前仅支持实色");
+                    paint.shadow = argb(decor.color);
+                }
             }
             if (kind == "glow" && palette.glowConcentrationForState(after) >= 0) {
                 const auto radius = std::lround(std::max(0.f, (after ? palette.glowAfterRadius : palette.glowBeforeRadius) * ratio));
                 if (radius > 256) throw BackendError("Skia 音量柱的光晕半径超限");
+                if (radius > 0 && decor.mode != "solid") throw BackendError("Skia 音量柱光晕当前仅支持实色");
                 (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(decor.color)};
             }
         }
