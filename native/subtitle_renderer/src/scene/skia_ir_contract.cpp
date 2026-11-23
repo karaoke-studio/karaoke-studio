@@ -990,8 +990,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 行背景带缺少对应逐字动画能力");
     if (((simpleBandAnimation || tintedBand) && !features.contains("p08_static_line_band"))
         || (customBandSequence && builtinBandAnimation)
-        || (simpleBandAnimation && features.contains("p08_staff_line_band"))
-        || (tintedBand && (simpleBandAnimation || features.contains("p08_animated_staff_line_band"))))
+        || (simpleBandAnimation && features.contains("p08_staff_line_band")))
         throw BackendError("Skia 行背景带缺少对应动画或着色能力");
     const bool lowerRubyBand = features.contains("p08_lower_ruby_line_band");
     if ((lowerRubyBand && !features.contains("p08_ruby_line_band"))

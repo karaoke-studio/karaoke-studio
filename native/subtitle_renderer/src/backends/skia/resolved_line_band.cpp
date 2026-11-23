@@ -151,7 +151,11 @@ std::vector<Frame> loadBandAnimation(const std::wstring& path, SkiaImageFillCach
         texture.staffClef = loadStaffLayer(images, band.clefPath, band.hasClefColor, band.clefColor);
         texture.animation = loadBandAnimation(band.imagePath, images);
         texture.image = texture.animation.front().image;
-        if (texture.animation.size() == 1) texture.animation.clear();
+        // The reference tints still images and uses decoded frames as-is for animations.
+        if (texture.animation.size() == 1) {
+            texture.image = tintBandImage(std::move(texture.image), band, images);
+            texture.animation.clear();
+        }
     } else {
         texture.image = tintBandImage(images.staticImage(band.imagePath, 0, 0), band, images);
         if (!band.linesPath.empty() || !band.clefPath.empty())

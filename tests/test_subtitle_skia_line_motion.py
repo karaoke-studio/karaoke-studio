@@ -350,6 +350,35 @@ def test_custom_line_band_gif_matches_actual_gpu(binary, application, tmp_path):
     assert_ruby_transition_gpu_parity(binary, case, (299, 350, 399, 400, 500, 600, 1499, 1500, 2600, 5499))
 
 
+def test_multiframe_band_does_not_reject_an_inactive_tint(binary, project, tmp_path):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = motion_project(project, entry='none', exit='none')
+    track = replace(track, lines=[replace(track.lines[0], display_start_override_ms=0, display_end_override_ms=4000)])
+    asset = Path(__file__).parent / 'data' / 'guide_anim_3frames.gif'
+    style = replace(solid_line_band(style, tmp_path), line_band_image=str(asset))
+    tinted = replace(style, line_band_tint='#00F531', line_band_tint_strength_pct=100)
+    times = (2400, 2500, 2700)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        samples = []
+        for look in (style, tinted):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, realization_enabled=False)
+            samples.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+        assert np.array_equal(*samples)
+        reference = samples[0]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, tinted)), times)
+    plain_gpu, plain_raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert not np.array_equal(gpu[0], gpu[1]) and np.array_equal(gpu[0], gpu[2])
+    assert np.array_equal(gpu, plain_gpu) and np.array_equal(raster, plain_raster)
+    assert_glow_parity(times, reference, gpu, raster, 'multiframe_band_tint', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_line_band_with_scanline_keeps_effect_geometry_and_seek(binary, reading, tmp_path, target):
     from test_subtitle_skia_scanline import ruby_band_source
