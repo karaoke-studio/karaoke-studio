@@ -99,8 +99,8 @@ def validate_vector_guides(track, style):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
         labels = {c.role_label for c in cells if c.role_label in appearance.custom_style_schemes}
         if labels:
-            if appearance.vertical or line.wipe_reverse or appearance.right_to_left:
-                raise ValueError('Skia 角色导唱符需要正向横排')
+            if appearance.vertical or line.wipe_reverse:
+                raise ValueError('Skia 角色导唱符当前需要横排普通方向走字')
             role_guides |= effective_karaoke_animation(appearance) == 'utopia'
     return role_guides
 

@@ -414,7 +414,8 @@ def test_inline_vector_outlines_match_actual_d2d_gpu(binary, project):
     assert_glow_parity(times, body, gpu, raster, 'inline_vector_outlines', check_p00_edges=True)
 
 
-def test_inline_vector_guide_uses_its_own_role_palette(binary, project):
+@pytest.mark.parametrize('rtl', [False, True])
+def test_inline_vector_guide_uses_its_own_role_palette(binary, project, rtl):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_roles import colors
     from test_subtitle_skia_static_glow import assert_glow_parity
@@ -425,7 +426,7 @@ def test_inline_vector_guide_uses_its_own_role_palette(binary, project):
     chars = list(line.chars)
     chars[index] = replace(chars[index], role_label='guide')
     track = replace(track, lines=[replace(line, chars=chars)])
-    style = replace(style, custom_style_schemes={'guide': SubtitleStyleScheme(
+    style = replace(style, right_to_left=rtl, custom_style_schemes={'guide': SubtitleStyleScheme(
         font_size_px=62, karaoke_colors=colors('#FF00FF', '#22DDB0'))})
     times, dpr = (250, 750, 1100, 1550), 1.5
     reference = None
@@ -440,7 +441,7 @@ def test_inline_vector_guide_uses_its_own_role_palette(binary, project):
     assert ir['track']['lines'][0]['chars'][index]['role_label'] == 'guide'
     assert ir['skia_layout']['lines'][0]['cells'][index]['metrics']['advance'] == pytest.approx(62.62)
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, reference, gpu, raster, 'inline_vector_role_palette', check_p00_edges=True)
+    assert_glow_parity(times, reference, gpu, raster, ('inline_vector_role_palette', rtl), check_p00_edges=True)
     for frames in (gpu, raster):
         assert any(np.count_nonzero(np.all(frame[..., :3] == [255, 0, 255], axis=-1)) > 100 for frame in frames)
 
