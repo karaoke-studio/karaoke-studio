@@ -175,6 +175,21 @@ def test_reverse_vector_guide_uses_existing_shadow_and_glow(binary, project):
                                      'reverse_vector_guide_decoration')
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_singing_vector_guide_retains_its_outlines(binary, project):
+    from test_subtitle_skia_secondary_outline import two_outlines
+    from test_subtitle_skia_vector_guides import CURVES
+
+    track, style = two_outlines(project, body_alpha=True, inner_alpha=True)
+    line, = track.lines
+    track = replace(track, lines=[replace(line, wipe_reverse=True, inline_guide_symbols={1: CURVES})])
+    style = replace(style, reverse_karaoke_anim='utopia')
+    ir = ir_for(binary, (track, style))
+    assert {'p07_reverse_singing_outline', 'p05_vector_guide_composition'} <= set(ir['required_features'])
+    assert_reverse_decoration_parity(binary, track, style, [250, 450, 750, 1100, 1550, 1850],
+                                     'reverse_singing_vector_guide_outlines')
+
+
 REVERSE_DECORATION_MOTION = (
     ('shadow', 'shadow', 'none', 'fade', 'fade'),
     ('glow', 'glow', 'no_wipe', 'slide_in', 'slide_out'),
@@ -183,7 +198,8 @@ REVERSE_DECORATION_MOTION = (
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, project):
+@pytest.mark.parametrize('guide', [False, True])
+def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, project, guide):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
@@ -191,7 +207,12 @@ def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, p
     track, style = source(project)
     line = track.lines[0]
     styled = replace(line.chars[1], role_label='lead')
-    track = replace(track, lines=[replace(line, chars=[line.chars[0], styled, *line.chars[2:]])])
+    line = replace(line, chars=[line.chars[0], styled, *line.chars[2:]])
+    if guide:
+        from test_subtitle_skia_vector_guides import SQUARE
+
+        line = replace(line, inline_guide_symbols={1: SQUARE})
+    track = replace(track, lines=[line])
     style = replace(style, reverse_karaoke_anim='utopia', custom_style_schemes={
         'lead': SubtitleStyleScheme(font_size_px=66, karaoke_colors=colors('#FF557ACC', '#FFEDA329')),
     })
@@ -208,7 +229,7 @@ def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, p
     feature = 'p07_reverse_role_singing'
     assert feature in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, 'reverse_singing_roles', check_p00_edges=True)
+    assert_glow_parity(times, refs[0], gpu, raster, ('reverse_singing_roles', guide), check_p00_edges=True)
     ir['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         with pytest.raises(NativeRendererError):

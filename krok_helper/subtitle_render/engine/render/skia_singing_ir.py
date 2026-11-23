@@ -82,18 +82,18 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         inline_roles = bool(roles)
         reverse_role_scale = False
         if (inline_roles and source.get('wipe_reverse') and not source.get('scanline')
-                and all(c.vector_glyph is None for c in item.render_line.chars)):
+                and not any(guide_symbol_is_bitmap(c.vector_glyph) for c in item.render_line.chars)):
             reverse_role_scale = all(_reverse_role_scale(source, style_for_role_in_layout(style, label))
                                      for label in roles)
         bitmap_glow = 'p08_reverse_bitmap_singing_glow' in ir['required_features']
-        plain_or_bitmap = all(c.vector_glyph is None or ('p08_reverse_bitmap_singing' in ir['required_features']
-                              and guide_symbol_is_bitmap(c.vector_glyph)
+        reverse_guide_cells = all(not guide_symbol_is_bitmap(c.vector_glyph) or (
+                              'p08_reverse_bitmap_singing' in ir['required_features']
                               and (c.vector_glyph.bitmap_no_decor or bitmap_glow))
                               for c in item.render_line.chars)
         allow_reverse_outline = (
             (style.stroke_width_px > 0 or (style.stroke2_enabled and style.stroke2_width_px > 0))
             and not (inline_roles or source.get('scanline'))
-            and plain_or_bitmap
+            and reverse_guide_cells
         )
         allow_reverse_glow = reverse_singing_glow(item, source, allow_bitmap=bitmap_glow)
         allow_reverse_particles = (
@@ -104,7 +104,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
         reverse_scale = (not annotated and (not inline_roles or reverse_role_scale)
                          and reverse_singing_scale(source, style, allow_outline=allow_reverse_outline,
                                                    allow_glow=allow_reverse_glow, allow_particles=allow_reverse_particles)
-                         and plain_or_bitmap)
+                         and reverse_guide_cells)
         static_role_scale = animations == {'none'} and not (
             source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
         faded_role_scale = ('p07_inline_role_faded_scanline' in ir['required_features']

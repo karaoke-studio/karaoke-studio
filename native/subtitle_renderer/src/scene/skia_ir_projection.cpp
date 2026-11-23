@@ -554,7 +554,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && ((!features.contains("p06_static_shadow") && !features.contains("p06_static_glow"))
                 || features.contains("p06_vertical_vector_guide_decoration"));
         const bool singingGuide = composedGuide && !cfg.vertical && !cfg.rightToLeft
-            && !source.wipeReverse && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
+            && (!source.wipeReverse || features.contains("p07_reverse_role_singing"))
+            && !source.scanlineEnabled && !source.zoomPulseEnabled && !source.strokeFlashEnabled
             && source.fxBursts.empty() && source.karaokeAnimation == "utopia"
             && (source.entryAnimation == "none" || source.entryAnimation == "fade")
             && (source.exitAnimation == "none" || source.exitAnimation == "fade");

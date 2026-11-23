@@ -478,7 +478,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !hasInlineRoles && !reverseSingingOutline;
         const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
             && !style.vertical && !style.rightToLeft && !annotated && (!hasInlineRoles || reverseRoleSinging)
-            && !vectorGuides
             && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && (line.bursts.empty() || reverseSingingParticles)
             && ((style.strokeWidth == 0 && style.stroke2Width == 0) || reverseSingingOutline);
