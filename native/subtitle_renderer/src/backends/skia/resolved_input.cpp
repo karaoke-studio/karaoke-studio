@@ -817,6 +817,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && layout.value("scanline_band_schema").toDouble(-1) >= 6
             && (style.scanlineMode != "role" || roleScanlineGlow);
+        const bool scanlineShadow = features.contains("p07_scanline_shadow") && hasShadow && !hasGlow
+            && !style.vertical && !style.rightToLeft && !line.wipeReverse
+            && style.scanlineShape == "band" && (style.scanlineMode == "color" || style.scanlineMode == "default")
+            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
+            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
+            && !vectorGuides && !hasInlineRoles && !features.contains("p05_lower_ruby");
         const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
             && features.contains("p07_no_wipe_decoration");
         const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
@@ -874,7 +880,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                       || (verticalDecoration && verticalDecorationAnimation)
                       || (reverseHorizontalDecoration && reverseHorizontalMotion))
                     && (line.entryAnimation != "none" || line.exitAnimation != "none"))
-                || (line.scanlineEnabled && !(scanlineGlow || verticalScanlineDecoration))
+                || (line.scanlineEnabled && !(scanlineGlow || scanlineShadow || verticalScanlineDecoration))
                 || (!line.bursts.empty() && !(particleGlow || (verticalParticleDecoration && verticalDecoration)))
                 || (line.strokeFlashEnabled && !flashGlow)
                 || (hasInlineRoles && !roleGuideShadow) || ((gradient || image) && !paintedDecoration)

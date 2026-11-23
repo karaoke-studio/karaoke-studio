@@ -186,6 +186,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_character_entry_fade_composition",
         "p07_ruby_character_exit_fade",
         "p07_scanline_band",
+        "p07_scanline_shadow",
         "p07_vertical_scanline_band",
         "p07_vertical_reverse_scanline",
         "p07_vertical_mixed_scanline",
@@ -957,6 +958,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 渐变扫字线缺少高亮带能力声明");
     if (features.contains("p07_scanline_shape_palette") && !features.contains("p07_scanline_shape"))
         throw BackendError("Skia 扫字线配色缺少形状能力声明");
+    if (features.contains("p07_scanline_shadow")
+        && (!features.contains("p07_scanline_band") || !features.contains("p06_static_shadow") || scanlineVersion < 3))
+        throw BackendError("Skia 扫字线阴影缺少对应协议");
     if (features.contains("p07_ruby_scanline")
         && (!features.contains("p07_scanline_band") || !features.contains("p05_resolved_ruby")
             || (features.contains("p05_lower_ruby") && !features.contains("p07_lower_ruby_scanline"))))

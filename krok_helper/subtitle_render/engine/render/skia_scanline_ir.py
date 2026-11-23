@@ -36,6 +36,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     shaped_palette = False
     rtl_band = False
     reverse_image = original_image_palette = False
+    shadow_band = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
             continue
@@ -116,16 +117,23 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         role_fade = inline_roles and fixed_fade
         prefix_fade = (vector_guides and not inline_roles and vector_guides_form_prefix(chars)
                        and (fixed_fade or (faded_band and look.scanline_mode in {'default', 'color'})))
+        body_shadow = uses_authored_decoration(look, 'shadow')
+        static_shadow_band = (body_shadow and ordinary and look.scanline_shape == 'band'
+                              and look.scanline_mode in {'default', 'color'} and line.get('karaoke_anim') == 'none'
+                              and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
+                                       or inline_roles or vector_guides or with_zoom_or_flash or bursts
+                                       or uses_authored_decoration(look, 'glow')))
         if ((look.scanline_shape != 'band' and not shape) or (look.right_to_left and not rtl_scanline)
                 or (line.get('karaoke_anim') != 'none' and not utopia)
                 or (with_zoom_or_flash and (not ordinary or source.wipe_reverse or look.scanline_mode == 'role'))
                 or (look.lower_ruby_enabled and not lower_band)
-                or uses_authored_decoration(look, 'shadow')
+                or (body_shadow and not static_shadow_band)
                 or (role_composition and (not ordinary or utopia or source.wipe_reverse or line.get('fx_bursts')))
                 or (track.rubies and not (ordinary or motion or particle_entry))
                 or (inline_roles and not role_fade) or (vector_guides and not prefix_fade)):
             raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
         rtl_band |= rtl_scanline
+        shadow_band |= static_shadow_band
         role_gradient |= (role_fill is not None
                           and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
                           and ordinary and not (track.rubies or bursts or with_zoom_or_flash or utopia or inline_roles))
@@ -154,6 +162,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_scanline_shape_palette')
     if rtl_band:
         features.append('p07_rtl_scanline_band')
+    if shadow_band:
+        features.append('p07_scanline_shadow')
     if reverse_image:
         features.append('p07_reverse_scanline_image')
     if original_image_palette:

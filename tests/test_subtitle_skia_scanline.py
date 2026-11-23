@@ -1403,7 +1403,6 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
 
 
 @pytest.mark.parametrize('change', [
-    {'decoration_kind': 'shadow', 'decoration_kind_before': 'shadow'},
     {'scanline_mode': 'role', 'scanline_role_name': '__global__', 'scanline_effect': 'star'},
     {'entry_anim': 'fade', 'entry_lead_ms': 400, 'scanline_mode': 'role', 'scanline_role_name': '__global__'},
     {'karaoke_anim': 'zoom_pulse_scanline', 'scanline_shape': 'flame'},
@@ -1412,6 +1411,47 @@ def test_unverified_glow_band_combinations_are_rejected(binary, reading, change)
     track, style = glow_band_source(reading, 'inherited')
     with pytest.raises(ValueError):
         upper_ir(binary, (track, replace(style, **change)), 1)
+
+
+def shadow_band_source(reading):
+    from test_subtitle_skia_static_shadow import shaded_ruby
+
+    track, style = shaded_ruby(reading, utopia=False, separate=True)
+    return track, band(style, 42)
+
+
+def test_shadow_band_requires_its_capability_and_keeps_scene(binary, reading):
+    ir = upper_ir(binary, shadow_band_source(reading), 1)
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_scanline_shadow')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        before, _ = collect(process, [550, 1100])
+        with pytest.raises(NativeRendererError, match='静态装饰'):
+            configure(process, bad)
+        after, _ = collect(process, [1100, 550], generation=2)
+    assert all(frame.any() for frame in before) and np.array_equal(before, after[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_shadow_band_matches_actual_d2d_gpu(binary, reading):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = shadow_band_source(reading)
+    times = (450, 899, 1100, 1550, 2300)
+    references = []
+    for look in (style, replace(style, scanline_enabled=False), replace(style, decoration_kind='none')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    ref, no_band, no_body_shadow = references
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(ref, no_band, strict=True))
+    assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 40
+               for a, b in zip(ref, no_body_shadow, strict=True))
+    gpu, raster = glow_band_frames(binary, (track, style), 1, times)
+    assert_glow_parity(times, ref, gpu, raster, 'shadow_band', check_p00_edges=True)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
