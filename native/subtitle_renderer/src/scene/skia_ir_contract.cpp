@@ -157,6 +157,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_faded_scanline_palette_gradient",
         "p06_static_shadow",
         "p06_role_static_shadow",
+        "p06_role_shadow_paints",
         "p06_body_gradient_shadow",
         "p06_body_image_shadow",
         "p06_ruby_shadow",
@@ -462,6 +463,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_role_static_shadow") && (!features.contains("p06_static_shadow")
         || !features.contains("p05_inline_roles") || features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 行内角色阴影缺少对应布局或画笔能力");
+    if (features.contains("p06_role_shadow_paints") && !features.contains("p06_role_static_shadow"))
+        throw BackendError("Skia 行内角色纹理阴影缺少装饰能力");
     const bool verticalShadowViewport = features.contains("p08_vertical_shadow_viewport");
     if (verticalShadowViewport != (features.contains("p08_vertical_viewport") && hasStaticShadows))
         throw BackendError("Skia 竖排阴影视口变换缺少对应布局能力");

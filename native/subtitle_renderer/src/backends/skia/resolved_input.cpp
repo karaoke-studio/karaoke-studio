@@ -76,6 +76,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool roleBodyPaints = features.contains("p06_role_body_paints");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
     const bool roleStaticShadow = features.contains("p06_role_static_shadow");
+    const bool roleShadowPaints = features.contains("p06_role_shadow_paints");
     const bool roleVectorGuides = features.contains("p05_role_vector_guides");
     const bool gradientGlowWithoutTexturedRoles = features.contains("p06_gradient_glow");
     const auto glowPaints = (gradientGlowWithoutTexturedRoles || features.contains("p06_role_gradient_glow"))
@@ -105,7 +106,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
         .roleStaticShadow = roleStaticShadow || (roleVectorGuides && features.contains("p06_static_shadow")),
         .roleStaticGlow = roleStaticGlow, .bodyShadowGradients = bodyShadowGradients,
-        .bodyShadowImages = bodyShadowImages, .glowPaints = glowPaints});
+        .bodyShadowImages = bodyShadowImages, .roleShadowPaints = roleShadowPaints, .glowPaints = glowPaints});
     const bool staticGlow = features.contains("p06_static_glow");
     const bool scriptStylesOnly = projected.charStyles.empty()
         && (latinSecondaryOutline || (latinPrimaryOutline && features.contains("p05_vector_guide_composition")
@@ -732,7 +733,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         std::optional<RolePaintBounds> rolePaintBounds;
         const bool gradientScanlineRole = line.scanlineEnabled && style.scanlineMode == "role"
             && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
-        if (roleBodyPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole || bodyShadowGradients
+        if (roleBodyPaints || roleShadowPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole || bodyShadowGradients
             || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient")
             || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient")
             || features.contains("p06_ruby_gradient_shadow"))
@@ -881,15 +882,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && line.karaokeAnimation == "none"
             && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-        if ((roleGuideShadow && hasInlineRoles) || inlineStaticShadow) {
-            prepared.cellShadows.reserve(line.chars.size());
-            for (const auto& cell : line.chars) {
-                const auto& look = cell.styleIndex < 0 ? style : projected.charStyles[cell.styleIndex];
-                prepared.cellShadows.push_back(skiaStaticShadow(look));
-            }
-            if (std::ranges::none_of(prepared.cellShadows, &::subtitle::skia::StaticShadow::visible))
-                prepared.cellShadows.clear();
-        }
+        if ((roleGuideShadow && hasInlineRoles) || inlineStaticShadow)
+            resolveRoleShadows(prepared, line, projected.charStyles,
+                               roleShadowPaints && inlineStaticShadow ? &*rolePaintBounds : nullptr,
+                               imageCache, projected.layoutReferenceScale);
         const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled || !prepared.cellShadows.empty();
         const bool hasDecoration = hasGlow || hasShadow;
         const bool singingGlow = singingScale && features.contains("p07_singing_glow")

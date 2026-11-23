@@ -102,6 +102,14 @@ def write_body_gradient_bounds(ir, plan):
     glow_features = {'p06_static_glow', 'p06_role_static_glow', 'p06_ruby_glow'}
     features = ir['required_features']
     layout = ir['skia_layout']
+    if 'p06_role_static_shadow' in features:
+        for item in plan.lines:
+            base = item.layout_style
+            labels = {cell.role_label for cell in item.render_line.chars if cell.role_label in base.custom_style_schemes}
+            if any(_decoration_paints(effective_karaoke_colors(look), *_body_decoration_kinds(look), 'shadow')
+                   & _TEXTURED for look in (style_for_role_in_layout(base, label) for label in labels)):
+                features.append('p06_role_shadow_paints')
+                break
     glow_paints = _gradient_glow_paints(layout, plan) if glow_features.intersection(features) else set()
     if 'p06_static_shadow' in features:
         body_modes = set().union(*(

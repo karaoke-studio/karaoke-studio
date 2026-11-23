@@ -66,7 +66,9 @@ struct StaticShadow {
                     if (!state.visible() || cells[index].path.isEmpty()) continue;
                     SkAutoCanvasRestore positioned(&canvas, true);
                     canvas.translate(state.x, state.y);
-                    brush.setColor(state.color);
+                    auto shader = state.image ? state.image.shaderAt(canvas.getTotalMatrix()) : state.shader;
+                    brush.setColor(shader ? SK_ColorWHITE : state.color);
+                    brush.setShader(std::move(shader));
                     brush.setAlphaf(brush.getAlphaf() * opacity);
                     silhouette(cells[index], brush);
                 }

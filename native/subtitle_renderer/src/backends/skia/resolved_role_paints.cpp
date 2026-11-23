@@ -141,4 +141,41 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
         }
     }
 }
+
+void resolveRoleShadows(::subtitle::skia::ResolvedLine& line, const TextLine& source, std::span<const TextStyle> styles,
+                       const RolePaintBounds* bounds, SkiaImageFillCache& images, float layoutScale) {
+    std::map<int, ::subtitle::skia::StaticShadow> roles;
+    line.cellShadows.reserve(source.chars.size());
+    for (const auto& cell : source.chars) {
+        const int role = cell.styleIndex;
+        if (role < 0) {
+            line.cellShadows.push_back(line.shadow);
+            continue;
+        }
+        auto [entry, inserted] = roles.try_emplace(role);
+        auto& shadow = entry->second;
+        if (inserted) {
+            const auto& look = styles[role];
+            shadow = skiaStaticShadow(look);
+            if (bounds) {
+                const auto prepare = [&](auto& state, const PaintStyle& paint) {
+                    if (!state.enabled || paint.mode == "solid") return;
+                    if (paint.mode == "image") {
+                        state.image = images.fill(paint, layoutScale);
+                        state.color = SkColorSetARGB(paint.color.alpha, paint.color.red, paint.color.green, paint.color.blue);
+                    } else if (hasVisibleGradientStops(paint)) {
+                        const auto& ink = paint.mode == "gradient_horizontal" ? bounds->forRole(role) : bounds->line;
+                        if (!ink.isEmpty())
+                            state.shader = ::subtitle::skia::lineGradient(paint, ink, bounds->outlinePad);
+                    }
+                };
+                prepare(shadow.before, look.beforeDecorPaint);
+                prepare(shadow.after, look.afterDecorPaint);
+            }
+        }
+        line.cellShadows.push_back(shadow);
+    }
+    if (std::ranges::none_of(line.cellShadows, &::subtitle::skia::StaticShadow::visible))
+        line.cellShadows.clear();
+}
 }

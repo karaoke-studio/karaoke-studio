@@ -23,6 +23,7 @@ struct SkiaPaintCapabilities {
     bool roleStaticGlow = false;
     bool bodyShadowGradients = false;
     bool bodyShadowImages = false;
+    bool roleShadowPaints = false;
     GlowPaintSupport glowPaints = GlowPaintSupport::Solid;
 };
 bool supportsSkiaGlowPaint(const PaintStyle&, GlowPaintSupport);

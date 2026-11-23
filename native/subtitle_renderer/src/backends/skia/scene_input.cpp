@@ -131,6 +131,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
             .bodyGradients = caps.roleBodyPaints, .outlineGradients = caps.outlineGradients && caps.roleBodyPaints,
             .imageFills = caps.roleBodyPaints,
             .staticShadow = caps.roleStaticShadow, .staticGlow = caps.roleStaticGlow,
+            .bodyShadowGradients = caps.roleShadowPaints, .bodyShadowImages = caps.roleShadowPaints,
             .glowPaints = caps.glowPaints});
     for (std::size_t index = 0; index < scene.lines.size(); ++index) {
         const auto& line = scene.lines[index];
