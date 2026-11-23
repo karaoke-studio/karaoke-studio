@@ -1783,6 +1783,41 @@ def test_decorated_signal_ignores_brushes_on_disabled_layers(binary, project, si
         assert all(np.count_nonzero(np.all(frame[..., :3] == [255, 0, 255], axis=-1)) > 100 for frame in frames)
 
 
+def test_decorated_volume_columns_use_the_same_split_height(binary, project):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = project
+    palette = colors('#FFFFFF', '#FFFFFF')
+    unfilled = PaintFill(mode='split_vertical', split_top_color='#2547E8', split_bottom_color='#FFDE24')
+    filled = PaintFill(mode='split_vertical', split_top_color='#EA005E', split_bottom_color='#44CD3A')
+    palette = SubtitleStyleScheme(font_size_px=48, karaoke_colors=replace(
+        palette, before=replace(palette.before, text=unfilled), after=replace(palette.after, text=filled)))
+    style = replace(style, volume_enabled=True, volume_appearance_mode='role', volume_role_name='split',
+                    custom_style_schemes={'split': palette}, volume_column_count=3, volume_flash_times=0,
+                    volume_time_offset_ms=900, volume_duration_ms=900)
+    times, dpr = (250, 500, 850), 3
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, 'split_volume_columns', check_p00_edges=True)
+    for frames in (gpu, raster):
+        filled_y = np.nonzero(np.all(frames[0][..., :3] == [234, 0, 94], axis=-1) & (frames[0][..., 3] > 250))[0]
+        unfilled_y = np.nonzero(np.all(frames[0][..., :3] == [37, 71, 232], axis=-1) & (frames[0][..., 3] > 250))[0]
+        assert filled_y.size > 100 and unfilled_y.size > 100
+        assert filled_y.max() == unfilled_y.max()
+        assert not np.any(np.all(frames[-1][..., :3] == [37, 71, 232], axis=-1) & (frames[-1][..., 3] > 250))
+
+
 def test_rtl_signals_share_resolved_text_anchor(binary, project):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_rtl_flow import rtl_source

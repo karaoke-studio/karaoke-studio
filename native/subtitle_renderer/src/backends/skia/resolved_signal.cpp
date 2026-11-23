@@ -142,8 +142,8 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
-            if (fill.mode != "solid" && fill.mode != "gradient_vertical")
-                throw BackendError("Skia 音量柱当前支持实色或纵向渐变填充");
+            if (fill.mode != "solid" && fill.mode != "gradient_vertical" && fill.mode != "split_vertical")
+                throw BackendError("Skia 音量柱当前支持实色、纵向渐变或上下分色填充");
             if ((signal.strokeWidth > 0 && stroke.mode != "solid")
                 || (signal.outerWidth > 0 && outer.mode != "solid"))
                 throw BackendError("Skia 音量柱描边当前仅支持实色");
@@ -184,10 +184,8 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     if (signal.decorated) {
         SkRect bounds = SkRect::MakeEmpty();
         for (const auto& bar : signal.bars) bounds.join(bar.rect.rect());
-        if (palette.beforeFillPaint.mode == "gradient_vertical")
-            signal.fillGradients[0] = subtitleGradient(palette.beforeFillPaint, bounds);
-        if (palette.afterFillPaint.mode == "gradient_vertical")
-            signal.fillGradients[1] = subtitleGradient(palette.afterFillPaint, bounds);
+        signal.fillGradients[0] = lineGradient(palette.beforeFillPaint, bounds, 0);
+        signal.fillGradients[1] = lineGradient(palette.afterFillPaint, bounds, 0);
     }
     return signal;
 }
