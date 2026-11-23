@@ -646,7 +646,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved)
-                && (!styledCellTransform || cell.bitmapGuide || cellStyle.strokeWidthPx != 0 || cellStyle.stroke2WidthPx != 0
+                && (!styledCellTransform || cell.bitmapGuide
                     || protocol::decorationKindForState(cellStyle, false) != "none"
                     || protocol::decorationKindForState(cellStyle, true) != "none"
                     || cellStyle.baseFill.mode != "solid" || cellStyle.afterFill.mode != "solid"))

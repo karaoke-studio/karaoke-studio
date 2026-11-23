@@ -261,19 +261,25 @@ def test_directional_character_transform_matches_actual_d2d_gpu(binary, project,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('kind', ['roles', 'inline_guide', 'prefix_guide'])
+@pytest.mark.parametrize('kind', ['roles', 'outlined_role', 'inline_guide', 'prefix_guide'])
 def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import role_outline_palette
     from test_subtitle_skia_static_glow import assert_glow_parity
     from test_subtitle_skia_vector_guides import SQUARE
 
-    track, style = singing_overlap(project, 'char_drip' if kind == 'roles' else 'spin_flip')
+    role = kind in {'roles', 'outlined_role'}
+    track, style = singing_overlap(project, 'char_drip' if role else 'spin_flip')
     if kind == 'prefix_guide':
         track, style = transform_source(project, 'spin_flip', 'none')
     line, = track.lines
-    if kind == 'roles':
-        style = replace(style, custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=70)})
+    if role:
+        appearance = SubtitleStyleScheme(font_size_px=70)
+        if kind == 'outlined_role':
+            appearance = replace(appearance, stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=3,
+                                 karaoke_colors=role_outline_palette())
+        style = replace(style, custom_style_schemes={'lead': appearance})
         line = replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])
     elif kind == 'inline_guide':
         line = replace(line, inline_guide_symbols={1: SQUARE})
