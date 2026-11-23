@@ -27,22 +27,39 @@ class ParticlePaint {
 
 public:
     explicit ParticlePaint(const krok::subtitle::native::ParticleBurst& source)
-        : fill_(source.fill), inner_(source.stroke), outer_(source.stroke2), glow_(source.decor),
+        : fill_(source.fill), inner_(source.stroke), outer_(source.stroke2), decoration_(source.decor),
           innerWidth_(source.strokeWidth * 1000.f / source.sizePx),
           outerWidth_(source.stroke2Width * 1000.f / source.sizePx),
+          shadow_(source.hasDecor && source.decorKind == "shadow"),
+          shadowOffset_{source.decorOffsetX, source.decorOffsetY},
           glowRadius_(source.hasDecor ? source.decorRadius * 1000.f / source.sizePx : 0.f),
           glowPasses_(source.decorConcentration + 1) {}
 
     void draw(SkCanvas& canvas, const SkPath& path, const SkMatrix& pose, float opacity) const {
         SkAutoCanvasRestore restore(&canvas, true);
-        canvas.concat(pose);
         SkPaint paint;
         paint.setAntiAlias(true);
         paint.setStrokeJoin(SkPaint::kRound_Join);
         paint.setStrokeCap(SkPaint::kRound_Cap);
+        if (shadow_) {
+            SkAutoCanvasRestore restorePose(&canvas, true);
+            // The offset is in line coordinates, independent of sprite rotation and scale.
+            canvas.translate(shadowOffset_.x(), shadowOffset_.y());
+            canvas.concat(pose);
+            decoration_.apply(paint, opacity);
+            const float width = innerWidth_ + outerWidth_;
+            if (width >= 1.f) {
+                paint.setStyle(SkPaint::kStroke_Style);
+                paint.setStrokeWidth(width);
+                canvas.drawPath(path, paint);
+            }
+            paint.setStyle(SkPaint::kFill_Style);
+            canvas.drawPath(path, paint);
+        }
+        canvas.concat(pose);
         paint.setStyle(SkPaint::kStroke_Style);
         if (glowRadius_ > 0.f) {
-            glow_.apply(paint, opacity);
+            decoration_.apply(paint, opacity);
             const float alpha = paint.getAlphaf();
             using krok::subtitle::native::effects::kGlowHaloStrokes;
             for (int pass = glowPasses_; pass > 0; --pass) {
@@ -72,8 +89,11 @@ public:
     }
 
 private:
-    Layer fill_, inner_, outer_, glow_;
-    float innerWidth_, outerWidth_, glowRadius_;
+    Layer fill_, inner_, outer_, decoration_;
+    float innerWidth_, outerWidth_;
+    bool shadow_;
+    SkPoint shadowOffset_;
+    float glowRadius_;
     int glowPasses_;
 };
 }

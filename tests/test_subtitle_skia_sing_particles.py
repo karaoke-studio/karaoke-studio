@@ -128,10 +128,9 @@ def test_rtl_singing_particles_follow_resolved_cell_anchors(binary, project):
         assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_singing_note_uses_inherited_particle_paint_layers(binary, project):
+@pytest.mark.parametrize('shadow', [False, True], ids=['outlines', 'shadow'])
+def test_singing_note_uses_inherited_particle_paint_layers(binary, project, shadow):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
-    from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style = twinkle_source(project)
@@ -139,30 +138,44 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project):
     gradient = PaintFill(mode='gradient_vertical', start_color='#FF2020FF', end_color='#FF15FFF0')
     palette = colors('#FF226BD5', '#FF226BD5')
     after = replace(palette.after, text=gradient, stroke=PaintFill(color='#FFFF4080'),
-                    stroke2=PaintFill(color='#FFFFD22C'))
+                    stroke2=PaintFill(color='#FFFFD22C'), shadow=PaintFill(color='#CC3CB549'))
     scheme = SubtitleStyleScheme(karaoke_colors=replace(palette, after=after),
                                  stroke_width_px=6, stroke2_enabled=True, stroke2_width_px=4)
+    if shadow:
+        scheme = replace(scheme, decoration_kind='shadow', shadow_offset_x=17, shadow_offset_y=-13)
     style = replace(style, karaoke_colors=colors('#00000000', '#00000000'), sing_fx='note',
                     fx_particle_size_em=.72, fx_particle_color_mode='role', fx_particle_role_name='particle',
-                    fx_particle_color_layers='stroke', custom_style_schemes={'particle': scheme})
-    fill_only = replace(style, fx_particle_color_layers='solid')
-    solid_scheme = replace(scheme, karaoke_colors=replace(palette, after=replace(after, text=solid)))
-    solid_fill = replace(style, custom_style_schemes={'particle': solid_scheme})
+                    fx_particle_color_layers='all' if shadow else 'stroke', custom_style_schemes={'particle': scheme})
+    if shadow:
+        controls = (replace(style, fx_particle_color_layers='stroke'),)
+    else:
+        solid_scheme = replace(scheme, karaoke_colors=replace(palette, after=replace(after, text=solid)))
+        controls = (replace(style, fx_particle_color_layers='solid'),
+                    replace(style, custom_style_schemes={'particle': solid_scheme}))
     times, dpr = (300, 475, 680, 950, 1280, 1590, 1940), 3
     refs = []
-    for look in (style, fill_only, solid_fill):
-        with NativeRendererProcess() as process:
-            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
-                                       width=640, height=360, dpr=dpr, realization_enabled=False)
-        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
-    for control in refs[1:]:
-        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        for look in (style, *controls):
+            with NativeRendererProcess() as process:
+                _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                           width=640, height=360, dpr=dpr, realization_enabled=False)
+            refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in raw])
+        for control in refs[1:]:
+            assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p07_singing_sprite_paints' in ir['required_features']
+    assert ('p07_singing_sprite_shadows' in ir['required_features']) == shadow
     assert any(paint['stroke_width_px'] > 0 and paint['stroke2_width_px'] > 0
                for paint in ir['fx_paint_table'])
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, refs[0], gpu, raster, 'note_particle_paint_layers', check_p00_edges=True)
+    assert any(np.count_nonzero(frame[..., 3] > 30) > 100 for frame in gpu)
+    if shadow:
+        assert any(np.count_nonzero((frame[..., 1] > frame[..., :3:2].max(axis=-1))
+                                    & (frame[..., 3] > 30)) > 100 for frame in gpu)
+    assert_glow_parity(times, refs[0] if refs else gpu, gpu, raster, ('note_particle_paint_layers', shadow),
+                       check_p00_edges=True)
 
 
 RUBY_PARTICLE_TIMES = [150, 450, 550, 899, 950, 1100, 1400, 1700, 2100, 2650, 3200]

@@ -170,10 +170,14 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0;
         const bool localPaint = paintedSprites && (star || symbol || falling)
             && spriteStroke(fx.strokeWidthPx, fx.stroke) && spriteStroke(fx.stroke2WidthPx, fx.stroke2);
+        const bool glow = fx.decorKind == "glow" && std::isfinite(fx.decorRadius)
+            && fx.decorRadius >= 0 && fx.decorRadius <= 532
+            && fx.decorConcentration >= 0 && fx.decorConcentration <= 2;
+        const bool shadow = localPaint && features.contains("p07_singing_sprite_shadows") && fx.decorKind == "shadow"
+            && std::isfinite(fx.decorOffsetX) && std::abs(fx.decorOffsetX) <= 1e5
+            && std::isfinite(fx.decorOffsetY) && std::abs(fx.decorOffsetY) <= 1e5;
         const bool painted = fx.hasPaint && (fadedPaint || localPaint) && spritePaint(fx.fill)
-            && (!fx.hasDecor || (fx.decorKind == "glow" && spritePaint(fx.decor)
-                && std::isfinite(fx.decorRadius) && fx.decorRadius >= 0 && fx.decorRadius <= 532
-                && fx.decorConcentration >= 0 && fx.decorConcentration <= 2));
+            && (!fx.hasDecor || ((glow || shadow) && spritePaint(fx.decor)));
         // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
         const bool impact = version >= 11 && animated
             && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
@@ -284,8 +288,14 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             burst.hasDecor = fx.hasDecor;
             if (burst.hasDecor) {
                 burst.decor = projectPaint(fx.decor, fx.color);
-                burst.decorRadius = float(fx.decorRadius * cfg.dpr);
-                burst.decorConcentration = fx.decorConcentration;
+                burst.decorKind = fx.decorKind.toStdString();
+                if (shadow) {
+                    burst.decorOffsetX = float(fx.decorOffsetX * cfg.dpr);
+                    burst.decorOffsetY = float(fx.decorOffsetY * cfg.dpr);
+                } else {
+                    burst.decorRadius = float(fx.decorRadius * cfg.dpr);
+                    burst.decorConcentration = fx.decorConcentration;
+                }
             }
         }
         line.bursts.push_back(std::move(burst));
