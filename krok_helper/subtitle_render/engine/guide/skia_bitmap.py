@@ -15,6 +15,7 @@ import math
 
 from PyQt6.QtGui import QImageReader
 
+from ..render.skia_line_animation_ir import ordinary_line_animation
 from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
 from .metrics import bitmap_guide_image, vector_glyph_width
 from .semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
@@ -194,9 +195,9 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
             source = ir['track']['lines'][item.track_index]
             if (item.layout_style.right_to_left or item.line.wipe_reverse
                     or source.get('karaoke_anim') not in {'none', 'utopia'}
-                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-                raise ValueError('Skia 图片导唱符与下方注音需要静态正向横排')
+                raise ValueError('Skia 图片导唱符与下方注音需要正向横排与整行出入场')
         features.append('p08_bitmap_lower_ruby')
     if any(uses_authored_decoration(item.layout_style, 'shadow')
            and any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor

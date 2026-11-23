@@ -666,11 +666,11 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             if (cell.bitmapGuide) {
                 const bool needsInline = (sawBitmapText && !staticTitle) || &cellStyle != &resolved;
                 if (features.contains("p08_bitmap_lower_ruby")
-                    && (cfg.rightToLeft || source.wipeReverse || !staticScanline
+                    && (cfg.rightToLeft || source.wipeReverse || !guideRubyAnimation
                         || (source.karaokeAnimation != "none" && source.karaokeAnimation != "utopia")
                         || source.scanlineEnabled || source.zoomPulseEnabled
                         || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                    throw BackendError("Skia 图片导唱符与下方注音需要静态正向横排");
+                    throw BackendError("Skia 图片导唱符与下方注音需要正向横排与整行出入场");
                 if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || (cfg.vertical && !verticalBitmap)
                     || (cfg.rightToLeft && (!rtlBitmap || (!cell.bitmapGuide->noDecor
                         && (!rtlBitmapDecoration || &cellStyle != &resolved))))

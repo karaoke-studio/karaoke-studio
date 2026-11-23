@@ -710,18 +710,29 @@ def test_vertical_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp_p
     assert_glow_parity(times, refs[0], gpu, raster, ('vertical_guide', decoration), check_p00_edges=True)
 
 
-def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path):
+@pytest.mark.parametrize('entry', ['none', 'fade'])
+def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path, entry):
     from test_subtitle_skia_lower_product import ir_for as lower_ir
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
 
     track, style, resolve = lower_source
     track, style = bitmap_lower_reading(track, style, image(tmp_path / 'guide.png'))
+    if entry == 'fade':
+        line, = track.lines
+        chars = [replace(char, start_ms=char.start_ms + 1000) for char in line.chars]
+        track = replace(track, lines=[replace(line, chars=chars, end_ms=line.end_ms + 1000,
+            display_start_override_ms=0, display_end_override_ms=3500)],
+            rubies=[replace(ruby, pos_start_ms=ruby.pos_start_ms + 1000, pos_end_ms=ruby.pos_end_ms + 1000)
+                    for ruby in track.rubies])
+        style = replace(style, entry_anim='fade', entry_lead_ms=600)
     ir = lower_ir(binary, (track, style, resolve))
     final, = ir['skia_layout']['lines']
     assert final['cells'][0]['metrics']['bitmap_guide']
     assert any(group.get('lower') and group['style_cell'] > 0 for group in final['ruby_groups'])
     bad = copy.deepcopy(ir)
     bad['required_features'].remove('p08_bitmap_lower_ruby')
-    times = [400, 950]
+    times = [250, 650] if entry == 'fade' else [400, 950]
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -729,18 +740,27 @@ def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_
             configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+    if entry == 'fade':
+        assert ir['track']['lines'][0]['entry_duration_ms'] == 600
+        gpu, raster = render_skia(binary, ir, times)
+        assert 0 < gpu[0][..., 3].max() < gpu[1][..., 3].max()
+        assert_glow_parity(times, None, gpu, raster, 'bitmap_lower_reading_fade', check_p00_edges=True)
 
 
 @GPU
-def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path):
+@pytest.mark.parametrize('entry', ['none', 'fade'])
+def test_bitmap_lower_reading_matches_actual_d2d_gpu(binary, application, tmp_path, entry):
     from scripts.subtitle_gpu_baseline.cases import build_cases
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
     from test_subtitle_render_gpu_backend import _render_g1_frames
 
     base = next(c for c in build_cases(tmp_path / 'assets') if c.case_id == 'lower_ruby')
     track, style = bitmap_lower_reading(base.track, base.style, image(tmp_path / 'guide.png'))
-    case = replace(base, track=track, style=style)
     times = (1000, 1550, 2600, 4110, 4280)
+    if entry == 'fade':
+        style = replace(style, entry_anim='fade', decoration_kind='none', ruby_decoration_kind='none')
+        times = (450, 600, 850, 1000, 1550)
+    case = replace(base, track=track, style=style)
     references = []
     for look in (case.style, replace(case.style, lower_ruby_enabled=False)):
         with NativeRendererProcess() as process:
