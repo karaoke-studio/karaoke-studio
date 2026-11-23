@@ -169,8 +169,7 @@ def test_line_overrides_resolve_before_the_capability(binary, project):
 
 
 @pytest.mark.parametrize('case', ['vertical_shape',
-                                  'ruby_role_utopia', 'zoom_role', 'utopia_entry', 'utopia_reverse',
-                                  'no_wipe'])
+                                  'ruby_role_utopia', 'zoom_role', 'utopia_entry', 'utopia_reverse'])
 def test_unproven_scanline_combinations_are_rejected(binary, project, case):
     track, style = scanline_source(project)
     if case == 'vertical_shape':
@@ -181,8 +180,7 @@ def test_unproven_scanline_combinations_are_rejected(binary, project, case):
         style = replace(band(replace(style, vertical=False)), scanline_mode='role', karaoke_anim='utopia')
     elif case == 'zoom_role': style = replace(style, karaoke_anim='zoom_pulse', scanline_mode='role')
     elif case == 'utopia_entry': style = replace(style, karaoke_anim='utopia', entry_anim='utopia', entry_lead_ms=600)
-    elif case == 'utopia_reverse': track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
-    else: style = replace(style, karaoke_anim='no_wipe')
+    else: track, style = reverse_band(track, replace(style, reverse_karaoke_anim='utopia'))
     with pytest.raises(ValueError, match='扫字线|Utopia'):
         ir_for(binary, (track, style))
 
@@ -1284,6 +1282,50 @@ def combined_particles(project, singing, scan):
     track, style = particle_band(project, scan, -180)
     return track, replace(style, sing_fx=singing, fx_particle_color='#0000FF',
                           fx_particle_color2='#0000FF', fx_particle_speed_pct=140)
+
+
+def no_wipe_particle_source(project):
+    track, style = combined_particles(project, 'twinkle', 'sakura')
+    return track, replace(style, karaoke_anim='no_wipe')
+
+
+def test_no_wipe_scanline_keeps_particles_and_suppresses_the_strip(binary, project):
+    track, style = no_wipe_particle_source(project)
+    ir = ir_for(binary, (track, style))
+    assert not ir['track']['lines'][0]['scanline'] and 'p07_scanline_band' not in ir['required_features']
+    assert {burst['kind'] for burst in ir['track']['lines'][0]['fx_bursts']} == {'twinkle', 'scanline'}
+    bad = copy.deepcopy(ir)
+    bad['required_features'].remove('p07_no_wipe_singing_particles')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [550, 1100])
+        with pytest.raises(NativeRendererError, match='粒子'):
+            configure(process, bad)
+        replay, _ = collect(process, [1100, 550], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_no_wipe_scanline_particles_match_actual_d2d_gpu(binary, project):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+
+    track, style = no_wipe_particle_source(project)
+    times = (300, 500, 620, 750, 1100, 1600, 1850, 2200)
+    without_particles = replace(style, scanline_effect='none')
+    references = []
+    for look in (style, without_particles, replace(without_particles, scanline_enabled=False)):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=track,
+                                       width=640, height=360, realization_enabled=False)
+        references.append([np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw])
+    reference, no_particles, bare = references
+    assert np.array_equal(no_particles, bare)
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, no_particles, strict=True))
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    for time, expected, first, second in zip(times, reference, gpu, raster, strict=True):
+        assert_particle_region(expected, first, ('no_wipe_scanline', time), check_contour=False)
+        assert_particle_region(first, second, ('no_wipe_scanline_raster', time), check_contour=False)
 
 
 def test_reverse_singing_particles_require_the_capability(binary, project):

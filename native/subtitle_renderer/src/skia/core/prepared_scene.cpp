@@ -112,8 +112,8 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             const bool scanline = burst.kind == "scanline";
             if (!item.sprite.isFinite() || !std::isfinite(item.originX) || !std::isfinite(item.originY)
                 || !std::isfinite(item.boxW) || !std::isfinite(item.boxH) || item.boxW < 1 || item.boxH < 0
-                || (source.vertical && !verticalSinging && !verticalScanline) || (source.noWipe && !verticalSinging)
-                || (scanline && !band.enabled) || burst.reverse != (source.wipeRightToLeft && scanline))
+                || (source.vertical && !verticalSinging && !verticalScanline)
+                || (scanline && !band.enabled && !source.noWipe) || burst.reverse != (source.wipeRightToLeft && scanline))
                 throw std::runtime_error("Skia 字幕粒子未支持此布局或方向");
         }
         line.particles = source.particles;

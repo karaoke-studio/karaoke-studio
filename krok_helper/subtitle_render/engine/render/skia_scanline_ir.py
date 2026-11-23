@@ -9,6 +9,18 @@ from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
 
 
+def suppress_no_wipe_bands(ir, plan):
+    for item in plan.lines:
+        line = ir['track']['lines'][item.track_index]
+        if line.get('karaoke_anim') != 'no_wipe' or not line.get('scanline'):
+            continue
+        # Whole-unit color changes have no moving highlight strip. Horizontal
+        # scanline particles still have independent clocks in the source IR.
+        line['scanline'] = False
+        if item.layout_style.vertical and line.get('fx_bursts'):
+            line['fx_bursts'] = [burst for burst in line['fx_bursts'] if burst['kind'] != 'scanline']
+
+
 def fixed_faded_utopia_band(line, style):
     animations = {line.get('entry_anim'), line.get('exit_anim')}
     return (line.get('scanline') and style.scanline_shape == 'band'
