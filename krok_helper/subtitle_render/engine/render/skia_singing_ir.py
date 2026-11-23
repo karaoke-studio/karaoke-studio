@@ -73,7 +73,6 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
             reverse_role_scale = all(_reverse_role_scale(source, style_for_role_in_layout(style, label))
                                      for label in roles)
         reverse_scale = (not annotated and (not inline_roles or reverse_role_scale)
-                         and 'p05_resolved_ruby' not in ir['required_features']
                          and reverse_singing_scale(source, style)
                          and all(c.vector_glyph is None or ('p08_reverse_bitmap_singing' in ir['required_features']
                              and guide_symbol_is_bitmap(c.vector_glyph) and c.vector_glyph.bitmap_no_decor)

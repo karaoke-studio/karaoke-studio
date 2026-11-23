@@ -363,6 +363,39 @@ def test_reverse_line_without_annotations_uses_the_same_endpoints(binary, marker
     assert annotated['skia_layout']['lines'][0]['cells'] == plain['skia_layout']['lines'][0]['cells']
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_reverse_singing_keeps_forward_readings_like_d2d_gpu(binary, marker_source):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, resolve = reverse_source(marker_source, 'mixed')
+    style = replace(style, lower_ruby_enabled=False, reverse_karaoke_anim='utopia')
+    times, dpr = (350, 575, 825, 1000, 1220, 1550, 1830), 1.5
+    refs = []
+    for source, look in (
+        (track, style),
+        (replace(track, rubies=track.rubies[:1]), style),
+        (replace(track, rubies=[]), style),
+        (track, replace(style, reverse_karaoke_anim='none')),
+    ):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=source,
+                                       width=900, height=600, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(900, 1350, 4) for p in raw])
+    assert np.array_equal(refs[0], refs[1])
+    for control in refs[2:]:
+        assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
+    ir = ir_for(binary, (track, style, resolve), dpr=dpr)
+    forward, reverse = ir['skia_layout']['lines']
+    assert reverse_index(ir) == [1]
+    assert 'p07_horizontal_reverse_singing' in ir['required_features']
+    assert forward['ruby_groups']
+    assert not reverse['ruby_groups']
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, refs[0], gpu, raster, 'reverse_singing_forward_readings', check_p00_edges=True)
+
+
 @pytest.mark.parametrize('blank', [False, True])
 def test_empty_reverse_line_needs_no_endpoint_capability(binary, marker_source, blank):
     track, style, resolve = reverse_source(marker_source, 'upper')

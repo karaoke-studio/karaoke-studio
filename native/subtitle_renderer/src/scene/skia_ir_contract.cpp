@@ -913,8 +913,7 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!reverseVertical || !features.contains("p07_vertical_singing_scale")))
         throw BackendError("Skia 反向竖排唱字缺少走字或逐字缩放能力");
     if (features.contains("p07_horizontal_reverse_singing")
-        && (!features.contains("p05_reverse_wipe") || !features.contains("p07_singing_scale")
-            || features.contains("p05_resolved_ruby")))
+        && (!features.contains("p05_reverse_wipe") || !features.contains("p07_singing_scale")))
         throw BackendError("Skia 反向横排缺少对应唱字放大能力");
     if (features.contains("p07_vertical_zoom_pulse")
         && !features.contains("p07_vertical_singing_scale"))
