@@ -585,13 +585,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && protocol::decorationKindForState(resolved, false) != "shadow"
             && protocol::decorationKindForState(resolved, true) != "shadow";
         const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby")
-            && staticScanline && !source.scanlineEnabled && !source.wipeReverse
+            && guideRubyAnimation && !source.scanlineEnabled && !source.wipeReverse
             && (source.karaokeAnimation == "none" || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
             && (rubyGroups.isEmpty() || rtlBitmapUpperRuby);
         const bool rtlBitmapDecoration = rtlBitmap && features.contains("p08_rtl_bitmap_guide_decoration")
-            && staticScanline && !source.wipeReverse && !source.scanlineEnabled
+            && guideWholeLineAnimation && !source.wipeReverse && !source.scanlineEnabled
             && (source.karaokeAnimation == "none" || rtlBitmapSinging)
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
@@ -601,7 +601,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (!features.contains("p06_static_shadow") && !features.contains("p06_static_glow")));
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
             && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
-            && source.entryAnimation == "none" && source.exitAnimation == "none"
+            && guideWholeLineAnimation
             && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && std::ranges::all_of(source.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
         const bool reverseBitmapSingingGlow = features.contains("p08_reverse_bitmap_singing_glow")
@@ -612,8 +612,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 return !cell.vectorGlyph && (!cell.bitmapGuide || cell.bitmapGuide->noDecor || reverseBitmapSingingGlow);
             });
         const bool reverseMixedBitmaps = source.wipeReverse && features.contains("p08_mixed_reverse_bitmap_guides")
-            && !cfg.vertical && !cfg.rightToLeft && (source.karaokeAnimation == "none" || reverseBitmapSinging)
-            && source.entryAnimation == "none" && source.exitAnimation == "none" && !source.scanlineEnabled
+            && !cfg.vertical && !cfg.rightToLeft
+            && ((source.karaokeAnimation == "none" && guideWholeLineAnimation) || (reverseBitmapSinging && staticScanline))
+            && !source.scanlineEnabled
             && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty();
         bool sawBitmapText = false;
         for (const auto& cell : source.chars) {

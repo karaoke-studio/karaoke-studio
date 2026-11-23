@@ -309,7 +309,8 @@ def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary
 
 
 @GPU
-def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, project, tmp_path):
+@pytest.mark.parametrize('entry', ['none', 'fade'])
+def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, project, tmp_path, entry):
     from krok_helper.subtitle_render.domain.timing import RubyAnnotation
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
@@ -317,13 +318,19 @@ def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, proj
 
     track, style = rtl_bitmap_guide(project, tmp_path)
     line = replace(track.lines[0], inline_guide_symbols={})
+    times, dpr = (250, 450, 750, 1100, 1550, 1950), 3
+    if entry == 'fade':
+        line = replace(line, chars=[replace(char, start_ms=char.start_ms + 600) for char in line.chars],
+                       end_ms=line.end_ms + 600, display_start_override_ms=0,
+                       guide_symbol=replace(line.guide_symbol, duration_ms=300),
+                       animation_override=LineAnimationOverride(entry_anim=entry, entry_duration_ms=450))
+        times = (120, 300, 650, 1050, 1500, 2100)
     reading = RubyAnnotation(line.chars[1].text, '字', target_line_index=0,
                              target_char_start=1, target_char_end=2,
                              pos_start_ms=line.chars[1].start_ms, pos_end_ms=line.chars[2].start_ms)
     track = replace(track, lines=[line], rubies=[reading])
     style = replace(style, ruby_font_family=style.font_family, ruby_font_size_px=24, ruby_gap_px=8,
                     ruby_colors_follow_main=False, ruby_karaoke_colors=colors('#FF5544FF', '#FFFF8C21'))
-    times, dpr = (250, 450, 750, 1100, 1550, 1950), 3
     refs = []
     for source in (track, replace(track, rubies=[]), replace(track, lines=[replace(line, guide_symbol=None)])):
         with NativeRendererProcess() as process:
@@ -335,6 +342,8 @@ def test_rtl_bitmap_guide_with_upper_reading_matches_actual_d2d_gpu(binary, proj
                    for a, b in zip(refs[0], control, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p08_rtl_bitmap_upper_ruby' in ir['required_features']
+    if entry == 'fade':
+        assert ir['track']['lines'][0]['entry_duration_ms'] == 450
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'rtl_bitmap_upper_ruby', check_p00_edges=True)
 
@@ -980,7 +989,8 @@ def test_reverse_guide_coexists_with_a_separate_lower_reading(binary, lower_sour
 
 
 @GPU
-def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_path):
+@pytest.mark.parametrize('entry', ['none', 'fade'])
+def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_path, entry):
     from test_subtitle_render_gpu_backend import _render_g1_frames
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
@@ -988,6 +998,13 @@ def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_
     track, style = mixed_reverse_bitmap_guide(project, tmp_path)
     times = (250, 450, 750, 1100, 1550)
     line, = track.lines
+    if entry == 'fade':
+        motion = LineAnimationOverride(entry_anim=entry, entry_duration_ms=450)
+        line = replace(line, chars=[replace(char, start_ms=char.start_ms + 600) for char in line.chars],
+                       end_ms=line.end_ms + 600, display_start_override_ms=0, animation_override=motion,
+                       guide_symbol=replace(line.guide_symbol, duration_ms=300))
+        track = replace(track, lines=[line])
+        times = (120, 300, 600, 1050, 1500, 2100)
     forward = replace(track, lines=[replace(line, wipe_reverse=False)])
     refs = []
     for source in (track, replace(track, rubies=[]), forward):
@@ -998,8 +1015,11 @@ def test_mixed_reverse_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_
     reference, no_reading, forward_frames = refs
     assert np.array_equal(reference, no_reading)
     assert any(np.count_nonzero(a != b) > 100 for a, b in zip(reference, forward_frames, strict=True))
-    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
-    assert_glow_parity(times, reference, gpu, raster, 'mixed_reverse_bitmap_guide', check_p00_edges=True)
+    ir = ir_for(binary, (track, style))
+    if entry == 'fade':
+        assert ir['track']['lines'][0]['entry_duration_ms'] == 450
+    gpu, raster = render_skia(binary, ir, times)
+    assert_glow_parity(times, reference, gpu, raster, ('mixed_reverse_bitmap_guide', entry), check_p00_edges=True)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

@@ -171,10 +171,10 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                        and source.get('karaoke_anim') == 'utopia'
                        and not uses_authored_decoration(item.layout_style, 'shadow'))
             if (item.line.wipe_reverse or (source.get('karaoke_anim') != 'none' and not singing)
-                    or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                    or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                     or any(cell.role_label is not None for cell in item.render_line.chars)):
-                raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要实色普通走字或静态 Utopia')
+                raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要整行出入场和普通走字或 Utopia')
             if decorates_bitmap or body_decoration:
                 rtl_requirements.add('p08_rtl_bitmap_guide_decoration')
             if has_reading:

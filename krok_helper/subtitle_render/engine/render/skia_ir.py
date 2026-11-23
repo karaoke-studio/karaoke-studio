@@ -345,7 +345,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
                            and (c.vector_glyph.bitmap_no_decor or glow))
                            for c in item.render_line.chars))
         modes = {'none', 'utopia'} if avatar_only or singing else {'none'}
-        if ({source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+        if (not ordinary_line_animation(source)
                 or source.get('karaoke_anim') not in modes
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                 or (not avatar_only and (item.layout_style.right_to_left or _inline_role_labels(item)))):
