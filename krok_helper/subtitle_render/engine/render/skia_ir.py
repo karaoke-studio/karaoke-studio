@@ -199,17 +199,17 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
         chars = item.render_line.chars
         final = ir['skia_layout']['lines'][index]
         readings = final.get('ruby_groups', ())
-        whole_cell = (source.get('karaoke_anim') == 'no_wipe' and not readings
-                      and animations <= {'char_drip', 'spin_flip', 'none'})
+        classic_pair = animations <= {'char_drip', 'spin_flip', 'none'}
+        whole_cell = source.get('karaoke_anim') == 'no_wipe' and not readings and classic_pair
         simple = (not readings and source.get('karaoke_anim') == 'none'
-                  and animations <= {'char_drip', 'spin_flip', 'none'}
                   and not (any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                            or any(uses_authored_decoration(look, kind) for kind in ('glow', 'shadow'))))
         reversed_flow = look.right_to_left or line.wipe_reverse
         styled_cells = any(c.role_label is not None or c.vector_glyph is not None for c in chars)
-        directional = (simple and reversed_flow and not styled_cells and not look.stroke_width_px
+        directional = (simple and classic_pair and reversed_flow and not styled_cells and not look.stroke_width_px
                        and not (look.stroke2_enabled and look.stroke2_width_px))
-        styled = simple and styled_cells and not reversed_flow
+        styled = (simple and styled_cells and not reversed_flow
+                  and ordinary_line_animation(source, extra_modes=('char_drip', 'spin_flip')))
         if (look.vertical or (reversed_flow and not directional)
                 or (index not in character_warp_lines and index not in composed_geometry_lines
                     and ((source.get('karaoke_anim') != 'none' and not whole_cell) or readings))

@@ -33,9 +33,9 @@ def project_vertical_line_animations(plan):
     return replace(plan, lines=tuple(lines))
 
 
-def ordinary_line_animation(source):
-    return (source.get('entry_anim') in {'none', 'fade', 'slide_in', 'rise'}
-            and source.get('exit_anim') in {'none', 'fade', 'slide_out', 'rise'})
+def ordinary_line_animation(source, *, extra_modes=()):
+    return (source.get('entry_anim') in ('none', 'fade', 'slide_in', 'rise', *extra_modes)
+            and source.get('exit_anim') in ('none', 'fade', 'slide_out', 'rise', *extra_modes))
 
 
 def is_noise_animation(source):

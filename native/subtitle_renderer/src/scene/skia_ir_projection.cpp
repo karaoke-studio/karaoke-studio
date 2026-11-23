@@ -536,12 +536,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled
             && !source.zoomPulseEnabled && source.fxBursts.empty();
-        const auto simpleTransform = [](const QString& animation) {
-            return animation == "none" || animation == "char_drip" || animation == "spin_flip";
+        const auto styledTransition = [&](const QString& animation, bool entry) {
+            return plainLineAnimation(animation, entry) || animation == "char_drip" || animation == "spin_flip";
         };
         const bool styledCellTransform = features.contains("p07_character_transform_cells")
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && rubyGroups.isEmpty()
-            && simpleTransform(source.entryAnimation) && simpleTransform(source.exitAnimation)
+            && styledTransition(source.entryAnimation, true) && styledTransition(source.exitAnimation, false)
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && !source.scanlineEnabled && source.fxBursts.empty();
         const bool rtlVectorGuide = cfg.rightToLeft && features.contains("p05_rtl_vector_guides");

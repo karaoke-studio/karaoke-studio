@@ -261,7 +261,7 @@ def test_directional_character_transform_matches_actual_d2d_gpu(binary, project,
 
 
 @pytest.mark.parametrize('kind', ['roles', 'outlined_role', 'inline_guide', 'outlined_inline_guide',
-                                  'outlined_guide_with_hole', 'prefix_guide'])
+                                  'outlined_guide_with_hole', 'prefix_guide', 'guide_with_fade_exit'])
 def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind):
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_roles import role_outline_palette
@@ -280,7 +280,7 @@ def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind
                                  karaoke_colors=role_outline_palette())
         style = replace(style, custom_style_schemes={'lead': appearance})
         line = replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])
-    elif kind in {'inline_guide', 'outlined_inline_guide', 'outlined_guide_with_hole'}:
+    elif kind in {'inline_guide', 'outlined_inline_guide', 'outlined_guide_with_hole', 'guide_with_fade_exit'}:
         symbol = SQUARE
         if kind == 'outlined_guide_with_hole':
             # An inset hole and a disjoint contour with the opposite winding.
@@ -290,7 +290,9 @@ def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind
                 ('M', 650, -700), ('L', 650, 0), ('L', 900, 0), ('L', 900, -700), ('Z',),
             ))
         line = replace(line, inline_guide_symbols={1: symbol})
-        if kind != 'inline_guide':
+        if kind == 'guide_with_fade_exit':
+            style = replace(style, exit_anim='fade', exit_fade_ms=600)
+        elif kind != 'inline_guide':
             style = replace(style, exit_anim='spin_flip', stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=3,
                             karaoke_colors=role_outline_palette())
     else:
@@ -299,8 +301,12 @@ def test_styled_character_transform_matches_actual_d2d_gpu(binary, project, kind
     times, dpr = (65, 125, 159, 200, 260, 400, 700, 1200), 3
     if kind in {'outlined_inline_guide', 'outlined_guide_with_hole'}:
         times += (2490, 2559, 2650, 2750, 2850, 3000)
+    elif kind == 'guide_with_fade_exit':
+        times += (2490, 2650, 2850, 2999)
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert 'p07_character_transform_cells' in ir['required_features']
+    if kind == 'guide_with_fade_exit':
+        assert ir['track']['lines'][0]['exit_duration_ms'] == 600
     gpu, raster = render_skia(binary, ir, times)
     still = replace(style, entry_anim='none', exit_anim='none')
     reference = None
