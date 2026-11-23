@@ -468,6 +468,22 @@ def test_title_vector_guides_can_use_role_and_title_paints(binary):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_title_vector_guides_share_solid_decoration(binary, decoration):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = vector_guide_title()
+    title = replace(style.title_overlays[0], decoration_kind=decoration,
+                    shadow=PaintFill(color='#D03D49DF'), glow_radius_px=7,
+                    shadow_offset_x=-9, shadow_offset_y=11)
+    style = replace(style, title_overlays=[title])
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id=f'title_vector_{decoration}'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def bitmap_guide_title(tmp_path, inline=False):
     from test_subtitle_skia_image_fills import write_png
 
