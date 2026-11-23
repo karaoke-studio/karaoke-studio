@@ -66,7 +66,7 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
             return brush ? brush->makeWithLocalMatrix(mapping) : nullptr;
         };
         const auto& unit = decoration->unitGradients;
-        gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke), fit(unit.shadow)};
+        gradients = {fit(unit.fill), fit(unit.stroke), fit(unit.outerStroke), fit(unit.shadow), fit(unit.glow)};
     }
     const float shadowOffset = std::max(size * .08f, 1.f);
     for (int index = 0; index <= state.activeIndex; ++index) {
@@ -102,11 +102,15 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         if (decoration && !decoration->glow.empty()) {
             SkAutoCanvasRestore local(&canvas, true);
             canvas.translate(x, y);
+            const auto glowBrush = gradients.glow && !path
+                ? gradients.glow->makeWithLocalMatrix(SkMatrix::Translate(-x, -y)) : gradients.glow;
             for (const auto& layer : decoration->glow) {
-                if (!layer.visible(true)) continue;
+                if (!glowBrush && !layer.visible(true)) continue;
                 auto source = layer.createSource(canvas);
                 if (!source.surface) continue;
-                layer.drawCell(*source.surface->getCanvas(), 0, true, std::nullopt);
+                auto& target = *source.surface->getCanvas();
+                if (glowBrush) layer.drawCellWithGradient(target, 0, true, glowBrush);
+                else layer.drawCell(target, 0, true, std::nullopt);
                 layer.composite(canvas, source);
             }
         }

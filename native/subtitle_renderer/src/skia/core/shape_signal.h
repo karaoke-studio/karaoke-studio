@@ -16,8 +16,8 @@ struct SignalTransition;
 struct ShapeSignal {
     enum class Shape { Circle, Square, Rounded, Image };
     struct GradientBrushes {
-        sk_sp<SkShader> fill, stroke, outerStroke, shadow;
-        bool empty() const { return !fill && !stroke && !outerStroke && !shadow; }
+        sk_sp<SkShader> fill, stroke, outerStroke, shadow, glow;
+        bool empty() const { return !fill && !stroke && !outerStroke && !shadow && !glow; }
     };
     struct Decoration {
         SkColor outerStroke = 0, shadow = 0;

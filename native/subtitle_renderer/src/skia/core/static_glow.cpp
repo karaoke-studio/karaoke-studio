@@ -156,6 +156,16 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     }
 }
 
+void PreparedGlow::drawCellWithGradient(SkCanvas& canvas, std::size_t index, bool after,
+                                        const sk_sp<SkShader>& shader) const {
+    const auto& path = cells_[index].path;
+    if (!shader || (phase_ && *phase_ != after) || path.isEmpty()) return;
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setShader(shader);
+    canvas.drawPath(path, paint);
+}
+
 void PreparedGlow::prepareBytePasses() {
     // Subtle coverage can cross an 8-bit step between the stacked blur passes.
     // Apply the same quantization in Ganesh and Raster before each blend.

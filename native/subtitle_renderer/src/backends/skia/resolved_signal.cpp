@@ -85,21 +85,22 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
             decoration.unitGradients.shadow = gradient(palette.afterDecorPaint, "Skia 指示灯当前支持实色或渐变阴影");
         }
     }
+    if (kind == "glow") {
+        using namespace ::subtitle::skia;
+        const auto radius = std::lround(std::max(0.f, palette.glowAfterRadius * ratio));
+        if (radius > 256) throw BackendError("Skia 指示灯的光晕半径超限");
+        if (radius > 0)
+            decoration.unitGradients.glow = gradient(palette.afterDecorPaint, "Skia 指示灯当前支持实色或渐变光晕");
+        const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color)};
+        const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
+        decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
+        for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
+    }
     if (signal.path && !decoration.unitGradients.empty()) {
         const auto baseline = source.value("cells").toArray().at(0).toObject().value("baseline_y");
         if (!baseline.isDouble() || !std::isfinite(baseline.toDouble()) || std::abs(baseline.toDouble()) > 1e6)
             throw BackendError("Skia 矢量指示灯渐变缺少有效的基线");
         decoration.glyphPaintOrigin = SkPoint::Make(float(xy[0].toDouble() * dpr), float(baseline.toDouble() * dpr));
-    }
-    if (kind == "glow") {
-        using namespace ::subtitle::skia;
-        const auto radius = std::lround(std::max(0.f, palette.glowAfterRadius * ratio));
-        if (radius > 256) throw BackendError("Skia 指示灯的光晕半径超限");
-        if (radius > 0 && !solid(palette.afterDecorPaint)) throw BackendError("Skia 指示灯光晕当前仅支持实色");
-        const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color)};
-        const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
-        decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
-        for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
     }
     signal.decoration = std::move(decoration);
     return signal;
@@ -170,7 +171,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             if (kind == "glow" && palette.glowConcentrationForState(after) >= 0) {
                 const auto radius = std::lround(std::max(0.f, (after ? palette.glowAfterRadius : palette.glowBeforeRadius) * ratio));
                 if (radius > 256) throw BackendError("Skia 音量柱的光晕半径超限");
-                if (radius > 0 && decor.mode != "solid") throw BackendError("Skia 音量柱光晕当前仅支持实色");
+                if (radius > 0 && !supportedBrush(decor)) throw BackendError("Skia 音量柱当前支持实色或渐变光晕");
                 (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(decor.color)};
             }
         }
@@ -187,7 +188,6 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         const auto box = SkRect::MakeXYWH(x + index * geometry.pitch, y + index * geometry.alignDeltaShift,
                                          geometry.columnWidth, height);
         VolumeSignal::Bar bar{SkRRect::MakeRectXY(box, radius, radius), PreparedGlow::prepare(glow)};
-        for (auto& layer : bar.glow) layer.appendCell(SkPath::RRect(bar.rect));
         signal.bars.push_back(std::move(bar));
     }
     if (signal.decorated) {
@@ -201,6 +201,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         const auto gradient = [&](const PaintStyle& paint) {
             return lineGradient(paint, paint.mode == "gradient_horizontal" ? horizontalBounds : bounds, 0);
         };
+        GlowGradients glowGradients;
         for (const bool after : {false, true}) {
             auto& brush = signal.palette[after];
             brush.fillGradient = gradient(after ? palette.afterFillPaint : palette.beforeFillPaint);
@@ -208,9 +209,13 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                 brush.strokeGradient = gradient(after ? palette.afterStrokePaint : palette.beforeStrokePaint);
             if (signal.outerWidth > 0)
                 brush.outerGradient = gradient(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint);
-            if (brush.shadowX || brush.shadowY)
-                brush.shadowGradient = gradient(after ? palette.afterDecorPaint : palette.beforeDecorPaint);
+            const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
+            if (brush.shadowX || brush.shadowY) brush.shadowGradient = gradient(decor);
+            if ((after ? glow.after : glow.before).radius > 0) glowGradients[after] = gradient(decor);
         }
+        for (auto& bar : signal.bars)
+            for (auto& layer : bar.glow)
+                layer.appendCell(SkPath::RRect(bar.rect), SkMatrix::I(), glowGradients);
     }
     return signal;
 }

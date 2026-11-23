@@ -1910,6 +1910,15 @@ def test_volume_horizontal_gradient_spans_the_columns_and_first_text_role(binary
 
 @pytest.mark.parametrize('signal', ['lamp', 'volume'])
 def test_signal_shadow_uses_its_authored_gradient(binary, project, signal):
+    _assert_signal_decoration_gradient(binary, project, signal, 'shadow')
+
+
+@pytest.mark.parametrize('signal', ['lamp', 'volume'])
+def test_signal_glow_uses_its_authored_gradient(binary, project, signal):
+    _assert_signal_decoration_gradient(binary, project, signal, 'glow')
+
+
+def _assert_signal_decoration_gradient(binary, project, signal, decoration):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from krok_helper.subtitle_render.domain.paint import PaintFill
     from test_subtitle_skia_outline_ruby import render_skia
@@ -1918,10 +1927,11 @@ def test_signal_shadow_uses_its_authored_gradient(binary, project, signal):
 
     track, style = project
     neutral = colors('#BBBBBB', '#BBBBBB')
-    shadow = PaintFill(mode='gradient_vertical', start_color='#D52C36', end_color='#2FC82A')
-    palette = SubtitleStyleScheme(font_size_px=50, decoration_kind='shadow', shadow_offset_x=13, shadow_offset_y=9,
-                                  karaoke_colors=replace(neutral, before=replace(neutral.before, shadow=shadow),
-                                                         after=replace(neutral.after, shadow=shadow)))
+    decor = PaintFill(mode='gradient_vertical', start_color='#D52C36', end_color='#2FC82A')
+    palette = SubtitleStyleScheme(font_size_px=50, decoration_kind=decoration, shadow_offset_x=13, shadow_offset_y=9,
+                                  glow_before_radius_px=9, glow_after_radius_px=9, glow_concentration_level=1,
+                                  karaoke_colors=replace(neutral, before=replace(neutral.before, shadow=decor),
+                                                         after=replace(neutral.after, shadow=decor)))
     style = replace(style, karaoke_colors=neutral, custom_style_schemes={'signal-shadow': palette})
     if signal == 'lamp':
         style = replace(style, lit_enabled=True, lit_style='square', lit_appearance_mode='role',
@@ -1940,10 +1950,10 @@ def test_signal_shadow_uses_its_authored_gradient(binary, project, signal):
                                        width=640, height=360, dpr=dpr, realization_enabled=False)
         reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
     gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
-    assert_glow_parity(times, reference, gpu, raster, ('signal_gradient_shadow', signal), check_p00_edges=True)
+    assert_glow_parity(times, reference, gpu, raster, ('signal_gradient', signal, decoration), check_p00_edges=True)
     for frames in (gpu, raster):
         r, g, b, a = np.moveaxis(frames[0], -1, 0)
-        shaded = (a > 250) & ((r != g) | (g != b))
+        shaded = (a > (250 if decoration == 'shadow' else 40)) & ((r != g) | (g != b))
         assert np.count_nonzero(shaded) > 500
         assert len(np.unique(g[shaded])) > 12
 
