@@ -505,6 +505,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
         const bool rtlBitmap = cfg.rightToLeft && features.contains("p08_rtl_bitmap_guides")
             && cfg.rubies.empty();
+        const bool verticalBitmap = cfg.vertical && features.contains("p08_vertical_bitmap_guides")
+            && staticScanline && cfg.rubies.empty() && !source.scanlineEnabled
+            && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+            && source.fxBursts.empty() && !features.contains("p06_static_shadow") && !features.contains("p06_static_glow");
         const bool reverseBitmapLine = source.wipeReverse && inlineBitmapGuides
             && features.contains("p08_reverse_bitmap_guides") && source.karaokeAnimation == "none"
             && source.entryAnimation == "none" && source.exitAnimation == "none"
@@ -567,9 +571,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                         || source.scanlineEnabled || source.zoomPulseEnabled
                         || source.strokeFlashEnabled || !source.fxBursts.empty()))
                     throw BackendError("Skia 图片导唱符与下方注音需要静态正向横排");
-                if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || cfg.vertical
+                if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || (cfg.vertical && !verticalBitmap)
                     || (cfg.rightToLeft && (!rtlBitmap || !cell.bitmapGuide->noDecor))
-                    || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps))
+                    || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps || verticalBitmap))
                     || (reverseMixedBitmaps && &cellStyle != &resolved)
                     || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
                     throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");

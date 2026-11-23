@@ -292,7 +292,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, adjust_position=Non
     reverse_bitmap_lines = set()
     mixed_reverse_bitmap_lines = False
     for item in plan.lines:
-        if not (item.line.wipe_reverse and has_bitmap_guides((item.render_line,))):
+        if item.layout_style.vertical or not (item.line.wipe_reverse and has_bitmap_guides((item.render_line,))):
             continue
         source = ir['track']['lines'][item.track_index]
         avatar_only = is_undecorated_bitmap_line(item.render_line)

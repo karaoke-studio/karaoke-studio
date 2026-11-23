@@ -271,7 +271,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             // A guide displaced from the lyric row keeps its own box and takes
             // the owning line's wipe position while its before/after parts draw.
             edge = lineWipeFront(line.cells, tMs, *line.bitmapLineFrontOrigin, line.scanline.restingPad,
-                                 line.wipeRightToLeft);
+                                 line.wipeRightToLeft, line.vertical);
         } else if (tMs > wipeEnd(cell)) {
             if (index + 1 < line.cells.size() && !line.cells[index + 1].path.isEmpty()) {
                 edge = front(line.cells[index + 1], rawProgress(line.cells[index + 1]));
@@ -293,9 +293,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         const float pad = guide.clipPad();
         for (const bool sung : {false, true}) {
             SkAutoCanvasRestore keep(&canvas, true);
-            const auto clip = sung != line.wipeRightToLeft
-                ? SkRect::MakeLTRB(box.left() - pad, -1e6f, edge, 1e6f)
-                : SkRect::MakeLTRB(edge, -1e6f, box.right() + pad, 1e6f);
+            const bool leading = sung != line.wipeRightToLeft;
+            const auto clip = line.vertical
+                ? SkRect::MakeLTRB(box.left() - pad, leading ? box.top() - pad : edge,
+                                  box.right() + pad, leading ? edge : box.bottom() + pad)
+                : band(leading ? box.left() - pad : edge, leading ? edge : box.right() + pad);
             clipViewportWipe(canvas, clip, wipeViewportHeight);
             guide.draw(canvas, sung, titleOpacity, tMs);
         }

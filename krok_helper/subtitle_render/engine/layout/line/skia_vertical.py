@@ -105,13 +105,15 @@ def vertical_cells(local, measured, item, *, width, height, ruby_allowance=0, si
         ink = cell['metrics']['ink']
         cell_top = top + index * cell_height
         baseline = cell_top + ascent - cell_height * offset
-        if 'vector_glyph_id' in cell['metrics']:
+        bitmap = cell['metrics'].get('bitmap_guide', False)
+        if bitmap or 'vector_glyph_id' in cell['metrics']:
             x = column - (ink[0] + ink[2]) / 2
             baseline = cell_top + (cell_height - ink[1] - ink[3]) / 2
         wipe_pad = measured.edge_sizes[index] // 2
         positioned = {**cell, 'origin_x': x, 'baseline_y': baseline,
                       'wipe_left': x + ink[0] - wipe_pad, 'wipe_right': x + ink[2] + wipe_pad,
-                      'wipe_top': cell_top, 'wipe_bottom': cell_top + cell_height,
+                      'wipe_top': baseline + ink[1] if bitmap else cell_top,
+                      'wipe_bottom': baseline + ink[3] if bitmap else cell_top + cell_height,
                       'wipe_end_position': 1.0}
         if vertical_glyph_rotates(text):
             positioned['rotation_pivot_x'] = column

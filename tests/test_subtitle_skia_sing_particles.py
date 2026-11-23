@@ -230,10 +230,21 @@ def test_singing_twinkle_projects_existing_bursts_and_replays_tail(binary, proje
 
 @pytest.mark.parametrize('changes', [{'entry_anim':'lightning', 'entry_lead_ms':750},
                                      {'exit_anim':'flame', 'exit_fade_ms':750}])
-def test_unverified_particle_styles_are_rejected(binary, project, changes):
+def test_energy_transition_keeps_singing_particle_clocks(binary, project, changes):
     track, style = twinkle_source(project)
-    with pytest.raises(ValueError, match='唱字'):
-        ir_for(binary, (track, replace(style, **changes)))
+    normal = ir_for(binary, (track, style))
+    combined = ir_for(binary, (track, replace(style, **changes)))
+    assert 'p07_energy_transition_singing_stars' in combined['required_features']
+    expected = normal['track']['lines'][0]['fx_bursts']
+    actual = [burst for burst in combined['track']['lines'][0]['fx_bursts'] if burst['kind'] == 'twinkle']
+    for before, after in zip(expected, actual, strict=True):
+        assert {k: v for k, v in before.items() if k != 'color_id'} == {
+            k: v for k, v in after.items() if k != 'color_id'}
+        assert normal['fx_color_table'][before['color_id']] == combined['fx_color_table'][after['color_id']]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, combined)
+        frames, _ = collect(process, [700, 1450])
+    assert all(frame.any() for frame in frames)
 
 
 def moving_twinkle_source(project):

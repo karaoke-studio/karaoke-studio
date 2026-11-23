@@ -108,8 +108,7 @@ def validate_bitmap_guides(track, style, *, static_title=False):
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         appearance = style_for_line(style, line)
-        if (appearance.vertical
-                or (line.wipe_reverse and (static_title or (track.rubies and not is_undecorated_bitmap_line(rendered))))
+        if ((line.wipe_reverse and (static_title or (track.rubies and not is_undecorated_bitmap_line(rendered))))
                 or (not inline and any(c.role_label is not None for c in cells))):
             raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
         if appearance.right_to_left and (track.rubies or any(not image.bitmap_no_decor for image in images)):
@@ -149,6 +148,11 @@ LOWER_RUBY_BITMAP_FEATURES = frozenset({
     'p08_bitmap_lower_ruby', 'p05_lower_ruby', 'p05_ruby_units', 'p05_ruby_markers', 'p05_standalone_marks',
     'p06_lower_ruby_glow', 'p06_lower_ruby_shadow', 'p06_lower_ruby_shadow_gradient', 'p06_lower_ruby_static_gradient',
 })
+VERTICAL_BITMAP_GUIDE_FEATURES = frozenset({
+    'p08_vertical_bitmap_guides', 'p05_vertical_solid', 'p05_vertical_columns', 'p05_vertical_japanese_glyphs',
+    'p05_reverse_wipe', 'p05_reverse_overlap',
+    'p06_vertical_outline', 'p06_vertical_columns_outline', 'p06_vertical_reverse_outline',
+})
 
 
 def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
@@ -159,6 +163,18 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
     features.append('p08_bitmap_guides')
     ir['skia_layout']['bitmap_guide_schema'] = 1
     allowed = BITMAP_GUIDE_FEATURES | {'p05_vector_guides'} if static_title else BITMAP_GUIDE_FEATURES
+    vertical_lines = [item for item in plan_lines
+                      if item.layout_style.vertical and has_bitmap_guides((item.render_line,))]
+    for item in vertical_lines:
+        source = ir['track']['lines'][item.track_index]
+        if (static_title or 'p05_resolved_ruby' in features or source.get('karaoke_anim') != 'none'
+                or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
+                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
+                or any(uses_authored_decoration(item.layout_style, kind) for kind in ('shadow', 'glow'))):
+            raise ValueError('Skia 竖排图片导唱符需要静态实色和普通走字')
+    if vertical_lines:
+        features.append('p08_vertical_bitmap_guides')
+        allowed |= VERTICAL_BITMAP_GUIDE_FEATURES
     if 'p08_inline_bitmap_guides' in features:
         allowed |= INLINE_BITMAP_GUIDE_FEATURES
         for item in plan_lines:

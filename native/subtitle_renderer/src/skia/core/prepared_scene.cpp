@@ -160,9 +160,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     previousPosition = point.position;
                 }
             }
-            if (cell.bitmap && (!cell.path.isEmpty() || cell.outline || cell.outerOutline || source.vertical
+            if (cell.bitmap && (!cell.path.isEmpty() || cell.outline || cell.outerOutline
                                 || source.noWipe || cell.strokeFlashWidth > 0))
-                throw std::runtime_error("Skia 图片导唱符仅支持横排走字单元");
+                throw std::runtime_error("Skia 图片导唱符走字单元的布局无效");
             if (cell.bodyPaintIndex < -1 || cell.bodyPaintIndex >= int(line.roleBodyPaints.size()))
                 throw std::runtime_error("Skia 正文角色画笔索引无效");
             if (cell.outline) line.hasOutline = true;
@@ -259,7 +259,9 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 if (cell.bitmap) ink.join(cell.bitmap->box());
                 else if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
             }
-            line.bitmapLineFrontOrigin = line.wipeRightToLeft ? ink.right() : ink.left();
+            const float start = line.vertical ? ink.top() : ink.left();
+            const float end = line.vertical ? ink.bottom() : ink.right();
+            line.bitmapLineFrontOrigin = line.wipeRightToLeft ? end : start;
         }
         if (line.scanline.enabled || line.characterGeometry.active() || line.shadow.visible() || !line.cellShadows.empty()) {
             SkRect ink = SkRect::MakeEmpty();

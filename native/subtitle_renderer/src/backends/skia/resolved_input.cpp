@@ -40,7 +40,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool extended = text.empty() || code == L' ' || code == 0x3000
         || (code >= L'0' && code <= L'9') || (code >= L'A' && code <= L'Z') || (code >= L'a' && code <= L'z')
         || (code >= 0x00c0 && code <= 0x00d6) || (code >= 0x00d8 && code <= 0x00f6) || (code >= 0x00f8 && code <= 0x00ff);
-    if (!vectorGuide && ((rotated || shifted) ? !japaneseGlyphs : !(upright || (version == 2 && extended))))
+    if (!vectorGuide && !glyph.bitmap
+        && ((rotated || shifted) ? !japaneseGlyphs : !(upright || (version == 2 && extended))))
         throw BackendError("Skia 竖排单元包含未验证字符或缺少日文字形能力");
     if (rotated != cell.contains("rotation_pivot_x"))
         throw BackendError("Skia 竖排单元的字形旋转与源字符不符");
@@ -51,6 +52,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         throw BackendError("Skia 竖排单元框无效");
     glyph.top = float(top.toDouble() * dpr);
     glyph.bottom = float(bottom.toDouble() * dpr);
+    if (glyph.bitmap && (std::abs(glyph.top - glyph.bitmap->box.top()) > 1e-3
+                         || std::abs(glyph.bottom - glyph.bitmap->box.bottom()) > 1e-3))
+        throw BackendError("Skia 竖排图片导唱符的走字范围与图片框不一致");
     if (vectorGuide && !glyph.path.isEmpty()
         && std::abs(glyph.path.computeTightBounds().centerY() - (glyph.top + glyph.bottom) * .5f) > 1e-3)
         throw BackendError("Skia 竖排矢量导唱符未居中于单元框");

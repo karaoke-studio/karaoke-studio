@@ -103,11 +103,11 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert before[0].any() and np.array_equal(before[0], after[0])
 
 
-@pytest.mark.parametrize('change', ['vertical', 'rtl', 'reverse', 'missing'])
+@pytest.mark.parametrize('change', ['vertical_utopia', 'rtl', 'reverse', 'missing'])
 def test_unvalidated_bitmap_guide_combinations_stay_gated(binary, project, tmp_path, change):
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     style, line = case.style, track.lines[0]
-    if change == 'vertical': style = replace(style, vertical=True)
+    if change == 'vertical_utopia': style = replace(style, vertical=True)
     elif change == 'rtl': style = replace(style, right_to_left=True)
     elif change == 'reverse': line = replace(line, wipe_reverse=True)
     else:
@@ -308,6 +308,52 @@ def bitmap_lower_reading(track, style, path):
     return (replace(track, lines=[replace(line, guide_symbol=picture)]),
             replace(style, right_to_left=False, lower_ruby_enabled=True, entry_anim='none',
                     exit_anim='none', karaoke_anim='none'))
+
+
+def vertical_bitmap_guide(project, tmp_path, reverse=False):
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    from test_subtitle_skia_vertical import vertical_source
+
+    track, style = vertical_source(project, position='center', reverse=reverse, texts=['字', '한', '字', '한'])
+    line, = track.lines
+    pictures = GuideSymbol(kind='bitmap', bitmap_before_path=image(tmp_path / 'before.png', 15, 12, '#3870FF'),
+                           bitmap_after_path=image(tmp_path / 'after.png', 15, 12, '#30FF80'),
+                           bitmap_no_decor=True, bitmap_zoom_percent=80, replacement_prefix=('字',))
+    return replace(track, lines=[replace(line, guide_symbol=pictures)]), style
+
+
+def test_vertical_bitmap_guide_keeps_scene_after_invalid_wipe_box(binary, project, tmp_path):
+    ir = ir_for(binary, vertical_bitmap_guide(project, tmp_path))
+    bad = copy.deepcopy(ir)
+    bad['skia_layout']['lines'][0]['cells'][0]['wipe_bottom'] += 1
+    times = [250, 450, 750]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, times)
+        with pytest.raises(NativeRendererError, match='走字范围'):
+            configure(process, bad)
+        replay, _ = collect(process, times[::-1], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@GPU
+@pytest.mark.parametrize('reverse', [False, True], ids=['top_to_bottom', 'bottom_to_top'])
+def test_vertical_bitmap_guide_matches_actual_d2d_gpu(binary, project, tmp_path, reverse):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = vertical_bitmap_guide(project, tmp_path, reverse)
+    times = (250, 450, 750, 1100, 1550, 1750)
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    # Each source has a constant distinct color over most of the image.
+    assert any(np.count_nonzero(frame[..., 2] > 240) > 100 for frame in reference)
+    assert any(np.count_nonzero(frame[..., 1] > 240) > 100 for frame in reference)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'vertical_bitmap_guide', check_p00_edges=True)
 
 
 def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_path):
