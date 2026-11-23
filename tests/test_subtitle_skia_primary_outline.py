@@ -148,6 +148,17 @@ def test_latin_primary_outline_matches_actual_gpu(binary, project, use_role, dpr
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('outline', ['latin', 'role'])
+def test_independent_outline_uses_the_shared_viewport(binary, project, outline):
+    track, style = latin_outline_project(project, use_role=outline == 'role')
+    if outline == 'role':
+        role = style.custom_style_schemes['contrast']
+        style = replace(style, custom_style_schemes={'contrast': replace(role, latin_stroke_width_px=None)})
+    style = replace(style, viewport_offset_x=25, viewport_offset_y=-13)
+    assert_outline_matches_actual_gpu(binary, track, style, dpr=1)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('latin_enabled', [False, True], ids=['japanese-only', 'latin-only'])
 def test_latin_secondary_outline_matches_actual_gpu(binary, project, latin_enabled):
     track, style = latin_outline_project(project, use_role=False)

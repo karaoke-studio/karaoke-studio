@@ -93,6 +93,31 @@ def test_multiple_sources_validate_all_sources_before_replacing_scene(binary, mu
     assert np.array_equal(before[0], after[0])
 
 
+def test_multitrack_keeps_source_local_latin_outlines(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_primary_outline import latin_outline_project
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    main, style = latin_outline_project(project, use_role=False)
+    side = replace(main, meta=replace(main.meta, offset_ms=3600))
+    times = (600, 1000, 4200, 4600)
+    ir = ir_for(binary, (main, style), extra_tracks=[side])
+    sources = (ir, *ir['skia_extra_sources'])
+    assert all('p06_latin_primary_outline' in source['required_features'] for source in sources)
+    gpu, raster = render_skia(binary, ir, times)
+    assert all(frame.any() for frame in gpu)
+    assert np.array_equal(gpu[0], gpu[2]) and np.array_equal(gpu[1], gpu[3])
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, pixels = _render_g1_frames(process, style, times, force_warp=False, track=main,
+                                          extra_tracks=[side], width=640, height=360, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in pixels]
+    assert_glow_parity(times, reference, gpu, raster, 'multitrack_latin_outline', check_p00_edges=True)
+
+
 def test_multiple_sources_keep_independent_page_plans(binary, grid):
     track, style = grid
     style = replace(style, sync_entry=True, sync_ending=True, sync_each_page=True)

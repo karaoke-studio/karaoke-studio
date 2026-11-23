@@ -15,8 +15,6 @@ struct SceneSize {
     qsizetype readings = 0;
 };
 
-enum class SourceKind { Lyrics, VerticalLyrics, Title };
-
 bool isVerticalSource(const QJsonObject& source) {
     return source.value("required_features").toArray().contains("p05_vertical_solid");
 }
@@ -29,106 +27,9 @@ QJsonObject bandOptions(const QJsonObject& source) {
     return result;
 }
 
-void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize& size, SourceKind kind) {
+void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize& size) {
     if (source.value("screen") != screen || source.contains("skia_extra_sources"))
         throw BackendError("Skia 多轨尺寸不一致或包含嵌套来源");
-    // These features carry only source-local geometry. Other combinations need
-    // their own validation of draw order before sharing the scene.
-    static const QJsonArray allowed{
-        "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
-        "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal",
-        "p05_segmented_wipe", "p05_overlap_wipe", "p05_font_fallback",
-        "p05_mixed_fonts", "p05_reverse_wipe", "p05_reverse_overlap",
-        "p05_resolved_ruby", "p05_upper_ruby", "p05_lower_ruby",
-        "p05_ruby_units", "p05_ruby_markers", "p05_standalone_marks",
-        "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_latin_secondary_outline", "p06_multi_lane_outline",
-        "p06_role_solid_outlines", "p06_role_body_paints", "p06_ruby_role_paints", "p06_role_outline_gradient",
-        "p06_role_outline_paints",
-        "p06_outline_ruby", "p06_ruby_solid_outline", "p06_ruby_outline_gradient", "p06_ruby_horizontal_outline",
-        "p07_ruby_line_animation",
-        "p06_body_gradient", "p06_outline_gradient", "p06_image_fill", "p06_unscaled_paint_fade", "p06_unscaled_paint_scanline",
-        "p06_ruby_main_paint", "p06_utopia_main_paint", "p06_ruby_fill_gradient", "p06_ruby_fill_image",
-        "p06_independent_ruby_fill",
-        "p06_faded_scanline_gradient_fill", "p06_animated_singing_gradient_fill", "p06_faded_scanline_palette_gradient",
-        "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow", "p07_singing_glow",
-        "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
-        "p06_static_shadow", "p06_ruby_shadow",
-        "p06_body_image_shadow", "p06_ruby_image_shadow",
-        "p06_role_static_shadow",
-        "p06_lower_ruby_static_gradient", "p06_lower_ruby_shadow", "p06_lower_ruby_shadow_gradient",
-        "p06_lower_ruby_shadow_image",
-        "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale", "p07_role_singing_glow",
-        "p07_no_wipe", "p07_line_fade", "p07_line_motion", "p07_utopia_line_animation", "p08_viewport",
-        "p07_scanline_band", "p07_scanline_role_gradient", "p07_ruby_scanline", "p07_lower_ruby_scanline",
-        "p07_scanline_image", "p07_scanline_shape", "p07_scanline_shape_palette", "p07_scanline_line_animation", "p07_faded_scanline_singing_particles",
-        "p07_reverse_scanline_image", "p07_original_scanline_image_palette",
-        "p07_faded_scanline_particle_paint", "p07_inline_role_faded_scanline", "p07_role_line_fade",
-        "p07_scanline_unscaled_line_animation",
-        "p07_lower_ruby_scanline_line_animation",
-        "p07_scanline_shape_line_animation", "p07_ruby_scanline_particles",
-        "p07_shaped_scanline_singing_particles", "p07_ruby_band_singing_particles", "p07_sing_twinkle",
-        "p08_line_band_with_effects", "p08_volume_signal",
-        "p07_singing_particle_line_animation",
-        "p08_inline_bitmap_guides", "p08_inline_bitmap_decoration", "p08_reverse_bitmap_guides", "p08_animated_bitmap_guides",
-        "p08_bitmap_guide_shadow",
-        "p08_static_line_band", "p08_line_band_fit", "p08_line_band_slices",
-        "p08_ruby_line_band", "p08_lower_ruby_line_band", "p08_tinted_line_band",
-        "p08_staff_line_band", "p08_animated_staff_line_band", "p08_animated_line_band",
-        "p08_line_band_image_sequence", "p08_line_band_outer_stroke", "p08_line_band_stroke_position",
-        "p08_line_band_blur", "p08_line_band_animated_decoration"
-    };
-    static const QJsonArray verticalAllowed{
-        "p05_vertical_solid", "p05_vertical_columns", "p05_vertical_japanese_glyphs", "p05_vertical_text_cells",
-        "p05_vertical_column_offsets",
-        "p05_vertical_ruby", "p05_vertical_ruby_groups", "p05_vertical_shifted_ruby", "p05_vertical_rotated_ruby",
-        "p05_vertical_reverse_ruby_track", "p05_vertical_columns_ruby",
-        "p06_vertical_outline", "p06_vertical_ruby_outline", "p06_vertical_columns_outline",
-        "p06_vertical_reverse_outline", "p06_vertical_ruby_group_paint",
-        "p06_vertical_glow", "p06_vertical_shadow", "p06_vertical_ruby_decoration",
-        "p06_vertical_reverse_glow", "p06_vertical_reverse_shadow", "p08_vertical_viewport",
-        "p08_vertical_shadow_viewport", "p07_vertical_singing_shadow", "p07_vertical_ruby_singing_shadow",
-        "p07_vertical_singing_scale", "p07_vertical_zoom_pulse", "p07_ruby_zoom_pulse", "p07_zoom_pulse_decoration",
-        "p07_vertical_scanline_band", "p07_vertical_scanline_decoration", "p07_vertical_scanline_palette",
-        "p07_vertical_scanline_singing", "p07_vertical_singing_scanline_palette", "p07_vertical_zoom_scanline",
-        "p08_vertical_scanline_viewport", "p08_vertical_scanline_palette_viewport",
-        "p08_vertical_singing_scanline_viewport",
-        "p07_vertical_sing_twinkle", "p07_vertical_sing_shapes", "p07_vertical_sing_falling",
-        "p07_vertical_sing_lightning", "p07_vertical_sing_flame", "p07_vertical_singing_with_particles",
-        "p07_vertical_reverse_singing_particles", "p07_vertical_reverse_singing",
-        "p07_vertical_scanline_singing_particles", "p07_vertical_scanline_particles",
-        "p07_vertical_reverse_scanline", "p07_vertical_reverse_scanline_singing",
-        "p07_vertical_reverse_scanline_particles", "p07_vertical_outlined_singing_particles"
-    };
-    const auto sourceFeatures = source.value("required_features").toArray();
-    const bool vertical = kind == SourceKind::VerticalLyrics && isVerticalSource(source);
-    const bool readingZoom = kind != SourceKind::Title && (sourceFeatures.contains("p07_ruby_zoom_line_animation")
-        || sourceFeatures.contains("p07_ruby_zoom_noise"));
-    static const QJsonArray readingZoomFeatures{
-        "p07_ruby_zoom_pulse", "p07_ruby_zoom_line_animation", "p07_ruby_zoom_noise",
-        "p07_noise_transition", "p07_noise_composition"
-    };
-    const bool prefixGuides = kind != SourceKind::Title && (sourceFeatures.contains("p07_faded_scanline_prefix_guides")
-        || sourceFeatures.contains("p05_role_vector_guides")
-        || (sourceFeatures.contains("p05_vector_guide_composition")
-            && (sourceFeatures.contains("p06_animated_singing_gradient_fill")
-                || (sourceFeatures.contains("p06_latin_primary_outline") && sourceFeatures.contains("p07_utopia_line_animation")))));
-    static const QJsonArray prefixGuideFeatures{
-        "p05_vector_guides", "p05_vector_guide_composition", "p07_faded_scanline_prefix_guides",
-        "p05_role_vector_guides", "p06_latin_primary_outline"
-    };
-    static const QJsonArray titleFeatures{
-        "p05_vector_guides", "p08_bitmap_guides", "p08_animated_title_guides", "p08_title_role_outlines",
-        "p06_role_shadow_paints", "p06_body_gradient_shadow"
-    };
-    for (const auto& feature : sourceFeatures)
-        if (!allowed.contains(feature)
-            && !(vertical && verticalAllowed.contains(feature))
-            && !(readingZoom && readingZoomFeatures.contains(feature))
-            && !(prefixGuides && prefixGuideFeatures.contains(feature))
-            && !(kind != SourceKind::Title && sourceFeatures.contains("p08_inline_bitmap_guides")
-                 && feature == QJsonValue("p08_bitmap_guides"))
-            && !(kind == SourceKind::Title && titleFeatures.contains(feature)))
-            throw BackendError("Skia 多轨暂不支持此绘制能力 " + feature.toString().toStdString());
     const auto layout = source.value("skia_layout").toObject().value("lines").toArray();
     if ((size.lines += layout.size()) > 4096) throw BackendError("Skia 多轨行数超限");
     for (const auto& value : layout) {
@@ -167,16 +68,15 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     const auto sharedBand = bandOptions(primary);
     const bool hasBand = features.contains("p08_static_line_band");
     bool hasVerticalSource = isVerticalSource(primary);
-    const auto kind = verticalSources ? SourceKind::VerticalLyrics : SourceKind::Lyrics;
     SceneSize size;
-    countSource(primary, screen, size, kind);
+    countSource(primary, screen, size);
     for (const auto& value : extras) {
         if (!value.isObject()) throw BackendError("Skia 附加轨道格式无效");
         const auto source = value.toObject();
         if (source.value("required_features").toArray().contains("p08_static_line_band") != hasBand
             || (hasBand && bandOptions(source) != sharedBand))
             throw BackendError("Skia 多轨行背景带必须共享场景素材与装饰");
-        countSource(source, screen, size, kind);
+        countSource(source, screen, size);
         hasVerticalSource |= isVerticalSource(source);
     }
     if (verticalSources != hasVerticalSource)
@@ -237,7 +137,7 @@ std::vector<::subtitle::skia::ResolvedLine::TitleWindow> titleWindows(const QJso
         const auto title = titles.at(index - 1).toObject();
         const auto source = title.value("source").toObject();
         auto windows = titleWindows(title.value("windows"));
-        countSource(source, ir.value("screen"), size, SourceKind::Title);
+        countSource(source, ir.value("screen"), size);
         auto prepared = resolvedSkiaSource(source, images, nullptr, /*staticTitle=*/true);
         if (prepared.lines.empty() || prepared.lines.size() > 32
             || !prepared.viewport.isIdentity() || prepared.lineBand.image)

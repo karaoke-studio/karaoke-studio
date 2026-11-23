@@ -1400,33 +1400,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_primary_solid_outline")
         && layout.value("primary_solid_outline_schema").toDouble(-1) != 1)
         throw BackendError("Skia 实色描边布局版本无效");
-    if (features.contains("p06_latin_primary_outline")) {
-        static const QJsonArray allowed{
-            "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
-            "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
-            "p05_overlap_wipe", "p05_font_fallback", "p05_mixed_fonts", "p05_standalone_marks",
-            "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_multi_lane_outline",
-            "p06_role_solid_outlines", "p06_latin_primary_outline", "p06_latin_secondary_outline", "p06_role_body_paints",
-            "p05_resolved_ruby", "p05_upper_ruby", "p05_ruby_units", "p05_ruby_markers",
-            "p06_outline_ruby", "p06_ruby_solid_outline", "p06_ruby_role_paints",
-            "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
-            "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
-            "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
-        };
-        static const QJsonArray animatedGuides{
-            "p05_vector_guides", "p05_vector_guide_composition", "p07_singing_scale",
-            "p07_ruby_singing_scale", "p07_utopia_line_animation", "p07_singing_glow",
-            "p05_role_vector_guides", "p07_role_singing_scale", "p07_role_singing_glow"
-        };
-        const bool animatedGuide = features.contains("p05_vector_guide_composition")
-            && features.contains("p07_utopia_line_animation");
-        if (!features.contains("p06_primary_solid_outline")
-            || (features.contains("p07_line_fade") && !features.contains("p07_role_line_fade") && !animatedGuide)
-            || std::any_of(features.begin(), features.end(), [&](const auto& v) {
-                return !allowed.contains(v) && !(animatedGuide && animatedGuides.contains(v));
-            }))
-            throw BackendError("Skia 英数独立首层描边需要正向横排、普通走字和受支持的画笔组合");
-    }
+    if (features.contains("p06_latin_primary_outline") && !features.contains("p06_primary_solid_outline"))
+        throw BackendError("Skia 英数独立首层描边缺少描边能力");
     if (features.contains("p06_secondary_solid_outline")
         && (layout.value("secondary_solid_outline_schema").toDouble(-1) != 1
             || !features.contains("p06_primary_solid_outline")))
@@ -1451,47 +1426,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         || (roleLineFade && (features.contains("p05_lower_ruby")
             || (features.contains("p07_singing_scale") && !(roleFadedScanline || inlineBitmapGuides || roleVectorGuides)))))
         throw BackendError("Skia 角色画笔整行淡化需要正向横排、普通走字和受支持的上注音画笔");
-    if (roleLayers) {
-        static const QJsonArray allowed{
-            "p05_resolved_horizontal", "p05_single_line_placement", "p05_inline_roles",
-            "p05_fixed_row_grid", "p05_page_collisions", "p05_smart_horizontal", "p05_segmented_wipe",
-            "p05_overlap_wipe", "p05_font_fallback", "p05_mixed_fonts",
-            "p05_resolved_ruby", "p05_upper_ruby", "p05_lower_ruby", "p05_ruby_units",
-            "p05_ruby_markers", "p05_standalone_marks", "p06_outline_ruby", "p06_ruby_solid_outline",
-            "p06_primary_solid_outline", "p06_secondary_solid_outline", "p06_role_solid_outlines", "p06_latin_primary_outline",
-            "p06_multi_lane_outline", "p06_role_body_paints", "p06_ruby_role_paints", "p08_title_role_outlines",
-            "p06_role_outline_paints",
-            "p06_static_glow", "p06_role_static_glow", "p06_ruby_glow", "p06_ruby_role_glow",
-            "p06_gradient_glow", "p06_vertical_gradient_glow", "p06_role_gradient_glow",
-            "p07_singing_scale", "p07_role_singing_scale", "p07_ruby_singing_scale",
-            "p07_singing_glow", "p07_role_singing_glow",
-            "p07_line_fade", "p07_role_line_fade", "p07_ruby_line_animation"
-        };
-        static const QJsonArray fadedScanline{
-            "p07_scanline_band", "p07_ruby_scanline", "p07_scanline_line_animation",
-            "p07_utopia_line_animation", "p07_inline_role_faded_scanline"
-        };
-        static const QJsonArray avatarFeatures{
-            "p08_bitmap_guides", "p08_inline_bitmap_guides", "p06_role_outline_gradient", "p06_ruby_outline_gradient",
-            "p08_inline_bitmap_decoration", "p08_animated_bitmap_guides", "p06_ruby_horizontal_outline",
-            "p07_utopia_line_animation", "p06_static_shadow", "p06_ruby_shadow"
-        };
-        static const QJsonArray roleGuideFeatures{
-            "p05_vector_guides", "p05_vector_guide_composition", "p05_role_vector_guides", "p07_utopia_line_animation",
-            "p06_static_shadow", "p06_ruby_shadow"
-        };
-        const bool roleBodyPaints = features.contains("p06_role_body_paints");
-        if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
-            || ((roleBodyPaints || roleStaticGlow) && !features.contains("p05_inline_roles"))
-            || std::any_of(features.begin(), features.end(), [&](const auto& v) {
-                return !allowed.contains(v) && !(roleFadedScanline && fadedScanline.contains(v))
-                    && !(inlineBitmapGuides && avatarFeatures.contains(v))
-                    && !(roleVectorGuides && roleGuideFeatures.contains(v))
-                    && !(reverseBitmapGuides && (v == QJsonValue("p05_reverse_wipe") || v == QJsonValue("p05_reverse_overlap")
-                                                 || v == QJsonValue("p08_reverse_bitmap_guides") || v == QJsonValue("p06_static_shadow")));
-            }))
-            throw BackendError("Skia 正文角色画笔当前支持正向横排和普通走字");
-    }
+    if ((features.contains("p06_role_solid_outlines") && !features.contains("p06_primary_solid_outline"))
+        || ((features.contains("p06_role_body_paints") || roleStaticGlow) && !features.contains("p05_inline_roles")))
+        throw BackendError("Skia 正文角色画笔缺少对应描边或角色能力");
     if (style.contains("right_to_left")
         && !style.value("right_to_left").isBool())
         throw BackendError("Skia 右至左单元排列标记必须是布尔值");
