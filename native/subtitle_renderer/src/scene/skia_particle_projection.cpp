@@ -66,6 +66,12 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
     const bool outlinedPlainScale = plainScale && !source.wipeReverse && !source.zoomPulseEnabled
         && features.contains("p07_horizontal_outlined_singing_particles");
+    const bool staticForwardSinging = !cfg.vertical && !cfg.rightToLeft && cfg.rubies.empty()
+        && !source.wipeReverse && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled
+        && source.karaokeAnimation == "none" && source.entryAnimation == "none" && source.exitAnimation == "none";
+    const bool outlinedUnscaled = staticForwardSinging && features.contains("p07_unscaled_outlined_singing_particles")
+        && protocol::decorationKindForState(style, false) == "none"
+        && protocol::decorationKindForState(style, true) == "none";
     const int entrySweep = isSkiaFallingParticle(entry) ? 1 : 0;
     const int exitSweep = isSkiaFallingParticle(exit) ? -1 : 0;
     const bool verticalStars = features.contains("p07_vertical_sing_twinkle");
@@ -143,16 +149,13 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || (noteExit && !petalWithBand)
         || (!cfg.rubies.empty() && (!rubyParticles || (animated && !composedTransition)
             || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
-        || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines && !outlinedPlainScale
+        || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines && !outlinedPlainScale && !outlinedUnscaled
             && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
         throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");
     line.bursts.reserve(source.fxBursts.size());
-    const bool paintedSprites = features.contains("p07_singing_sprite_paints") && !cfg.vertical && !cfg.rightToLeft
-        && !source.wipeReverse && cfg.rubies.empty() && !source.scanlineEnabled && !source.strokeFlashEnabled
-        && !source.zoomPulseEnabled && source.karaokeAnimation == "none"
-        && source.entryAnimation == "none" && source.exitAnimation == "none";
+    const bool paintedSprites = staticForwardSinging && features.contains("p07_singing_sprite_paints");
     const auto spritePaint = [](const auto& paint) {
         return paint.mode == "solid" || paint.mode == "gradient_vertical";
     };

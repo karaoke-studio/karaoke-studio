@@ -143,6 +143,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     plain_scaled_singing = False
     plain_zoom_singing = False
     horizontal_outlined_singing = False
+    unscaled_outlined_singing = False
     energy_line_motion = energy_singing_stars = False
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
@@ -206,6 +207,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         static_sprite_paint = (not (look.vertical or look.right_to_left or item.line.wipe_reverse or band or annotated)
                                and (entry, exit_) == ('none', 'none') and source.get('karaoke_anim') == 'none'
                                and not (source.get('zoom_pulse') or source.get('stroke_flash')))
+        unscaled_outline = static_sprite_paint and outlined and not any(
+            uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))
         scaled_singing = (faded_band or plain_scale
                           or (annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')))
         unscaled_motion = (not look.vertical and not look.right_to_left and not item.line.wipe_reverse
@@ -237,13 +240,15 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 or (look.lower_ruby_enabled and not (faded_band
                     and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
                 or (annotated and animated and index not in composed_lines)
-                or (not (annotated or vertical_particles or faded_band or outlined_energy or outlined_singing) and outlined)
+                or (not (annotated or vertical_particles or faded_band or outlined_energy
+                         or outlined_singing or unscaled_outline) and outlined)
                 or any(c.role_label is not None or (c.vector_glyph is not None and not prefix_guides) for c in chars)):
             raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
         horizontal_line_motion |= unscaled_motion
         plain_scaled_singing |= plain_scale
         plain_zoom_singing |= plain_scale and bool(source.get('zoom_pulse'))
         horizontal_outlined_singing |= outlined_singing
+        unscaled_outlined_singing |= unscaled_outline
         reverse_horizontal_singing |= reverse_singing
         rtl_horizontal_singing |= rtl_singing
         no_wipe_horizontal_singing |= no_wipe_singing
@@ -362,6 +367,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_plain_zoom_singing_particles')
     if horizontal_outlined_singing:
         ir['required_features'].append('p07_horizontal_outlined_singing_particles')
+    if unscaled_outlined_singing:
+        ir['required_features'].append('p07_unscaled_outlined_singing_particles')
     if reverse_horizontal_singing:
         ir['required_features'].append('p07_reverse_singing_particles')
     if rtl_horizontal_singing:

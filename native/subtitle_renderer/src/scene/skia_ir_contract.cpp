@@ -305,6 +305,7 @@ const QJsonArray& skiaIrProfiles() {
         "p07_plain_scaled_singing_particles",
         "p07_plain_zoom_singing_particles",
         "p07_horizontal_outlined_singing_particles",
+        "p07_unscaled_outlined_singing_particles",
         "p07_no_wipe_singing_particles",
         "p07_vertical_singing_particle_line_animation",
         "p07_vertical_scanline_singing_particles",
@@ -1304,6 +1305,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p07_horizontal_outlined_singing_particles")
         && (!features.contains("p07_plain_scaled_singing_particles") || !features.contains("p06_primary_solid_outline")))
         throw BackendError("Skia 横排唱字粒子缺少对应唱字放大或描边能力");
+    if (features.contains("p07_unscaled_outlined_singing_particles")
+        && (!features.contains("p07_sing_twinkle")
+            || !(features.contains("p06_primary_solid_outline") || features.contains("p06_secondary_solid_outline"))))
+        throw BackendError("Skia 横排普通走字粒子缺少对应描边能力");
     if (features.contains("p07_reverse_singing_particles")
         && (!features.contains("p07_sing_twinkle") || !features.contains("p05_reverse_wipe")))
         throw BackendError("Skia 横排反向唱字粒子缺少粒子或反向走字能力声明");
