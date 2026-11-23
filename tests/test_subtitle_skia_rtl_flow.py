@@ -188,10 +188,16 @@ def test_python_flow_flag_must_be_boolean(binary,project,value):
     with pytest.raises(ValueError,match='布尔值'):ir_for(binary,(track,replace(style,right_to_left=value)))
 
 
-def test_vertical_rtl_combination_is_rejected(binary, project):
-    track,style=rtl_source(project)
-    with pytest.raises(ValueError):
-        ir_for(binary, (track, replace(style, vertical=True)))
+def test_vertical_layout_ignores_authored_horizontal_direction(binary, project):
+    track, style = rtl_source(project)
+    vertical = replace(style, vertical=True)
+    ir = ir_for(binary, (track, vertical))
+    control = ir_for(binary, (track, replace(vertical, right_to_left=False)))
+    assert vertical.right_to_left
+    assert not ir['style']['right_to_left']
+    assert 'p05_horizontal_rtl' not in ir['required_features']
+    assert ir['skia_layout'] == control['skia_layout']
+    assert ir['track']['lines'] == control['track']['lines']
 
 
 def test_rtl_upper_reading_without_body_stroke_preserves_scene(binary, reading):

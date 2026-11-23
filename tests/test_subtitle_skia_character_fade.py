@@ -67,17 +67,14 @@ def test_character_fade_matches_fixed_stagger(binary, project, target, single, t
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutated', ['feature', 'schema', 'ruby'])
-def test_character_fade_capabilities_and_unsupported_ruby_preserve_scene(binary, project, mutated):
+@pytest.mark.parametrize('mutated', ['feature', 'schema'])
+def test_invalid_character_fade_capabilities_preserve_scene(binary, project, mutated):
     ir = ir_for(binary, character_fade_project(project))
     bad = copy.deepcopy(ir)
     if mutated == 'feature':
         bad['required_features'].remove('p07_character_fade')
-    elif mutated == 'schema':
-        bad['skia_layout']['character_fade_schema'] = True
     else:
-        track, style = vertical_ruby_source(project)
-        bad = ir_for(binary, (track, replace(style, entry_anim='char_fade', entry_lead_ms=180)))
+        bad['skia_layout']['character_fade_schema'] = True
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [125])
@@ -85,6 +82,29 @@ def test_character_fade_capabilities_and_unsupported_ruby_preserve_scene(binary,
             configure(process, bad)
         after, _ = collect(process, [125], generation=2)
     assert np.array_equal(before[0], after[0])
+
+
+def test_vertical_reading_ignores_inactive_character_entry_fade(binary, project):
+    track, style = vertical_ruby_source(project)
+    plain = ir_for(binary, (track, style))
+    with_fade = replace(style, entry_anim='char_fade', entry_lead_ms=180)
+    ir = ir_for(binary, (track, with_fade))
+    assert with_fade.entry_anim == 'char_fade'
+    assert 'p07_character_fade' not in ir['required_features']
+    assert ir['skia_layout']['lines'][0]['ruby_groups']
+    assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
+    source, = ir['track']['lines']
+    control, = plain['track']['lines']
+    assert source['entry_anim'] == 'none' and source['entry_duration_ms'] == 0
+    for name in ('display_start_ms', 'display_end_ms', 'resolved_intervals'):
+        assert source[name] == control[name]
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, plain)
+        before, _ = collect(process, [520, 750])
+        configure(process, ir)
+        after, _ = collect(process, [520, 750], generation=2)
+    assert all(frame.any() for frame in before)
+    assert np.array_equal(before, after)
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
