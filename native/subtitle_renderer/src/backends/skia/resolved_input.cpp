@@ -995,7 +995,10 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
             && features.contains("p06_utopia_main_paint"));
         const bool movingGradientShadow = movingSingingGradientFill && movingGradient && hasShadow && !hasGlow;
-        const bool paintedDecoration = (rubyMainPaint || movingGradient) && (!hasShadow || movingGradientShadow);
+        const bool stationaryPaint = staticShadowLine && line.karaokeAnimation == "none"
+            && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        const bool paintedDecoration = (stationaryPaint && !style.vertical && !style.rightToLeft && !line.wipeReverse)
+            || ((rubyMainPaint || movingGradient) && (!hasShadow || movingGradientShadow));
         const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
             && (line.entryAnimation == "none" || line.entryAnimation == "fade")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade");
@@ -1030,10 +1033,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
             && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-        const bool staticPaintStack = !hasDecoration && !hasBitmapGuide
-            && !annotated && !hasInlineRoles && line.karaokeAnimation == "none" && line.entryAnimation == "none"
-            && line.exitAnimation == "none" && !line.zoomPulseEnabled && !line.scanlineEnabled
-            && !line.strokeFlashEnabled && line.bursts.empty();
+        const bool staticPaintStack = stationaryPaint && !hasDecoration && !hasBitmapGuide && !annotated && !hasInlineRoles;
         const bool staticDirectional = staticPaintStack && !style.vertical && style.rightToLeft != line.wipeReverse;
         const bool verticalPaints = staticPaintStack && style.vertical && !vectorGuides
             && features.contains("p06_vertical_body_paints");

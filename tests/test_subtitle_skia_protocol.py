@@ -507,6 +507,23 @@ def test_title_vector_guides_share_solid_decoration(binary, decoration):
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_title_vector_guides_compose_gradient_with_solid_decoration(binary, decoration):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = vector_guide_title()
+    title = replace(style.title_overlays[0], decoration_kind=decoration,
+                    fill=PaintFill(mode='gradient_vertical', start_color='#F65232', end_color='#26C9A1'),
+                    shadow=PaintFill(color='#BB204CAA'), shadow_offset_x=9, shadow_offset_y=12,
+                    glow_radius_px=7)
+    style = replace(style, title_overlays=[title])
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=style, case_id=f'title_gradient_vector_{decoration}'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+
+
 def bitmap_guide_title(tmp_path, inline=False):
     from test_subtitle_skia_image_fills import write_png
 
@@ -606,6 +623,7 @@ def test_title_bitmap_guides_use_per_image_decoration(binary, tmp_path, decorati
     title = style.title_overlays[0]
     inline = replace(title.inline_guide_symbols[(0, 2)], bitmap_no_decor=True)
     title = replace(title, decoration_kind=decoration, shadow=PaintFill(color='#E0F51456'),
+                    fill=PaintFill(mode='gradient_vertical', start_color='#E4481A', end_color='#209EEB'),
                     shadow_offset_x=-10, shadow_offset_y=12, glow_radius_px=7,
                     inline_guide_symbols={(0, 2): inline})
     style = replace(style, title_overlays=[title])

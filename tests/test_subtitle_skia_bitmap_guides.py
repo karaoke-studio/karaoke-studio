@@ -682,6 +682,10 @@ def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path, p
     from test_subtitle_skia_static_shadow import premultiplied
 
     track, style = shadowed_bitmap_guide(project, tmp_path, paint_mode=paint_mode)
+    if paint_mode == 'solid':
+        fill = PaintFill(mode='gradient_horizontal', start_color='#17CE77', end_color='#FFAA32')
+        palette = style.karaoke_colors
+        style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, text=fill)))
     line, = track.lines
     plain = replace(track, lines=[replace(line, guide_symbol=replace(line.guide_symbol, bitmap_no_decor=True))])
     times = (250, 450, 750, 1100, 1550)

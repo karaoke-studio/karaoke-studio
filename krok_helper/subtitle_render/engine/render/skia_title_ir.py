@@ -65,12 +65,6 @@ def title_style(title):
         return None
     guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
     bitmaps = any(guide['kind'] == 'bitmap' for guide in guides)
-    textured = any(paint['fill']['mode'] != 'solid'
-                   or (paint['stroke_width_px'] > 0 and paint['stroke']['mode'] != 'solid')
-                   or (paint['stroke2_width_px'] > 0 and paint['stroke2']['mode'] != 'solid')
-                   for paint in paints)
-    if textured and any(paint['decoration_kind'] != 'none' for paint in paints):
-        return None
     if bitmaps and any(paint['decoration_kind'] == 'shadow' and paint['shadow']['mode'] != 'solid'
                        for paint in paints):
         return None

@@ -164,9 +164,9 @@ def write_body_gradient_bounds(ir, plan):
         animations = {source.get('entry_anim'), source.get('exit_anim')}
         annotated = bool(final.get('ruby_groups'))
         directional = look.right_to_left or item.line.wipe_reverse
-        static_paints = (animations == {'none'} and source.get('karaoke_anim') == 'none'
-                         and not annotated
-                         and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash'))
+        stationary = (animations == {'none'} and source.get('karaoke_anim') == 'none' and not annotated
+                      and not any(source.get(flag) for flag in ('scanline', 'fx_bursts', 'zoom_pulse', 'stroke_flash')))
+        static_paints = (stationary
                          and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow')))
         static_directional = static_paints and not look.vertical and look.right_to_left != item.line.wipe_reverse
         static_vertical = static_paints and look.vertical
@@ -199,7 +199,7 @@ def write_body_gradient_bounds(ir, plan):
                           and look.scanline_mode in {'default', 'color'} and animations == {'none'}
                           and source.get('karaoke_anim') == 'none' and not annotated
                           and not (source.get('fx_bursts') or source.get('zoom_pulse')))
-        bitmap_paints = not (look.vertical or directional) and (static_paints or paint_fade)
+        bitmap_paints = not (look.vertical or directional) and (stationary or paint_fade)
         palette_band = (source.get('scanline') and look.scanline_shape == 'band' and look.scanline_mode == 'brighten'
                         and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
                         and not source.get('fx_bursts') and 'fade' in animations and animations <= {'none', 'fade'}
