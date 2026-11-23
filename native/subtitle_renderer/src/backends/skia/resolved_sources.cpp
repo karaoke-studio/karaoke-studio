@@ -98,6 +98,12 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     };
     const auto sourceFeatures = source.value("required_features").toArray();
     const bool vertical = kind == SourceKind::VerticalLyrics && isVerticalSource(source);
+    const bool readingZoom = kind != SourceKind::Title && (sourceFeatures.contains("p07_ruby_zoom_line_animation")
+        || sourceFeatures.contains("p07_ruby_zoom_noise"));
+    static const QJsonArray readingZoomFeatures{
+        "p07_ruby_zoom_pulse", "p07_ruby_zoom_line_animation", "p07_ruby_zoom_noise",
+        "p07_noise_transition", "p07_noise_composition"
+    };
     const bool prefixGuides = kind != SourceKind::Title && (sourceFeatures.contains("p07_faded_scanline_prefix_guides")
         || sourceFeatures.contains("p05_role_vector_guides")
         || (sourceFeatures.contains("p05_vector_guide_composition")
@@ -110,6 +116,7 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     for (const auto& feature : sourceFeatures)
         if (!allowed.contains(feature)
             && !(vertical && verticalAllowed.contains(feature))
+            && !(readingZoom && readingZoomFeatures.contains(feature))
             && !(prefixGuides && prefixGuideFeatures.contains(feature))
             && !(kind != SourceKind::Title && sourceFeatures.contains("p08_inline_bitmap_guides")
                  && feature == QJsonValue("p08_bitmap_guides"))

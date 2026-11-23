@@ -264,6 +264,36 @@ def test_upper_reading_zoom_with_line_animation_matches_actual_d2d_gpu(binary, r
     assert_glow_parity(times, reference, gpu, raster, 'upper_reading_zoom_line_animation', check_p00_edges=True)
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('noise', [False, True], ids=['line_motion', 'noise'])
+def test_animated_upper_reading_zoom_stays_source_local_in_multitrack(binary, reading, noise):
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = animated_upper_reading(reading)
+    if noise:
+        style = replace(style, entry_anim='noise', exit_anim='noise')
+    # The later source overlaps the first at the same position with a
+    # different clock and ink, exposing a change in composite order.
+    other = replace(track, meta=replace(track.meta, offset_ms=175),
+                    rubies=[replace(track.rubies[0], reading='A', reading_parts=['A'], reading_part_ms=[])])
+    times, dpr = (450, 510, 590, 665, 900, 1470, 4850), 3
+    refs = []
+    for extras in ([other], []):
+        with NativeRendererProcess() as d2d:
+            _, pixels = _render_g1_frames(d2d, style, times, extra_tracks=extras, force_warp=False, track=track,
+                                          width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in pixels])
+    assert any(np.count_nonzero(a != b) > 100 for a, b in zip(*refs, strict=True))
+    output = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            process.configure(track, style, extra_tracks=[other], width=640, height=360, fps=60, dpr=dpr)
+            frames, _ = collect(process, times)
+        output.append(frames)
+    assert_glow_parity(times, refs[0], *output, 'multitrack_upper_reading_zoom', check_p00_edges=True)
+
+
 def test_old_group_only_sidecar_cannot_silently_accept_product_upper_ruby(monkeypatch, tmp_path):
     path = tmp_path/'old'; path.touch()
     profiles = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles', 'p05_fixed_row_grid',
