@@ -1,9 +1,24 @@
 #include "volume_signal.h"
+#include "character_halo.h"
 #include "signal_transition.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 
 namespace subtitle::skia {
+void VolumeSignal::drawTransitionHalo(SkCanvas& canvas, int time, const SignalTransition& transition) const {
+    const auto state = krok::subtitle::native::volumeSignalState(clock, time);
+    if (!state.visible || state.opacity <= 0) return;
+    for (int index = 0; index < clock.count; ++index) {
+        const auto& rect = bars[index].rect;
+        const auto& box = rect.rect();
+        const auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY());
+        if (pose.glowAlpha <= 0) continue;
+        const auto contour = SkPath::RRect(rect);
+        drawCharacterHalo(canvas, pose.transformed ? contour.makeTransform(pose.matrix) : contour, pose,
+                          transition.geometry.fontPx, state.opacity);
+    }
+}
+
 void VolumeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition) const {
     const auto state = krok::subtitle::native::volumeSignalState(clock, time);
     if (!state.visible || state.opacity <= 0 || opacity <= 0) return;

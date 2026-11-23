@@ -1664,6 +1664,45 @@ def test_decorated_signal_zoom_pulses_on_its_own_countdown(binary, project, sign
         assert np.array_equal(gpu[0], still[0])  # The preceding flash interval must not grow a column.
 
 
+@pytest.mark.parametrize('signal,effects', [('lamp', ('glow_in', 'none')), ('volume', ('none', 'stretch_out'))])
+def test_signal_transition_halo_composes_with_the_row(binary, project, signal, effects):
+    from test_subtitle_skia_character_transform import transform_source
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_roles import colors
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = transform_source(project, *effects)
+    style = replace(style, karaoke_colors=colors('#12402C', '#12402C'))
+    if signal == 'lamp':
+        style = replace(style, lit_enabled=True, lit_appearance_mode='custom', lit_style='square',
+                        lit_size=22, lit_number=3, lit_fill_color='#FF00FF', lit_offset_y=-75,
+                        lit_stroke_width=0, lit_edge_brightness_pct=0, lit_shadow=False,
+                        signals_duration_ms=5000, lit_time_offset_ms=3000, lit_transition_mode='none')
+        times = (0, 45, 105, 260, 620)
+    else:
+        style = replace(style, volume_enabled=True, volume_appearance_mode='custom', volume_column_count=3,
+                        volume_fill_color='#FF00FF', volume_overlay_fill_color='#FF00FF', volume_offset_y=-75,
+                        volume_stroke_width=0, volume_flash_times=0)
+        times = (2390, 2470, 2580, 2770, 2860)
+    reference, dpr = None, 3
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, reference, gpu, raster, ('signal_transition_halo', signal), check_p00_edges=True)
+    for frames in (gpu, raster):
+        settled = frames[-1] if signal == 'lamp' else frames[0]
+        halo = frames[0] if signal == 'lamp' else frames[1]
+        ys = np.nonzero(np.all(settled[..., :3] == [255, 0, 255], axis=-1) & (settled[..., 3] > 240))[0]
+        assert ys.size > 100
+        signal_band = halo[ys.min():ys.max() + 1]
+        assert np.count_nonzero((signal_band[..., 3] > 20) & np.all(signal_band[..., :3] > 240, axis=-1)) > 100
+
+
 @pytest.mark.parametrize('shape', ['square', 'star'])
 def test_decorated_lamp_gradient_keeps_its_group_span(binary, project, shape):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme

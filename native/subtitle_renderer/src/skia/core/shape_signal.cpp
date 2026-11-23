@@ -1,4 +1,5 @@
 #include "shape_signal.h"
+#include "character_halo.h"
 #include "signal_transition.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
@@ -20,7 +21,7 @@ SkPath ShapeSignal::outline() const {
 void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& transition, float entryOpacity) const {
     const auto state = krok::subtitle::native::shapeSignalState(clock, time);
     const float signalOpacity = opacity * entryOpacity;
-    if (!state.visible || signalOpacity <= 0) return;
+    if (!state.visible || state.activeIndex < 0 || signalOpacity <= 0) return;
     SkAutoCanvasRestore group(&canvas, false);
     if (decoration && signalOpacity < 1) canvas.saveLayerAlphaf(nullptr, signalOpacity);
     const float brushOpacity = decoration ? 1.f : signalOpacity;
@@ -69,7 +70,16 @@ void ShapeSignal::draw(SkCanvas& canvas, int time, const SignalTransition& trans
         const auto box = boxAt(index);
         const float x = box.left(), y = box.top();
         auto pose = transition.at(time, index, clock.count, box.centerX(), box.centerY(), true);
-        const float alpha = pose.opacity * (active ? state.activeOpacity : 1.f);
+        const float countdownOpacity = active ? state.activeOpacity : 1.f;
+        if (pose.glowAlpha > 0 && countdownOpacity > 0) {
+            auto contour = outline().makeOffset(x, y);
+            const bool strokeInPose = pose.transformed && !pose.glowEcho;
+            SkAutoCanvasRestore halo(&canvas, strokeInPose);
+            if (strokeInPose) canvas.concat(pose.matrix);
+            else if (pose.transformed) contour = contour.makeTransform(pose.matrix);
+            drawCharacterHalo(canvas, contour, pose, transition.geometry.fontPx, brushOpacity * countdownOpacity);
+        }
+        const float alpha = pose.opacity * countdownOpacity;
         if (alpha <= 0) continue;
         if (decoration && transition.singingScale.zoomPulse) {
             const auto duration = std::int64_t(clock.activeDurationMs);

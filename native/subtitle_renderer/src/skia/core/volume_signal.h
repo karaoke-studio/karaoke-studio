@@ -30,6 +30,7 @@ struct VolumeSignal {
     std::array<sk_sp<SkShader>, 2> fillGradients;
     std::vector<Bar> bars;
 
+    void drawTransitionHalo(SkCanvas&, int time, const SignalTransition&) const;
     void draw(SkCanvas&, int time, const SignalTransition&) const;
 };
 }

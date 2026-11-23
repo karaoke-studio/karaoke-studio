@@ -461,12 +461,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     if (!line.particles.empty())
         drawSingParticles(canvas, line.particles, tMs, false, line.vertical, sampledKind, quantizedKind);
-    if (geometry)
+    if (geometry && line.characterGeometry.hasHalo()) {
         for (std::size_t i = 0; i < line.cells.size(); ++i) {
             const auto& state = states[i];
-            drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
-                              state.transform, line.characterGeometry.fontPx);
+            if (state.transform.opacity > 0)
+                drawCharacterHalo(canvas, state.animatedInk ? *state.animatedInk : line.cells[i].path,
+                                  state.transform, line.characterGeometry.fontPx);
         }
+        if (line.volumeSignal) line.volumeSignal->drawTransitionHalo(canvas, tMs, signalTransition);
+    }
     const auto rubyOpacity = [&](const PreparedWipeGroup& group) {
         const auto owner = group.fadeOwner();
         return owner ? states[*owner].transform.opacity : 1.f;

@@ -13,6 +13,9 @@ struct CharacterGeometry {
     float fontPx = 0;
 
     bool active() const { return entryMs > 0 || exitMs > 0; }
+    bool hasHalo() const {
+        return entry == "glow_in" || entry == "stretch_in" || exit == "glow_out" || exit == "stretch_out";
+    }
     bool inEntryWindow(int time, int displayStart) const {
         return entryMs > 0 && time <= displayStart + std::clamp(entryMs, 120, 3000);
     }
@@ -40,7 +43,7 @@ struct CharacterGeometry {
         state.glowAlpha = value.glowAlpha;
         state.glowRadiusEm = value.glowRadiusEm;
         state.glowEcho = effect == "glow_in" || effect == "glow_out";
-        state.transformed = state.opacity > 0 && (value.dx != 0.f || value.dy != 0.f || value.rotation != 0.f
+        state.transformed = (state.opacity > 0 || state.glowEcho) && (value.dx != 0.f || value.dy != 0.f || value.rotation != 0.f
             || value.scaleX != 1.f || value.scaleY != 1.f);
         if (state.transformed) {
             state.matrix.setTranslate(x + value.dx, pivot.centerY + value.dy);
