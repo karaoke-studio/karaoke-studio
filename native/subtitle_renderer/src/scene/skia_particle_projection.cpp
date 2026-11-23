@@ -157,8 +157,10 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         return paint.mode == "solid" || paint.mode == "gradient_vertical";
     };
     const bool lineGradients = features.contains("p07_singing_sprite_line_gradients");
+    const bool imagePaints = features.contains("p07_singing_sprite_images");
     const auto spriteLayerPaint = [&](const auto& paint) {
-        return spritePaint(paint) || (lineGradients && paint.mode == "gradient_horizontal");
+        return spritePaint(paint) || (lineGradients && paint.mode == "gradient_horizontal")
+            || (imagePaints && paint.mode == "image");
     };
     const auto spriteStroke = [&](double width, const auto& paint) {
         return width == 0 || (std::isfinite(width) && width > 0 && width <= 2048 && spriteLayerPaint(paint));
@@ -181,7 +183,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             && std::isfinite(fx.decorOffsetX) && std::abs(fx.decorOffsetX) <= 1e5
             && std::isfinite(fx.decorOffsetY) && std::abs(fx.decorOffsetY) <= 1e5;
         const bool painted = fx.hasPaint && (fadedPaint || localPaint)
-            && (!fx.hasDecor || ((glow || shadow) && spritePaint(fx.decor)));
+            && (!fx.hasDecor || ((glow || shadow) && (spritePaint(fx.decor)
+                || (localPaint && imagePaints && fx.decor.mode == "image"))));
         // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
         const bool impact = version >= 11 && animated
             && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");

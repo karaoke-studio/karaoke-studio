@@ -128,8 +128,8 @@ def test_rtl_singing_particles_follow_resolved_cell_anchors(binary, project):
         assert abs(premultiplied(d2d) - premultiplied(vulkan)).mean() < .16
 
 
-@pytest.mark.parametrize('appearance', ['outlines', 'shadow', 'horizontal'])
-def test_singing_note_uses_inherited_particle_paint_layers(binary, project, appearance):
+@pytest.mark.parametrize('appearance', ['outlines', 'shadow', 'horizontal', 'image'])
+def test_singing_note_uses_inherited_particle_paint_layers(binary, project, tmp_path, appearance):
     from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
     from test_subtitle_skia_static_glow import assert_glow_parity
 
@@ -137,11 +137,16 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project, appe
     solid = PaintFill(color='#FF226BD5')
     shadow = appearance == 'shadow'
     mode = 'gradient_horizontal' if appearance == 'horizontal' else 'gradient_vertical'
-    gradient = PaintFill(mode=mode, start_color='#FF2020FF', end_color='#FF15FFF0')
+    fill = PaintFill(mode=mode, start_color='#FF2020FF', end_color='#FF15FFF0')
+    if appearance == 'image':
+        from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+
+        image_path = write_png(tmp_path / 'note.png', pattern('opaque'))
+        fill = image_paint(image_path, scale=780, fallback='#FF226BD5')
     palette = colors('#FF226BD5', '#FF226BD5')
     inner = (PaintFill(mode='gradient_horizontal', start_color='#FFFF4080', end_color='#FF9840C0')
              if appearance == 'horizontal' else PaintFill(color='#FFFF4080'))
-    after = replace(palette.after, text=gradient, stroke=inner,
+    after = replace(palette.after, text=fill, stroke=inner,
                     stroke2=PaintFill(color='#FFFFD22C'), shadow=PaintFill(color='#CC3CB549'))
     scheme = SubtitleStyleScheme(karaoke_colors=replace(palette, after=after),
                                  stroke_width_px=6, stroke2_enabled=True, stroke2_width_px=4)
@@ -173,6 +178,7 @@ def test_singing_note_uses_inherited_particle_paint_layers(binary, project, appe
     assert 'p07_singing_sprite_paints' in ir['required_features']
     assert ('p07_singing_sprite_shadows' in ir['required_features']) == shadow
     assert ('p07_singing_sprite_line_gradients' in ir['required_features']) == (appearance == 'horizontal')
+    assert ('p07_singing_sprite_images' in ir['required_features']) == (appearance == 'image')
     assert any(paint['stroke_width_px'] > 0 and paint['stroke2_width_px'] > 0
                for paint in ir['fx_paint_table'])
     gpu, raster = render_skia(binary, ir, times)

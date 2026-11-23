@@ -48,7 +48,7 @@ _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 's
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
 _PAINTED_SPRITES = {'twinkle', 'twinkle_classic', 'note', 'heart'} | FALLING_PARTICLES
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
-_LINE_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal'}
+_LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'image'}
 
 
 def _transition_layers(kind, entry):
@@ -87,15 +87,20 @@ def faded_band_singing_particles(line, style):
             and all(burst['kind'] in {'twinkle', 'twinkle_classic', 'note', 'heart', 'snow_solid'} for burst in bursts))
 
 
+def _sprite_layer_modes(paint):
+    return {paint['fill']['mode']} | {paint[layer]['mode'] for layer in ('stroke', 'stroke2')
+                                    if paint[f'{layer}_width_px']}
+
+
 def _supports_singing_particle_paint(paint, *, local_sprite=False):
     decor = paint.get('decor')
-    modes = _LINE_SPRITE_PAINT_MODES if local_sprite else _SPRITE_PAINT_MODES
-    if paint['fill']['mode'] not in modes or any(
-            paint[f'{layer}_width_px'] and (not local_sprite or paint[layer]['mode'] not in modes)
-            for layer in ('stroke', 'stroke2')):
+    modes = _LOCAL_SPRITE_PAINT_MODES if local_sprite else _SPRITE_PAINT_MODES
+    if not _sprite_layer_modes(paint) <= modes or (
+            not local_sprite and (paint['stroke_width_px'] or paint['stroke2_width_px'])):
         return False
     kinds = {'glow', 'shadow'} if local_sprite else {'glow'}
-    return decor is None or (decor['kind'] in kinds and decor['fill']['mode'] in _SPRITE_PAINT_MODES)
+    decor_modes = _SPRITE_PAINT_MODES | {'image'} if local_sprite else _SPRITE_PAINT_MODES
+    return decor is None or (decor['kind'] in kinds and decor['fill']['mode'] in decor_modes)
 
 
 def vertical_singing_particle_modes(source):
@@ -117,7 +122,7 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
     """Bind solid particles to final cells and return the required profile version."""
     version = 3
     ruby_scanline = ruby_band_singing = painted_singing = False
-    painted_sprites = sprite_shadows = sprite_line_gradients = False
+    painted_sprites = sprite_shadows = sprite_line_gradients = sprite_images = False
     vertical_modes_used = set()
     vertical_scaled_particles = False
     reverse_vertical_particles = False
@@ -250,10 +255,11 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
                 elif static_sprite_paint and kind in _PAINTED_SPRITES and _supports_singing_particle_paint(
                         paint, local_sprite=True):
                     painted_sprites = True
-                    sprite_shadows |= (paint.get('decor') or {}).get('kind') == 'shadow'
-                    sprite_line_gradients |= paint['fill']['mode'] == 'gradient_horizontal' or any(
-                        paint[f'{layer}_width_px'] and paint[layer]['mode'] == 'gradient_horizontal'
-                        for layer in ('stroke', 'stroke2'))
+                    decor = paint.get('decor')
+                    modes = _sprite_layer_modes(paint)
+                    sprite_shadows |= decor is not None and decor['kind'] == 'shadow'
+                    sprite_line_gradients |= 'gradient_horizontal' in modes
+                    sprite_images |= 'image' in modes or (decor is not None and decor['fill']['mode'] == 'image')
                 else:
                     raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
             if (kind not in _PARTICLES
@@ -329,6 +335,8 @@ def write_particle_anchors(track, ir, plan, measured, composed_lines=()) -> int:
         ir['required_features'].append('p07_singing_sprite_shadows')
     if sprite_line_gradients:
         ir['required_features'].append('p07_singing_sprite_line_gradients')
+    if sprite_images:
+        ir['required_features'].append('p07_singing_sprite_images')
     if horizontal_line_motion:
         ir['required_features'].append('p07_singing_particle_line_animation')
     if plain_scaled_singing:

@@ -1,4 +1,5 @@
 #include "resolved_particles.h"
+#include "image_fill_cache.h"
 #include "resolved_glyph.h"
 #include "core/resolved_scene.h"
 #include "../render_backend.h"
@@ -19,7 +20,7 @@ SkiaParticleSprites resolveSkiaParticleSprites(const RenderScene& scene) {
 
 void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& features, const TextLine& line,
                                 const TextStyle& style, bool rubyParticles, const SkiaParticleSprites& sprites,
-                                double dpr, ::subtitle::skia::ResolvedLine& prepared) {
+                                SkiaImageFillCache& imageCache, double dpr, ::subtitle::skia::ResolvedLine& prepared) {
     if (line.bursts.empty()) {
         if (!box.isUndefined()) throw BackendError("Skia 粒子行盒高度缺少能力声明");
         return;
@@ -52,13 +53,22 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
         const float verticalEmit = style.vertical ? localBurst.emitX * height * (line.wipeReverse ? -1.f : 1.f) : 0.f;
         if (style.vertical) localBurst.emitX = 0.f;
         const auto color = burst.color;
+        std::optional<::subtitle::skia::ParticlePaint> paint;
+        if (burst.hasPaint) {
+            const auto spriteShader = [&](const PaintStyle& layer) {
+                // Bitmap paint uses the unscaled sprite grid before particle transforms.
+                return imageCache.fill(layer, 1.f).shaderAt(SkMatrix::I());
+            };
+            ::subtitle::skia::ParticlePaint::Images images{
+                spriteShader(burst.fill), spriteShader(burst.stroke), spriteShader(burst.stroke2), spriteShader(burst.decor)};
+            paint.emplace(burst, lineLeft, lineSpan, std::move(images));
+        }
         prepared.particles.push_back({std::move(localBurst), sprite->second,
             SkColorSetARGB(color.alpha, color.red, color.green, color.blue),
             x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
             burst.kind == "ripple" || burst.kind == "shockwave"
                 ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt,
-            burst.hasPaint ? std::optional<::subtitle::skia::ParticlePaint>(std::in_place, burst, lineLeft, lineSpan)
-                           : std::nullopt});
+            std::move(paint)});
     }
 }
 }

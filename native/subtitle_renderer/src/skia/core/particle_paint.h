@@ -7,6 +7,7 @@
 #include "include/core/SkPaint.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace subtitle::skia {
@@ -34,13 +35,13 @@ class ParticlePaint {
                 channel(left.color.blue, right->color.blue));
         }
 
-        explicit Layer(const krok::subtitle::native::PaintStyle& source)
-            : tint(color(source.color)) {
+        Layer(const krok::subtitle::native::PaintStyle& source, sk_sp<SkShader> image)
+            : tint(color(source.color)), shader(std::move(image)) {
             if (source.mode == "gradient_horizontal") {
                 lineColors.reserve(lineSteps + 1);
                 for (int i = 0; i <= lineSteps; ++i)
                     lineColors.push_back(sample(source, float(i) / lineSteps));
-            } else {
+            } else if (!shader) {
                 shader = lineGradient(source, SkRect::MakeLTRB(-500, -500, 500, 500), 0);
             }
         }
@@ -57,8 +58,15 @@ class ParticlePaint {
     };
 
 public:
-    ParticlePaint(const krok::subtitle::native::ParticleBurst& source, float lineLeft, float lineSpan)
-        : fill_(source.fill), inner_(source.stroke), outer_(source.stroke2), decoration_(source.decor),
+    struct Images {
+        sk_sp<SkShader> fill, inner, outer, decoration;
+    };
+
+    ParticlePaint(const krok::subtitle::native::ParticleBurst& source, float lineLeft, float lineSpan, Images images)
+        : fill_(source.fill, std::move(images.fill)),
+          inner_(source.stroke, std::move(images.inner)),
+          outer_(source.stroke2, std::move(images.outer)),
+          decoration_(source.decor, std::move(images.decoration)),
           innerWidth_(source.strokeWidth * 1000.f / source.sizePx),
           outerWidth_(source.stroke2Width * 1000.f / source.sizePx),
           shadow_(source.hasDecor && source.decorKind == "shadow"),

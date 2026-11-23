@@ -783,7 +783,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
             throw BackendError("Skia 逐字淡化暂不支持注音组合");
         resolveSkiaParticleAnchors(source.value("particle_box_height"), features, line, style,
-                                   rubyParticles, particleSprites, glyphs.dpr, prepared);
+                                   rubyParticles, particleSprites, imageCache, glyphs.dpr, prepared);
         if (transforms) {
             // Transformed cells are never wiping: entry finishes before each cell starts,
             // exit begins after every cell ends. Overlap uses a per-glyph front (unverified).
