@@ -63,12 +63,14 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
         || (outlineLayers > 0 && (s.strokeWidth < 0 || !std::isfinite(s.strokeWidth)
             || s.latinStrokeWidth < 0 || !std::isfinite(s.latinStrokeWidth)
             || (!canonical && s.strokeWidth != s.latinStrokeWidth)
-            || !supportedOutline(s.beforeStrokePaint) || !supportedOutline(s.afterStrokePaint)))
+            || ((s.strokeWidth > 0 || s.latinStrokeWidth > 0)
+                && (!supportedOutline(s.beforeStrokePaint) || !supportedOutline(s.afterStrokePaint)))))
         || (outlineLayers < 2 && (s.stroke2Width != 0 || s.latinStroke2Width != 0))
         || (outlineLayers == 2 && (s.stroke2Width < 0 || !std::isfinite(s.stroke2Width)
             || !std::isfinite(s.latinStroke2Width) || s.latinStroke2Width < 0
             || (!canonical && s.stroke2Width != s.latinStroke2Width)
-            || !supportedOutline(s.beforeStroke2Paint) || !supportedOutline(s.afterStroke2Paint)))
+            || ((s.stroke2Width > 0 || s.latinStroke2Width > 0)
+                && (!supportedOutline(s.beforeStroke2Paint) || !supportedOutline(s.afterStroke2Paint)))))
         || !supportedDecoration(false) || !supportedDecoration(true)
         || !supportedBodyFill(s.beforeFillPaint) || !supportedBodyFill(s.afterFillPaint)
         // Canonical fonts come exclusively from the validated layout resource

@@ -225,13 +225,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const int followingEnd = wipeEnd(line.cells[index+1]);
             wiping = start < tMs && tMs < followingEnd && start != followingEnd;
         }
-        const auto transform = [&] {
-            if (cell.bitmap) {
-                // A bitmap keeps its image box and inherits the classic character fade.
-                const auto fade = characterTransformAt(line.characterFade, tMs, line.startMs,
-                    line.endMs, int(index), int(line.cells.size()), cell.pivot);
-                return CharacterTransformState{.opacity = fade.opacity};
-            }
+        auto transform = [&] {
             if (utopia) {
                 const int following = line.utopiaTransition.leave ? line.followingDone[index] : 0;
                 return line.utopiaTransition.at(tMs, line.startMs, int(index), int(line.cells.size()), following,
@@ -244,6 +238,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             return characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
                                         int(index), int(line.cells.size()), cell.pivot);
         }();
+        // A bitmap keeps its image box and inherits its owning character's opacity.
+        if (cell.bitmap) transform = CharacterTransformState{.opacity = transform.opacity};
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
             && (cell.outline || cell.outerOutline || cell.bodyPaintIndex >= 0 || transform.glowAlpha > 0

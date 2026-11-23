@@ -4,6 +4,7 @@ from ..style.style_semantics import (
     effective_karaoke_colors, effective_ruby_karaoke_colors, style_for_role_in_layout, uses_authored_decoration,
 )
 from ..guide.semantics import guide_symbol_is_bitmap
+from ..text.font_slots import main_script_stroke_style
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles
 from .skia_ruby_paint_ir import ruby_decoration_kinds
@@ -15,24 +16,28 @@ _TEXTURED = _GRADIENTS | {'image'}
 
 
 def _declare_role_body_paints(ir, plan):
-    palettes = []
-    has_roles = False
+    outlines = set()
+    has_roles = has_textured_fill = False
     for item in plan.lines:
         look = item.layout_style
         labels = {cell.role_label for cell in item.render_line.chars
                   if cell.role_label in look.custom_style_schemes}
         has_roles |= bool(labels)
         appearances = (look, *(style_for_role_in_layout(look, label) for label in labels))
-        palettes.extend(effective_karaoke_colors(appearance) for appearance in appearances)
-    if not has_roles:
+        for appearance in appearances:
+            colors = effective_karaoke_colors(appearance)
+            states = (colors.before, colors.after)
+            has_textured_fill |= any(state.text.mode in _TEXTURED for state in states)
+            latin = main_script_stroke_style(appearance, 'A')
+            if max(appearance.stroke_width_px, latin.stroke_width_px) > 0:
+                outlines.update(state.stroke.mode for state in states)
+            if ((appearance.stroke2_enabled and appearance.stroke2_width_px > 0)
+                    or (latin.stroke2_enabled and latin.stroke2_width_px > 0)):
+                outlines.update(state.stroke2.mode for state in states)
+    outlines.discard('solid')
+    if not has_roles or not (outlines or has_textured_fill):
         return False
-    states = [state for colors in palettes for state in (colors.before, colors.after)]
     features = ir['required_features']
-    layers = [layer for layer, feature in (('stroke', 'p06_primary_solid_outline'),
-                                            ('stroke2', 'p06_secondary_solid_outline')) if feature in features]
-    outlines = {getattr(state, layer).mode for state in states for layer in layers} - {'solid'}
-    if not outlines and not any(state.text.mode in _TEXTURED for state in states):
-        return False
     if outlines:
         if 'p08_inline_bitmap_guides' in features and outlines <= {'gradient_vertical', 'split_vertical'}:
             features.append('p06_role_outline_gradient')

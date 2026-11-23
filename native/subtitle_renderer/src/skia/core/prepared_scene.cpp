@@ -205,7 +205,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 const auto& cell = line.cells[cursor - 1];
                 line.followingDone[cursor - 1] = next ? std::max(next->endMs, cell.endMs)
                     : cell.endMs + std::max(line.utopiaTransition.tailMs - 750, 0);
-                if (!cell.path.isEmpty()) next = &cell;
+                if (!cell.path.isEmpty() || cell.bitmap) next = &cell;
             }
         }
         if (line.isolateVerticalDecoration || line.animation.active()) {

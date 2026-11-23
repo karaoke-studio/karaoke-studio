@@ -570,6 +570,41 @@ def test_body_role_outlines_follow_their_cell_clock(binary, project, target, wit
         assert np.any(np.all(colors == color, axis=-1))
 
 
+def test_disabled_role_outline_paints_do_not_affect_active_guides(binary, project):
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_vector_guides import SQUARE, guide_source
+
+    track, style = guide_source(project, 'inline')
+    line, = track.lines
+    chars = [replace(char, role_label='plain') if index == 1 else char for index, char in enumerate(line.chars)]
+    track = replace(track, lines=[replace(line, chars=chars)])
+    palette = role_outline_palette()
+    paint = PaintFill(mode='gradient_horizontal', start_color='#FF102060', end_color='#FFE0E0E0')
+    stored = replace(palette, before=replace(palette.before, stroke=paint, stroke2=paint),
+                     after=replace(palette.after, stroke=paint, stroke2=paint))
+    role = SubtitleStyleScheme(stroke_width_px=0, stroke2_enabled=False, karaoke_colors=stored)
+    style = replace(style, stroke_width_px=4, stroke2_enabled=True, stroke2_width_px=3,
+                    karaoke_colors=palette, custom_style_schemes={'plain': role})
+    clean = replace(style, custom_style_schemes={'plain': replace(role, karaoke_colors=palette)})
+    times = (250, 750, 1150, 1750)
+    ir = ir_for(binary, (track, style), dpr=1.5)
+    assert 'p06_role_body_paints' not in ir['required_features']
+    assert ir['track']['lines'][0]['chars'][1]['role_label'] == 'plain'
+    gpu, raster = render_skia(binary, ir, times)
+    clean_gpu, clean_raster = render_skia(binary, ir_for(binary, (track, clean), dpr=1.5), times)
+    assert np.array_equal(gpu, clean_gpu) and np.array_equal(raster, clean_raster)
+    reference = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=1.5, realization_enabled=False)
+        reference = [np.frombuffer(frame, np.uint8).reshape(540, 960, 4) for frame in raw]
+    assert_glow_parity(times, reference, gpu, raster, 'disabled_role_outline_paints', check_p00_edges=True)
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('ruby', ['none', 'upper', 'both'])
 def test_body_role_outlines_match_actual_d2d_gpu(binary, application, tmp_path, ruby):

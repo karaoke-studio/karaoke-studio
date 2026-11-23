@@ -274,17 +274,23 @@ def test_rtl_bitmap_guides_match_actual_d2d_gpu(binary, project, tmp_path):
     assert_glow_parity(times, reference, gpu, raster, 'rtl_bitmap_guide', check_p00_edges=True)
 
 
-def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary, project, tmp_path):
+@pytest.mark.parametrize('effect', ['spin_flip', 'utopia'])
+def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary, project, tmp_path, effect):
     from test_subtitle_skia_character_transform import transform_source
     from test_subtitle_skia_outline_ruby import render_skia
     from test_subtitle_skia_static_glow import assert_glow_parity
 
-    track, style = transform_source(project, 'spin_flip', 'spin_flip')
+    track, style = transform_source(project, effect, effect)
+    if effect == 'utopia':
+        style = replace(style, karaoke_anim='utopia', line_tail_ms=1100)
     guide = GuideSymbol(kind='bitmap', bitmap_before_path=image(tmp_path / 'fixed.png', color='#30FF80'),
                         bitmap_no_decor=False, bitmap_fix_size=True, bitmap_margin_bottom_px=18)
     line, = track.lines
     track = replace(track, lines=[replace(line, inline_guide_symbols={1: guide})])
-    times, dpr = (85, 180, 260, 480, 700, 2580, 2680, 2750), 3
+    times = (85, 180, 260, 480, 700, 2580, 2680, 2750)
+    if effect == 'utopia':
+        times = (55, 180, 260, 480, 700, 2020, 2280, 2580)
+    dpr = 3
     reference = None
     if sys.platform == 'win32':
         from test_subtitle_render_gpu_backend import _render_g1_frames
@@ -296,7 +302,7 @@ def test_bitmap_guide_uses_the_character_opacity_with_its_fixed_rectangle(binary
     ir = ir_for(binary, (track, style), dpr=dpr)
     assert ir['track']['lines'][0]['chars'][1]['bitmap_guide']['no_decor'] is False
     gpu, raster = render_skia(binary, ir, times)
-    assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_character_opacity', check_p00_edges=True)
+    assert_glow_parity(times, reference, gpu, raster, ('bitmap_guide_character_opacity', effect), check_p00_edges=True)
     for frames in (gpu, raster):
         parts = []
         for frame in frames:
