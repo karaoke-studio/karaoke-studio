@@ -491,12 +491,17 @@ def test_title_bitmap_guides_use_before_image_at_every_time(binary, tmp_path, ta
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('inline', [False, True], ids=['prefix', 'inline'])
-def test_title_bitmap_guides_match_actual_d2d_gpu(binary, tmp_path, inline):
+@pytest.mark.parametrize('inline,outlined', [(False, False), (True, False), (True, True)],
+                         ids=['prefix', 'inline', 'inline_with_text_outlines'])
+def test_title_bitmap_guides_match_actual_d2d_gpu(binary, tmp_path, inline, outlined):
     from types import SimpleNamespace
     from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
 
     track, style = bitmap_guide_title(tmp_path, inline)
+    if outlined:
+        title = replace(style.title_overlays[0], stroke_width_px=8, stroke2_width_px=5,
+                        stroke=PaintFill(color='#8D1E89'), stroke2=PaintFill(color='#682014'))
+        style = replace(style, title_overlays=[title])
     assert_ruby_transition_gpu_parity(
         binary, SimpleNamespace(track=track, style=style, case_id=f'title_bitmap_guides_{inline}'),
         (299, 400, 500, 900, 1000, 1400, 1800, 1801))
