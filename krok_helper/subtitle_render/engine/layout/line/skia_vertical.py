@@ -65,8 +65,9 @@ def vertical_solid_schema(track):
 
 
 def validate_vertical_style(style):
-    if style.right_to_left or style.lower_ruby_enabled:
-        raise ValueError('Skia 竖排布局不能携带横排方向或下方注音')
+    # Vertical lines derive no lower readings (shared lower semantics) and
+    # keep their column order whatever the horizontal direction says.
+    return None
 
 
 def validate_vertical_source(track):
@@ -94,9 +95,8 @@ def validate_vertical_columns(style, line_styles):
         return
     for appearance in line_styles:
         if (appearance.vertical != style.vertical or appearance.dual_line_layout != style.dual_line_layout
-                or len(appearance.line_alignments) != len(style.line_alignments)
-                or appearance.font_size_px != style.font_size_px):
-            raise ValueError('Skia 多列竖排暂需统一的列数和字号')
+                or len(appearance.line_alignments) != len(style.line_alignments)):
+            raise ValueError('Skia 多列竖排暂需统一的列数')
 
 
 def vertical_line_box(item, measured, count, width, height, ruby_allowance=0):
