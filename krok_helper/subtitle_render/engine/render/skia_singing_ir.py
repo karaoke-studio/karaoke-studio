@@ -54,6 +54,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
     reverse_outlined_singing = False
     reverse_glowing_singing = False
     with_line_animation = False
+    rtl_plain_singing = False
     role_guides = {'p08_inline_bitmap_guides', 'p05_role_vector_guides'}.intersection(ir['required_features'])
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
@@ -113,7 +114,10 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                              and animations <= {'none', 'fade'} and not any(
                                  source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts')))
         role_scale = inline_roles and scales and (static_role_scale or faded_role_scale or guide_role_scale)
-        rtl_singing = scales and annotated and 'p07_rtl_ruby_singing_scale' in ir['required_features']
+        # Right-to-left cell order only moves the cell boxes; the singing pose is per cell.
+        plain_rtl_singing = scales and not annotated and not item.line.wipe_reverse and not source.get('zoom_pulse')
+        rtl_singing = scales and (plain_rtl_singing or (annotated and 'p07_rtl_ruby_singing_scale' in ir['required_features']))
+        rtl_plain_singing |= style.right_to_left and plain_rtl_singing
         if (style.vertical or (style.right_to_left and not rtl_singing) or (item.line.wipe_reverse and not reverse_scale)
                 or (annotated and ((source.get('zoom_pulse') and not ruby_zoom)
                                    or (animations != {'none'} and not (line_animation or with_character_transition or with_noise))))
@@ -123,7 +127,8 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                 or (source.get('scanline') and ((animations != {'none'} and not scanline_motion) or (source.get('zoom_pulse')
                     and 'p07_composed_scanline' not in ir['required_features'])))
                 or (source.get('stroke_flash') and 'p07_composed_stroke_flash' not in ir['required_features'])
-                or (source.get('fx_bursts') and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12
+                or (source.get('fx_bursts') and not (with_character_transition and not annotated)
+                    and ir['skia_layout'].get('sing_twinkle_schema', 0) < 12
                     and 'p07_plain_scaled_singing_particles' not in ir['required_features']
                     and not faded_band_singing_particles(source, style))
                 or (inline_roles and not role_scale)):
@@ -149,6 +154,8 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
             ir['required_features'].append('p07_vertical_zoom_pulse')
         if 'p05_vertical_columns' in ir['required_features']:
             ir['required_features'].append('p07_vertical_columns_singing_scale')
+    if rtl_plain_singing:
+        ir['required_features'].append('p07_rtl_singing_scale')
     if role_singing:
         ir['required_features'].append('p07_role_singing_scale')
     if reverse_singing:

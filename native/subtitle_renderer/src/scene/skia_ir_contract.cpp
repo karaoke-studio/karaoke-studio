@@ -287,6 +287,9 @@ const QJsonArray& skiaIrProfiles() {
         "p06_lower_ruby_static_image",
         "p07_ruby_scanline_particles",
         "p07_character_transform",
+        "p07_singing_character_transform",
+        "p07_rtl_singing_scale",
+        "p07_outlined_character_geometry",
         "p07_translucent_character_outline",
         "p07_energy_transition_outlines",
         "p07_energy_transition_line_animation",
@@ -1115,6 +1118,16 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p07_scanline_band") || !features.contains("p07_character_transform")
             || scanlineVersion < 3 || features.contains("p05_resolved_ruby")))
         throw BackendError("Skia 扫字线缺少对应的正文逐字变换能力");
+    if (features.contains("p07_singing_character_transform")
+        && (!features.contains("p07_character_transform") || !features.contains("p07_singing_scale")))
+        throw BackendError("Skia 唱字放大的逐字变换缺少对应能力声明");
+    if (features.contains("p07_outlined_character_geometry")
+        && (!features.contains("p07_character_transform") || transformVersion < 4
+            || !(features.contains("p06_primary_solid_outline") || features.contains("p06_secondary_solid_outline"))))
+        throw BackendError("Skia 描边逐字几何过渡缺少对应能力声明");
+    if (features.contains("p07_rtl_singing_scale")
+        && (!features.contains("p05_horizontal_rtl") || !features.contains("p07_singing_scale")))
+        throw BackendError("Skia 右至左唱字放大缺少对应能力声明");
     if (features.contains("p07_character_transform")
         && (transformVersion < 1 || transformVersion > kCharacterTransformSchema || std::floor(transformVersion) != transformVersion))
         throw BackendError("Skia 逐字变换布局版本无效");

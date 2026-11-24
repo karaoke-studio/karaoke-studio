@@ -257,6 +257,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
         const bool rtlRubyNoWipe = rtlRuby && prepared.noWipe && features.contains("p07_rtl_ruby_no_wipe");
         const bool rtlRubyMotion = rtlRubySinging && features.contains("p07_rtl_ruby_line_animation");
+        // Cell order does not change the per-cell singing pose on lines without readings.
+        const bool rtlPlainSinging = style.rightToLeft && singingScale && !annotated && !line.wipeReverse
+            && !line.zoomPulseEnabled && features.contains("p07_rtl_singing_scale");
         const bool verticalMotion = style.vertical && features.contains("p07_vertical_decoration_line_motion")
             && ordinaryLineAnimation && (line.karaokeAnimation == "none"
                 || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
@@ -420,6 +423,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(true), readingEntryGlow)))
             throw BackendError("Skia 带上注音的粒子入场暂不支持阴影或光晕");
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
+        // Without readings the singing pose and per-character transition are independent layers.
+        const bool singingTransform = !annotated && singingScale && features.contains("p07_singing_character_transform")
+            && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
+            && !line.scanlineEnabled && !line.strokeFlashEnabled && (line.bursts.empty() || particleEntry || particleExit)
+            && !usesDecoration("shadow") && !usesDecoration("glow")
+            && (charEntry || charExit || geoEntry || geoExit);
         const bool fadeComposition = (fadeEntry || fadeExit)
             && (line.entryAnimation == "none" || fadeEntry
                 || (fadeExit && (line.entryAnimation == "fade" || line.entryAnimation == "rise")))
@@ -489,12 +498,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
-        if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging) || prepared.noWipe
+        if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging && !rtlPlainSinging) || prepared.noWipe
             || (vectorGuides && !features.contains("p05_vector_guide_composition"))
             || (line.wipeReverse && !(verticalSinging || reverseHorizontalSinging))
             || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
                 || !features.contains("p07_composed_stroke_flash")))
-            || (!line.bursts.empty() && !verticalScaledParticles
+            || (!line.bursts.empty() && !verticalScaledParticles && !singingTransform
                 && ((!rubyParticles && !fadedScanlineParticles && !features.contains("p07_plain_scaled_singing_particles"))
                     || utopiaEntry || utopiaExit
                     || (line.zoomPulseEnabled && !features.contains("p07_plain_zoom_singing_particles"))))
@@ -502,6 +511,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (line.zoomPulseEnabled && !features.contains(style.vertical
                     ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
             || (!lineAnimation && !fadeComposition && !noiseComposition && !warpComposition && !geometryComposition
+                && !singingTransform
                 && ((!utopiaEntry && line.entryAnimation != "none")
                 || (!utopiaExit && line.exitAnimation != "none")))
             || (annotated && (!features.contains("p07_ruby_singing_scale")
@@ -541,9 +551,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool outlinedEnergy = features.contains("p07_energy_transition_outlines") && !annotated
             && energyOrNone(line.entryAnimation) && energyOrNone(line.exitAnimation)
             && (particleEntry || particleExit);
-        if (geometry && !geometryComposition && !outlinedEnergy && (style.strokeWidth > 0 || style.stroke2Width > 0))
+        const bool outlinedGeometry = !annotated && line.exitAnimation != "glow_out"
+            && features.contains("p07_outlined_character_geometry");
+        if (geometry && !geometryComposition && !outlinedEnergy && !outlinedGeometry
+            && (style.strokeWidth > 0 || style.stroke2Width > 0))
             throw BackendError("Skia 逐字几何过渡当前仅支持无描边正文");
         prepared.rubyGeometryComposition = geometryComposition;
+        prepared.geometryOwnsPose = singingTransform && (geoEntry || geoExit);
         if (particleEntryGlow) {
             using Glow = ::subtitle::skia::ParticleEntryGlow;
             prepared.particleEntryGlow = symbolEntry ? Glow::SampledSymbols : Glow::Standard;

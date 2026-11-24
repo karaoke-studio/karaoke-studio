@@ -62,7 +62,11 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         && !source.strokeFlashEnabled && !source.scanlineEnabled
         && protocol::decorationKindForState(style, false) == "none"
         && protocol::decorationKindForState(style, true) == "none";
-    const bool scaledSinging = fadedBand || plainScale
+    // Transition particles on a singing line without readings keep their own burst clocks.
+    const bool transitionSinging = animated && !annotated && !cfg.vertical && !cfg.rightToLeft
+        && features.contains("p07_singing_character_transform") && source.karaokeAnimation == "utopia"
+        && !source.wipeReverse && !source.zoomPulseEnabled && !source.strokeFlashEnabled && !source.scanlineEnabled;
+    const bool scaledSinging = fadedBand || plainScale || transitionSinging
         || (rubyParticles && source.karaokeAnimation == "utopia" && !source.zoomPulseEnabled);
     const bool outlinedPlainScale = plainScale && !source.wipeReverse && !source.zoomPulseEnabled
         && features.contains("p07_horizontal_outlined_singing_particles");

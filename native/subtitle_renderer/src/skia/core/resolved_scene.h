@@ -92,6 +92,8 @@ struct ResolvedLine {
     CharacterFade characterFade;
     CharacterGeometry characterGeometry;
     bool rubyGeometryComposition = false;
+    // The transition, not the singing pose, owns cells inside its window.
+    bool geometryOwnsPose = false;
     ParticleEntryGlow particleEntryGlow = ParticleEntryGlow::None;
     SingingScale singingScale;
     float rubySingingOrigin = 0;

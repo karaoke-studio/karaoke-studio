@@ -86,6 +86,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             || line.isolateVerticalDecoration || !line.titleWindows.empty();
         line.characterGeometry = source.characterGeometry;
         line.rubyGeometryComposition = source.rubyGeometryComposition;
+        line.geometryOwnsPose = source.geometryOwnsPose || source.rubyGeometryComposition;
         line.singingScale = source.singingScale;
         line.rubySingingOrigin = source.rubySingingOrigin;
         line.utopiaTransition = source.utopiaTransition;

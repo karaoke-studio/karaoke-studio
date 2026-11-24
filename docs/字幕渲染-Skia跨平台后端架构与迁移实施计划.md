@@ -1215,6 +1215,10 @@ Utopia 信号动画、信号光晕、上下分色及按行扫字线复验通过�
 
 静态正向横排的渐变正文与阴影、光晕组合使用同一套绘制层，标题和歌词无需凭图片或矢量导唱符类型筛选整行。Windows 9 项专项通过，含 D2D GPU 对照，原生 CTest 3 项通过。
 
+无注音的 Utopia 唱字行可叠加逐字滴落/翻转、几何与粒子出入场（`p07_singing_character_transform`）：过渡窗口内由过渡占有单元姿态（`geometryOwnsPose`），窗口外回到唱字放大；注音路径特有的粒子采样仍只由 `rubyGeometryComposition` 控制。无注音右至左行开放 Utopia 唱字（`p07_rtl_singing_scale`）。带阴影/光晕的唱字过渡仍拒绝（wave_in 加光晕时光晕质量缺约三成）。组合探针中同一过渡在普通走字下的既有偏差（滴落/翻转/平移入场中段、converge/glow_out 尾帧、snow 入场 MAE 5.4、assemble 首帧与 dissolve 尾帧）与 Utopia 版数值完全相同，未计入本项。Windows 1089 项相关回归与 14 项新增专项通过（含 D2D GPU 对照），原生 CTest 3 项通过。
+
+无注音正文的逐字几何过渡（tracking/wave/stretch/glow_in、scatter/converge/stretch_out）可带一重或二重描边（`p07_outlined_character_geometry`），描边路径与正文共用逐单元变换。glow_out 加描边的尾帧光晕仍与 D2D 偏差较大（IoU 0.91），继续拒绝。Windows 584 项相关回归通过，含 12 项描边几何 D2D GPU 对照。
+
 补充可跨平台执行的反向 Utopia 粒子回跳测试，验证开启放大前后发射时钟一致，Vulkan 倒序逐帧一致，Raster 粒子区域满足原有误差条件。Windows 新一轮回归 4 项通过，含浮窗直画、离屏及导出。WSL X11、Wayland 各 18 项通过、22 项 Windows 专用跳过，原生 CTest 3 项通过。
 
 #### P05–P07 收口顺序（2026-11-20）

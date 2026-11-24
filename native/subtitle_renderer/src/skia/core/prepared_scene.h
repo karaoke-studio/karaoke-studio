@@ -93,6 +93,7 @@ private:
         CharacterFade characterFade;
         CharacterGeometry characterGeometry;
         bool rubyGeometryComposition = false;
+        bool geometryOwnsPose = false;
         SingingScale singingScale;
         float rubySingingOrigin = 0;
         UtopiaTransition utopiaTransition;

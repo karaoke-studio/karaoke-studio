@@ -183,6 +183,7 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
     version = 3
     translucent_outlines = False
     energy_outlines = False
+    outlined_geometry = False
     whole_cell_transform = False
     directional_transform = False
     styled_cell_transform = False
@@ -232,6 +233,10 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
         if geometry and outlined and index not in composed_geometry_lines:
             if not readings and animations & ENERGY_TRANSITIONS and animations <= ENERGY_TRANSITIONS | {'none'}:
                 energy_outlines = True
+            elif not readings and 'glow_out' not in animations:
+                # Outline paths take the same per-cell transform as the body; the glow-out
+                # halo of an outline still differs from the existing GPU.
+                outlined_geometry = True
             else:
                 raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
         if not geometry and not readings and (look.stroke_width_px > 0 or look.stroke2_enabled):
@@ -250,6 +255,8 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
         ir['required_features'].append('p07_translucent_character_outline')
     if energy_outlines:
         ir['required_features'].append('p07_energy_transition_outlines')
+    if outlined_geometry:
+        ir['required_features'].append('p07_outlined_character_geometry')
     if whole_cell_transform:
         ir['required_features'].append('p07_no_wipe_character_transform')
     if directional_transform:
@@ -485,6 +492,21 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
     affine_geometry_lines = (affine_lines | stretch_lines | stretch_entry_lines | glow_lines
                              | paired_geometry_lines | particle_affine_lines)
     composed_geometry_lines = translation_lines | affine_geometry_lines | composed_particle_lines
+    # Without readings, singing scale and per-character transitions are independent
+    # layers of one glyph stack; only the reading transitions above need pairing rules.
+    singing_transform_lines = set()
+    for index, item in enumerate(plan.lines):
+        source = ir['track']['lines'][item.track_index]
+        look = item.layout_style
+        readings = geometry.ruby.lines[index].rubies if geometry.ruby is not None else ()
+        if (not readings and source.get('karaoke_anim') == 'utopia'
+                and {source.get('entry_anim'), source.get('exit_anim')} & _TRANSFORMS
+                and not (look.vertical or look.right_to_left or item.line.wipe_reverse)
+                and not any(uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))
+                and not any(source.get(flag) for flag in ('zoom_pulse', 'scanline', 'stroke_flash'))
+                # Particle transitions carry their own bursts; singing particles are separate.
+                and (not source.get('fx_bursts') or look.sing_fx == 'none')):
+            singing_transform_lines.add(index)
     lines = []
     if vertical_ruby is None:
         for index, item in enumerate(plan.lines):
@@ -947,14 +969,17 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             ir['skia_layout']['kana_mark_schema'] = 1
     if any({line.get('entry_anim'), line.get('exit_anim')} & _TRANSFORMS for line in ir['track']['lines']):
         ir['skia_layout']['character_transform_schema'] = _character_transforms(
-            ir, plan, measured, character_warp_lines, composed_geometry_lines, particle_band_tracks)
+            ir, plan, measured, character_warp_lines | singing_transform_lines, composed_geometry_lines,
+            particle_band_tracks)
         ir['required_features'].append('p07_character_transform')
+        if singing_transform_lines:
+            ir['required_features'].append('p07_singing_character_transform')
     if title_geometry is None and uses_inline_bitmap_guides(plan.lines):
         ir['required_features'].append('p08_inline_bitmap_guides')
     write_body_gradient_bounds(ir, plan)
     write_scanline_schema(ir, track, style)
     if any(line.get('fx_bursts') for line in ir['track']['lines']):
-        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(ir, plan, measured, composed_particle_lines)
+        ir['skia_layout']['sing_twinkle_schema'] = write_particle_anchors(ir, plan, measured, composed_particle_lines | singing_transform_lines)
         ir['required_features'].append('p07_sing_twinkle')
     if any(len(run['font_ids']) > 1 or 'font_options' in run for run in ir['skia_layout']['runs']):
         ir['required_features'].append('p05_font_fallback')
@@ -1042,7 +1067,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
         ir['skia_layout']['character_fade_schema'] = 1
     if role_vector_guides:
         ir['required_features'].append('p05_role_vector_guides')
-    transitions = fade_lines | character_warp_lines | composed_geometry_lines | utopia_entry_lines | utopia_exit_lines
+    transitions = (fade_lines | character_warp_lines | composed_geometry_lines | utopia_entry_lines
+                   | utopia_exit_lines | singing_transform_lines)
     if reverse_bitmap_singing:
         ir['required_features'].append('p08_reverse_bitmap_singing')
     if reverse_bitmap_singing_outline:

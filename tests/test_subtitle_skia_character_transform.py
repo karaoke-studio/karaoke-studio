@@ -671,3 +671,101 @@ def test_character_halo_matches_actual_d2d_and_gpu_raster(binary, project, kind,
             else:
                 assert relative <= budget['max_alpha_sum_relative'], (sample, 'halo mass', relative)
                 assert within_one_pixel(aw > 24, bw > 24), (sample, 'halo')
+
+
+SINGING_TRANSITIONS = [('none', 'char_drip'), ('none', 'spin_flip'), ('stretch_in', 'scatter_out'),
+                       ('none', 'stretch_out'), ('sparkle', 'petal'),
+                       ('flame', 'none'), ('lightning', 'none'), ('heart', 'none'), ('none', 'snow')]
+
+
+def singing_transition(project, entry, exit_):
+    track, style = transform_source(project, entry, exit_)
+    return track, replace(style, karaoke_anim='utopia', decoration_kind='none', stroke_width_px=0,
+                          stroke2_enabled=False, stroke2_width_px=0)
+
+
+@pytest.mark.parametrize('entry, exit_', [('none', 'spin_flip'), ('sparkle', 'none')])
+def test_singing_character_transition_requires_its_capability(binary, project, entry, exit_):
+    ir = ir_for(binary, singing_transition(project, entry, exit_))
+    assert {'p07_singing_character_transform', 'p07_singing_scale'} <= set(ir['required_features'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p07_singing_character_transform')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        configure(process, ir)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('entry, exit_', SINGING_TRANSITIONS)
+def test_singing_lines_compose_character_transitions_like_actual_d2d(binary, project, entry, exit_):
+    """Without readings the singing pose and the per-character transition are independent layers."""
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = singing_transition(project, entry, exit_)
+    case = SimpleNamespace(track=track, style=style, case_id=f'singing_{entry}_{exit_}')
+    assert_ruby_transition_gpu_parity(binary, case, (65, 180, 300, 450, 700, 1500, 2200, 2500, 2700, 2900))
+
+
+def rtl_singing(project, **changes):
+    track, style = transform_source(project, 'none', 'none')
+    return track, replace(style, karaoke_anim='utopia', right_to_left=True, decoration_kind='none',
+                          stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0, **changes)
+
+
+def test_rtl_singing_scale_requires_its_capability(binary, project):
+    ir = ir_for(binary, rtl_singing(project))
+    assert {'p07_rtl_singing_scale', 'p05_horizontal_rtl'} <= set(ir['required_features'])
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p07_rtl_singing_scale')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        configure(process, ir)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('animation', ['none', 'fade'])
+def test_rtl_singing_scale_matches_actual_d2d(binary, project, animation):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = rtl_singing(project, entry_anim=animation, exit_anim=animation)
+    case = SimpleNamespace(track=track, style=style, case_id=f'rtl_singing_{animation}')
+    assert_ruby_transition_gpu_parity(binary, case, (65, 300, 700, 1100, 1500, 2000, 2500, 2900))
+
+
+OUTLINED_GEOMETRY = ['tracking_in', 'wave_in', 'stretch_in', 'glow_in', 'scatter_out', 'stretch_out']
+
+
+def outlined_geometry(project, animation, double):
+    entry, exit_ = (animation, 'none') if animation.endswith('_in') else ('none', animation)
+    track, style = transform_source(project, entry, exit_)
+    return track, replace(style, karaoke_anim='none', decoration_kind='none', stroke_width_px=4,
+                          stroke2_enabled=double, stroke2_width_px=2 if double else 0)
+
+
+def test_outlined_character_geometry_requires_its_capability(binary, project):
+    ir = ir_for(binary, outlined_geometry(project, 'wave_in', True))
+    assert 'p07_outlined_character_geometry' in ir['required_features']
+    invalid = copy.deepcopy(ir)
+    invalid['required_features'].remove('p07_outlined_character_geometry')
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        with pytest.raises(NativeRendererError):
+            configure(process, invalid)
+        configure(process, ir)
+    with pytest.raises(ValueError, match='无描边'):
+        ir_for(binary, outlined_geometry(project, 'glow_out', False))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('double', [False, True])
+@pytest.mark.parametrize('animation', OUTLINED_GEOMETRY)
+def test_outlined_character_geometry_matches_actual_d2d(binary, project, animation, double):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = outlined_geometry(project, animation, double)
+    case = SimpleNamespace(track=track, style=style, case_id=f'outlined_{animation}_{double}')
+    assert_ruby_transition_gpu_parity(binary, case, (65, 180, 300, 450, 700, 1500, 2500, 2700, 2900))

@@ -73,6 +73,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     if (animation.dx != 0 || animation.dy != 0)
         canvas.translate(animation.dx, animation.dy);
     if (placement.x() != 0 || placement.y() != 0) canvas.translate(placement.x(), placement.y());
+    const bool geometryPhase = line.geometryOwnsPose
+        && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
     const bool rubyGeometryPhase = line.rubyGeometryComposition
         && line.characterGeometry.inWindow(tMs, line.startMs, line.endMs);
     const bool hasParticleEntryGlow = line.particleEntryGlow != ParticleEntryGlow::None;
@@ -113,7 +115,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool geometry = line.characterGeometry.active();
     // The opacity-only character transition owns the entry window.
     const int fadeSide = line.characterFade.side(tMs, line.startMs, line.endMs);
-    const bool utopia = !rubyGeometryPhase && (line.singingScale.active || line.utopiaTransition.active())
+    const bool utopia = !geometryPhase && (line.singingScale.active || line.utopiaTransition.active())
         && fadeSide == 0;
     const bool rubyUtopiaEntry = utopia && !line.rubyGroups.empty()
         && line.utopiaTransition.inEntryWindow(tMs, line.startMs);

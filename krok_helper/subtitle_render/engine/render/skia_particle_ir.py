@@ -213,7 +213,9 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                                and not (source.get('zoom_pulse') or source.get('stroke_flash')))
         unscaled_outline = static_sprite_paint and outlined and not any(
             uses_authored_decoration(look, kind) for kind in ('shadow', 'glow'))
-        scaled_singing = (faded_band or plain_scale
+        transition_singing = (not annotated and index in composed_lines and source.get('karaoke_anim') == 'utopia'
+                              and not source.get('zoom_pulse'))
+        scaled_singing = (faded_band or plain_scale or transition_singing
                           or (annotated and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')))
         unscaled_motion = (not look.vertical and not look.right_to_left and not item.line.wipe_reverse
                            and not band and not animated and not annotated and not outlined
