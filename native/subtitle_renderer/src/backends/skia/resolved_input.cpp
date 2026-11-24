@@ -331,9 +331,9 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool petalNotePair = noteExit && petalScanline;
         // Readings transition with their owner cells on any horizontal forward line.
         const bool transformedRuby = annotated && !line.wipeReverse && !style.vertical;
-        const bool rubyUtopiaExit = transformedRuby && utopiaExit && singingScale
+        const bool rubyUtopiaExit = transformedRuby && utopiaExit
             && features.contains("p07_ruby_utopia_exit");
-        const bool rubyUtopiaEntry = transformedRuby && utopiaEntry && singingScale
+        const bool rubyUtopiaEntry = transformedRuby && utopiaEntry
             && features.contains("p07_ruby_utopia_entry");
         const bool spinEntry = line.entryAnimation == "spin_flip" && line.entryDurationMs > 0;
         const bool spinExit = line.exitAnimation == "spin_flip" && line.exitDurationMs > 0;
@@ -343,22 +343,13 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && line.exitAnimation == "char_fade"
             && style.rubyDecorationKindForState(false) != "shadow"
             && style.rubyDecorationKindForState(true) != "shadow";
-        const bool spinComposition = transformedRuby && line.bursts.empty() && (spinEntry || spinExit)
-            && (line.entryAnimation == "none" || line.entryAnimation == "fade"
-                || line.entryAnimation == "rise" || line.entryAnimation == "spin_flip" || fadeEntry)
-            && (line.exitAnimation == "none" || line.exitAnimation == "spin_flip" || fadeExit)
+        const bool spinComposition = transformedRuby && (spinEntry || spinExit)
             && (!spinEntry || features.contains("p07_ruby_character_entry_spin"))
             && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
-        const bool dripGlow = features.contains("p07_ruby_character_drip_glow")
-            && glowPaints == GlowPaintSupport::Solid;
         const bool dripEntry = line.entryAnimation == "char_drip" && line.entryDurationMs > 0;
         const bool dripExit = line.exitAnimation == "char_drip" && line.exitDurationMs > 0;
-        const bool dripComposition = transformedRuby && !usesDecoration("shadow")
-            && (dripGlow || !usesDecoration("glow"))
-            && line.bursts.empty()
-            && features.contains("p07_ruby_character_drip")
-            && ((dripEntry && line.exitAnimation == "none") || (dripExit && line.entryAnimation == "none")
-                || (dripEntry && dripExit && features.contains("p07_ruby_character_drip_pair")));
+        const bool dripComposition = transformedRuby && features.contains("p07_ruby_character_drip")
+            && (dripEntry || dripExit) && (!(dripEntry && dripExit) || features.contains("p07_ruby_character_drip_pair"));
         const bool warpComposition = spinComposition || dripComposition;
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
@@ -503,7 +494,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || (!projected.charStyles.empty() && !(roleSinging || scriptStylesOnly))))
             (void)0 /* composition gate lifted */;
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
-        if (singingScale && annotated && !verticalSinging) {
+        if ((singingScale || ((rubyUtopiaEntry || rubyUtopiaExit) && source.contains("utopia_origin_x")))
+            && annotated && !verticalSinging) {
             const auto origin = source.value("utopia_origin_x");
             if (!origin.isDouble() || !std::isfinite(origin.toDouble()) || std::abs(origin.toDouble()) > 1e6)
                 throw BackendError("Skia Utopia 注音缺少有效的行原点");

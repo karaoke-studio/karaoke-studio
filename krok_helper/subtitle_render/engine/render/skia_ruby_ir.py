@@ -105,6 +105,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 serialized['fade_owner'] = indices[0]
             if line_index in utopia_exit_lines:
                 serialized['utopia_exit_owner'] = indices[-1]
+                serialized['utopia_exit_first'] = indices[0]
             if line_index in spin_lines:
                 if group.zoom_center_offset is None:
                     raise ValueError('Skia 注音翻转缺少规范字体轴心')

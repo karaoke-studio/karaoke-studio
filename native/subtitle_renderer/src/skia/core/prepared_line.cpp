@@ -132,7 +132,10 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         && line.characterFade.entryKind == CharacterFade::Kind::Fade;
     const bool compositingDrip = fadeActive
         && std::ranges::any_of(line.rubyGroups, [](const auto& group) { return group.drips(); });
-    const bool movingGlow = compositingSpin || compositingDrip;
+    // Like the GPU, a spinning or dripping cell blurs its glow before taking its pose.
+    const bool warpingLine = fadeActive && (fadeSide < 0 ? line.characterFade.entryKind
+                                                         : line.characterFade.exitKind) != CharacterFade::Kind::Fade;
+    const bool movingGlow = compositingSpin || compositingDrip || warpingLine;
     const SingingScale rubyScale = utopia ? line.singingScale : SingingScale{};
     const bool movingCells = line.characterFade.transforms() || geometry || utopia;
     // Move the path independently of paint anchored to the line or canvas.
@@ -561,6 +564,15 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     for (const auto& lane : line.rubyGlows)
         for (const auto& group : lane)
             for (const auto& layer : group.phases) drawRubyGlow(layer, group.readings);
+    // Like the GPU, a cell posed by a shape transition leaves the grouped glow
+    // and has no glow of its own; opacity-only (particle) transitions keep it.
+    const std::string_view activeGeometryKind = !line.characterGeometry.active() ? std::string_view{}
+        : line.characterGeometry.inEntryWindow(tMs, line.startMs) ? entryKind
+        : line.characterGeometry.inWindow(tMs, line.startMs, line.endMs) ? exitKind : std::string_view{};
+    const bool shapeTransition = activeGeometryKind == "tracking_in" || activeGeometryKind == "wave_in"
+        || activeGeometryKind == "glow_in" || activeGeometryKind == "stretch_in"
+        || activeGeometryKind == "scatter_out" || activeGeometryKind == "converge_out"
+        || activeGeometryKind == "glow_out" || activeGeometryKind == "stretch_out" || activeGeometryKind == "flame";
     for (const auto& group : line.roleGlows) {
         for (const auto& layer : group.phases) {
             const bool after = layer.visible(true);
@@ -568,27 +580,42 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             const auto visible = [after](const State& state) {
                 return state.transform.opacity > 0 && state.phase != (after ? Phase::Before : Phase::After);
             };
-            if (std::ranges::none_of(group.cells, [&](std::size_t index) { return visible(states[index]); })) continue;
-            const auto source = layer.createSource(canvas);
-            if (!source.surface) continue;
-            for (std::size_t local = 0; local < group.cells.size(); ++local) {
-                const auto index = group.cells[local];
-                const auto& state = states[index];
-                if (!visible(state)) continue;
-                const auto edge = state.phase == Phase::Wiping
-                    ? std::optional(utopia ? transformedEdge(index) : state.edge) : std::nullopt;
-                const auto* ink = state.animatedInk ? &*state.animatedInk : nullptr;
-                layer.drawCell(*source.surface->getCanvas(), local, after, edge, ink,
-                               state.transform.opacity * titleOpacity);
+            // Spinning and dripping cells blur their role glow before taking their pose;
+            // cells posed by a shape transition have no glow (as in the GPU).
+            const auto moving = [&](const State& state) { return movingGlow && state.transform.transformed; };
+            const auto grouped = [&](const State& state) {
+                return visible(state) && !moving(state) && !(shapeTransition && state.transform.transformed);
+            };
+            if (std::ranges::any_of(group.cells, [&](std::size_t index) { return grouped(states[index]); })) {
+                const auto source = layer.createSource(canvas);
+                if (source.surface) {
+                    for (std::size_t local = 0; local < group.cells.size(); ++local) {
+                        const auto index = group.cells[local];
+                        const auto& state = states[index];
+                        if (!grouped(state)) continue;
+                        const auto edge = state.phase == Phase::Wiping
+                            ? std::optional(utopia ? transformedEdge(index) : state.edge) : std::nullopt;
+                        const auto* ink = state.animatedInk ? &*state.animatedInk : nullptr;
+                        layer.drawCell(*source.surface->getCanvas(), local, after, edge, ink,
+                                       state.transform.opacity * titleOpacity);
+                    }
+                    layer.composite(canvas, source);
+                }
             }
-            layer.composite(canvas, source);
+            for (std::size_t local = 0; local < group.cells.size(); ++local) {
+                const auto& state = states[group.cells[local]];
+                if (!visible(state) || !moving(state)) continue;
+                const auto edge = state.phase == Phase::Wiping ? std::optional(state.edge) : std::nullopt;
+                layer.compositeTransformedCell(canvas, local, after, edge, state.transform.matrix,
+                                               state.transform.opacity * titleOpacity);
+            }
         }
     }
     for (const auto& layer : line.glow) {
         const bool before = layer.visible(false), after = layer.visible(true);
         const auto usesStaticGlow = [&](const State& state) {
             return state.transform.opacity > 0.f
-                && !((movingGlow || rubyGeometryPhase) && state.transform.transformed)
+                && !((movingGlow || rubyGeometryPhase || shapeTransition) && state.transform.transformed)
                 && ((before && state.phase != Phase::After) || (after && state.phase != Phase::Before));
         };
         const auto source = std::ranges::any_of(states, usesStaticGlow)
@@ -630,7 +657,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             });
     }
     // Shadows follow each cell's transition pose and opacity, as they follow its singing pose.
-    const bool posedShadow = utopia || (!line.noWipe && titleOpacity >= 1.f
+    const bool posedShadow = utopia || (titleOpacity >= 1.f
         && std::ranges::any_of(states, [](const State& state) {
             return state.transform.transformed || state.transform.opacity < 1.f;
         }));
@@ -653,8 +680,22 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                          titleOpacity, line.noWipe, line.cellShadows);
     }
     float previousReadingShadowOffset = 0.f;
-    for (const auto& group : line.rubyGroups)
-        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin, previousReadingShadowOffset);
+    for (const auto& group : line.rubyGroups) {
+        ReadingMotion motion;
+        if (const auto owner = group.utopiaExitOwner(); owner && tMs > line.followingDone[*owner]) {
+            motion.exit = &line.utopiaTransition;
+            motion.followingDone = line.followingDone[*owner];
+        } else {
+            motion.opacity = rubyOpacity(group);
+            motion.pose = rubyPose(group);
+            motion.entryScale = rubyEntryScale(group);
+            if (const auto owner = group.fadeOwner(); rubyGeometryPhase && owner) {
+                const auto& pivot = line.cells[*owner].pivot;
+                motion.ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};
+            }
+        }
+        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin, previousReadingShadowOffset, motion);
+    }
     if (line.hasOuterOutline)
         drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
     if (line.hasOutline)

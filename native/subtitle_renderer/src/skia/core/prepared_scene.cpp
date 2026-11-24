@@ -208,6 +208,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     : cell.endMs + std::max(line.utopiaTransition.tailMs - 750, 0);
                 if (!cell.path.isEmpty() || cell.bitmap) next = &cell;
             }
+            for (const auto& group : source.rubyGroups) {
+                if (!group.utopiaExitSpan) continue;
+                const auto [first, last] = *group.utopiaExitSpan;
+                if (last >= line.followingDone.size() || last <= first) continue;
+                for (auto index = first; index < last; ++index) line.followingDone[index] = line.followingDone[last];
+            }
         }
         if (line.isolateVerticalDecoration || line.animation.active()) {
             const auto bodyBounds = line.paintBounds;

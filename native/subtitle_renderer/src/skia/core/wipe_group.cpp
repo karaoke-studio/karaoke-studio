@@ -216,26 +216,51 @@ void PreparedWipeGroup::compositeTransformedGlow(SkCanvas& canvas, const Prepare
     }
 }
 
+SkMatrix PreparedWipeGroup::unitPose(const ResolvedCell& cell, const SkMatrix& pose, SkPoint ownerPivot) const {
+    if (drip_) return readingDrip(cell, pose);
+    auto unit = pose;
+    if (affine_) {
+        // The same affine motion acts around each reading's own
+        // pivot, shifted by the host's translation. Utopia singing
+        // replaces layoutLeft with its scale origin; layoutRight
+        // keeps the unit's layout center (zoom lines never pose).
+        const SkVector delta{cell.pivot.layoutRight - ownerPivot.x(), cell.pivot.centerY - ownerPivot.y()};
+        const auto mapped = pose.mapVector(delta.x(), delta.y());
+        unit.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
+    }
+    return unit;
+}
+
 void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingScale& scale,
-                                   float originX, float& previousReadingOffset) const {
-    if ((!shadow_.before.enabled && !shadow_.after.enabled) || bounds_.isEmpty()) return;
+                                   float originX, float& previousReadingOffset, const ReadingMotion& motion) const {
+    if ((!shadow_.before.enabled && !shadow_.after.enabled) || bounds_.isEmpty() || motion.opacity <= 0.f) return;
     const float edge = frontAt(timeMs, wipeStart());
     const bool complete = lineWipeComplete(cells_, timeMs);
     const float pad = std::max(shadow_.outlineWidth + shadow_.secondaryWidth, 2.f) + 4.f;
-    if (!scale.active) {
+    const bool posed = !motion.pose.isIdentity();
+    const bool singing = (scale.active || motion.entryScale || motion.exit) && !vertical_;
+    if (!singing && !posed && motion.opacity >= 1.f && !(scale.active && vertical_)) {
         shadow_.drawAt(canvas, cells_, bounds_, edge, complete, pad, vertical_, rightToLeft_,
                        1.f, vertical_ || rightToLeft_ || noWipe_ ? nullptr : &previousReadingOffset);
         return;
     }
+    // The shadow takes the pose and opacity its reading is drawn with.
     shadow_.drawAnimated(canvas, cells_, bounds_, edge, complete, pad, [&](std::size_t index) {
         const auto& cell = cells_[index];
-        const auto transform = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+        auto transform = posed ? CharacterTransformState{1.f, unitPose(cell, motion.pose, motion.ownerPivot), true}
+            : singing ? readingMotion(cell, timeMs, scale, motion.exit, motion.followingDone, motion.entryScale)
+            : scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
+        transform.opacity *= motion.opacity;
         const bool before = timeMs <= cell.startMs;
         std::optional<float> clip;
-        if (!before && timeMs < cell.endMs)
+        // A leaving reading is fully sung, so its shadow is unclipped.
+        if (!motion.exit && !before && timeMs < cell.endMs) {
             clip = vertical_ ? wipeCoordinate(cell, timeMs, rightToLeft_, true)
-                             : singingFront(cell, timeMs, originX, transform.matrix.mapRect(cell.path.computeTightBounds()));
-        return StaticShadow::WipePose{transform, before, clip};
+                : singing ? singingFront(cell, timeMs, originX, transform.matrix.mapRect(cell.path.computeTightBounds()),
+                                         rightToLeft_)
+                : wipeCoordinate(cell, timeMs, rightToLeft_, false, noWipe_);
+        }
+        return StaticShadow::WipePose{transform, before && !motion.exit, clip};
     }, vertical_, vertical_ && rightToLeft_);
 }
 
@@ -314,7 +339,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     const float startEdge = wipeStart();
     const float edge = frontAt(timeMs, startEdge);
     const bool revealed = rightToLeft_ ? edge < startEdge : edge > startEdge;
-    if (scale.active && !vertical_) {
+    if ((scale.active || entryScale) && !vertical_) {
         drawSinging(canvas, timeMs, scale, originX, revealed, opacity, viewportHeight, nullptr, 0, entryScale);
         return;
     }
@@ -328,19 +353,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
                 const auto posed = posedUnit(cell, singing);
                 paintRubyCell(canvas, paint, posed ? *posed : cell, after, opacity, shaders);
             } else {
-                auto unitPose = pose;
-                if (drip_) {
-                    unitPose = readingDrip(cell, pose);
-                } else if (affine_) {
-                    // The same affine motion acts around each reading's own
-                    // pivot, shifted by the host's translation. Utopia singing
-                    // replaces layoutLeft with its scale origin; layoutRight
-                    // keeps the unit's layout center (zoom lines never pose).
-                    const SkVector delta{cell.pivot.layoutRight - ownerPivot.x(), cell.pivot.centerY - ownerPivot.y()};
-                    const auto mapped = pose.mapVector(delta.x(), delta.y());
-                    unitPose.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
-                }
-                const auto posed = posedUnit(cell, {opacity, unitPose, true});
+                const auto posed = posedUnit(cell, {opacity, unitPose(cell, pose, ownerPivot), true});
                 paintRubyCell(canvas, paint, *posed, after, opacity, shaders);
             }
         }

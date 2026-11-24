@@ -308,10 +308,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         if (rtl && lower && (!features.contains("p05_rtl_lower_ruby") || !staticLine
                 || line.karaokeAnimation != "none" || object.contains("lower_glow") || object.contains("lower_shadow")))
             (void)0 /* composition gate lifted */;
-        const bool utopiaExit = transition == RubyTransition::UtopiaExit && !lower
-            && object.contains("utopia_exit_owner");
-        // The IR names the transition owner; lower readings never own one.
-        const bool animatedOwner = transition != RubyTransition::None && !utopiaExit && !lower
+        const bool utopiaExit = transition == RubyTransition::UtopiaExit && object.contains("utopia_exit_owner");
+        // The IR names the transition owner; lower readings follow it like upper ones (as in D2D).
+        const bool animatedOwner = transition != RubyTransition::None && !utopiaExit
             && object.contains("fade_owner");
         // Pose data present in the IR selects the composed reading transition.
         const bool spinComposition = transition == RubyTransition::Spin && object.contains("spin_pivot");
@@ -329,6 +328,13 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             fadeOwner = integer(object.value("fade_owner"), 0, int(line.chars.size()) - 1);
         std::optional<std::size_t> utopiaExitOwner;
         if (utopiaExit) utopiaExitOwner = integer(object.value("utopia_exit_owner"), 0, int(line.chars.size()) - 1);
+        std::optional<std::pair<std::size_t, std::size_t>> utopiaExitSpan;
+        if (transition == RubyTransition::UtopiaExit && object.contains("utopia_exit_first")
+            && object.contains("utopia_exit_owner")) {
+            const auto last = integer(object.value("utopia_exit_owner"), 0, int(line.chars.size()) - 1);
+            utopiaExitSpan = std::pair<std::size_t, std::size_t>(
+                integer(object.value("utopia_exit_first"), 0, int(last)), last);
+        }
         std::optional<SkPoint> spinPivot;
         if (spinComposition) {
             const auto pivot = object.value("spin_pivot").toArray();
@@ -555,7 +561,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             }
             if (groupZoom && !cell.contains("utopia_layout_right"))
                 throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
-            if (line.karaokeAnimation == "utopia" && !vertical) {
+            // Utopia entry/exit poses readings around the same layout anchor as Utopia singing.
+            const bool utopiaPose = line.karaokeAnimation == "utopia"
+                || ((line.entryAnimation == "utopia" || line.exitAnimation == "utopia")
+                    && cell.contains("utopia_layout_left"));
+            if (utopiaPose && !vertical) {
                 const double left = pivotCoordinate(cell.value("utopia_layout_left"));
                 glyph.pivot.layoutLeft = float(left * glyphs.dpr);
                 glyph.pivot.baseline = float(cell.value("baseline_y").toDouble() * glyphs.dpr);
@@ -707,6 +717,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                           roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner,
                           std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients),
                           dripComposition});
+        groups.back().utopiaExitSpan = utopiaExitSpan;
     }
     return groups;
 }

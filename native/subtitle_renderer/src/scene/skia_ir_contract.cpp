@@ -913,12 +913,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 注音整字放大缺少噪声出入场能力声明");
     if (features.contains("p07_utopia_transition") && layout.value("utopia_transition_schema").toDouble(-1) != 1)
         throw BackendError("Skia Utopia 出入场布局版本无效");
-    if (features.contains("p07_ruby_utopia_exit")
-        && (!features.contains("p07_utopia_transition") || !features.contains("p07_ruby_singing_scale")))
+    if (features.contains("p07_ruby_utopia_exit") && !features.contains("p07_utopia_transition"))
         throw BackendError("Skia 上注音 Utopia 退场缺少对应能力");
-    if (features.contains("p07_ruby_utopia_entry")
-        && (!features.contains("p07_utopia_transition") || !features.contains("p07_ruby_singing_scale")
-            || features.contains("p05_lower_ruby")))
+    if (features.contains("p07_ruby_utopia_entry") && !features.contains("p07_utopia_transition"))
         throw BackendError("Skia 上注音 Utopia 入场缺少对应能力");
     if (features.contains("p07_ruby_utopia_entry_glow")
         && (!features.contains("p07_ruby_utopia_entry")

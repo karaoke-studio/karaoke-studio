@@ -404,6 +404,18 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             look = item.layout_style
             with_flame = petal_entry_with_flame(source, look)
             with_band = petal_entry_with_scanline(source, look)
+            # Readings spin or drip with their owner cell whatever else the line composes.
+            if ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
+                    or (leave == 'spin_flip' and source['exit_duration_ms'] > 0)):
+                spin_lines.add(index)
+            dripping_in = entry == 'char_drip' and source['entry_duration_ms'] > 0
+            dripping_out = leave == 'char_drip' and source['exit_duration_ms'] > 0
+            if dripping_in or dripping_out:
+                reading_decorations = {kind for reading in geometry.ruby.lines[index].rubies
+                                       for kind in ruby_decoration_kinds(reading.target.style)}
+                drip_lines.add(index)
+                paired_drips |= dripping_in and dripping_out
+                drip_glow |= 'glow' in reading_decorations or uses_authored_decoration(look, 'glow')
             if (source.get('karaoke_anim') not in {'none', 'utopia'} or source.get('zoom_pulse')
                     or (source.get('scanline') and not with_band) or source.get('stroke_flash')
                     or uses_authored_decoration(look, 'shadow')):
@@ -451,22 +463,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                         if effect == 'flame':
                             particle_affine_lines.add(index)
                 continue
-            if (entry in {'none', 'fade', 'rise', 'spin_flip', 'char_fade'}
-                    and (leave in {'none', 'spin_flip'} or (entry == 'spin_flip' and leave == 'char_fade'))
-                    and ((entry == 'spin_flip' and source['entry_duration_ms'] > 0)
-                         or (leave == 'spin_flip' and source['exit_duration_ms'] > 0))):
-                spin_lines.add(index)
-            dripping_in = entry == 'char_drip' and source['entry_duration_ms'] > 0
-            dripping_out = leave == 'char_drip' and source['exit_duration_ms'] > 0
-            drip_active = ((dripping_in and (leave == 'none' or dripping_out))
-                           or (dripping_out and entry == 'none'))
-            if drip_active:
-                reading_decorations = {kind for reading in geometry.ruby.lines[index].rubies
-                                       for kind in ruby_decoration_kinds(reading.target.style)}
-                if 'shadow' not in reading_decorations:
-                    drip_lines.add(index)
-                    paired_drips |= dripping_in and dripping_out
-                    drip_glow |= 'glow' in reading_decorations or uses_authored_decoration(look, 'glow')
             if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
                     and source.get('entry_duration_ms', 0) > 0):
                 translation_lines.add(index)
@@ -751,22 +747,21 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
     utopia_exit_body_glow = False
     if geometry.ruby is not None:
         lower_enabled = any(item.layout_style.lower_ruby_enabled for item in plan.lines)
-        if not lower_enabled:
-            for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True)):
-                source = ir['track']['lines'][item.track_index]
-                look = item.layout_style
-                if not (reading.rubies and source.get('karaoke_anim') == 'utopia' and not item.line.wipe_reverse):
-                    continue
-                body_glow = uses_authored_decoration(look, 'glow')
-                ruby_glow = any('glow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
-                phase = source.get('entry_anim'), source.get('exit_anim')
-                if phase[0] == 'utopia':
-                    utopia_entry_lines.add(index)
-                    utopia_entry_glow |= body_glow or ruby_glow
-                if phase[1] == 'utopia':
-                    utopia_exit_lines.add(index)
-                    utopia_exit_body_glow |= body_glow
-                    utopia_exit_ruby_glow |= ruby_glow
+        for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True)):
+            source = ir['track']['lines'][item.track_index]
+            look = item.layout_style
+            if not (reading.rubies and not item.line.wipe_reverse):
+                continue
+            body_glow = uses_authored_decoration(look, 'glow')
+            ruby_glow = any('glow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
+            phase = source.get('entry_anim'), source.get('exit_anim')
+            if phase[0] == 'utopia':
+                utopia_entry_lines.add(index)
+                utopia_entry_glow |= body_glow or ruby_glow
+            if phase[1] == 'utopia':
+                utopia_exit_lines.add(index)
+                utopia_exit_body_glow |= body_glow
+                utopia_exit_ruby_glow |= ruby_glow
         rtl_shadow = False
         rtl_without_body_stroke = False
         rtl_motion = False
@@ -823,7 +818,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
             lower_gradients='p07_lower_ruby_scanline_singing_particles' in ir['required_features'],
-            singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
+            singing_lines=singing_lines | zoom_lines | utopia_entry_lines | utopia_exit_lines, zoom_lines=zoom_lines,
             fade_lines=fade_lines | composed_geometry_lines | utopia_entry_lines | drip_lines | follow_lines,
             spin_lines=spin_lines, drip_lines=drip_lines,
             affine_lines=affine_geometry_lines | utopia_exit_lines, utopia_exit_lines=utopia_exit_lines)

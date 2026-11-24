@@ -59,6 +59,8 @@ struct ResolvedRubyGroup {
     std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
     ScanlineGradients scanlineGradients;
     bool drip = false;
+    // Owner cells under this reading leave together, after its last cell (GPU clamp).
+    std::optional<std::pair<std::size_t, std::size_t>> utopiaExitSpan;
 };
 enum class ParticleEntryGlow { None, Standard, SampledSymbols };
 
