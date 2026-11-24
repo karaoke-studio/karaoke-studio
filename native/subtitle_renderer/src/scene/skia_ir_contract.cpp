@@ -1390,7 +1390,6 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 淡化扫字线渐变缺少正文画笔或组合能力声明");
     if (animatedSingingGradient
         && (!features.contains("p06_body_gradient") || !features.contains("p06_utopia_main_paint")
-            || (features.contains("p05_upper_ruby") && !rubySingingPaint)
             || !features.contains("p07_utopia_line_animation")))
         throw BackendError("Skia Utopia 出入场渐变缺少正文画笔或唱字动画能力声明");
     if (features.contains("p06_faded_scanline_palette_gradient")
