@@ -41,6 +41,9 @@ struct ResolvedCell {
     float strokeFlashWidth = 0;
     std::optional<BitmapGuide> bitmap; // bitmap_guide_schema=1: drawn instead of the empty path.
     int bodyPaintIndex = -1;
+    // A reading's own pivot for affine owner motion, kept apart from the
+    // singing pivot so a zoom pulse and a geometry transition compose.
+    std::optional<SkPoint> affinePivot;
 };
 struct ResolvedRubyGroup {
     std::vector<ResolvedCell> cells;

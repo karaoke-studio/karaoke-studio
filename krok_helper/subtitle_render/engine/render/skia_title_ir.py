@@ -58,16 +58,9 @@ def _title_color(title):
 
 
 def title_style(title):
+    # Title paints compose as lyric paints do: gradient glows and painted
+    # shadows beside bitmap guides use the same lyric layers.
     roles = title['role_styles']
-    paints = (title, *roles.values())
-    if any(paint['shadow']['mode'] != 'solid' and paint['decoration_kind'] == 'glow'
-           and paint['glow_radius_px'] > 0 for paint in paints):
-        return None
-    guides = [entry[-1] for entry in (*title['guide_symbols'], *title['inline_guide_symbols']) if entry[-1]]
-    bitmaps = any(guide['kind'] == 'bitmap' for guide in guides)
-    if bitmaps and any(paint['decoration_kind'] == 'shadow' and paint['shadow']['mode'] != 'solid'
-                       for paint in paints):
-        return None
     anchor = title['anchor']
     horizontal = anchor.rsplit('_', 1)[-1]
     state = _title_color(title)

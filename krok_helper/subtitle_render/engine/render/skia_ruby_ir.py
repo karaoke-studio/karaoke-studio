@@ -44,6 +44,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     has_lower_shadow = False
     has_lower_shadow_gradient = False
     has_lower_shadow_image = False
+    has_lower_outline_gradient = False
     has_lower_gradient = False
     has_static_lower_gradient = False
     has_static_lower_image = False
@@ -74,9 +75,10 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 continue
             indices = group.target.indices
             style_cell = next((i for i in indices if item.render_line.chars[i].role_label), indices[0])
-            outlines, gradients = ruby_outlines(group.target.style,
-                allow_gradients=not (rtl or group.target.lower), allow_split=inline_bitmaps)
-            outline_gradients.update(gradients)
+            # Upper outline gradients span the reading's own ink on any line.
+            outlines, gradients = ruby_outlines(group.target.style, allow_gradients=True, allow_split=True)
+            if not group.target.lower:
+                outline_gradients.update(gradients)
             # The existing GPU floors a half-width in reference pixels, then
             # uses that integer directly in the physical annotation clip.
             wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
@@ -133,6 +135,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 has_lower_shadow = has_lower_shadow or 'lower_shadow' in serialized
                 has_lower_shadow_gradient |= 'lower_shadow_gradient' in serialized
                 has_lower_shadow_image |= 'lower_shadow_image' in serialized
+                has_lower_outline_gradient |= 'lower_outline_gradient' in serialized
             else:
                 decorations = ruby_decoration_kinds(group.target.style)
                 has_shadow = has_shadow or 'shadow' in decorations
@@ -160,4 +163,5 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'lower_ruby_shadow_schema': 1} if has_lower_shadow else {}),
             **({'lower_ruby_shadow_gradient_schema': 1} if has_lower_shadow_gradient else {}),
             **({'lower_ruby_shadow_image_schema': 1} if has_lower_shadow_image else {}),
+            **({'lower_ruby_outline_gradient_schema': 1} if has_lower_outline_gradient else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}

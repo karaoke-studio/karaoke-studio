@@ -186,7 +186,10 @@ void resolveRoleShadows(::subtitle::skia::ResolvedLine& line, const TextLine& so
         }
         line.cellShadows.push_back(shadow);
     }
-    if (std::ranges::none_of(line.cellShadows, &::subtitle::skia::StaticShadow::visible))
+    if (std::ranges::none_of(line.cellShadows, &::subtitle::skia::StaticShadow::visible)) {
+        // No cell casts a shadow: the line's own shadow must not come back as a fallback.
         line.cellShadows.clear();
+        line.shadow.before.enabled = line.shadow.after.enabled = false;
+    }
 }
 }

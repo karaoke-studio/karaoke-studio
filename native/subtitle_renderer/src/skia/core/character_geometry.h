@@ -27,17 +27,23 @@ struct CharacterGeometry {
     }
 
     CharacterTransformState at(int time, int displayStart, int displayEnd, int index, int count,
-                               const CharacterPivot& pivot, std::optional<float> lineCenter, bool entryOnly = false) const {
+                               const CharacterPivot& pivot, std::optional<float> lineCenter, bool entryOnly = false,
+                               float exitScale = 1.f) const {
         const int leave = exitStart(displayEnd);
         const bool exiting = !entryOnly && exitMs > 0 && time >= leave;
         if (!exiting && !inEntryWindow(time, displayStart))
             return {};
         const float x = (pivot.layoutLeft + pivot.layoutRight) * .5f;
         const auto& effect = exiting ? exit : entry;
-        const auto value = krok::subtitle::native::effects::geoCharState(
+        auto value = krok::subtitle::native::effects::geoCharState(
             effect, fontPx, index, count, time,
             exiting ? leave : displayStart, exiting ? exitMs : entryMs,
             exiting, x, lineCenter.value_or(0.f), lineCenter.has_value());
+        // The zoom pulse keeps shrinking back under an exit transition.
+        if (exiting) {
+            value.scaleX *= exitScale;
+            value.scaleY *= exitScale;
+        }
         CharacterTransformState state;
         state.opacity = value.opacity;
         state.glowAlpha = value.glowAlpha;

@@ -48,6 +48,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
     readings = prepared.vertical_readings
     ruby = readings.measured
     outlined = False
+    outline_gradients = set()
     singing_shadow = False
     decorations = set()
     fonts = dict(measured.fonts)
@@ -74,7 +75,8 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
         for target, clock, reading_index in groups:
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
-            outlines, _ = ruby_outlines(target.style)
+            outlines, gradients = ruby_outlines(target.style, allow_gradients=True, allow_split=True)
+            outline_gradients.update(gradients)
             decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow'}
             singing_shadow |= singing_scale and 'shadow' in decoration
             decorations.update(decoration)
@@ -86,6 +88,9 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
             if outlines:
                 group['outlines'] = outlines
                 outlined = True
+            if gradients:
+                # Like the GPU, a vertical reading's paint spans its owner cells.
+                group['vertical_paint_span'] = [top + first * height_per_cell, top + end * height_per_cell]
             if len(groups) > 1:
                 group['span_end_cell'] = end
             ruby_groups.append(group)
@@ -113,5 +118,9 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
         result['ruby_unit_schema'] = 1
     if outlined:
         result['ruby_solid_outline_schema'] = 1
+    if outline_gradients:
+        result['ruby_outline_gradient_schema'] = 1
+    if 'gradient_horizontal' in outline_gradients:
+        result['ruby_horizontal_outline_schema'] = 1
     result.update({f'ruby_{kind}_schema': 1 for kind in decorations})
     return result, singing_shadow

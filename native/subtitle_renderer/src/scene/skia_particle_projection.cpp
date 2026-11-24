@@ -159,7 +159,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         || source.fxBursts.size() > 4096)
         (void)0 /* composition gate lifted */;
     line.bursts.reserve(source.fxBursts.size());
-    const bool paintedSprites = staticForwardSinging && features.contains("p07_singing_sprite_paints");
+    // Particle paints attach to each burst whatever the line does, as in Direct2D.
+    const bool paintedSprites = features.contains("p07_singing_sprite_paints");
     const auto spritePaint = [](const auto& paint) {
         return paint.mode == "solid" || paint.mode == "gradient_vertical";
     };
@@ -183,6 +184,9 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool star = fx.kind == "twinkle" || (version >= 2 && fx.kind == "twinkle_classic")
             || (version >= 10 && animated && fx.kind == "sparkle");
         const bool assemblySprite = version >= 10 && animated && (fx.kind == "assemble" || fx.kind == "dissolve");
+        // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
+        const bool impact = version >= 11 && animated
+            && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
         const bool falling = version >= 5 && isSkiaFallingParticle(fx.kind);
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
@@ -190,7 +194,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool paintedEnergy = (lightning || flame) && features.contains("p07_energy_singing_paints");
         const bool fadedPaint = fadedBand && features.contains("p07_faded_scanline_particle_paint")
             && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0 && spritePaint(fx.fill);
-        const bool localPaint = paintedSprites && (star || symbol || falling || paintedEnergy) && spriteLayerPaint(fx.fill)
+        const bool localPaint = paintedSprites && (star || symbol || falling || paintedEnergy || assemblySprite
+                || (impact && fx.kind != "shockwave")) && spriteLayerPaint(fx.fill)
             && spriteStroke(fx.strokeWidthPx, fx.stroke) && spriteStroke(fx.stroke2WidthPx, fx.stroke2);
         const bool ringPaint = paintedSprites && ripple && ripplePaints
             && (spritePaint(fx.fill) || fx.fill.mode == "split_vertical"
@@ -205,9 +210,6 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool painted = fx.hasPaint && (fadedPaint || localPaint || ringPaint)
             && (!fx.hasDecor || ((glow || shadow) && (spritePaint(fx.decor)
                 || (localPaint && spriteLocalPaint(fx.decor)))));
-        // Ignition and strike impacts, and burnt-out ash, exist only as transition layers.
-        const bool impact = version >= 11 && animated
-            && (fx.kind == "fireball" || fx.kind == "flash" || fx.kind == "shockwave" || fx.kind == "ash");
         const int singingFlameSweep = fx.kind == "flame" || fx.kind == "flame_alt" ? 2 : 0;
         const bool validSweep = animated
             ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))

@@ -239,12 +239,22 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return line.utopiaTransition.at(tMs, line.startMs, int(index), int(line.cells.size()), following,
                                                cell.pivot, line.singingScale, start, end);
             }
+            // Like the GPU, a zoom pulse keeps shrinking back while an exit
+            // transition takes the cell (it multiplies into the exit pose).
+            const auto zoom = line.singingScale.active && line.singingScale.zoomPulse
+                ? line.singingScale.at(tMs, cell.startMs, cell.endMs, cell.pivot) : CharacterTransformState{};
             if (geometry && line.characterFade.side(tMs, line.startMs, line.endMs) == 0)
                 return line.characterGeometry.at(tMs, line.startMs, line.endMs,
                                                  int(index), int(line.cells.size()), cell.pivot,
-                                                 line.characterMotionCenter);
-            return characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
-                                        int(index), int(line.cells.size()), cell.pivot);
+                                                 line.characterMotionCenter, false,
+                                                 zoom.transformed ? zoom.matrix.getScaleX() : 1.f);
+            auto faded = characterTransformAt(line.characterFade, tMs, line.startMs, line.endMs,
+                                              int(index), int(line.cells.size()), cell.pivot);
+            if (zoom.transformed && line.characterFade.side(tMs, line.startMs, line.endMs) > 0) {
+                faded.matrix.preConcat(zoom.matrix);
+                faded.transformed = true;
+            }
+            return faded;
         }();
         // A bitmap keeps its image box and inherits its owning character's opacity.
         if (cell.bitmap) transform = CharacterTransformState{.opacity = transform.opacity};
@@ -596,8 +606,9 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                         const auto edge = state.phase == Phase::Wiping
                             ? std::optional(utopia ? transformedEdge(index) : state.edge) : std::nullopt;
                         const auto* ink = state.animatedInk ? &*state.animatedInk : nullptr;
+                        // Role glows clip on the line's physical wipe side, like the line glow.
                         layer.drawCell(*source.surface->getCanvas(), local, after, edge, ink,
-                                       state.transform.opacity * titleOpacity);
+                                       state.transform.opacity * titleOpacity, line.vertical, line.wipeRightToLeft);
                     }
                     layer.composite(canvas, source);
                 }
@@ -662,10 +673,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             return state.transform.transformed || state.transform.opacity < 1.f;
         }));
     if (posedShadow && (line.shadow.visible() || !line.cellShadows.empty())) {
-        const bool reverse = line.vertical && line.wipeRightToLeft;
+        // The posed shadow clips on the line's physical wipe side (horizontal too).
+        const bool reverse = line.wipeRightToLeft;
         const float origin = line.vertical
             ? (reverse ? line.decorationInk.bottom() : line.decorationInk.top())
-            : line.decorationInk.left();
+            : (reverse ? line.decorationInk.right() : line.decorationInk.left());
         const float edge = lineWipeFront(line.cells, tMs, origin, line.shadow.secondaryWidth / 2 + .5f,
                                         reverse, line.vertical);
         line.shadow.drawAnimated(canvas, line.cells, line.decorationInk, edge, lineWipeComplete(line.cells, tMs),
@@ -784,7 +796,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                                  line.rubySingingOrigin, wipeViewportHeight);
             continue;
         }
-        SkPoint ownerPivot{};
+        std::optional<SkPoint> ownerPivot;
         if (const auto owner = group.fadeOwner(); rubyGeometryPhase && owner) {
             const auto& pivot = line.cells[*owner].pivot;
             ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};

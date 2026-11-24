@@ -10,9 +10,16 @@ from .skia_ruby_paint_ir import ruby_decoration_kinds
 _GRADIENT_MODES = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
 
 
+def _split_stops(fill):
+    # Split bands use their own stops, as the GPU's paint projection does.
+    raw = fill.split_stops or [(0, fill.split_top_color), (fill.split_position_pct, fill.split_bottom_color),
+                               (100, fill.split_bottom_color)]
+    return sorted(((min(max(float(position), 0.0), 100.0), color) for position, color in raw), key=lambda s: s[0])
+
+
 def _gradient_payload(fill):
-    return {'mode': fill.mode,
-            'stops': [[position, list(rgba(color))] for position, color in gradient_stops(fill)]}
+    stops = _split_stops(fill) if fill.mode == 'split_vertical' else gradient_stops(fill)
+    return {'mode': fill.mode, 'stops': [[position, list(rgba(color))] for position, color in stops]}
 
 
 def _image_payload(fill):
@@ -61,6 +68,16 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         result['fill_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     if images:
         result['static_fill_image'] = images
+    # Like the GPU, lower outlines paint with the lower reading's own stroke fills.
+    outline_gradients = {}
+    for layer in ('stroke', 'stroke2'):
+        for phase, palette in (('before', colors.before), ('after', colors.after)):
+            fill = getattr(palette, layer)
+            if fill.mode in _GRADIENT_MODES:
+                outline_gradients.setdefault(layer, {})[phase] = _gradient_payload(fill)
+    if outline_gradients:
+        result['lower_outline_gradient'] = outline_gradients
+        result['outline_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     glow, shadow, shadow_gradients, shadow_images = {}, {}, {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':

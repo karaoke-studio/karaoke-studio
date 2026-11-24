@@ -416,6 +416,22 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 drip_lines.add(index)
                 paired_drips |= dripping_in and dripping_out
                 drip_glow |= 'glow' in reading_decorations or uses_authored_decoration(look, 'glow')
+            # Readings take each geometry phase of their owner whatever the
+            # other phase, karaoke mode, particles or decorations do.
+            entering = source.get('entry_duration_ms', 0) > 0
+            leaving = source.get('exit_duration_ms', 0) > 0
+            if entering and entry in {'tracking_in', 'wave_in'}:
+                translation_lines.add(index)
+            if leaving and leave in {'scatter_out', 'converge_out'}:
+                affine_lines.add(index)
+            if leaving and leave == 'stretch_out':
+                stretch_lines.add(index)
+            if entering and entry == 'stretch_in':
+                stretch_entry_lines.add(index)
+            if (entering and entry == 'glow_in') or (leaving and leave == 'glow_out'):
+                glow_lines.add(index)
+            if entering and leaving and entry == 'wave_in' and leave == 'scatter_out':
+                paired_geometry_lines.add(index)
             if (source.get('karaoke_anim') not in {'none', 'utopia'} or source.get('zoom_pulse')
                     or (source.get('scanline') and not with_band) or source.get('stroke_flash')
                     or uses_authored_decoration(look, 'shadow')):
@@ -463,26 +479,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                         if effect == 'flame':
                             particle_affine_lines.add(index)
                 continue
-            if (source.get('entry_anim') in {'tracking_in', 'wave_in'} and source.get('exit_anim') == 'none'
-                    and source.get('entry_duration_ms', 0) > 0):
-                translation_lines.add(index)
-            if (source.get('entry_anim') == 'none' and source.get('exit_anim') in {'scatter_out', 'converge_out'}
-                    and source.get('exit_duration_ms', 0) > 0):
-                affine_lines.add(index)
-            if (source.get('entry_anim') == 'none' and source.get('exit_anim') == 'stretch_out'
-                    and source.get('exit_duration_ms', 0) > 0):
-                stretch_lines.add(index)
-            if (source.get('entry_anim') == 'stretch_in' and source.get('exit_anim') == 'none'
-                    and source.get('entry_duration_ms', 0) > 0):
-                stretch_entry_lines.add(index)
-            if ((source.get('entry_anim') == 'glow_in' and source.get('exit_anim') == 'none'
-                    and source.get('entry_duration_ms', 0) > 0)
-                    or (source.get('entry_anim') == 'none' and source.get('exit_anim') == 'glow_out'
-                        and source.get('exit_duration_ms', 0) > 0)):
-                glow_lines.add(index)
-            if (source.get('entry_anim') == 'wave_in' and source.get('exit_anim') == 'scatter_out'
-                    and source.get('entry_duration_ms', 0) > 0 and source.get('exit_duration_ms', 0) > 0):
-                paired_geometry_lines.add(index)
     character_warp_lines = spin_lines | drip_lines
     composed_particle_lines = assembly_lines | particle_fade_lines | energy_pair_lines | particle_entry_lines
     affine_geometry_lines = (affine_lines | stretch_lines | stretch_entry_lines | glow_lines
@@ -566,6 +562,10 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             ir['required_features'].append('p05_ruby_units')
         if vertical_ruby.get('ruby_solid_outline_schema'):
             ir['required_features'] += ['p06_ruby_solid_outline', 'p06_vertical_ruby_outline']
+        if vertical_ruby.get('ruby_outline_gradient_schema'):
+            ir['required_features'].append('p06_ruby_outline_gradient')
+        if vertical_ruby.get('ruby_horizontal_outline_schema'):
+            ir['required_features'].append('p06_ruby_horizontal_outline')
         ir['required_features'].extend(f'p06_ruby_{kind}' for kind in ('shadow', 'glow')
                                        if vertical_ruby.get(f'ruby_{kind}_schema'))
     secondary_outline = declare_outline_layers(ir, plan, title=title_geometry is not None)
@@ -893,6 +893,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             ir['required_features'].append('p06_lower_ruby_shadow_gradient')
         if 'lower_ruby_shadow_image_schema' in ir['skia_layout']:
             ir['required_features'].append('p06_lower_ruby_shadow_image')
+        if 'lower_ruby_outline_gradient_schema' in ir['skia_layout']:
+            ir['required_features'].append('p06_lower_ruby_outline_gradient')
         spin_sources = [ir['track']['lines'][plan.lines[index].track_index] for index in spin_lines]
         for phase in ('entry', 'exit'):
             if any(source.get(f'{phase}_anim') == 'spin_flip' and source[f'{phase}_duration_ms'] > 0

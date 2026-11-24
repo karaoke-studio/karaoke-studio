@@ -73,7 +73,12 @@ CharacterTransformState readingMotion(const ResolvedCell& cell, int time, const 
     if (!entryScale) return scale.at(time, cell.startMs, cell.endMs, cell.pivot);
     CharacterTransformState transform;
     transform.transformed = *entryScale != 1.f;
-    transform.matrix = UtopiaTransition::entryScaleMatrix(cell.pivot, *entryScale);
+    // Like the GPU, a zoom pulse line scales its entry around the glyph centre.
+    if (scale.zoomPulse)
+        transform.matrix.setScale(*entryScale, *entryScale,
+                                  (cell.pivot.layoutLeft + cell.pivot.layoutRight) * .5f, cell.pivot.centerY);
+    else
+        transform.matrix = UtopiaTransition::entryScaleMatrix(cell.pivot, *entryScale);
     return transform;
 }
 
@@ -170,7 +175,8 @@ void PreparedWipeGroup::drawGlowSource(SkCanvas& canvas, const PreparedGlow& glo
                                       const UtopiaTransition* exit, int followingDone,
                                       std::optional<float> entryScale) const {
     if (!glowOffset_ || bounds_.isEmpty() || opacity <= 0) return;
-    if ((scale.active && !vertical_) || exit) {
+    // An entry-scaled reading glows from its posed path, like its body.
+    if (((scale.active || entryScale) && !vertical_) || exit) {
         for (std::size_t index = 0; index < cells_.size(); ++index) {
             const auto& cell = cells_[index];
             const bool before = timeMs <= cell.startMs;
@@ -216,15 +222,19 @@ void PreparedWipeGroup::compositeTransformedGlow(SkCanvas& canvas, const Prepare
     }
 }
 
-SkMatrix PreparedWipeGroup::unitPose(const ResolvedCell& cell, const SkMatrix& pose, SkPoint ownerPivot) const {
-    if (drip_) return readingDrip(cell, pose);
+SkMatrix PreparedWipeGroup::unitPose(const ResolvedCell& cell, const SkMatrix& pose,
+                                    std::optional<SkPoint> ownerPivot) const {
+    // A drip warps readings outside the geometry window; a geometry phase on the
+    // same line moves each reading around its own pivot instead.
+    if (drip_ && !ownerPivot) return readingDrip(cell, pose);
     auto unit = pose;
-    if (affine_) {
+    if (affine_ && ownerPivot) {
         // The same affine motion acts around each reading's own
         // pivot, shifted by the host's translation. Utopia singing
         // replaces layoutLeft with its scale origin; layoutRight
         // keeps the unit's layout center (zoom lines never pose).
-        const SkVector delta{cell.pivot.layoutRight - ownerPivot.x(), cell.pivot.centerY - ownerPivot.y()};
+        const SkPoint own = cell.affinePivot ? *cell.affinePivot : SkPoint{cell.pivot.layoutRight, cell.pivot.centerY};
+        const SkVector delta{own.x() - ownerPivot->x(), own.y() - ownerPivot->y()};
         const auto mapped = pose.mapVector(delta.x(), delta.y());
         unit.postTranslate(delta.x() - mapped.x(), delta.y() - mapped.y());
     }
@@ -333,7 +343,7 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
 }
 
 void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& scale, float originX,
-                             float opacity, float viewportHeight, const SkMatrix& pose, SkPoint ownerPivot,
+                             float opacity, float viewportHeight, const SkMatrix& pose, std::optional<SkPoint> ownerPivot,
                              std::optional<float> entryScale) const {
     if (bounds_.isEmpty() || opacity <= 0) return;
     const float startEdge = wipeStart();

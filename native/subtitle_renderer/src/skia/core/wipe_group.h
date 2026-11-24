@@ -8,7 +8,8 @@ namespace subtitle::skia {
 struct ReadingMotion {
     float opacity = 1.f;
     SkMatrix pose = SkMatrix::I();
-    SkPoint ownerPivot{};
+    // Present only in the geometry window: readings then move around their own pivots.
+    std::optional<SkPoint> ownerPivot;
     std::optional<float> entryScale;
     const UtopiaTransition* exit = nullptr;
     int followingDone = 0;
@@ -25,7 +26,7 @@ public:
     bool lower() const { return lower_; }
     SkMatrix spinMatrix(const CharacterTransformState& owner) const;
     void draw(SkCanvas&, int timeMs, const SingingScale&, float originX, float opacity, float viewportHeight,
-              const SkMatrix& pose = SkMatrix::I(), SkPoint ownerPivot = {},
+              const SkMatrix& pose = SkMatrix::I(), std::optional<SkPoint> ownerPivot = {},
               std::optional<float> entryScale = {}) const;
     void drawShadow(SkCanvas&, int timeMs, const SingingScale&, float originX, float& previousReadingOffset,
                     const ReadingMotion& motion = {}) const;
@@ -41,7 +42,7 @@ private:
     void drawSinging(SkCanvas&, int timeMs, const SingingScale&, float originX, bool afterVisible,
                      float opacity, float viewportHeight, const UtopiaTransition* exit = nullptr,
                      int followingDone = 0, std::optional<float> entryScale = {}) const;
-    SkMatrix unitPose(const ResolvedCell&, const SkMatrix& pose, SkPoint ownerPivot) const;
+    SkMatrix unitPose(const ResolvedCell&, const SkMatrix& pose, std::optional<SkPoint> ownerPivot) const;
     float wipeStart() const;
     float frontAt(int timeMs, float startEdge) const;
     sk_sp<SkShader> fillShader(const SkCanvas&, bool after) const;

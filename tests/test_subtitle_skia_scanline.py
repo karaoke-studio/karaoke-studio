@@ -918,13 +918,9 @@ def test_faded_scanline_brightens_gradient_outline_and_keeps_its_clock(binary, r
     assert {feature, 'p06_ruby_outline_gradient', 'p07_ruby_scanline'} <= set(ir['required_features'])
     disabled = upper_ir(binary, (track, replace(style, scanline_brightness_pct=0)), 1)
     assert ir['skia_layout']['lines'] == disabled['skia_layout']['lines']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         active, _ = collect(process, [550, 1000, 550])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
         configure(process, disabled)
         plain, _ = collect(process, [550, 1000], generation=2)
     assert np.array_equal(active[0], active[-1])

@@ -211,13 +211,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                                 : features.contains("p07_faded_scanline_singing_particles"));
     const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
         && scanlineStyle.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
-    const bool avatarOutline = features.contains("p08_inline_bitmap_guides") && fadeOnly && !line.scanlineEnabled
-        && !line.strokeFlashEnabled && line.bursts.empty();
-    const bool allowOutlineGradient = features.contains("p06_ruby_outline_gradient")
-        && !vertical && !rtl && !line.wipeReverse && !line.zoomPulseEnabled && !line.strokeFlashEnabled
-        && (!line.scanlineEnabled || fixedScanlinePaint || brightenedScanlineGradient) && (scene.charStyles.empty() || avatarOutline)
-        && transition == RubyTransition::None;
-    const bool allowHorizontalOutline = roleBounds && features.contains("p06_ruby_horizontal_outline");
+    // Outline gradients span the reading's own ink (or the shared role
+    // domain), so they compose with every line layout and transition.
+    const bool allowOutlineGradient = features.contains("p06_ruby_outline_gradient");
+    const bool allowHorizontalOutline = features.contains("p06_ruby_horizontal_outline");
     const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
         && features.contains("p07_ruby_line_animation");
     const bool verticalNoWipe = line.karaokeAnimation == "no_wipe"
@@ -310,17 +307,22 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             (void)0 /* composition gate lifted */;
         const bool utopiaExit = transition == RubyTransition::UtopiaExit && object.contains("utopia_exit_owner");
         // The IR names the transition owner; lower readings follow it like upper ones (as in D2D).
-        const bool animatedOwner = transition != RubyTransition::None && !utopiaExit
-            && object.contains("fade_owner");
+        // A Utopia exit reading still follows its owner through the entry.
+        const bool animatedOwner = transition != RubyTransition::None && object.contains("fade_owner");
         // Pose data present in the IR selects the composed reading transition.
-        const bool spinComposition = transition == RubyTransition::Spin && object.contains("spin_pivot");
+        // A warp phase (spin/drip) and a geometry phase can share one line;
+        // the core poses each in its own window, so keep both kinds of data.
+        const bool sharedGeometry = transition == RubyTransition::Affine || transition == RubyTransition::Translation;
+        const bool spinComposition = (transition == RubyTransition::Spin || sharedGeometry)
+            && object.contains("spin_pivot");
         const auto unitsCarry = [&](const char* key) {
             const auto values = object.value("units").toArray();
             return !values.isEmpty() && std::ranges::all_of(values, [&](const auto& value) {
                 return value.toObject().contains(QLatin1String(key));
             });
         };
-        const bool dripComposition = transition == RubyTransition::Drip && unitsCarry("drip_layout_right");
+        const bool dripComposition = (transition == RubyTransition::Drip || sharedGeometry)
+            && unitsCarry("drip_layout_right");
         const bool affineComposition = (transition == RubyTransition::Affine || utopiaExit)
             && object.contains("affine_pivot_y") && unitsCarry("affine_pivot_x");
         std::optional<std::size_t> fadeOwner;
@@ -455,13 +457,33 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const float width = latin ? paint.rubyLatinStrokeWidth : paint.rubyStrokeWidth;
             const float width2 = latin ? paint.rubyLatinStroke2Width : paint.rubyStroke2Width;
             if (!matchesOutline(primary, paint.rubyBeforeStrokePaint, paint.rubyAfterStrokePaint,
-                                width, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, avatarOutline)
+                                width, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, true)
                 || !matchesOutline(secondary, paint.rubyBeforeStroke2Paint, paint.rubyAfterStroke2Paint,
-                                   width2, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, avatarOutline))
+                                   width2, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, true))
                 throw BackendError("Skia 上注音描边与样式或画笔能力不一致");
         }
         using ::subtitle::skia::paintNeedsBodyProtection;
-        const bool gradientOutlines = !lower && allowOutlineGradient && (primary.width || secondary.width);
+        // Lower readings outline with their own stroke fills, as in the GPU.
+        const auto lowerOutlineGradients = object.value("lower_outline_gradient").toObject();
+        if (object.contains("lower_outline_gradient")
+            && (!lower || lowerOutlineGradients.isEmpty() || !features.contains("p06_lower_ruby_outline_gradient")
+                || lowerOutlineGradients.size() != int(lowerOutlineGradients.contains("stroke"))
+                    + int(lowerOutlineGradients.contains("stroke2"))))
+            throw BackendError("Skia 下方注音渐变描边缺少能力声明或格式无效");
+        const auto lowerOutlinePaint = [&](const char* layer, const char* phase) {
+            const auto authored = lowerOutlineGradients.value(layer).toObject();
+            if (lowerOutlineGradients.contains(layer) && !validPhases(authored))
+                throw BackendError("Skia 下方注音渐变描边缺少能力声明或格式无效");
+            return lowerGradient(authored, phase);
+        };
+        const std::array<PaintStyle, 2> lowerStroke{lowerOutlinePaint("stroke", "before"), lowerOutlinePaint("stroke", "after")};
+        const std::array<PaintStyle, 2> lowerStroke2{lowerOutlinePaint("stroke2", "before"),
+                                                     lowerOutlinePaint("stroke2", "after")};
+        const auto lowerOutlineWithMain = object.value("outline_gradient_with_main");
+        if (object.contains("lower_outline_gradient") != lowerOutlineWithMain.isBool())
+            throw BackendError("Skia 下方注音渐变描边缺少能力声明或格式无效");
+        const bool gradientOutlines = (primary.width || secondary.width)
+            && (lower ? object.contains("lower_outline_gradient") : allowOutlineGradient);
         const bool protectPrimary = primary.width && (primary.hasAlpha() || (gradientOutlines
             && (paintNeedsBodyProtection(paint.rubyBeforeStrokePaint) || paintNeedsBodyProtection(paint.rubyAfterStrokePaint))));
         const bool protectFill = imageFill || (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
@@ -558,6 +580,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 const float x = float(pivotCoordinate(cell.value("affine_pivot_x")) * glyphs.dpr);
                 glyph.pivot.layoutLeft = glyph.pivot.layoutRight = x;
                 glyph.pivot.centerY = affineY;
+                glyph.affinePivot = SkPoint{x, affineY};
             }
             if (groupZoom && !cell.contains("utopia_layout_right"))
                 throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
@@ -662,6 +685,15 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             for (const auto& cell : cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
         const auto outlinePad = ::subtitle::skia::outlineVisualPad(innerWidth, secondaryWidth, float(glyphs.dpr));
+        SkRect outlineInk = ink;
+        if (object.contains("vertical_paint_span")) {
+            const auto span = object.value("vertical_paint_span").toArray();
+            const double top = span.size() == 2 ? pivotCoordinate(span[0]) : 0, bottom = span.size() == 2 ? pivotCoordinate(span[1]) : 0;
+            if (!vertical || span.size() != 2 || !(bottom > top))
+                throw BackendError("Skia 竖排注音画笔跨度无效");
+            outlineInk.fTop = float(top * glyphs.dpr);
+            outlineInk.fBottom = float(bottom * glyphs.dpr);
+        }
         if (beforeShadowGradient || afterShadowGradient) {
             auto shaders = rubyGradients({beforeShadowGradient ? beforeShadowPaint : nullptr,
                                           afterShadowGradient ? afterShadowPaint : nullptr},
@@ -677,14 +709,21 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             shareHorizontalFill, source, ink, outlinePad, glyphs.dpr, sharedFillBounds)
             : std::array<sk_sp<SkShader>, 2>{};
         std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
-        const auto* outlineBounds = allowHorizontalOutline ? &roleBounds->forRole(role) : nullptr;
-        const bool sharedHorizontalOutline = outlineBounds && paint.rubyHorizontalGradientWithMain;
+        // Lower outlines span the main line like the lower fill.
+        const auto* outlineBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
+            : allowHorizontalOutline && roleBounds ? &roleBounds->forRole(role) : nullptr;
+        const bool sharedHorizontalOutline = lower ? lowerOutlineWithMain.toBool()
+            : outlineBounds && paint.rubyHorizontalGradientWithMain;
         if (gradientOutlines && primary.width)
-            outlineGradients = rubyGradients({&paint.rubyBeforeStrokePaint, &paint.rubyAfterStrokePaint},
-                                           sharedHorizontalOutline, source, ink, outlinePad, glyphs.dpr, outlineBounds);
+            outlineGradients = rubyGradients(lower ? std::array<const PaintStyle*, 2>{&lowerStroke[0], &lowerStroke[1]}
+                                                   : std::array<const PaintStyle*, 2>{&paint.rubyBeforeStrokePaint,
+                                                                                      &paint.rubyAfterStrokePaint},
+                                           sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds);
         if (gradientOutlines && secondary.width)
-            outerOutlineGradients = rubyGradients({&paint.rubyBeforeStroke2Paint, &paint.rubyAfterStroke2Paint},
-                                                sharedHorizontalOutline, source, ink, outlinePad, glyphs.dpr, outlineBounds);
+            outerOutlineGradients = rubyGradients(lower ? std::array<const PaintStyle*, 2>{&lowerStroke2[0], &lowerStroke2[1]}
+                                                        : std::array<const PaintStyle*, 2>{&paint.rubyBeforeStroke2Paint,
+                                                                                           &paint.rubyAfterStroke2Paint},
+                                                sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds);
         ::subtitle::skia::GlowGradients glowGradients;
         if (hasGlow && glowPaints != GlowPaintSupport::Solid) {
             glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeDecorPaint : nullptr,

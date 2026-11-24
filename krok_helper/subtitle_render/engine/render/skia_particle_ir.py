@@ -46,7 +46,8 @@ _VERTICAL_PARTICLE_FEATURES = (
 _VERTICAL_PARTICLE_MODES = set().union(*(modes for modes, _ in _VERTICAL_PARTICLE_FEATURES))
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
-_PAINTED_SPRITES = {'twinkle', 'twinkle_classic', 'note', 'heart'} | FALLING_PARTICLES
+_PAINTED_SPRITES = ({'twinkle', 'twinkle_classic', 'note', 'heart', 'sparkle', 'assemble', 'dissolve',
+                     'fireball', 'flash', 'ash'} | FALLING_PARTICLES)
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
 _LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical', 'image'}
 _RIPPLE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical'}
@@ -170,6 +171,11 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                           and not (source.get('stroke_flash') or source.get('zoom_pulse')))
         vertical_modes = vertical_singing_particle_modes(source) if look.vertical and supported_band else set()
         vertical_particles = bool(vertical_modes)
+        if look.vertical and not vertical_particles:
+            # Direct2D draws no particles on vertical lines; drop the ones the
+            # vertical profile cannot anchor instead of rejecting the scene.
+            source['fx_bursts'] = []
+            continue
         outlined = look.stroke_width_px > 0 or (look.stroke2_enabled and look.stroke2_width_px > 0)
         rtl_singing = (look.right_to_left and not (look.vertical or item.line.wipe_reverse or annotated or band or outlined)
                        and source.get('karaoke_anim') == 'none' and (entry, exit_) == ('none', 'none')
@@ -270,11 +276,13 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                 paint = ir['fx_paint_table'][burst['paint_id']]
                 if faded_band and _supports_singing_particle_paint(paint):
                     painted_singing = True
-                elif (static_sprite_paint and kind == 'ripple' and paint['fill']['mode'] in _RIPPLE_PAINT_MODES
+                # Particle paints attach to each burst whatever the line does,
+                # as in Direct2D.
+                elif (kind == 'ripple' and paint['fill']['mode'] in _RIPPLE_PAINT_MODES
                       and not (paint['stroke_width_px'] or paint['stroke2_width_px'] or paint.get('decor'))):
                     painted_sprites = painted_ripples = True
                     sprite_line_gradients |= paint['fill']['mode'] == 'gradient_horizontal'
-                elif static_sprite_paint and kind in (_PAINTED_SPRITES | _ENERGY_PARTICLES) and _supports_singing_particle_paint(
+                elif kind in (_PAINTED_SPRITES | _ENERGY_PARTICLES) and _supports_singing_particle_paint(
                         paint, local_sprite=True):
                     painted_sprites = True
                     painted_energy |= kind in _ENERGY_PARTICLES

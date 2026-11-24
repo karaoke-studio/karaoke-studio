@@ -167,7 +167,9 @@ struct StaticShadow {
                 canvas.translate(offset.x(), offset.y());
                 SkPaint paint;
                 paint.setAntiAlias(true);
-                paint.setColor(state.color);
+                auto shader = state.image ? state.image.shaderAt(canvas.getTotalMatrix()) : state.shader;
+                paint.setColor(shader ? SK_ColorWHITE : state.color);
+                paint.setShader(std::move(shader));
                 paint.setAlphaf(paint.getAlphaf() * pose.transform.opacity);
                 if (width > 0) {
                     if (pose.transform.transformed) drawFixedOutline(canvas, path, paint, width);

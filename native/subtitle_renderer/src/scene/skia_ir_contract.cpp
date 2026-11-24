@@ -160,6 +160,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_solid_outline",
         "p06_ruby_outline_gradient",
         "p06_ruby_horizontal_outline",
+        "p06_lower_ruby_outline_gradient",
         "p06_role_outline_gradient",
         "p06_role_outline_paints",
         "p06_animated_singing_gradient_fill",
@@ -922,7 +923,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
             || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
         throw BackendError("Skia 上注音 Utopia 入场光晕缺少对应能力");
     if (features.contains("p07_ruby_utopia_exit_glow")
-        && (!features.contains("p07_ruby_utopia_exit") || !features.contains("p06_ruby_glow")))
+        && (!features.contains("p07_ruby_utopia_exit")
+            || !(features.contains("p06_ruby_glow") || features.contains("p06_lower_ruby_glow"))))
         throw BackendError("Skia 上注音 Utopia 退场光晕缺少对应能力");
     if (features.contains("p07_ruby_utopia_exit_body_glow")
         && (!features.contains("p07_ruby_utopia_exit") || !features.contains("p06_static_glow")))
@@ -1148,7 +1150,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 逐字滴落或翻转缺少逐字变换或注音布局能力声明");
     if (features.contains("p07_ruby_character_drip_glow")
         && (!features.contains("p07_ruby_character_drip")
-            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
+            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow")
+                 || features.contains("p06_lower_ruby_glow"))))
         throw BackendError("Skia 上注音逐字滴落光晕缺少对应能力");
     if (features.contains("p07_ruby_character_drip_pair") && !features.contains("p07_ruby_character_drip"))
         throw BackendError("Skia 上注音双向逐字滴落缺少对应能力");
@@ -1261,7 +1264,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         && (!features.contains("p05_resolved_ruby") || layout.value("ruby_solid_outline_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音描边缺少版本化布局或注音能力声明");
     if (features.contains("p06_ruby_outline_gradient")
-        && (!features.contains("p06_ruby_solid_outline") || !features.contains("p05_upper_ruby")
+        && (!features.contains("p06_ruby_solid_outline")
+            || !(features.contains("p05_upper_ruby") || features.contains("p05_vertical_ruby"))
             || layout.value("ruby_outline_gradient_schema").toDouble(-1) != 1))
         throw BackendError("Skia 注音渐变描边缺少版本化布局或注音能力声明");
     if (features.contains("p06_ruby_horizontal_outline")
@@ -1304,6 +1308,10 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_lower_ruby_shadow_image")
         && (!features.contains("p06_lower_ruby_shadow") || layout.value("lower_ruby_shadow_image_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音图片阴影缺少对应布局版本");
+    if (features.contains("p06_lower_ruby_outline_gradient")
+        && (!features.contains("p05_lower_ruby") || !features.contains("p06_ruby_solid_outline")
+            || layout.value("lower_ruby_outline_gradient_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音渐变描边缺少版本化布局或注音能力声明");
     if (features.contains("p07_lower_ruby_decoration_line_animation")
         && (!features.contains("p07_utopia_line_animation") || !features.contains("p07_ruby_line_animation")
             || !(features.contains("p06_lower_ruby_glow") || features.contains("p06_lower_ruby_shadow"))))
