@@ -257,6 +257,34 @@ def test_title_without_layout_uses_each_roles_letter_spacing(binary):
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_title_roles_resolve_latin_fonts_independently(binary):
+    from types import SimpleNamespace
+    from PyQt6.QtGui import QFontDatabase
+    from krok_helper.subtitle_render.engine.render.render_ir import title_to_ir
+    from krok_helper.subtitle_render.engine.render.skia_title_ir import title_style
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    if 'Courier New' not in QFontDatabase.families():
+        pytest.skip('Courier New is required to distinguish the Latin font slots')
+    track, style = role_title()
+    title = style.title_overlays[0]
+    with_latin = replace(style, title_overlays=[replace(title, font_family_latin='Courier New')])
+    selected = title_style(title_to_ir(track, with_latin))
+    assert selected.font_family_latin == 'Courier New'
+    assert selected.custom_style_schemes['accent'].font_family_latin == 'Arial'
+    inherited_style = replace(style, font_family_latin='Courier New')
+    independent = title_style(title_to_ir(track, inherited_style))
+    assert independent.font_family_latin is None
+    assert independent.custom_style_schemes['accent'].font_family_latin == 'Courier New'
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=with_latin, case_id='title_role_latin_slots'),
+        (299, 400, 500, 900, 1000, 1400, 1800, 1801))
+    assert_ruby_transition_gpu_parity(
+        binary, SimpleNamespace(track=track, style=inherited_style, case_id='title_source_latin_slot'),
+        (400, 500, 900, 1400))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('decoration', ['shadow', 'glow'])
 def test_title_role_decoration_matches_actual_d2d_gpu(binary, decoration):
     from types import SimpleNamespace

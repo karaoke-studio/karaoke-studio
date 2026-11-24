@@ -68,10 +68,6 @@ def title_style(title):
     if bitmaps and any(paint['decoration_kind'] == 'shadow' and paint['shadow']['mode'] != 'solid'
                        for paint in paints):
         return None
-    if title['font_family_latin'] is not None and any(
-        paint['font_family_latin'] is None for paint in roles.values()
-    ):
-        return None
     anchor = title['anchor']
     horizontal = anchor.rsplit('_', 1)[-1]
     state = _title_color(title)
@@ -81,7 +77,11 @@ def title_style(title):
     schemes = {}
     for label, appearance in roles.items():
         color = _title_color(appearance)
-        schemes[label] = SubtitleStyleScheme(**{key: appearance[key] for key in font_fields},
+        role_fonts = {key: appearance[key] for key in font_fields}
+        if role_fonts['font_family_latin'] is None:
+            # A title role resolves its Latin glyphs against its own main face.
+            role_fonts['font_family_latin'] = role_fonts['font_family']
+        schemes[label] = SubtitleStyleScheme(**role_fonts,
                                             **{key: appearance[key] for key in decoration_fields},
                                             decoration_before_sync=True,
                                             glow_before_radius_px=appearance['glow_radius_px'],

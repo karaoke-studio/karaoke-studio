@@ -402,7 +402,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                     or uses_authored_decoration(look, 'shadow')):
                 continue
             if source.get('fx_bursts'):
-                if len(plan.lines) == 1 and (look.sing_fx == 'none' or with_flame):
+                readings = geometry.ruby.lines[index].rubies
+                if readings and (look.sing_fx == 'none' or with_flame):
                     both_phases = source['entry_duration_ms'] > 0 and source['exit_duration_ms'] > 0
                     if both_phases and (entry, leave) == ('assemble_in', 'dissolve_out'):
                         assembly_lines.add(index)
@@ -421,7 +422,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                                               or (entry == 'petal' and leave in {'sparkle', 'ripple'}))
                     note_exit = petal_scanline_with_note_exit(source, look)
                     if paired or note_exit or (leave == 'none' and effect in RUBY_PARTICLE_ENTRIES):
-                        readings = geometry.ruby.lines[index].rubies
                         ruby_decorations = {kind for reading in readings
                                             for kind in ruby_decoration_kinds(reading.target.style)}
                         body_glow = uses_authored_decoration(look, 'glow')
