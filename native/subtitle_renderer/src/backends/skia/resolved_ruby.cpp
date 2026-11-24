@@ -347,7 +347,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const float affineY = affineComposition
             ? float(pivotCoordinate(object.value("affine_pivot_y")) * glyphs.dpr) : 0.f;
         // Readings zoom with their line whenever the IR prepared their pivot.
-        const bool groupZoom = zoom && !lower && object.contains("zoom_pivot_y");
+        const bool groupZoom = zoom && object.contains("zoom_pivot_y");
         const double zoomCenter = groupZoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
         if (object.contains("span_end_cell") != multipleVertical
