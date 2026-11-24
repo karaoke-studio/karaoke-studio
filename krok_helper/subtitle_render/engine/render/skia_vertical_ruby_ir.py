@@ -63,8 +63,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
         main_clocks, groups = readings.entries[item.track_index]
         style = item.layout_style
         singing_scale = item.track_index in singing_tracks
-        allowance = (geometry.vertical_reading_allowance if style.dual_line_layout
-                     else readings.allowances[item.track_index])
+        allowance = readings.allowances[item.track_index]
         cells = vertical_cells(local, main, item, width=width, height=height, ruby_allowance=allowance,
                                singing_scale=singing_scale)
         for cell, curve in zip(cells, main_clocks, strict=True):

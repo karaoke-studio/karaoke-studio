@@ -20,9 +20,11 @@ class SkiaCollisionGeometry:
     def __init__(self, track, style, styles, measured, *, ruby_geometry=None, vertical_readings=None):
         self.track, self.style, self.styles, self.measured = track, style, tuple(styles), measured
         self.ruby = ruby_geometry
-        self.vertical_reading_allowance = (
-            max(vertical_readings.allowances, default=0.0) if vertical_readings is not None and style.dual_line_layout
-            else 0.0)
+        # Direct2D reserves the reading slot per column: a line without
+        # readings keeps the bare column and lane pitch.
+        self.vertical_reading_allowances = (
+            tuple(vertical_readings.allowances) if vertical_readings is not None and style.dual_line_layout
+            else (0.0,) * len(track.lines))
         if ruby_geometry is not None and (ruby_geometry.main_identity != measured.identity
                 or len(ruby_geometry.lines) != len(track.lines)):
             raise ValueError('Skia 注音几何与正文度量不一致或已过期')
@@ -34,7 +36,7 @@ class SkiaCollisionGeometry:
         self.identity = (('skia', measured.identity) if self.ruby is None
                          else ('skia-ruby', measured.identity, self.ruby.identity))
         if vertical_readings is not None:
-            self.identity += (vertical_readings.measured.identity, self.vertical_reading_allowance)
+            self.identity += (vertical_readings.measured.identity, self.vertical_reading_allowances)
         self.indices = {id(line): i for i, line in enumerate(track.lines)}
         self.locals = (tuple(line.main for line in self.ruby.lines) if self.ruby is not None
                        else tuple(local_line_geometry(m, s) for m, s in zip(measured.lines, styles, strict=True)))
@@ -103,15 +105,15 @@ class SkiaCollisionGeometry:
             if style.vertical and style.dual_line_layout:
                 # Page collisions operate along x for vertical columns, using
                 # the same cell boxes and lane pitch as final layout.
+                allowance = self.vertical_reading_allowances[i]
                 column, top, cell_height, _ = vertical_line_box(
-                    placement, self.measured.lines[i], len(local.cells), width, height,
-                    self.vertical_reading_allowance)
+                    placement, self.measured.lines[i], len(local.cells), width, height, allowance)
                 primary = max(0, style.stroke_width_px)
                 secondary = max(0, style.stroke2_width_px) if style.stroke2_enabled else 0
                 outline_radius = (primary + secondary) / 2
                 half_width = float(style.font_size_px) / 2 + outline_radius
                 self.cache[key] = None if local.ink is None else CollisionLineGeometry(
-                    column - half_width, column + half_width + self.vertical_reading_allowance,
+                    column - half_width, column + half_width + allowance,
                     top - outline_radius, top + cell_height * len(local.cells) + outline_radius,
                     column, float(style.line_gap_px))
                 return self.cache[key]

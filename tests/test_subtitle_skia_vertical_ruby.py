@@ -526,7 +526,10 @@ def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, 
     final = ir['skia_layout']['lines']
     assert [line['vertical_lane'] for line in final] == [0, 1, 0, 1]
     columns = [line['cells'][0]['origin_x'] for line in final]
-    assert columns[:2] == pytest.approx(columns[2:])
+    # Direct2D reserves the reading slot per column: the reading-free line
+    # keeps the bare column while annotated lines keep their own pitch.
+    assert columns[1] == pytest.approx(columns[3])
+    assert columns[2] == pytest.approx(bare['skia_layout']['lines'][2]['cells'][0]['origin_x'])
     blank_column = bare['skia_layout']['lines'][0]['cells'][0]['origin_x']
     allowance = blank_column - columns[0]
     assert allowance > style.ruby_gap_px
