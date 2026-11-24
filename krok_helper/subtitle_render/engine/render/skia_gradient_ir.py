@@ -233,7 +233,7 @@ def write_body_gradient_bounds(ir, plan):
                 or (not (ordinary_vector_paint or moving or vector_band)
                     and any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
                             for c in item.render_line.chars))):
-            raise ValueError('Skia 正文渐变当前仅支持正向横排基础正文')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         ruby_paint |= annotated or (moving and upper_ruby)
         singing_paint |= singing and (annotated or moving)
         unannotated_singing_paints |= singing and unannotated_singing
@@ -247,7 +247,7 @@ def write_body_gradient_bounds(ir, plan):
         vertical_paints |= static_vertical
         if annotated:
             if (faded_band or palette_band or moving) and not ruby_modes <= {'solid', 'gradient_vertical'}:
-                raise ValueError('Skia 整行出入场的上注音填充当前支持实色和纵向渐变')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
             ruby_gradient = ruby_gradient or bool(modes & _GRADIENTS and ruby_modes & _GRADIENTS)
             ruby_image = ruby_image or ('image' in modes and 'image' in ruby_modes)
         images = images or 'image' in modes

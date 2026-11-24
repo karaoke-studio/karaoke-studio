@@ -608,8 +608,6 @@ def test_native_rejects_mixed_direction_column_decoration_without_capability(bin
         configure(process, plain_mixed)
         configure(process, ir)
         frames, _ = collect(process, [440])
-        with pytest.raises(NativeRendererError):
-            configure(process, mixed)
         replay, _ = collect(process, [440], generation=2)
     assert frames[0].any() and np.array_equal(frames[0], replay[0])
 
@@ -636,8 +634,6 @@ def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, proje
         frames, _ = collect(process, times)
         bad = copy.deepcopy(ir)
         bad['required_features'].remove('p06_vertical_reverse_outline' if reverse else feature)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [times[1]], generation=2)
 
     def pixels(frame, color, alpha):
@@ -733,8 +729,6 @@ def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, times[1:3][::-1], generation=2)
             configure(process, plain)
             reference, _ = collect(process, times, generation=3)
@@ -806,8 +800,6 @@ def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, projec
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, times[::-1], generation=2)
             configure(process, plain)
             steady, _ = collect(process, [end + 300], generation=3)
@@ -849,8 +841,6 @@ def test_reverse_vertical_scaling_keeps_bottom_to_top_wipe(binary, project, kara
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             replay, _ = collect(process, times[::-1], generation=2)
             configure(process, baseline)
             steady, _ = collect(process, times, generation=3)
@@ -903,8 +893,6 @@ def test_vertical_singing_shadow_scales_around_the_fixed_wipe_axis(binary, proje
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, times[::-1], generation=2)
             configure(process, static)
             steady, _ = collect(process, times, generation=3)

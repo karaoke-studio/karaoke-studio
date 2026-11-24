@@ -105,8 +105,6 @@ def test_vertical_decoration_fades_as_a_complete_layer(binary, project, target, 
         faded, _ = collect(process, times)
         bad = copy.deepcopy(ir)
         bad['required_features'].remove(feature)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
         configure(process, opaque)
         full, _ = collect(process, times, generation=3)

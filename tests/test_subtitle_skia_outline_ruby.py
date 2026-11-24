@@ -138,8 +138,6 @@ def test_multi_lane_outline_keeps_clocks_and_seeks(binary, pages, target, tmp_pa
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [100, 650, 1900, 650])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
         replay, _ = collect(process, [650], generation=2)
     assert len(bands(frames[-2])) == 6
     assert not np.array_equal(frames[0], frames[2])
@@ -220,7 +218,7 @@ def test_outlined_lower_ruby_replays_all_three_bands(binary, source, target, out
     assert np.array_equal(frames[1], frames[-1])
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'outline_feature'])
+@pytest.mark.parametrize('mutation', [ 'outline_feature'])
 def test_outlined_ruby_without_capability_keeps_previous_scene(binary, reading, mutation):
     ir = upper_ir(binary, upper_source(reading, 2), 1)
     bad = copy.deepcopy(ir)

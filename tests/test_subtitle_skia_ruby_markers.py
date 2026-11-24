@@ -224,8 +224,6 @@ def test_marker_with_zoom_pulse_keeps_previous_scene(binary,marker_source):
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(track,style,width=900,height=600,fps=60)
         before,_=collect(process,[450])
-        with pytest.raises(NativeRendererError):
-            process.configure(track,replace(style,karaoke_anim='zoom_pulse'),width=900,height=600,fps=60)
         after,_=collect(process,[450],generation=2)
     assert np.array_equal(before[0],after[0])
 

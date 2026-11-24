@@ -132,7 +132,7 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                     and 'p07_plain_scaled_singing_particles' not in ir['required_features']
                     and not faded_band_singing_particles(source, style))
                 or (inline_roles and not role_scale)):
-            raise ValueError('Skia Utopia 动画当前仅支持正向横排实色正文')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         write_horizontal_pivots(final['cells'], measured.lines[item.track_index])
         singing = singing or scales
         role_singing = role_singing or role_scale

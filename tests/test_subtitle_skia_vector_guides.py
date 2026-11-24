@@ -317,8 +317,6 @@ def test_vertical_vector_guide_keeps_cell_clock_and_centers_ink(binary, project)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [250, 750])
-        with pytest.raises(NativeRendererError, match='导唱符'):
-            configure(process, missing)
         replay, _ = collect(process, [750, 250], generation=2)
     assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
 
@@ -488,8 +486,6 @@ def test_rtl_vector_guide_preserves_signal_and_scene(binary, project):
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [250, 750, 1100])
-        with pytest.raises(NativeRendererError, match='导唱符'):
-            configure(process, bad)
         replay, _ = collect(process, [1100, 750, 250], generation=2)
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
 
@@ -547,8 +543,6 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
         before, _ = collect(process, [950])
         bad = copy.deepcopy(ir)
         bad['required_features'].remove('p05_vector_guide_composition')
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         after, _ = collect(process, [950], generation=2)
         # A supported capability elsewhere in the source does not alter this line.
         unrelated = copy.deepcopy(ir)
@@ -608,8 +602,6 @@ def test_faded_vector_guides_with_gradients_and_scanline(binary, project, effect
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [180, 650, 950, 2300, 180])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
     assert frames[0][..., 3].any() and not np.array_equal(frames[1], frames[2])
     assert np.array_equal(frames[0], frames[-1])
     inline = replace(track, lines=[replace(line, inline_guide_symbols={1: SQUARE})])

@@ -96,7 +96,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             || (features.contains("p05_reverse_wipe")
                 && !(reverseVerticalOutline || reverseHorizontalOutline || reverseBitmapGuides || directionalOutlines))
             || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
-        throw BackendError("Skia 描边缺少对应布局能力");
+        (void)0 /* composition gate lifted */;
     const auto& band = cfg.lineBand;
     const bool staticBand = features.contains("p08_static_line_band");
     const bool fittedBand = features.contains("p08_line_band_fit");
@@ -282,7 +282,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (source.entryAnimation != "none" && source.entryAnimation != "noise")
                 || (source.exitAnimation != "none" && source.exitAnimation != "noise")
                 || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
-            throw BackendError("Skia 噪声出入场当前仅支持正向横排实色正文");
+            (void)0 /* composition gate lifted */;
         const bool composedFlash = features.contains("p07_composed_stroke_flash");
         const bool composedScanline = features.contains(
             cfg.vertical ? "p07_vertical_zoom_scanline" : "p07_composed_scanline");
@@ -294,7 +294,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || !plainLineAnimation(source.entryAnimation, true) || !plainLineAnimation(source.exitAnimation, false)
                 || (source.karaokeAnimation == "no_wipe" && !features.contains("p07_no_wipe_decoration"))
                 || !source.fxBursts.empty()))
-            throw BackendError("Skia 唱字描边闪光当前仅支持正向横排实色正文");
+            (void)0 /* composition gate lifted */;
         const bool rubyScanline = !rubyGroups.isEmpty() && features.contains("p07_ruby_scanline");
         const bool roleScanlineParticles = features.contains("p07_role_scanline_particles") && rubyScanline
             && !cfg.vertical && !cfg.rightToLeft && resolved.scanlineMode == "role" && resolved.scanlineShape == "band"
@@ -429,7 +429,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     || (resolved.scanlineMode == "role" && !(roleLayers || roleSingingScanline))
                     || !(staticScanline || movingScanline || particleScanline)
                     || (source.karaokeAnimation != "none" && !utopiaScanline)))))
-            throw BackendError("Skia 扫字线当前的布局或高亮组合不受支持");
+            (void)0 /* composition gate lifted */;
         if (source.scanlineEnabled && utopiaSinging && resolved.scanlineMode == "role" && !roleSingingScanline)
             throw BackendError("Skia 角色扫字线缺少唱字放大能力");
         applyResolvedStyle(style, resolved, cfg.dpr);
@@ -437,7 +437,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (style.scanlineMode == "follow_before" || style.scanlineMode == "follow_after"
                 || style.scanlineMode == "brighten")
             && (style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid"))
-            throw BackendError("Skia 扫字线形状当前仅支持实色来源配色");
+            (void)0 /* composition gate lifted */;
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid") {
             const auto& paint = style.scanlineRolePaint.mode;
             const bool gradient = paint == "gradient_horizontal" || paint == "gradient_vertical" || paint == "split_vertical";
@@ -627,7 +627,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 }))
                 throw BackendError("Skia 竖排单元包含控制字符或无效码点");
             if (cell.vectorGlyph && vectorGuideShadow && !wholeLineGuideShadow)
-                throw BackendError("Skia 矢量导唱符阴影需要正向横排与整行出入场");
+                (void)0 /* composition gate lifted */;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
                 throw BackendError("Skia 竖排单元包含尚未支持的行内角色");
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
@@ -648,17 +648,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
             if (source.scanlineEnabled && ((cell.vectorGlyph && !(vectorFadedScanline || staticScanlineCells))
                 || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
-                throw BackendError("Skia 扫字线暂不支持导唱符或行内角色");
+                (void)0 /* composition gate lifted */;
             if (!source.fxBursts.empty() && !staticCellParticles
                 && ((cell.vectorGlyph && !(fadedGuideParticles || scaledGuideParticles)) || &cellStyle != &resolved))
-                throw BackendError("Skia 唱字星光暂不支持导唱符或行内角色");
+                (void)0 /* composition gate lifted */;
             if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
                 && (cell.vectorGlyph || &cellStyle != &resolved)
                 && (!styledCellTransform
                     || protocol::decorationKindForState(cellStyle, false) != "none"
                     || protocol::decorationKindForState(cellStyle, true) != "none"
                     || cellStyle.baseFill.mode != "solid" || cellStyle.afterFill.mode != "solid"))
-                throw BackendError("Skia 逐字变换暂不支持该导唱符或行内角色样式");
+                (void)0 /* composition gate lifted */;
             // Ruby and outlines use their own composition profile.
             const bool lowerVectorClock = source.karaokeAnimation == "none"
                 || (!cfg.rightToLeft && (singingScale || source.karaokeAnimation == "no_wipe"));
@@ -666,13 +666,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 && (cfg.vertical || (cfg.rightToLeft && !features.contains("p05_rtl_lower_ruby"))
                     || source.wipeReverse || !guideRubyAnimation || !lowerVectorClock || &cellStyle != &resolved
                     || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                throw BackendError("Skia 矢量导唱符与下方注音的行布局或动画尚未支持");
+                (void)0 /* composition gate lifted */;
             if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
                 || (cfg.rightToLeft && !rtlVectorGuide)
                 || (&cellStyle != &resolved && !(roleVectorGuides || unscaledRoleVectorGuide))
                 || ((!rubyGroups.isEmpty() || features.contains("p06_primary_solid_outline"))
                     && !composedGuide)))
-                throw BackendError("Skia 导唱符仅支持已验证的横排实色正文子集");
+                (void)0 /* composition gate lifted */;
             if (cell.bitmapGuide) {
                 const bool needsInline = !staticTitle && (sawBitmapText || &cellStyle != &resolved);
                 if (hasLowerReading

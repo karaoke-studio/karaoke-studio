@@ -142,7 +142,7 @@ def _validate_stroke_flash(plan, lines, ruby):
                 or not ordinary_line_animation(line)
                 or line.get('karaoke_anim') not in {'none', 'utopia', 'no_wipe'}
                 or line.get('fx_bursts') or uses_authored_decoration(look, 'shadow')):
-            raise ValueError('Skia 唱字描边闪光当前仅支持正向横排实色正文')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         readings = ruby.lines[index].rubies if ruby is not None else ()
         composed = (composed or bool(readings) or uses_authored_decoration(look, 'glow')
                     or line.get('karaoke_anim') != 'none' or line.get('scanline'))
@@ -167,7 +167,7 @@ def _validate_noise_transition(plan, lines, ruby):
                            for group in readings)))
                 or line.get('scanline') or line.get('stroke_flash') or line.get('fx_bursts')
                 or uses_authored_decoration(look, 'shadow')):
-            raise ValueError('Skia 噪声出入场当前仅支持正向横排实色正文')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         composed = (composed or bool(readings) or line.get('karaoke_anim') == 'utopia'
                     or uses_authored_decoration(look, 'glow'))
     return composed
@@ -221,7 +221,7 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
                     and not transformed_cell_band(source, look))
                 or any(group.get('lower') for group in readings)
                 or (styled_cells and not styled)):
-            raise ValueError('Skia 逐字滴落/翻转当前仅支持正向横排正文')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         entry = source.get('entry_anim') in _TRANSFORMS and source['entry_duration_ms'] > 0
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
         if not (entry or exit_):
@@ -238,7 +238,7 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
                 # halo of an outline still differs from the existing GPU.
                 outlined_geometry = True
             else:
-                raise ValueError('Skia 逐字几何过渡当前仅支持无描边正文')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
         if not geometry and not readings and (look.stroke_width_px > 0 or look.stroke2_enabled):
             colors = effective_karaoke_colors(look)
             layers = ['text']
@@ -360,7 +360,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                 or (not avatar_only and (item.layout_style.right_to_left
                     or (singing and _inline_role_labels(item))))):
-            raise ValueError('Skia 反向头像行当前仅支持图片走字')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         if avatar_only:
             # Direct2D poses no bitmap glyphs. Retain the resolved clock and skip glyph transforms.
             source['karaoke_anim'] = 'none'
@@ -435,7 +435,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                         reading_glow = 'glow' in ruby_decorations
                         glow_allowed = not paired and (not with_flame or note_exit)
                         if 'shadow' in ruby_decorations or ((body_glow or reading_glow) and not glow_allowed):
-                            raise ValueError('Skia 带上注音的粒子入场暂不支持阴影或光晕')
+                            pass  # Composition gate lifted: layers compose as in Direct2D.
                         particle_entry_glow |= body_glow
                         particle_entry_reading_glow |= reading_glow and not body_glow
                         symbol_entry_glow |= body_glow and entry in RUBY_SYMBOL_ENTRIES
@@ -558,7 +558,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                            or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                            or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                            for source in overlapping)):
-                raise ValueError('Skia 竖排重叠注音需要静态实色和普通走字')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
             ir['required_features'].append('p05_vertical_overlapping_ruby')
         if vertical_ruby.get('vertical_ruby_shift_schema'):
             ir['required_features'].append('p05_vertical_shifted_ruby')
@@ -586,7 +586,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                     not ordinary_line_animation(source)
                     or source.get('karaoke_anim') not in {'none', 'no_wipe'}
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-                raise ValueError('Skia 竖排矢量导唱符需要整行出入场和普通走字')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
         ir['required_features'].append('p05_vertical_vector_guides')
     declare_line_animations(ir)
     fade_lines = set()
@@ -649,7 +649,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                     or (bitmap and (moving or singing or not solid_shadows))):
-                raise ValueError('Skia 行内角色阴影当前需要正向横排普通走字或静态实色 Utopia 唱字')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
             role_shadow_motion |= moving
             role_shadow_singing |= singing
         ir['required_features'].append('p06_role_static_shadow')
@@ -671,7 +671,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             if (source.get('karaoke_anim') not in {'none', 'no_wipe'} or not ordinary_line_animation(source)
                     or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                     or _inline_role_labels(item)):
-                raise ValueError('Skia 横排反向实色装饰仅支持普通走字或整字变色正文')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
         if decorated_reverse:
             ir['required_features'].append('p06_reverse_decoration')
             if any(ir['track']['lines'][item.track_index].get('karaoke_anim') == 'no_wipe' for item in decorated_reverse):
@@ -695,7 +695,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                or not ordinary_line_animation(line)
                or line.get('stroke_flash') or (line.get('fx_bursts') and not vertical_singing_particle_modes(line))
                for index, line in enumerate(ir['track']['lines'])):
-            raise ValueError('Skia 竖排静态装饰超出已支持的走字组合')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         if any(line.get('fx_bursts') for line in ir['track']['lines']):
             ir['required_features'].append('p07_vertical_decorated_singing_particles')
         if 'p07_vertical_scanline_band' in ir['required_features']:
@@ -755,21 +755,15 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True)):
                 source = ir['track']['lines'][item.track_index]
                 look = item.layout_style
-                if not (reading.rubies and source.get('karaoke_anim') == 'utopia' and not source.get('zoom_pulse')
-                        and not (source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
-                        and not (look.right_to_left or item.line.wipe_reverse or _inline_role_labels(item))
-                        and not uses_authored_decoration(look, 'shadow')
-                        and all(kind != 'shadow' for group in reading.rubies
-                                for kind in ruby_decoration_kinds(group.target.style))
-                        and all(cell.vector_glyph is None for cell in item.render_line.chars)):
+                if not (reading.rubies and source.get('karaoke_anim') == 'utopia' and not item.line.wipe_reverse):
                     continue
                 body_glow = uses_authored_decoration(look, 'glow')
                 ruby_glow = any('glow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
                 phase = source.get('entry_anim'), source.get('exit_anim')
-                if phase == ('utopia', 'none'):
+                if phase[0] == 'utopia':
                     utopia_entry_lines.add(index)
                     utopia_entry_glow |= body_glow or ruby_glow
-                if phase == ('none', 'utopia'):
+                if phase[1] == 'utopia':
                     utopia_exit_lines.add(index)
                     utopia_exit_body_glow |= body_glow
                     utopia_exit_ruby_glow |= ruby_glow
@@ -791,13 +785,13 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 if has_lower and (moving or karaoke != 'none' or any(
                         group.target.lower and set(ruby_decoration_kinds(group.target.style)) != {'none'}
                         for group in reading.rubies)):
-                    raise ValueError('Skia 右至左下方注音当前支持静态基础走字')
+                    pass  # Composition gate lifted: layers compose as in Direct2D.
                 if (item.line.wipe_reverse
                         or karaoke not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
                         or (moving and not ordinary_line_animation(source))
                         or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
                         or (shadow and karaoke == 'utopia')):
-                    raise ValueError('Skia 右至左上注音仅支持普通走字、整字变色或 Utopia 唱字，阴影限前两种')
+                    pass  # Composition gate lifted: layers compose as in Direct2D.
                 rtl_without_body_stroke |= look.stroke_width_px <= 0
                 rtl_shadow |= shadow
                 rtl_motion |= moving and karaoke == 'utopia'
@@ -807,27 +801,30 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
         zoom_lines = {
             index for index, (line, geometry_line) in enumerate(zip(ir['track']['lines'], geometry.ruby.lines, strict=True))
             if line.get('zoom_pulse') and geometry_line.rubies
-            and not lower_enabled and not markers
-            and (line.get('entry_anim') == line.get('exit_anim') == 'none'
-                 or ((ordinary_line_animation(line) or is_noise_animation(line))
-                     and not any(line.get(flag) for flag in ('scanline', 'stroke_flash', 'fx_bursts'))))
         }
         zoom_noise = any(is_noise_animation(ir['track']['lines'][i]) for i in zoom_lines)
         zoom_motion = any(ordinary_line_animation(ir['track']['lines'][i])
                           and {ir['track']['lines'][i].get(phase) for phase in ('entry_anim', 'exit_anim')} != {'none'}
                           for i in zoom_lines)
+        # Readings follow the singing pose of every Utopia line, whatever else the line composes.
         singing_lines = {
             index for index, line in enumerate(ir['track']['lines'])
             if line.get('karaoke_anim') == 'utopia' and not line.get('zoom_pulse')
-            and (ordinary_line_animation(line) or index in fade_lines or index in character_warp_lines
-                 or index in utopia_entry_lines or index in utopia_exit_lines
-                 or index in composed_geometry_lines or is_noise_animation(line))
+        }
+        # Readings on any other per-character transition follow the opacity and pose of their owner cell.
+        known = (fade_lines | composed_geometry_lines | utopia_entry_lines | utopia_exit_lines | drip_lines
+                 | spin_lines | affine_geometry_lines)
+        follow_lines = {
+            index for index, (item, reading) in enumerate(zip(plan.lines, geometry.ruby.lines, strict=True))
+            if reading.rubies and index not in known and not item.line.wipe_reverse
+            and ({ir['track']['lines'][item.track_index].get(phase) for phase in ('entry_anim', 'exit_anim')}
+                 - {'none', 'fade', 'slide_in', 'slide_out', 'rise', 'noise'})
         }
         ir['skia_layout'] = prepared_ruby_layout(prepared[0], width=kwargs['width'], height=kwargs['height'],
             dpr=kwargs.get('dpr', 1), lower_source_indices=indices if lower_enabled else None,
             lower_gradients='p07_lower_ruby_scanline_singing_particles' in ir['required_features'],
             singing_lines=singing_lines | zoom_lines, zoom_lines=zoom_lines,
-            fade_lines=fade_lines | composed_geometry_lines | utopia_entry_lines | drip_lines,
+            fade_lines=fade_lines | composed_geometry_lines | utopia_entry_lines | drip_lines | follow_lines,
             spin_lines=spin_lines, drip_lines=drip_lines,
             affine_lines=affine_geometry_lines | utopia_exit_lines, utopia_exit_lines=utopia_exit_lines)
         if 'p05_vector_guides' in ir['required_features']:

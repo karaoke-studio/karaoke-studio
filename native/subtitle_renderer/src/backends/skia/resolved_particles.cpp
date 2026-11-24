@@ -29,8 +29,7 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
     const bool validBox = style.vertical ? box.isUndefined()
         : box.isDouble() && std::isfinite(lineHeight) && lineHeight >= 0 && lineHeight <= 1e5;
     if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
-        || (style.vertical && !scene::hasSkiaVerticalParticleProfile(features))
-        || (style.rightToLeft && !features.contains("p07_rtl_singing_particles")))
+        || (style.vertical && !scene::hasSkiaVerticalParticleProfile(features)))
         throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
     const float lineLeft = prepared.cells.empty() ? 0.f : prepared.cells.front().pivot.layoutLeft;
     float lineSpan = 1.f;

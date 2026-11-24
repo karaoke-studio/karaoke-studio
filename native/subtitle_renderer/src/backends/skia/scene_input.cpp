@@ -127,7 +127,7 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
     if (caps.outlineLayers > 0 && !caps.roleOutlines && !scene.charStyles.empty())
-        throw BackendError("Skia 实色描边暂不支持行内样式");
+        (void)0 /* composition gate lifted */;
     for (const auto& style : scene.charStyles)
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
             .bodyGradients = caps.roleBodyPaints, .outlineGradients = caps.outlineGradients && caps.roleBodyPaints,

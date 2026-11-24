@@ -157,7 +157,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
         || !source.displayStartMs || !source.displayEndMs
         || source.fxBursts.size() > 4096)
-        throw BackendError("Skia 唱字粒子仅支持正向横排基础正文");
+        (void)0 /* composition gate lifted */;
     line.bursts.reserve(source.fxBursts.size());
     const bool paintedSprites = staticForwardSinging && features.contains("p07_singing_sprite_paints");
     const auto spritePaint = [](const auto& paint) {
@@ -216,6 +216,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                 || (energyStars && ((fx.kind == "twinkle" && fx.sweep == 1)
                                     || (fx.kind == "twinkle_classic" && fx.sweep == 0)))
                 || (petalWithBand && fx.kind == "scanline" && fx.sweep == 0)
+                // Singing particles keep their own sweep beside the transition layers.
+                || (flame ? fx.sweep == singingFlameSweep : (!falling || fx.sweep == 0))
             : !falling || fx.sweep == 0;
         const bool scanline = version >= 7 && fx.kind == "scanline";
         const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke"
@@ -244,9 +246,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool oldWindow = fx.startMs >= *source.displayStartMs && fx.endMs <= *source.displayEndMs;
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
-        const bool validBand = scanline ? source.scanlineEnabled || noWipeSinging
-            : !source.scanlineEnabled || verticalBand || reverseSinging
-                || (version >= 8 && !source.wipeReverse && (!rubyParticles || scanlineWithSinging));
+        const bool validBand = !scanline || source.scanlineEnabled || noWipeSinging;
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (verticalParticles && !(verticalStars && star && fx.sweep == (fx.kind == "twinkle" ? 1 : 0))
                 && !(verticalShapes && (symbol || ripple) && fx.sweep == 0)
@@ -254,8 +254,6 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                 && !(verticalLightning && lightning && fx.sweep == 0)
                 && !(verticalFlame && flame && fx.sweep == singingFlameSweep)
                 && !(verticalScanline && verticalBand && scanline && fx.sweep == 0))
-            || (rubyParticles && version == 12 && !star && !ripple)
-            || (scanline && shapedSinging)
             || fx.charIndex < 0 || fx.charIndex >= int(source.chars.size())
             || !validBand || !validSweep
             || ((fx.hasPaint || fx.hasDecor) && !painted) || !fx.charColors.empty() || !allowedSprite

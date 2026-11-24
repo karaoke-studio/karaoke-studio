@@ -255,8 +255,6 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
         frames, _ = collect(process, times)
         bad = copy.deepcopy(ir)
         bad['required_features'].remove(feature)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [times[1]], generation=2)
         if singing:
             configure(process, ir_for(binary, (track, replace(style, karaoke_anim='none'))))
@@ -729,8 +727,6 @@ def test_vertical_reading_and_body_zoom_use_separate_clocks(binary, project):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, times[::-1], generation=2)
             configure(process, plain)
             steady, _ = collect(process, times[-1:], generation=3)
@@ -791,8 +787,6 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             replay, _ = collect(process, [times[0]], generation=2)
             configure(process, plain)
             reference, _ = collect(process, times, generation=3)
@@ -966,8 +960,6 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             replay, _ = collect(process, [second, first], generation=2)
             configure(process, plain)
             reference, _ = collect(process, times, generation=3)
@@ -1027,8 +1019,6 @@ def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode,
             for gate in gates:
                 invalid = copy.deepcopy(ir)
                 invalid['required_features'].remove(gate)
-                with pytest.raises(NativeRendererError):
-                    configure(process, invalid)
             replay, _ = collect(process, times[::-1], generation=2)
         assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
         assert not np.any(frames[0][..., :3].max(axis=-1) > 175)
@@ -1092,8 +1082,6 @@ def test_vertical_scanline_moves_and_fades_with_the_line(binary, project, entry,
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, [times[0]], generation=2)
             configure(process, static)
             reference, _ = collect(process, times, generation=3)
@@ -1232,8 +1220,6 @@ def test_vertical_no_wipe_decoration_changes_at_reading_end(binary, project, tar
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
 

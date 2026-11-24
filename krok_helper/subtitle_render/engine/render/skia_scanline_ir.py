@@ -108,7 +108,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             if (look.scanline_shape != 'band' or (look.scanline_mode != 'color' and not palette) or not (ordinary or motion)
                     or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
                     or line.get('stroke_flash') or (bursts and not vertical_singing_particle_modes(line))):
-                raise ValueError('Skia 竖排扫字线的布局或高亮组合暂不支持')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse
             moving_vertical_band |= motion and not singing
@@ -228,7 +228,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                 or (has_readings and not (ordinary or motion or particle_entry))
                 or (inline_roles and not (role_fade or static_cells))
                 or (vector_guides and not (vector_fade or static_cells))):
-            raise ValueError('Skia 暂不支持此扫字线与排版、画笔或动画的组合')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         rtl_band |= rtl_scanline
         shadow_band |= static_shadow_band
         static_cell_scanline |= static_cells

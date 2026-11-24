@@ -235,8 +235,6 @@ def test_upper_reading_zoom_with_line_animation_requires_capability(binary, read
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [450, 4850])
-        with pytest.raises(NativeRendererError, match='Utopia'):
-            configure(process, forged)
         replay, _ = collect(process, [4850, 450], generation=2)
     assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
 

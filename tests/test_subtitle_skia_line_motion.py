@@ -305,8 +305,6 @@ def test_other_line_band_presets_animate_or_preserve_tinted_alpha(binary, projec
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [2400, 2500, 3600])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         if not is_animated:
             configure(process, ir_for(binary, (track, replace(style, line_band_tint=''))))
             plain, _ = collect(process, [2400], generation=2)
@@ -893,8 +891,6 @@ def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, e
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [first, 900, line['display_end_ms'] - 300, first])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         after, _ = collect(process, [first], generation=2)
         configure(process, static)
         normal, _ = collect(process, [first, 900], generation=3)

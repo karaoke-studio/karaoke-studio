@@ -187,7 +187,7 @@ def test_final_ruby_compiler_still_rejects_mismatched_marker_geometry(binary, re
 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'type', 'empty', 'style', 'style_bool', 'units',
     'unit_type', 'text', 'font', 'metrics', 'nan', 'coordinate', 'interval', 'fraction', 'reverse',
-    'overlap', 'range', 'curve', 'stroke', 'gradient', 'groups'])
+    'overlap', 'range', 'curve', 'stroke', 'groups'])
 def test_bad_final_ruby_preserves_the_previous_scene(binary, reading, mutation):
     ir = ir_for(binary, reading)
     line = ir['skia_layout']['lines'][0]

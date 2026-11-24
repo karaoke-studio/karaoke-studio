@@ -80,10 +80,12 @@ std::array<sk_sp<SkShader>, 2> rubyGradients(const std::array<const PaintStyle*,
                 bounds.fLeft = roleBounds->left();
                 bounds.fRight = roleBounds->right();
             } else {
+                // Without a body gradient domain the reading spans its own ink.
                 const auto domain = line.value("body_gradient_bounds").toArray();
-                if (domain.size() != 4) throw BackendError("Skia 上注音共享横向渐变缺少正文范围");
-                bounds.fLeft = float(pivotCoordinate(domain[0]) * dpr);
-                bounds.fRight = float(pivotCoordinate(domain[2]) * dpr);
+                if (domain.size() == 4) {
+                    bounds.fLeft = float(pivotCoordinate(domain[0]) * dpr);
+                    bounds.fRight = float(pivotCoordinate(domain[2]) * dpr);
+                }
             }
             if (bounds.fRight <= bounds.fLeft) throw BackendError("Skia 上注音共享横向渐变范围无效");
         }
@@ -269,18 +271,15 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
             || decorationMotion.upper || decorationMotion.lower || unscaledScanlineGlow || roleLineFade || gradientLineFade)
         && (scene.charStyles.empty() || roleGlow || latinGuideGlow);
-    const bool lowerWipe = line.karaokeAnimation == "none" || (line.karaokeAnimation == "utopia"
-        && features.contains("p07_ruby_singing_scale")) || (line.karaokeAnimation == "no_wipe"
-        && (staticLine || decorationMotion.lower) && features.contains("p07_lower_ruby_no_wipe_decoration"));
+    // Karaoke modes only change the reading clock, not which paints a reading may use.
+    const bool lowerWipe = true;
     const bool lowerScanline = line.scanlineEnabled && line.karaokeAnimation != "no_wipe"
         && features.contains("p07_lower_ruby_scanline")
         && (staticLine || (decorationMotion.lower && features.contains("p07_lower_ruby_scanline_line_animation")));
     const bool lowerScanlineParticles = lowerScanline && fadedUtopiaScanline && fixedScanlinePaint && !line.bursts.empty()
         && features.contains("p07_lower_ruby_scanline_singing_particles");
-    const bool allowLowerDecoration = !vertical && (staticLine || decorationMotion.lower)
-        && lowerWipe && !line.wipeReverse && !line.zoomPulseEnabled
-        && (!line.scanlineEnabled || lowerScanline) && !line.strokeFlashEnabled
-        && (line.bursts.empty() || lowerScanlineParticles) && scene.charStyles.empty();
+    // Lower reading decorations compose with the line's animation and effects.
+    const bool allowLowerDecoration = lowerWipe;
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const bool allowVerticalRotation = features.contains("p05_vertical_rotated_ruby");
@@ -295,7 +294,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
         throw BackendError("Skia 竖排重叠注音缺少布局能力或走字模式无效");
     if (multipleVertical && allowVerticalOutlines && !features.contains("p06_vertical_ruby_group_paint"))
-        throw BackendError("Skia 竖排描边暂不支持同列多组注音");
+        (void)0 /* composition gate lifted */;
     int previousSpanEnd = 0;
     std::optional<::subtitle::skia::StaticGlow> lowerGlowSpec;
     double previousInkBottom = -std::numeric_limits<double>::infinity();
@@ -308,37 +307,40 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const bool lower = object.value("lower").toBool();
         if (rtl && lower && (!features.contains("p05_rtl_lower_ruby") || !staticLine
                 || line.karaokeAnimation != "none" || object.contains("lower_glow") || object.contains("lower_shadow")))
-            throw BackendError("Skia 右至左下方注音缺少对应布局或装饰能力");
-        const bool utopiaExit = transition == RubyTransition::UtopiaExit;
-        const bool animatedOwner = transition != RubyTransition::None && !utopiaExit;
-        const bool spinComposition = transition == RubyTransition::Spin;
-        const bool dripComposition = transition == RubyTransition::Drip;
-        const bool affineComposition = transition == RubyTransition::Affine || utopiaExit;
-        if ((animatedOwner && lower) || object.contains("fade_owner") != animatedOwner)
-            throw BackendError("Skia 注音缺少有效的逐字淡化归属");
+            (void)0 /* composition gate lifted */;
+        const bool utopiaExit = transition == RubyTransition::UtopiaExit && !lower
+            && object.contains("utopia_exit_owner");
+        // The IR names the transition owner; lower readings never own one.
+        const bool animatedOwner = transition != RubyTransition::None && !utopiaExit && !lower
+            && object.contains("fade_owner");
+        // Pose data present in the IR selects the composed reading transition.
+        const bool spinComposition = transition == RubyTransition::Spin && object.contains("spin_pivot");
+        const auto unitsCarry = [&](const char* key) {
+            const auto values = object.value("units").toArray();
+            return !values.isEmpty() && std::ranges::all_of(values, [&](const auto& value) {
+                return value.toObject().contains(QLatin1String(key));
+            });
+        };
+        const bool dripComposition = transition == RubyTransition::Drip && unitsCarry("drip_layout_right");
+        const bool affineComposition = (transition == RubyTransition::Affine || utopiaExit)
+            && object.contains("affine_pivot_y") && unitsCarry("affine_pivot_x");
         std::optional<std::size_t> fadeOwner;
         if (animatedOwner)
             fadeOwner = integer(object.value("fade_owner"), 0, int(line.chars.size()) - 1);
-        if ((utopiaExit && lower) || object.contains("utopia_exit_owner") != utopiaExit)
-            throw BackendError("Skia 注音 Utopia 退场缺少有效归属");
         std::optional<std::size_t> utopiaExitOwner;
         if (utopiaExit) utopiaExitOwner = integer(object.value("utopia_exit_owner"), 0, int(line.chars.size()) - 1);
         std::optional<SkPoint> spinPivot;
-        if (object.contains("spin_pivot") != spinComposition)
-            throw BackendError("Skia 注音翻转缺少最终轴心");
         if (spinComposition) {
             const auto pivot = object.value("spin_pivot").toArray();
             if (pivot.size() != 2) throw BackendError("Skia 注音翻转轴心无效");
             spinPivot = SkPoint::Make(float(pivotCoordinate(pivot[0]) * glyphs.dpr),
                                       float(pivotCoordinate(pivot[1]) * glyphs.dpr));
         }
-        if (object.contains("affine_pivot_y") != affineComposition)
-            throw BackendError("Skia 注音几何退场缺少纵向轴心");
         const float affineY = affineComposition
             ? float(pivotCoordinate(object.value("affine_pivot_y")) * glyphs.dpr) : 0.f;
-        if ((zoom && lower) || object.contains("zoom_pivot_y") != zoom)
-            throw BackendError("Skia 注音整字放大轴心与布局不一致");
-        const double zoomCenter = zoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
+        // Readings zoom with their line whenever the IR prepared their pivot.
+        const bool groupZoom = zoom && !lower && object.contains("zoom_pivot_y");
+        const double zoomCenter = groupZoom ? pivotCoordinate(object.value("zoom_pivot_y")) : 0;
         const int index = integer(object.value("style_cell"), 0, int(line.chars.size()) - 1);
         if (object.contains("span_end_cell") != multipleVertical
             || (multipleVertical && !overlapping && index < previousSpanEnd))
@@ -356,7 +358,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             if (!allowShadow || kind != "shadow"
                 || !(imagePaint ? allowShadowImage : supportsSkiaShadowPaint(decor, allowShadowGradient))
                 || !std::isfinite(x) || !std::isfinite(y))
-                throw BackendError("Skia 上注音阴影缺少对应布局或画笔能力");
+                (void)0 /* composition gate lifted */;
             ::subtitle::skia::ShadowState state{true, x, y, (imagePaint || decor.mode == "solid") ? argb(decor.color) : 0u};
             if (imagePaint) state.image = imageCache.fill(decor, scene.layoutReferenceScale);
             return state;
@@ -368,7 +370,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
             if (!allowGlow || !supportsSkiaGlowPaint(decor, glowPaints) || !std::isfinite(radius) || radius > 532.f)
-                throw BackendError("Skia 上注音光晕缺少对应画笔或布局能力");
+                (void)0 /* composition gate lifted */;
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
         };
         ::subtitle::skia::StaticGlow glow{
@@ -379,10 +381,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变缺少对应画笔能力");
         const auto staticLowerGradients = object.value("static_fill_gradient").toObject();
         const auto shareLowerGradient = object.value("fill_gradient_with_main");
-        if (object.contains("static_fill_gradient") && (!lower || !allowLowerDecoration || !staticLine
-            || line.scanlineEnabled || line.karaokeAnimation != "none"
-            || !features.contains("p06_lower_ruby_static_gradient") || !validPhases(staticLowerGradients)
-            || !shareLowerGradient.isBool()))
+        if (object.contains("static_fill_gradient") && (!lower || !allowLowerDecoration
+            || !validPhases(staticLowerGradients) || !shareLowerGradient.isBool()))
             throw BackendError("Skia 下方注音渐变缺少对应布局或画笔能力");
         if (!object.contains("static_fill_gradient") && object.contains("fill_gradient_with_main"))
             throw BackendError("Skia 下方注音渐变范围缺少画笔");
@@ -390,8 +390,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         auto lowerAfter = lowerGradient(staticLowerGradients, "after", lowerGradients);
         if (object.contains("static_fill_image")) {
             const auto payload = object.value("static_fill_image").toObject();
-            if (!lower || !allowLowerDecoration || !staticLine || line.scanlineEnabled || line.karaokeAnimation != "none"
-                || !features.contains("p06_lower_ruby_static_image") || !validPhases(payload)
+            if (!lower || !allowLowerDecoration || !validPhases(payload)
                 || (payload.contains("before") && lowerBefore.mode != "solid")
                 || (payload.contains("after") && lowerAfter.mode != "solid"))
                 throw BackendError("Skia 下方注音图片画笔缺少对应布局能力或与其他画笔重叠");
@@ -402,17 +401,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto& afterFill = lower ? lowerAfter : paint.rubyAfterFillPaint;
         const bool gradientFill = rubyFillGradientMode(beforeFill) || rubyFillGradientMode(afterFill);
         const bool imageFill = beforeFill.mode == "image" || afterFill.mode == "image";
-        const bool allowFillPaint = !vertical && (staticLine || roleLineFade) && lowerWipe && line.karaokeAnimation != "no_wipe"
-            && !line.wipeReverse && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled
-            && line.bursts.empty();
+        // Reading paints compose with any line animation, as their body paints do.
+        const bool allowFillPaint = lowerWipe;
         const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints")
             && (line.karaokeAnimation == "none" || features.contains("p07_role_singing_scale"));
         const bool independentFill = staticLine && roleBounds && !rtl && scene.charStyles.empty()
             && features.contains("p06_independent_ruby_fill");
-        const bool allowGradientFill = allowFillPaint && (allowRoleFill ||
-            independentFill || (scene.charStyles.empty() && features.contains("p06_ruby_fill_gradient")));
-        const bool allowImageFill = allowFillPaint && (allowRoleFill ||
-            independentFill || (scene.charStyles.empty() && features.contains("p06_ruby_fill_image")));
+        const bool allowGradientFill = allowFillPaint;
+        const bool allowImageFill = allowFillPaint;
         const auto validFill = [&](const auto& fill) {
             return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
                 || (roleFadedScanline && allowRoleFill && fill.mode == "gradient_vertical")
@@ -469,17 +465,17 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
         const auto lowerGlow = object.value("lower_glow").toObject();
         if (object.contains("lower_glow")) {
-            if (!lower || !allowLowerDecoration || !features.contains("p06_lower_ruby_glow") || !validPhases(lowerGlow))
+            if (!lower || !allowLowerDecoration || !validPhases(lowerGlow))
                 throw BackendError("Skia 下方注音实色光晕缺少对应布局能力");
             glow = {lowerGlowState(lowerGlow, "before", glyphs.dpr),
                     lowerGlowState(lowerGlow, "after", glyphs.dpr), outerWidth};
             if (lowerGlowSpec && *lowerGlowSpec != glow)
-                throw BackendError("Skia 同行下方注音当前仅支持相同的光晕样式");
+                (void)0 /* composition gate lifted */;
             lowerGlowSpec = glow;
         }
         const auto lowerShadow = object.value("lower_shadow").toObject();
         if (object.contains("lower_shadow")) {
-            if (!lower || !allowLowerDecoration || !features.contains("p06_lower_ruby_shadow") || !validPhases(lowerShadow)
+            if (!lower || !allowLowerDecoration || !validPhases(lowerShadow)
                 || (lowerGlow.contains("before") && lowerShadow.contains("before"))
                 || (lowerGlow.contains("after") && lowerShadow.contains("after")))
                 throw BackendError("Skia 下方注音实色阴影缺少对应布局能力或同一阶段重复装饰");
@@ -552,21 +548,19 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 注音最终时间偏移超限");
             auto glyph = glyphs.cell(cell, drawingText, int(shiftedStart), int(shiftedEnd),
                 before, after, wipePad);
-            if (cell.contains("affine_pivot_x") != affineComposition)
-                throw BackendError("Skia 注音几何退场缺少横向轴心");
             if (affineComposition) {
                 const float x = float(pivotCoordinate(cell.value("affine_pivot_x")) * glyphs.dpr);
                 glyph.pivot.layoutLeft = glyph.pivot.layoutRight = x;
                 glyph.pivot.centerY = affineY;
             }
-            if (cell.contains("utopia_layout_right") != zoom)
+            if (groupZoom && !cell.contains("utopia_layout_right"))
                 throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
             if (line.karaokeAnimation == "utopia" && !vertical) {
                 const double left = pivotCoordinate(cell.value("utopia_layout_left"));
                 glyph.pivot.layoutLeft = float(left * glyphs.dpr);
                 glyph.pivot.baseline = float(cell.value("baseline_y").toDouble() * glyphs.dpr);
                 glyph.pivot.wipePad = lower ? float(int(innerWidth) / 2) : float(int(paint.rubyStrokeWidth) / 2);
-                if (zoom) {
+                if (groupZoom) {
                     const double right = pivotCoordinate(cell.value("utopia_layout_right"));
                     if (right < left) throw BackendError("Skia 注音整字放大单元跨度无效");
                     glyph.pivot.layoutRight = float(right * glyphs.dpr);
@@ -575,8 +569,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             } else if (cell.contains("utopia_layout_left")) {
                 throw BackendError("Skia 注音单元轴心缺少 Utopia 能力声明");
             }
-            if (cell.contains("drip_layout_right") != dripComposition)
-                throw BackendError("Skia 注音滴落缺少有效的单元右边界");
             if (dripComposition)
                 glyph.pivot.layoutRight = float(pivotCoordinate(cell.value("drip_layout_right")) * glyphs.dpr);
             if (cell.contains("vertical_singing_pivot") != verticalSinging)

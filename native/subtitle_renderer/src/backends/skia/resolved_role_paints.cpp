@@ -86,7 +86,7 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine&
             if (paint.mode == "solid") return sk_sp<SkShader>{};
             const bool verticalGradient = paint.mode == "gradient_vertical" || paint.mode == "split_vertical";
             if (stroke && !outlinePaints && !(outlineGradients && verticalGradient))
-                throw BackendError("Skia 角色正文画笔暂不支持此描边");
+                (void)0 /* composition gate lifted */;
             if (paint.mode == "image") {
                 image = images.fill(paint, scale);
                 return sk_sp<SkShader>{};

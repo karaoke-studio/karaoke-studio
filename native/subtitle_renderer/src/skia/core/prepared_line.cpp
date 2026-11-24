@@ -629,7 +629,12 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 }
             });
     }
-    if (utopia && (line.shadow.visible() || !line.cellShadows.empty())) {
+    // Shadows follow each cell's transition pose and opacity, as they follow its singing pose.
+    const bool posedShadow = utopia || (!line.noWipe && titleOpacity >= 1.f
+        && std::ranges::any_of(states, [](const State& state) {
+            return state.transform.transformed || state.transform.opacity < 1.f;
+        }));
+    if (posedShadow && (line.shadow.visible() || !line.cellShadows.empty())) {
         const bool reverse = line.vertical && line.wipeRightToLeft;
         const float origin = line.vertical
             ? (reverse ? line.decorationInk.bottom() : line.decorationInk.top())

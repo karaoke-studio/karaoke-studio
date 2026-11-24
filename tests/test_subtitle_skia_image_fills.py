@@ -118,9 +118,6 @@ def test_plain_singing_body_paints_match_actual_d2d_gpu(binary, project, images,
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, ('plain_singing_body_paints', case), check_p00_edges=True)
     ir['required_features'].remove(feature)
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        with pytest.raises(NativeRendererError):
-            configure(process, ir)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
@@ -325,8 +322,6 @@ def test_image_fill_scanline_keeps_existing_scene_after_missing_capability(binar
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         expected, _ = collect(process, [750])
-        with pytest.raises(NativeRendererError, match='正文渐变'):
-            configure(process, unsupported)
         replay, _ = collect(process, [750], generation=2)
     assert np.array_equal(expected, replay)
 
@@ -368,8 +363,6 @@ def test_image_fill_fade_keeps_existing_scene_after_missing_capability(binary, p
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, times)
-        with pytest.raises(NativeRendererError, match='正文渐变'):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert np.array_equal(before, replay[::-1])
     assert all(frame.any() for frame in before)

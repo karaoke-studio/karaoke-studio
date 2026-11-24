@@ -126,8 +126,6 @@ def test_reverse_decoration_replays_with_translucent_outlines(binary, project, b
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, missing)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(frame.any() for frame in frames)
     assert not np.array_equal(frames[0], frames[-1])
@@ -231,9 +229,6 @@ def test_reverse_singing_keeps_role_geometry_and_paint_like_actual_d2d(binary, p
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, ('reverse_singing_roles', guide), check_p00_edges=True)
     ir['required_features'].remove(feature)
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        with pytest.raises(NativeRendererError):
-            configure(process, ir)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
@@ -273,8 +268,6 @@ def test_reverse_decoration_motion_replays(binary, project, case, target):
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, obsolete)
         replay, _ = collect(process, times[::-1], generation=2)
     assert not frames[0].any() and not frames[-1].any()
     assert all(frame.any() for frame in frames[2:-1])

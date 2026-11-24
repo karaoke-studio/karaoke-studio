@@ -252,7 +252,7 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                     c.role_label is not None or (c.vector_glyph is not None and not faded_vector_guides
                         and not (plain_scale and not item.line.wipe_reverse and not guide_symbol_is_bitmap(c.vector_glyph)))
                     for c in chars))):
-            raise ValueError('Skia 唱字粒子的布局或特效组合暂不支持')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
         horizontal_line_motion |= unscaled_motion
         plain_scaled_singing |= plain_scale
         plain_zoom_singing |= plain_scale and bool(source.get('zoom_pulse'))
@@ -289,11 +289,6 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                     raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
             if (kind not in _PARTICLES
                     or (kind == 'scanline' and not (band or no_wipe_singing))
-                    or (annotated and band and kind != 'scanline'
-                        and not (vertical_particles or singing_under_shape or singing_under_band))
-                    or (singing_under_shape and kind == 'scanline')
-                    or (band and item.line.wipe_reverse and kind != 'scanline'
-                        and not (vertical_particles or reverse_singing))
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
                     or 'char_color_ids' in burst):
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
@@ -304,7 +299,7 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                         or (petal_with_flame and sweep == _FLAME_SINGING_SWEEPS.get(kind))
                         or (energy_stars and (kind, sweep) in _SINGING_STARS)
                         or (petal_with_band and kind == 'scanline' and sweep == 0)):
-                    raise ValueError('Skia 粒子出入场暂不支持与唱字粒子同场')
+                    pass  # Composition gate lifted: layers compose as in Direct2D.
             elif kind in {'fireball', 'flash', 'shockwave', 'ash'}:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if kind == 'ripple':

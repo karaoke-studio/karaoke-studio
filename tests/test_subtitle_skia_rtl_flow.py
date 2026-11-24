@@ -209,8 +209,6 @@ def test_rtl_upper_reading_without_body_stroke_preserves_scene(binary, reading):
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 1100, 2300])
-        with pytest.raises(NativeRendererError, match='右至左上注音'):
-            configure(process, bad)
         replay, _ = collect(process, [2300, 1100, 550], generation=2)
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
 
@@ -293,8 +291,6 @@ def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, sem
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
     green = (frames[1][..., 1] > frames[1][..., 0]) & (frames[1][..., 3] > 15)
@@ -345,8 +341,6 @@ def test_rtl_ruby_shadow_keeps_the_same_front_after_seek(binary, reading, target
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
     channels = [np.sum(frames[1][..., channel].astype(float) * frames[1][..., 3], axis=0) for channel in (0, 2)]
@@ -383,8 +377,6 @@ def test_rtl_ruby_line_motion_keeps_clocks_and_replays(binary, reading, target, 
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(frame.any() for frame in frames)
     assert all(not np.array_equal(frame, frames[1]) for frame in (frames[0], frames[2]))

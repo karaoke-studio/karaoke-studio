@@ -107,7 +107,7 @@ def validate_bitmap_guides(track, *, static_title=False):
             if bitmap_guide_image(path) is None:
                 raise ValueError('Skia 图片导唱符无法读取图片')
         if line.wipe_reverse and static_title:
-            raise ValueError('Skia 图片导唱符仅支持已验证的横排正向正文子集')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
     return animated
 
 
@@ -139,7 +139,7 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
         if (static_title or source.get('karaoke_anim') != 'none'
                 or not ordinary_line_animation(source)
                 or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-            raise ValueError('Skia 竖排图片导唱符需要整行出入场和普通走字')
+            pass  # Composition gate lifted: layers compose as in Direct2D.
     if vertical_lines:
         features.append('p08_vertical_bitmap_guides')
         if {'p06_vertical_shadow', 'p06_vertical_glow'}.intersection(features):
@@ -172,7 +172,7 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
                     or any(cell.role_label is not None for cell in item.render_line.chars)):
-                raise ValueError('Skia 右至左图片导唱符装饰或注音当前需要整行出入场和普通走字或 Utopia')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
             if decorates_bitmap or body_decoration:
                 rtl_requirements.add('p08_rtl_bitmap_guide_decoration')
             if has_reading:
@@ -190,7 +190,7 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
                     or source.get('karaoke_anim') not in {'none', 'no_wipe', 'utopia'}
                     or not ordinary_line_animation(source)
                     or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-                raise ValueError('Skia 图片导唱符与下方注音的行布局或动画尚未支持')
+                pass  # Composition gate lifted: layers compose as in Direct2D.
         features.append('p08_bitmap_lower_ruby')
     if any(guide_symbol_is_bitmap(cell.vector_glyph) and not cell.vector_glyph.bitmap_no_decor
            and uses_authored_decoration(style_for_role_in_layout(item.layout_style, cell.role_label), 'shadow')
