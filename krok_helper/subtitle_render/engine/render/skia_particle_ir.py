@@ -101,7 +101,8 @@ def _supports_singing_particle_paint(paint, *, local_sprite=False):
             not local_sprite and (paint['stroke_width_px'] or paint['stroke2_width_px'])):
         return False
     kinds = {'glow', 'shadow'} if local_sprite else {'glow'}
-    decor_modes = _LOCAL_SPRITE_PAINT_MODES - {'gradient_horizontal'} if local_sprite else _SPRITE_PAINT_MODES
+    # A sprite's decoration samples its line span like its other layers.
+    decor_modes = _LOCAL_SPRITE_PAINT_MODES if local_sprite else _SPRITE_PAINT_MODES
     return decor is None or (decor['kind'] in kinds and decor['fill']['mode'] in decor_modes)
 
 
@@ -289,7 +290,8 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                     decor = paint.get('decor')
                     modes = _sprite_layer_modes(paint)
                     sprite_shadows |= decor is not None and decor['kind'] == 'shadow'
-                    sprite_line_gradients |= 'gradient_horizontal' in modes
+                    sprite_line_gradients |= 'gradient_horizontal' in modes or (
+                        decor is not None and decor['fill']['mode'] == 'gradient_horizontal')
                     sprite_images |= 'image' in modes or (decor is not None and decor['fill']['mode'] == 'image')
                     sprite_split_paints |= 'split_vertical' in modes or (
                         decor is not None and decor['fill']['mode'] == 'split_vertical')

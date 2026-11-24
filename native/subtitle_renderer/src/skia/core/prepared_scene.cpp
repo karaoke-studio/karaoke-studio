@@ -300,7 +300,11 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     line.inkStart = line.scanline.rightToLeft ? ink.right() : ink.left();
             }
             line.inkTop = ink.isEmpty() ? 0.f : ink.fTop;
-            if (!ink.isEmpty()) line.characterMotionCenter = ink.centerX();
+            // The GPU's motion centre spans the line's fill box, bitmap guides included.
+            SkRect motionInk = ink;
+            for (const auto& cell : line.cells)
+                if (cell.bitmap) motionInk.join(cell.bitmap->box());
+            if (!motionInk.isEmpty()) line.characterMotionCenter = motionInk.centerX();
             if (line.shadow.visible() || !line.cellShadows.empty()) line.decorationInk = ink;
             line.bodyInk = ink;
         }

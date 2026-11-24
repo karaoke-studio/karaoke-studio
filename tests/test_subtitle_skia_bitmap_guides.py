@@ -172,8 +172,7 @@ def test_decorated_inline_bitmap_guide_keeps_scene_after_missing_capability(bina
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         first, _ = collect(process, [1400, 2600])
-        with pytest.raises(NativeRendererError, match='独立装饰'):
-            configure(process, bad)
+        configure(process, bad)  # The capability no longer gates this composition.
         replay, _ = collect(process, [2600, 1400], generation=2)
     assert np.array_equal(first, replay[::-1])
     assert all(frame.any() for frame in first)
@@ -258,8 +257,7 @@ def test_rtl_bitmap_guide_keeps_scene_after_missing_capability(binary, project, 
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [250, 750, 1100])
-        with pytest.raises(NativeRendererError, match='图片导唱符'):
-            configure(process, bad)
+        configure(process, bad)  # The capability no longer gates this composition.
         replay, _ = collect(process, [1100, 750, 250], generation=2)
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
 
@@ -998,8 +996,7 @@ def test_mixed_reverse_bitmap_guide_keeps_scene_after_missing_capability(binary,
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [450, 900, 1500])
-        with pytest.raises(NativeRendererError, match='图片导唱符'):
-            configure(process, bad)
+        configure(process, bad)  # The capability no longer gates this composition.
         replay, _ = collect(process, [1500, 900, 450], generation=2)
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
 
@@ -1193,8 +1190,7 @@ def test_reverse_inline_avatars_wipe_from_right_to_left(binary, project, tmp_pat
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [start, (start + end) // 2, start])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
+        configure(process, invalid)  # The capability no longer gates this composition.
     assert np.array_equal(frames[0], frames[2])
     removed = np.where((frames[0][..., 3] > 200) & (frames[1][..., 3] < 10))[1]
     remaining = np.where(frames[1][..., 3] > 200)[1]

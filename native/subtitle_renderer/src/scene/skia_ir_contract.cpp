@@ -161,6 +161,7 @@ const QJsonArray& skiaIrProfiles() {
         "p06_ruby_outline_gradient",
         "p06_ruby_horizontal_outline",
         "p06_lower_ruby_outline_gradient",
+        "p06_lower_ruby_glow_gradient",
         "p06_role_outline_gradient",
         "p06_role_outline_paints",
         "p06_animated_singing_gradient_fill",
@@ -831,7 +832,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");
     const bool bitmapGuideGradientGlow = features.contains("p08_bitmap_guide_gradient_glow");
     if (bitmapGuideGradientGlow && (!features.contains("p08_bitmap_guides")
-        || !features.contains("p06_gradient_glow") || !features.contains("p06_static_glow")))
+        || !(features.contains("p06_gradient_glow") || features.contains("p06_role_gradient_glow")
+             || features.contains("p06_vertical_gradient_glow"))))
         throw BackendError("Skia 图片导唱符渐变光晕缺少画笔或布局能力声明");
     if (bitmapGuideGradientShadow && (!bitmapGuideShadow || !features.contains("p06_body_gradient_shadow")))
         throw BackendError("Skia 图片导唱符渐变阴影缺少画笔或布局能力声明");
@@ -920,7 +922,8 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 上注音 Utopia 入场缺少对应能力");
     if (features.contains("p07_ruby_utopia_entry_glow")
         && (!features.contains("p07_ruby_utopia_entry")
-            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))))
+            || !(features.contains("p06_static_glow") || features.contains("p06_ruby_glow")
+                 || features.contains("p06_lower_ruby_glow"))))
         throw BackendError("Skia 上注音 Utopia 入场光晕缺少对应能力");
     if (features.contains("p07_ruby_utopia_exit_glow")
         && (!features.contains("p07_ruby_utopia_exit")
@@ -1308,6 +1311,9 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
     if (features.contains("p06_lower_ruby_shadow_image")
         && (!features.contains("p06_lower_ruby_shadow") || layout.value("lower_ruby_shadow_image_schema").toDouble(-1) != 1))
         throw BackendError("Skia 下方注音图片阴影缺少对应布局版本");
+    if (features.contains("p06_lower_ruby_glow_gradient")
+        && (!features.contains("p05_lower_ruby") || layout.value("lower_ruby_glow_gradient_schema").toDouble(-1) != 1))
+        throw BackendError("Skia 下方注音渐变光晕缺少版本化布局或注音能力声明");
     if (features.contains("p06_lower_ruby_outline_gradient")
         && (!features.contains("p05_lower_ruby") || !features.contains("p06_ruby_solid_outline")
             || layout.value("lower_ruby_outline_gradient_schema").toDouble(-1) != 1))
@@ -1412,14 +1418,12 @@ void validateSkiaIrEnvelope(const QJsonObject& ir) {
         throw BackendError("Skia 英数第二道描边缺少二重描边布局声明");
     const bool roleStaticGlow = features.contains("p06_role_static_glow");
     if (features.contains("p06_gradient_glow")
-        && (!(roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow") || features.contains("p06_ruby_glow"))
-            || features.contains("p05_lower_ruby")))
+        && !(roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow") || features.contains("p06_ruby_glow")))
         throw BackendError("Skia 基础渐变光晕缺少对应正文或上注音能力");
     if ((features.contains("p06_vertical_gradient_glow") || features.contains("p06_role_gradient_glow"))
         && (!features.contains("p06_role_body_paints")
             || !(roleStaticGlow || rubyRoleGlow || features.contains("p06_static_glow")
-                 || features.contains("p06_ruby_glow"))
-            || (features.contains("p07_singing_scale") && !inlineBitmapGuides) || features.contains("p05_lower_ruby")))
+                 || features.contains("p06_ruby_glow"))))
         throw BackendError("Skia 渐变光晕需要正向横排角色画笔和普通走字");
     const bool roleLayers = features.contains("p06_role_solid_outlines") || features.contains("p06_role_body_paints")
         || roleStaticGlow || rubyRoleGlow;

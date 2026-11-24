@@ -273,10 +273,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
             (void)0 /* composition gate lifted */;
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
-        const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle
-            && !style.vertical && !style.rightToLeft && !line.wipeReverse && !hasInlineRoles && !vectorGuides
-            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.scanlineEnabled && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
+        // A bitmap guide's glow takes the line's glow paint on any line.
+        const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle;
         const bool reverseBitmapLine = line.wipeReverse && features.contains("p08_reverse_bitmap_guides")
             && !line.chars.empty()
             && std::ranges::all_of(line.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
@@ -774,7 +772,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
         if (roleBodyPaints || roleShadowPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole || bodyShadowGradients
             || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient")
-            || features.contains("p06_lower_ruby_outline_gradient")
+            || features.contains("p06_lower_ruby_outline_gradient") || features.contains("p06_lower_ruby_glow_gradient")
             || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient")
             || features.contains("p06_ruby_gradient_shadow"))
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,

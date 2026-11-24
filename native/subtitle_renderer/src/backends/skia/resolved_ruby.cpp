@@ -513,8 +513,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto lowerShadowGradients = object.value("lower_shadow_gradient").toObject();
         if (object.contains("lower_shadow_image")) {
             const auto images = object.value("lower_shadow_image").toObject();
-            if (!lower || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled
-                || !features.contains("p06_lower_ruby_shadow_image") || !validPhases(images))
+            if (!lower || !features.contains("p06_lower_ruby_shadow_image") || !validPhases(images))
                 throw BackendError("Skia 下方注音图片阴影缺少对应布局或画笔能力");
             const auto prepareImage = [&](auto& state, const char* phase) {
                 if (!images.contains(phase)) return;
@@ -527,7 +526,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         const auto shadowWithMain = object.value("shadow_gradient_with_main");
         if (object.contains("lower_shadow_gradient")
-            && (!lower || !roleBounds || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled
+            && (!lower || !roleBounds
                 || !features.contains("p06_lower_ruby_shadow_gradient") || !validPhases(lowerShadowGradients)
                 || !shadowWithMain.isBool()
                 || (lowerShadowGradients.contains("before") && !lowerShadow.contains("before"))
@@ -679,8 +678,18 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 竖排同列注音的墨迹范围重叠");
         previousInkBottom = inkBottom;
         const bool hasGlow = glow.before.radius > 0 || glow.after.radius > 0;
+        // Lower glows paint with their own gradient, spanning the main line like the lower fill.
+        const auto lowerGlowGradients = object.value("lower_glow_gradient").toObject();
+        const auto lowerGlowWithMain = object.value("glow_gradient_with_main");
+        if (object.contains("lower_glow_gradient")
+            && (!lower || !object.contains("lower_glow") || !validPhases(lowerGlowGradients)
+                || !lowerGlowWithMain.isBool() || !features.contains("p06_lower_ruby_glow_gradient")))
+            throw BackendError("Skia 下方注音渐变光晕缺少对应布局或画笔能力");
+        const auto lowerGlowBefore = lowerGradient(lowerGlowGradients, "before");
+        const auto lowerGlowAfter = lowerGradient(lowerGlowGradients, "after");
+        const bool lowerGlowGradient = lower && object.contains("lower_glow_gradient") && hasGlow;
         SkRect ink = SkRect::MakeEmpty();
-        if (gradientFill || gradientOutlines || beforeShadowGradient || afterShadowGradient
+        if (gradientFill || gradientOutlines || beforeShadowGradient || afterShadowGradient || lowerGlowGradient
             || (hasGlow && glowPaints != GlowPaintSupport::Solid))
             for (const auto& cell : cells)
                 if (!cell.path.isEmpty()) ink.join(cell.path.computeTightBounds());
@@ -725,7 +734,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                                                                                            &paint.rubyAfterStroke2Paint},
                                                 sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds);
         ::subtitle::skia::GlowGradients glowGradients;
-        if (hasGlow && glowPaints != GlowPaintSupport::Solid) {
+        if (lowerGlowGradient) {
+            glowGradients = rubyGradients({glow.before.radius > 0 ? &lowerGlowBefore : nullptr,
+                                           glow.after.radius > 0 ? &lowerGlowAfter : nullptr},
+                                          lowerGlowWithMain.toBool(), source, ink, outlinePad, glyphs.dpr,
+                                          roleBounds ? &roleBounds->line : nullptr);
+        } else if (hasGlow && glowPaints != GlowPaintSupport::Solid && !lower) {
             glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeDecorPaint : nullptr,
                                            glow.after.radius > 0 ? &paint.rubyAfterDecorPaint : nullptr},
                                           paint.rubyHorizontalGradientWithMain, source, ink, outlinePad, glyphs.dpr,

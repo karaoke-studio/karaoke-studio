@@ -200,6 +200,7 @@ def declare_bitmap_guides(plan_lines, ir, *, static_title=False):
             features.append('p08_bitmap_guide_gradient_shadow')
         if 'p06_body_image_shadow' in features:
             features.append('p08_bitmap_guide_image_shadow')
-    if (not static_title and 'p06_gradient_glow' in features
+    gradient_glow = {'p06_gradient_glow', 'p06_role_gradient_glow', 'p06_vertical_gradient_glow'}
+    if (not static_title and gradient_glow.intersection(features)
             and any(_has_bitmap_gradient_glow(item) for item in plan_lines)):
         features.append('p08_bitmap_guide_gradient_glow')

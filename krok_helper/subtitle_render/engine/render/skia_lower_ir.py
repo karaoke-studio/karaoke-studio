@@ -78,7 +78,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     if outline_gradients:
         result['lower_outline_gradient'] = outline_gradients
         result['outline_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
-    glow, shadow, shadow_gradients, shadow_images = {}, {}, {}, {}
+    glow, shadow, shadow_gradients, shadow_images, glow_gradients = {}, {}, {}, {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':
             continue
@@ -90,9 +90,10 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         if kind == 'shadow' and layer.mode == 'image':
             shadow_images[phase] = _image_payload(layer)
         elif layer.mode != 'solid':
-            if kind != 'shadow' or layer.mode not in _GRADIENT_MODES:
+            if layer.mode not in _GRADIENT_MODES:
                 raise ValueError('Skia 下方注音装饰当前不支持此画笔')
-            shadow_gradients[phase] = _gradient_payload(layer)
+            # Lower glows take gradient paints like lower shadows, as in the GPU.
+            (shadow_gradients if kind == 'shadow' else glow_gradients)[phase] = _gradient_payload(layer)
         color = list(rgba(layer.color))
         if kind == 'glow':
             glow[phase] = {'radius': radius, 'color': color,
@@ -111,4 +112,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         result['shadow_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     if shadow_images:
         result['lower_shadow_image'] = shadow_images
+    if glow_gradients:
+        result['lower_glow_gradient'] = glow_gradients
+        result['glow_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
     return result

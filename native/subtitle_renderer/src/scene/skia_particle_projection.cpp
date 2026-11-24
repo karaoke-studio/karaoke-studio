@@ -209,7 +209,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             && std::isfinite(fx.decorOffsetY) && std::abs(fx.decorOffsetY) <= 1e5;
         const bool painted = fx.hasPaint && (fadedPaint || localPaint || ringPaint)
             && (!fx.hasDecor || ((glow || shadow) && (spritePaint(fx.decor)
-                || (localPaint && spriteLocalPaint(fx.decor)))));
+                || (localPaint && spriteLayerPaint(fx.decor)))));
         const int singingFlameSweep = fx.kind == "flame" || fx.kind == "flame_alt" ? 2 : 0;
         const bool validSweep = animated
             ? (!entry.isEmpty() && fx.sweep == entrySweep && isSkiaTransitionLayer(entry, fx.kind, true))

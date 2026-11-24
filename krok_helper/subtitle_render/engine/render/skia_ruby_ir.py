@@ -45,6 +45,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
     has_lower_shadow_gradient = False
     has_lower_shadow_image = False
     has_lower_outline_gradient = False
+    has_lower_glow_gradient = False
     has_lower_gradient = False
     has_static_lower_gradient = False
     has_static_lower_image = False
@@ -136,6 +137,7 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 has_lower_shadow_gradient |= 'lower_shadow_gradient' in serialized
                 has_lower_shadow_image |= 'lower_shadow_image' in serialized
                 has_lower_outline_gradient |= 'lower_outline_gradient' in serialized
+                has_lower_glow_gradient |= 'lower_glow_gradient' in serialized
             else:
                 decorations = ruby_decoration_kinds(group.target.style)
                 has_shadow = has_shadow or 'shadow' in decorations
@@ -164,4 +166,5 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             **({'lower_ruby_shadow_gradient_schema': 1} if has_lower_shadow_gradient else {}),
             **({'lower_ruby_shadow_image_schema': 1} if has_lower_shadow_image else {}),
             **({'lower_ruby_outline_gradient_schema': 1} if has_lower_outline_gradient else {}),
+            **({'lower_ruby_glow_gradient_schema': 1} if has_lower_glow_gradient else {}),
             'fonts': fonts, 'runs': [*measured.runs, *ruby.measured.runs], 'lines': lines}

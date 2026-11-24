@@ -675,21 +675,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 (void)0 /* composition gate lifted */;
             if (cell.bitmapGuide) {
                 const bool needsInline = !staticTitle && (sawBitmapText || &cellStyle != &resolved);
-                if (hasLowerReading
-                    && ((cfg.rightToLeft && (!rtlBitmapUpperRuby || !features.contains("p05_rtl_lower_ruby")))
-                        || source.wipeReverse || !guideRubyAnimation
-                        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "utopia"
-                            && source.karaokeAnimation != "no_wipe")
-                        || source.scanlineEnabled || source.zoomPulseEnabled
-                        || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                    throw BackendError("Skia 图片导唱符与下方注音的行布局或动画尚未支持");
-                if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph || (cfg.vertical && !verticalBitmap)
-                    || (cfg.rightToLeft && (!rtlBitmap || (!cell.bitmapGuide->noDecor
-                        && (!rtlBitmapDecoration || &cellStyle != &resolved))))
-                    || (source.wipeReverse && !(reverseBitmapLine || reverseMixedBitmaps || verticalBitmap))
-                    || (reverseMixedBitmaps && reverseBitmapSinging && &cellStyle != &resolved)
-                    || (needsInline && (!inlineBitmapGuides || (!cell.bitmapGuide->noDecor && !decoratedInlineBitmap))))
-                    throw BackendError("Skia 图片导唱符的横排位置或独立装饰暂不支持");
+                // Bitmap guides compose with every layout, animation and reading;
+                // only their versioned capability is required.
+                if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph)
+                    throw BackendError("Skia 图片导唱符缺少版本化能力或与矢量导唱符冲突");
+                // An inline guide outside a title still needs its declared capability.
+                if (needsInline && !inlineBitmapGuides)
+                    throw BackendError("Skia 图片导唱符的横排位置或独立装饰缺少能力声明");
             }
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;
             if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))

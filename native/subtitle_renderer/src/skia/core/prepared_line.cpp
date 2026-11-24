@@ -205,6 +205,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     std::vector<State> states;
     states.reserve(line.cells.size());
+
     for (std::size_t index = 0; index < line.cells.size(); ++index) {
         const auto& cell = line.cells[index];
         float progress = rawProgress(cell);
@@ -257,6 +258,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
             return faded;
         }();
         // A bitmap keeps its image box and inherits its owning character's opacity.
+        // Like the GPU, a bitmap guide keeps its image box and takes only the opacity.
         if (cell.bitmap) transform = CharacterTransformState{.opacity = transform.opacity};
         std::optional<SkPath> animatedInk;
         if (transform.transformed && transform.opacity > 0
