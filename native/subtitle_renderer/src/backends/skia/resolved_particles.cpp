@@ -31,10 +31,17 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
     if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
         || (style.vertical && !scene::hasSkiaVerticalParticleProfile(features)))
         throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
-    const float lineLeft = prepared.cells.empty() ? 0.f : prepared.cells.front().pivot.layoutLeft;
-    float lineSpan = 1.f;
-    for (const auto& cell : prepared.cells)
-        lineSpan = std::max(lineSpan, cell.pivot.layoutRight - lineLeft);
+    // Line-anchored particle paints span the physical line box (cells run right to left on RTL lines).
+    float lineLeft = 0.f, lineRight = 1.f;
+    if (!prepared.cells.empty()) {
+        lineLeft = prepared.cells.front().pivot.layoutLeft;
+        lineRight = prepared.cells.front().pivot.layoutRight;
+        for (const auto& cell : prepared.cells) {
+            lineLeft = std::min(lineLeft, cell.pivot.layoutLeft);
+            lineRight = std::max(lineRight, cell.pivot.layoutRight);
+        }
+    }
+    const float lineSpan = std::max(lineRight - lineLeft, 1.f);
     for (const auto& burst : line.bursts) {
         const auto sprite = sprites.find(burst.sprite);
         if (sprite == sprites.end() || sprite->second.isEmpty()
