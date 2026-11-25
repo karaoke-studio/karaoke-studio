@@ -808,3 +808,30 @@ def test_vector_guides_match_actual_gpu(binary, project, case):
     track, style = guide_source(project, kind, SQUARE if shape == 'square' else CURVES,
                                 reverse=reverse, effect=effect, semantics=semantics)
     assert_gpu_parity(binary, track, style, dpr, case)
+
+
+# A role-coloured guide elsewhere in the scene must not switch every role
+# shadow back to the line's own shadow (the role shadow mode was dropped).
+@GPU
+@pytest.mark.parametrize('dpr', [1, 1.5])
+def test_role_shadows_survive_a_role_guide_on_another_line_like_actual_gpu(binary, project, dpr):
+    track, style = guide_source(project, 'prefix', effect='utopia')
+    guided = replace(track.lines[0], guide_symbol=replace(SQUARE, role_labels=('lead',)))
+    plain = replace(track.lines[0], guide_symbol=None, track_line_index=1, break_before='page',
+                    chars=[replace(char, start_ms=char.start_ms + 2400, role_label='lead') for char in track.lines[0].chars],
+                    end_ms=track.lines[0].end_ms + 2400)
+    colors = style.karaoke_colors
+    role = SubtitleStyleScheme(font_size_px=style.font_size_px, decoration_kind='shadow', decoration_kind_before='shadow',
+                               shadow_color='#E1E196', shadow_offset_x=8, shadow_offset_y=8,
+                               shadow_before_offset_x=8, shadow_before_offset_y=8,
+                               karaoke_colors=replace(colors, before=replace(colors.before, shadow=PaintFill(color='#FE99B9')),
+                                                      after=replace(colors.after, shadow=PaintFill(color='#FFB542'))))
+    style = replace(style, karaoke_anim='utopia', decoration_kind='shadow', shadow_color='#E1E196',
+                    shadow_offset_x=0, shadow_offset_y=0, custom_style_schemes={'lead': role})
+    track = replace(track, lines=[guided, plain])
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert {'p05_role_vector_guides', 'p06_role_static_shadow'} <= set(ir['required_features'])
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    assert_ruby_transition_gpu_parity(binary, SimpleNamespace(track=track, style=style, case_id=f'role-shadow-{dpr}'),
+                                      (2700, 3100, 3500, 3900), dpr=dpr)

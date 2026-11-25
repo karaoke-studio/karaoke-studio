@@ -579,7 +579,8 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
     role_shadow_lines = [item for item in plan.lines if _uses_role_decoration(item, 'shadow')]
     if role_shadow_lines and 'shadow' not in decorations:
         decorations.append('shadow')
-    if role_shadow_lines and not role_vector_guides:
+    # Role shadows are per cell on every line, guide lines included, as in Direct2D.
+    if role_shadow_lines:
         role_shadow_motion = False
         role_shadow_singing = False
         for item in role_shadow_lines:
