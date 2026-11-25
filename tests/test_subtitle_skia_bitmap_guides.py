@@ -671,6 +671,28 @@ def test_bitmap_guide_gradient_glow_matches_actual_d2d_gpu(binary, project, tmp_
 
 
 @GPU
+def test_bitmap_guide_gradient_glow_fades_with_the_image_like_d2d_gpu(binary, project, tmp_path):
+    """The D2D gradient halo once ignored the guide's fade opacity and stayed opaque under exits."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style, _ = gradient_glowing_bitmap_guide(project, tmp_path)
+    style = replace(style, exit_anim='fade', exit_fade_ms=600)
+    line, = track.lines
+    times = tuple(line.end_ms + offset for offset in (-100, 500, 650, 850))
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    reference = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
+    box = reference[0][..., 3] > 0
+    # The halo must fade, not stay at the opacity it had before the exit.
+    assert reference[-1][..., 3][box].sum() < .6 * reference[0][..., 3][box].sum()
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), times)
+    assert_glow_parity(times, reference, gpu, raster, 'bitmap_guide_gradient_glow_fade', check_p00_edges=True)
+
+
+@GPU
 @pytest.mark.parametrize('paint_mode', ['solid', 'gradient', 'image'])
 def test_bitmap_guide_shadow_matches_actual_d2d_gpu(binary, project, tmp_path, paint_mode):
     from scripts.subtitle_gpu_baseline.policy import COMPARISON_BUDGETS

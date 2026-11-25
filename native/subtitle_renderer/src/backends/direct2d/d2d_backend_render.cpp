@@ -4527,6 +4527,40 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 composite->SetInput(0, bitmap);
                 composite->SetInput(1, gradientRaster);
                 composite->GetOutput(tintOutput.ReleaseAndGetAddressOf());
+                if (opacity < 1.0f) {
+                    // Like the solid tint below, the halo fades with the
+                    // guide's character/line opacity.
+                    ID2D1Effect *fade = acquireDecorEffect(
+                        CLSID_D2D1ColorMatrix,
+                        impl_->decorTintEffectPool,
+                        impl_->decorTintEffectInUse,
+                        "ID2D1DeviceContext::CreateEffect(bitmap guide decor fade)"
+                    );
+                    const auto fadeMatrix = D2D1::Matrix5x4F(
+                        1.0f, 0.0f, 0.0f, 0.0f,
+                        0.0f, 1.0f, 0.0f, 0.0f,
+                        0.0f, 0.0f, 1.0f, 0.0f,
+                        0.0f, 0.0f, 0.0f, opacity,
+                        0.0f, 0.0f, 0.0f, 0.0f
+                    );
+                    checkHr(
+                        fade->SetValue(
+                            D2D1_COLORMATRIX_PROP_COLOR_MATRIX, fadeMatrix
+                        ),
+                        "ID2D1Effect::SetValue(bitmap guide decor fade)",
+                        device_
+                    );
+                    checkHr(
+                        fade->SetValue(
+                            D2D1_COLORMATRIX_PROP_ALPHA_MODE,
+                            D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED
+                        ),
+                        "ID2D1Effect::SetValue(bitmap guide decor fade mode)",
+                        device_
+                    );
+                    fade->SetInput(0, tintOutput.Get());
+                    fade->GetOutput(tintOutput.ReleaseAndGetAddressOf());
+                }
             } else {
                 ID2D1Effect *tint = acquireDecorEffect(
                     CLSID_D2D1ColorMatrix,
