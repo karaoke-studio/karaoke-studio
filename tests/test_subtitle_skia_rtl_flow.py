@@ -349,6 +349,36 @@ def test_rtl_ruby_shadow_keeps_the_same_front_after_seek(binary, reading, target
     assert blue > red
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('effect', ['utopia', 'utopia_scanline'])
+def test_rtl_singing_reading_shadow_and_band_match_actual_gpu(binary, application, effect):
+    """Singing RTL readings clip shadows and sweep bands from the right, like the GPU."""
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingChar, TimingLine, TimingTrack
+    from scripts.subtitle_render_corpus import _base_style
+    from test_subtitle_skia_character_fade import render_ruby_transition_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    line = TimingLine(chars=[TimingChar('漢', 200), TimingChar('字', 700), TimingChar('か', 1100)], end_ms=1600)
+    ruby = RubyAnnotation(kanji='漢字', reading='かんじ', reading_parts=['か', '', 'んじ'],
+                          reading_part_ms=[450, 950], pos_start_ms=200, pos_end_ms=1100)
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    style = _base_style(karaoke_anim=effect, right_to_left=True, ruby_decoration_kind='shadow',
+                        ruby_decoration_kind_before='shadow', entry_lead_ms=500, exit_fade_ms=500)
+    times = (250, 350, 450, 600, 800, 1000)
+    reference, gpu, raster = render_ruby_transition_frames(binary, SimpleNamespace(track=track, style=style), times)
+
+    def recoloured(expected, rendered):
+        both = (expected[..., 3] > 200) & (rendered[..., 3] > 200)
+        delta = np.abs(expected[..., :3].astype(int) - rendered[..., :3].astype(int)).max(-1)
+        return round(float((delta[both] > 40).mean()), 4)
+
+    # A reading shadow clipped on the wrong side recolours about 3% of the opaque pixels.
+    shares = [[recoloured(*pair) for pair in zip(reference, frames, strict=True)] for frames in (gpu, raster)]
+    assert max(map(max, shares)) < .015, shares
+    assert_glow_parity(times, reference, gpu, raster, f'rtl_singing_reading_shadow_{effect}', check_p00_edges=True)
+
+
 _RTL_RUBY_LINE_PHASES = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
 
 

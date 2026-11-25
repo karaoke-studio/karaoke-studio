@@ -271,7 +271,7 @@ void PreparedWipeGroup::drawShadow(SkCanvas& canvas, int timeMs, const SingingSc
                 : wipeCoordinate(cell, timeMs, rightToLeft_, false, noWipe_);
         }
         return StaticShadow::WipePose{transform, before && !motion.exit, clip};
-    }, vertical_, vertical_ && rightToLeft_);
+    }, vertical_, rightToLeft_); // Horizontal RTL readings sing from the right like reverse vertical ones.
 }
 
 float PreparedWipeGroup::wipeStart() const {
@@ -318,8 +318,8 @@ void PreparedWipeGroup::drawScanline(SkCanvas& canvas, const ScanlineBand& band,
             if (source.path.isEmpty() || !(source.startMs < timeMs && timeMs < source.endMs)) continue;
             const auto posed = posedUnit(source, scale.at(timeMs, source.startMs, source.endMs, source.pivot));
             const auto& cell = posed ? *posed : source;
-            const float edge = vertical_ ? wipeCoordinate(source, timeMs, false, true)
-                                        : singingFront(cell, timeMs, originX, cell.path.computeTightBounds());
+            const float edge = vertical_ ? wipeCoordinate(source, timeMs, rightToLeft_, true)
+                                        : singingFront(cell, timeMs, originX, cell.path.computeTightBounds(), rightToLeft_);
             if (edge + band.halfWidth <= inkStart - pad || edge - band.halfWidth >= inkEnd + pad)
                 continue;
             band.drawSlices(canvas, edge, [&](int layer, bool after, float opacity) {
