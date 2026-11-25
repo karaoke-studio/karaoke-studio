@@ -583,8 +583,6 @@ def test_native_rejects_mixed_direction_column_decoration_without_capability(bin
     track, style, plain = decorated_columns(project, 'glow', mixed_directions=True)
     plain_mixed = ir_for(binary, (track, plain))
     ir = ir_for(binary, (track, style))
-    mixed = copy.deepcopy(ir)
-    mixed['required_features'].remove('p06_vertical_mixed_column_decoration')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         # Mixed directions remain valid for undecorated (transparent) columns.
         configure(process, plain_mixed)
@@ -614,8 +612,6 @@ def test_vertical_outlines_follow_rotated_body_and_fixed_wipe_axis(binary, proje
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        bad = copy.deepcopy(ir)
-        bad['required_features'].remove('p06_vertical_reverse_outline' if reverse else feature)
         replay, _ = collect(process, [times[1]], generation=2)
 
     def pixels(frame, color, alpha):
@@ -704,8 +700,6 @@ def test_vertical_reverse_scanline_follows_the_wipe_from_bottom_to_top(
     top, bottom = ir['skia_layout']['lines'][0]['cells']
     split = round((top['wipe_bottom'] + bottom['wipe_top']) * dpr / 2)
     times = [start - 1, start + (end - start) // 3, end - (end - start) // 3, last_end + 1]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     targets = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -770,8 +764,6 @@ def test_vertical_zoom_pulse_holds_peak_at_cell_end_then_releases(binary, projec
     x = first['layout_left']
     box = np.s_[:round((first['wipe_bottom'] + 5) * dpr), round((x - 35)*dpr):round((x + 35)*dpr)]
     times = [end, end + 120, end + 299, end + 300]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     captures = []
 
     def green_ink(frame):
@@ -816,8 +808,6 @@ def test_reverse_vertical_scaling_keeps_bottom_to_top_wipe(binary, project, kara
     assert resolved == {**bare['skia_layout']['lines'][0], 'ruby_groups': []}
     (start, end), = ir['track']['lines'][0]['resolved_intervals']
     times = [(start + end) // 2, end + 300]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     captures = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -866,8 +856,6 @@ def test_vertical_singing_shadow_scales_around_the_fixed_wipe_axis(binary, proje
     static = ir_for(binary, (track, baseline), dpr=1.5)
     feature = 'p07_vertical_singing_shadow'
     assert {feature, 'p06_vertical_shadow', 'p07_vertical_singing_scale'} <= set(ir['required_features'])
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     (start, end), = ir['track']['lines'][0]['resolved_intervals']
     times = [start - 1, (start + end) // 2, end + 300]
     captures = []

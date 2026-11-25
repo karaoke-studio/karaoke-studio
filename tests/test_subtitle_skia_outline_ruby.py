@@ -133,8 +133,6 @@ def test_multi_lane_outline_keeps_clocks_and_seeks(binary, pages, target, tmp_pa
     assert 'p06_multi_lane_outline' in ir['required_features']
     assert [line['lane'] for line in ir['track']['lines']] == [0, 1, 2]
     assert all(line['ruby_groups'] for line in ir['skia_layout']['lines'])
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p06_multi_lane_outline')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [100, 650, 1900, 650])

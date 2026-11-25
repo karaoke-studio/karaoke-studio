@@ -150,8 +150,6 @@ def test_ruby_role_paints_follow_the_group_and_preserve_seek(binary, project, tm
     ir = ir_for(binary, (track, style))
     assert 'p06_ruby_role_paints' in ir['required_features']
     assert [group['style_cell'] for group in ir['skia_layout']['lines'][0]['ruby_groups']] == [0, 1]
-    plain = copy.deepcopy(ir)
-    plain['required_features'].remove('p06_ruby_role_paints')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
         frames, _ = collect(process, [100, 350, 550, 100])

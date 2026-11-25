@@ -536,8 +536,6 @@ def test_singing_particles_keep_clocks_under_line_motion(binary, project):
     baseline = ir_for(binary, (track, replace(style, entry_anim='none', exit_anim='none')))
     line, = ir['track']['lines']
     assert line['fx_bursts'] == baseline['track']['lines'][0]['fx_bursts']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     times = (320, 550, 1800, 2060)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
@@ -744,8 +742,6 @@ def test_vertical_singing_particles_keep_each_glyph_anchor(binary, project, vari
             layers.setdefault(key, set()).add(burst['kind'])
         assert all(pair == {'lightning', 'lightning_glow'} for pair in layers.values())
     times = [100, 350, 500, 1750, 1900, 2501]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature if karaoke == 'none' else composition)
     invalid_sweep = copy.deepcopy(ir)
     invalid_sweep['track']['lines'][0]['fx_bursts'][0]['sweep'] = int(variant != 'twinkle')
     captures = []
@@ -852,8 +848,6 @@ def test_vertical_reverse_singing_particles_keep_clock_order(binary, project, va
     assert [cell['clock_index'] for cell in final['cells']] == [1, 0]
     for burst in source['fx_bursts']:
         assert burst['start_ms'] == source['resolved_intervals'][burst['char_index']][0]
-    malformed = copy.deepcopy(ir)
-    malformed['required_features'].remove(reverse)
 
     def center(frames):
         rows = np.sum([blue_coverage(frame).sum(axis=1) for frame in frames], axis=0)
@@ -907,8 +901,6 @@ def test_vertical_singing_particles_follow_whole_line_motion(binary, project, en
     assert (layer['entry_anim'], layer['entry_duration_ms'], layer['display_start_ms']) == (entry, 200, 0)
     assert (layer['exit_anim'], layer['exit_duration_ms'], layer['display_end_ms']) == (exit_, 500, 2050)
     assert layer['fx_bursts'] == baseline['track']['lines'][0]['fx_bursts']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature if sweep == 'none' else band_feature)
     times = [100, 450, 900, 1800, 2050]
     results = []
 
@@ -960,8 +952,6 @@ def test_vertical_singing_particles_keep_independent_band_and_bursts(binary, pro
     only_particles = ir_for(binary, (track, replace(style, karaoke_anim=karaoke, scanline_enabled=False)), dpr=1.5)
     only_band = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
     assert ir['track']['lines'][0]['fx_bursts'] == only_particles['track']['lines'][0]['fx_bursts']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(required)
     times = [150, 450, 750, 1100, 2100]
     results = []
 
@@ -1013,8 +1003,6 @@ def test_vertical_scanline_particles_emit_along_the_cell_y_axis(binary, project,
 
         legacy = build_render_ir(track, style, width=640, height=360, fps=60, dpr=1.5)
         assert not legacy['track']['lines'][0].get('fx_bursts')
-    malformed = copy.deepcopy(ir)
-    malformed['required_features'].remove(reverse_feature if reverse else feature)
     layer, = ir['track']['lines']
     bursts = layer['fx_bursts']
     assert {burst['char_index'] for burst in bursts} == {0, 1}
@@ -1063,8 +1051,6 @@ def test_vertical_singing_particles_over_outlined_bare_lyrics(binary, project, l
     assert 'p05_resolved_ruby' not in ir['required_features']
     bare = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
     assert ir['skia_layout']['lines'] == bare['skia_layout']['lines']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     times = [150, 400, 800, 1300, 1799]
     results = []
     for target in ('gpu', 'raster'):
@@ -1161,8 +1147,6 @@ def test_vertical_singing_particles_compose_with_body_and_reading_decoration(bin
     ir = ir_for(binary, (track, style), dpr=1.5)
     feature = 'p07_vertical_decorated_singing_particles'
     assert {feature, f'p06_vertical_{body}', 'p07_vertical_singing_with_particles'} <= set(ir['required_features'])
-    malformed = copy.deepcopy(ir)
-    malformed['required_features'].remove(feature)
     baseline = ir_for(binary, (track, replace(style, sing_fx='none')), dpr=1.5)
     assert ir['skia_layout']['lines'] == baseline['skia_layout']['lines']
     times = [150, 450, 750, 1300, 1700]
@@ -1198,8 +1182,6 @@ def test_vertical_no_wipe_particles_emit_before_the_cell_changes_color(binary, p
     source, = ir['track']['lines']
     start, end = source['resolved_intervals'][0]
     assert source['fx_bursts'][0]['start_ms'] == start
-    without_feature = copy.deepcopy(ir)
-    without_feature['required_features'].remove(feature)
     times = [start - 1, start + (end - start) // 2, end, end + 1]
     results = []
     for target in ('gpu', 'raster'):

@@ -313,8 +313,6 @@ def scanline_paint_source(project, images):
 
 def test_image_fill_scanline_keeps_existing_scene_after_missing_capability(binary, project, images):
     ir = ir_for(binary, scanline_paint_source(project, images))
-    unsupported = copy.deepcopy(ir)
-    unsupported['required_features'].remove('p06_unscaled_paint_scanline')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         expected, _ = collect(process, [750])
@@ -351,8 +349,6 @@ def fading_paint_source(project, images):
 
 def test_image_fill_fade_keeps_existing_scene_after_missing_capability(binary, project, images):
     ir = ir_for(binary, fading_paint_source(project, images))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_unscaled_paint_fade')
     line, = ir['track']['lines']
     start, end = line['display_start_ms'], line['display_end_ms']
     times = [start + 150, end - 150]

@@ -55,8 +55,6 @@ def test_upper_ruby_stays_independent_of_body_gradient(binary, reading, target, 
     plain = upper_ir(binary, (track, style), 1)
     assert 'p06_ruby_main_paint' in ir['required_features']
     assert ('p06_utopia_main_paint' in ir['required_features']) == (karaoke == 'utopia')
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_utopia_main_paint' if karaoke == 'utopia' else 'p06_ruby_main_paint')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, plain)
         ruby, _ = collect(process, [150])
@@ -208,8 +206,6 @@ def test_ruby_gradient_can_use_its_ink_or_the_shared_body_domain(binary, reading
         local, _ = collect(process, [150])
         configure(process, layout[1])
         shared, _ = collect(process, [150, 500, 150], generation=2)
-        bad = copy.deepcopy(layout[1])
-        bad['required_features'].remove(feature)
         replay, _ = collect(process, [150], generation=2)
     assert np.array_equal(shared[0], shared[-1]) and np.array_equal(shared[0], replay[0])
     assert np.array_equal(local[0][..., 3], shared[0][..., 3])
@@ -267,8 +263,6 @@ def test_independent_ruby_paint_uses_separate_phases_and_preserves_scene(binary,
     feature = 'p06_independent_ruby_fill'
     assert feature in ir['required_features']
     assert 'p06_body_gradient' not in ir['required_features'] and 'p06_image_fill' not in ir['required_features']
-    forged = copy.deepcopy(ir)
-    forged['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 1100, 2300])

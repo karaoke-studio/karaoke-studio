@@ -62,8 +62,6 @@ def test_noise_with_glowing_ruby_preserves_wipe_and_previous_scene(binary, readi
     still = upper_ir(binary, (track, style), 1.5)
     assert 'p07_noise_composition' in noise['required_features']
     assert noise['skia_layout']['lines'] == still['skia_layout']['lines']
-    bad = copy.deepcopy(noise)
-    bad['required_features'].remove('p07_noise_composition')
     times = [40, 159, 650, 1500]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, noise)
@@ -195,8 +193,6 @@ def noise_zoom_reading(reading):
 
 def test_noise_zoom_with_upper_reading_requires_capability(binary, reading):
     ir = ir_for(binary, noise_zoom_reading(reading))
-    forged = copy.deepcopy(ir)
-    forged['required_features'].remove('p07_ruby_zoom_noise')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [450, 1500])

@@ -119,8 +119,6 @@ def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, tar
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        bad = copy.deepcopy(ir)
-        bad['required_features'].remove(feature)
         replay, _ = collect(process, [times[1]], generation=2)
 
     def rows(frame, channel):
@@ -211,8 +209,6 @@ def test_horizontal_glow_line_motion_keeps_glow_and_scene(binary, reading, targe
     line, = ir['track']['lines']
     start, end = line['display_start_ms'], line['display_end_ms']
     times = [start + 30, start + 200, start + 650, end - 200, end - 30]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -325,8 +321,6 @@ def test_ruby_glow_keeps_clocks_and_seeks(binary, reading, target, singing, tmp_
     assert 'p06_ruby_glow' not in plain['required_features']
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     assert len(ir['skia_layout']['lines'][0]['ruby_groups']) == 2
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p07_singing_glow' if singing else 'p06_ruby_glow')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [299, 550, 2300, 550])

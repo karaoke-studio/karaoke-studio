@@ -117,8 +117,6 @@ def test_reverse_decoration_replays_with_translucent_outlines(binary, project, b
     assert feature in ir['required_features']
     assert ir['track']['lines'][0]['wipe_reverse']
     assert ir['track']['lines'][0]['karaoke_anim'] == effect
-    missing = copy.deepcopy(ir)
-    missing['required_features'].remove(feature)
     times = [199, 399, 750, 1200, 1801]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
@@ -259,8 +257,6 @@ def test_reverse_decoration_motion_replays(binary, project, case, target):
     ir = ir_for(binary, (track, style), dpr=1.5)
     feature = 'p07_reverse_decoration_line_animation'
     assert feature in ir['required_features']
-    obsolete = copy.deepcopy(ir)
-    obsolete['required_features'].remove(feature)
     times = [0, 1, 450, 900, 2400, 2700, 3000]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)

@@ -249,8 +249,6 @@ def test_vertical_ruby_decoration_follows_its_reading_front(binary, project, tar
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        bad = copy.deepcopy(ir)
-        bad['required_features'].remove(feature)
         replay, _ = collect(process, [times[1]], generation=2)
         if singing:
             configure(process, ir_for(binary, (track, replace(style, karaoke_anim='none'))))
@@ -698,8 +696,6 @@ def test_vertical_reading_and_body_zoom_use_separate_clocks(binary, project):
     x, y = first['vertical_singing_pivot']
     upper_reading = np.s_[:round(y * dpr) - 6, round(x * dpr):]
     times = [reading_end, body_end, reading_end + 300, body_end + 300]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     captures = []
 
     def painted_areas(frame):
@@ -765,8 +761,6 @@ def test_vertical_ruby_decoration_moves_with_the_column(binary, project, entry, 
     assert first['entry_duration_ms'] > 0 and first['exit_duration_ms'] > 0
     times = [start + first['entry_duration_ms'] // 3, start + 650,
              end - first['exit_duration_ms'] // 2]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     targets = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -926,8 +920,6 @@ def test_vertical_scanline_follows_body_and_reading_fronts(binary, project, dpr,
         columns_to_check = [slice(None, split), slice(split, None)]
     first, second = start + (end - start) // 3, end - (end - start) // 3
     times = [start - 1, first, second, end + 25, 1801]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     targets = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -989,9 +981,6 @@ def test_vertical_scanline_uses_body_and_reading_palettes(binary, project, mode,
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            for gate in gates:
-                invalid = copy.deepcopy(ir)
-                invalid['required_features'].remove(gate)
             replay, _ = collect(process, times[::-1], generation=2)
         assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
         assert not np.any(frames[0][..., :3].max(axis=-1) > 175)
@@ -1038,8 +1027,6 @@ def test_vertical_scanline_moves_and_fades_with_the_line(binary, project, entry,
     assert line['entry_duration_ms'] and line['exit_duration_ms']
     times = [line['display_start_ms'] + line['entry_duration_ms'] // 2, 350, 1530,
              line['display_end_ms'] - line['exit_duration_ms'] // 2]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     targets = []
 
     def band_mask(frame):
@@ -1188,8 +1175,6 @@ def test_vertical_no_wipe_decoration_changes_at_reading_end(binary, project, tar
     unit, = group['units']
     end = unit['interval_ms'][1]
     times = [end - 1, end, end + 1]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)

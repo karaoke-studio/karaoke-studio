@@ -284,8 +284,6 @@ def test_other_line_band_presets_animate_or_preserve_tinted_alpha(binary, projec
     is_animated = preset in {'stars', 'bubbles'}
     feature = 'p08_animated_line_band' if is_animated else 'p08_tinted_line_band'
     assert feature in ir['required_features'] and 'p08_staff_line_band' not in ir['required_features']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [2400, 2500, 3600])
@@ -829,8 +827,6 @@ def test_line_animation_keeps_ruby_layout_and_replays(binary, reading, target, e
     assert 'p07_ruby_line_animation' in ir['required_features']
     assert ('p07_utopia_line_animation' in ir['required_features']) == utopia
     assert ir['skia_layout']['lines'] == static['skia_layout']['lines']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_utopia_line_animation' if utopia else 'p07_ruby_line_animation')
     line = ir['track']['lines'][0]
     first = line['display_start_ms'] + 100
     with SkiaRendererProcess(binary, selection=selection(target)) as process:

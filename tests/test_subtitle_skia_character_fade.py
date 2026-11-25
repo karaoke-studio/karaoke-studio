@@ -104,8 +104,6 @@ def test_ruby_and_glow_follow_their_first_character_entry_fade(binary, reading, 
     assert [group['fade_owner'] for group in groups] == [0, 1]
     invalid = copy.deepcopy(ir)
     invalid['skia_layout']['lines'][0]['ruby_groups'][0]['fade_owner'] = len(layout['cells'])
-    unsupported = copy.deepcopy(ir)
-    unsupported['track']['lines'][0].update(exit_anim='char_fade', exit_duration_ms=600)
     source = ir['track']['lines'][0]
     start, end = source['display_start_ms'], source['display_end_ms']
     times = [start, start+125, start+600, end-200, end, start+125]
@@ -213,9 +211,6 @@ def test_ruby_character_transform_owns_its_anchor_and_replays(binary, reading, t
     if affine:
         assert np.isfinite(group['affine_pivot_y'])
         assert all(np.isfinite(unit['affine_pivot_x']) for unit in group['units'])
-    bad = copy.deepcopy(ir)
-    del bad['skia_layout']['lines'][0]['ruby_groups'][0][
-        'spin_pivot' if spinning else 'affine_pivot_y' if affine else 'fade_owner']
     line = ir['track']['lines'][0]
     moving = line['display_end_ms']-400 if exiting else line['display_start_ms']+170
     if animation == 'entry_flame':
@@ -255,9 +250,6 @@ def test_ruby_spin_pair_requires_both_phase_capabilities(binary, reading, target
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        for feature in features:
-            missing = copy.deepcopy(ir)
-            missing['required_features'].remove(feature)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(frame.any() for frame in frames) and not np.array_equal(*frames)
     assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
@@ -280,8 +272,6 @@ def test_ruby_geometry_uses_both_line_override_phases(binary, reading, target):
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     assert np.isfinite(group['affine_pivot_y'])
     assert all(np.isfinite(unit['affine_pivot_x']) for unit in group['units'])
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     entering = line['display_start_ms'] + 150
     leaving = line['display_end_ms'] - 350
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -324,8 +314,6 @@ def test_ruby_energy_pair_keeps_both_phases_and_replays(binary, reading, target,
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        invalid = copy.deepcopy(ir)
-        invalid['required_features'].remove(same_feature if entry == exit_ else feature)
         replay, _ = collect(process, [leaving, entering], generation=2)
     assert frames[0].any() and frames[1].any() and not np.array_equal(frames[0], frames[1])
     assert np.array_equal(frames[0], frames[2]) and np.array_equal(frames[0], replay[1])
@@ -362,8 +350,6 @@ def test_undecorated_ruby_particle_pair_preserves_phase_clocks(binary, reading, 
     assert exit_burst['start_ms'] > entry_burst['end_ms']
     entering, leaving = ((burst['start_ms'] + burst['end_ms']) // 2 for burst in (entry_burst, exit_burst))
     times = [entering, leaving, line['display_end_ms'] - 7, line['display_end_ms']]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -388,8 +374,6 @@ def test_undecorated_ruby_particle_entry_replays(binary, reading, target, effect
     assert group['fade_owner'] == 0
     entering = line['display_start_ms'] + line['entry_duration_ms'] * 3 // 4
     settled = line['display_start_ms'] + line['entry_duration_ms']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [entering, settled])
@@ -411,8 +395,6 @@ def test_ruby_particle_entry_body_glow_replays(binary, reading, target, effect):
     symbol = effect in {'sparkle', 'ripple', 'note'}
     assert 'p07_ruby_particle_entry_glow' in features
     assert ('p07_ruby_symbol_entry_glow' in features) == symbol
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_ruby_symbol_entry_glow' if symbol else 'p07_ruby_particle_entry_glow')
     start = ir['track']['lines'][0]['display_start_ms']
     times = [start + 1, start + 2, start + 17, start + 150, start + 600]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -480,8 +462,6 @@ def test_ruby_petal_entry_and_singing_flame_keep_independent_clocks(binary, read
     assert feature in ir['required_features']
     assert ('p07_ruby_particle_entry_glow' in ir['required_features']) == glow
     assert ('p08_line_band_transition' in ir['required_features']) == image
-    missing = copy.deepcopy(ir)
-    missing['required_features'].remove(feature)
     bad_sweep = copy.deepcopy(ir)
     flame = next(burst for burst in bad_sweep['track']['lines'][0]['fx_bursts'] if burst['kind'] == 'flame')
     flame['sweep'] = 1
@@ -513,8 +493,6 @@ def test_ruby_assembly_pair_owns_both_phases_and_replays(binary, reading, target
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     assert group['fade_owner'] == 0
     times = [source['display_start_ms'] + 170, source['display_end_ms'] - 350]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -533,8 +511,6 @@ def test_ruby_particle_entry_uses_independent_reading_glow(binary, reading, targ
     feature = 'p07_ruby_particle_entry_reading_glow'
     assert feature in ir['required_features']
     assert 'p07_ruby_particle_entry_glow' not in ir['required_features']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
                                              ruby_decoration_kind_before='none')), 1)
     start = ir['track']['lines'][0]['display_start_ms']
@@ -588,8 +564,6 @@ def test_ruby_drip_entry_and_exit_share_the_reading_anchor(binary, reading, targ
     ir = upper_ir(binary, (track, style), 1)
     feature = 'p07_ruby_character_drip_pair'
     assert feature in ir['required_features']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     line = ir['track']['lines'][0]
     start, end = line['display_start_ms'], line['display_end_ms']
     times = [start + 180, start + 600, end - 450]
@@ -672,8 +646,6 @@ def test_ruby_drip_shears_the_independent_glow(binary, reading, target):
     ir = upper_ir(binary, (track, style), 1)
     feature = 'p07_ruby_character_drip_glow'
     assert feature in ir['required_features']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
                                              ruby_decoration_kind_before='none')), 1)
     start = ir['track']['lines'][0]['display_start_ms']
@@ -819,8 +791,6 @@ def test_ruby_utopia_entry_glow_follows_scaled_reading(binary, reading, target):
     assert feature in ir['required_features'] and 'p06_ruby_glow' in ir['required_features']
     start = ir['track']['lines'][0]['display_start_ms']
     times = [start, start + 120, start + 400, start + 701]
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     plain = upper_ir(binary, (track, replace(style, ruby_decoration_kind='none',
                                              ruby_decoration_kind_before='none')), 1)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:

@@ -41,6 +41,22 @@ def guide_source(project, kind='prefix', symbol=SQUARE, *, reverse=False, effect
     return replace(track, lines=[line]), replace(style, right_to_left=False, layout_semantics=semantics)
 
 
+# The GPU searches a reading's base text in the drawn line: a replacement guide
+# leaves no match for the characters it replaces, so that reading is omitted.
+@GPU
+@pytest.mark.parametrize('explicit', [False, True])
+def test_readings_on_guide_replaced_characters_are_omitted_like_actual_gpu(binary, project, explicit):
+    track, style = guide_source(project, 'replacement')
+    style = replace(style, karaoke_anim='none', entry_anim='none', exit_anim='none')
+    hidden = RubyAnnotation('A', 'aa', **({'target_char_start': 0, 'target_char_end': 1} if explicit else {}))
+    shown = RubyAnnotation('字', 'f', **({'target_char_start': 1, 'target_char_end': 2} if explicit else {}))
+    track = replace(track, rubies=[hidden, shown])
+    ir = ir_for(binary, (track, style))
+    groups = ir['skia_layout']['lines'][0]['ruby_groups']
+    assert [[u['text'] for u in group['units']] for group in groups] == [['f']]
+    assert_gpu_parity(binary, track, style, 1, ('replaced-reading', explicit))
+
+
 @pytest.mark.parametrize('placement,entry', [('prefix', 'fade'), ('inline', 'fade'), ('inline', 'slide_in')])
 def test_vector_guide_and_line_animation_share_the_same_render_path(binary, project, placement, entry):
     from test_subtitle_skia_outline_ruby import render_skia
@@ -312,8 +328,6 @@ def test_vertical_vector_guide_keeps_cell_clock_and_centers_ink(binary, project)
     ink = first['metrics']['ink']
     assert first['baseline_y'] + (ink[1] + ink[3]) / 2 == pytest.approx(
         (first['wipe_top'] + first['wipe_bottom']) / 2)
-    missing = copy.deepcopy(ir)
-    missing['required_features'].remove('p05_vertical_vector_guides')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [250, 750])
@@ -477,8 +491,6 @@ def test_rtl_vector_guide_preserves_signal_and_scene(binary, project):
     track, style = guide_source(project, 'inline')
     style = replace(style, right_to_left=True)
     ir = ir_for(binary, (track, style))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p05_rtl_vector_guides')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [250, 750, 1100])
@@ -537,8 +549,6 @@ def test_prefix_guide_composes_ruby_on_render_cells(binary, project, count, targ
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         before, _ = collect(process, [950])
-        bad = copy.deepcopy(ir)
-        bad['required_features'].remove('p05_vector_guide_composition')
         after, _ = collect(process, [950], generation=2)
         # A supported capability elsewhere in the source does not alter this line.
         unrelated = copy.deepcopy(ir)
@@ -593,8 +603,6 @@ def test_faded_vector_guides_with_gradients_and_scanline(binary, project, effect
         assert {burst['kind'] for burst in ir['track']['lines'][0]['fx_bursts']} == {'snow_solid'}
     assert ir['track']['lines'][0]['chars'][0].get('vector_glyph_id')
     assert ir['skia_layout']['lines'][0]['ruby_groups'][0]['style_cell'] == 2
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [180, 650, 950, 2300, 180])

@@ -187,8 +187,6 @@ def test_rtl_upper_reading_without_body_stroke_preserves_scene(binary, reading):
     track, style = reading
     style = replace(style, right_to_left=True, stroke_width_px=0)
     ir = ir_for(binary, (track, style))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p05_rtl_ruby_without_body_stroke')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 1100, 2300])
@@ -269,8 +267,6 @@ def test_rtl_upper_reading_keeps_clocks_and_replays(binary, reading, target, sem
     times = [start - 1, (start + end) // 2, units[-1]['interval_ms'][1]]
     if effect == 'no_wipe':
         times[:2] = [end - 1, end]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -319,8 +315,6 @@ def test_rtl_ruby_shadow_keeps_the_same_front_after_seek(binary, reading, target
     group, = ir['skia_layout']['lines'][0]['ruby_groups']
     start, end = group['units'][0]['interval_ms']
     times = [start - 1, end if effect == 'no_wipe' else (start + end) // 2]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -406,8 +400,6 @@ def test_rtl_ruby_line_motion_keeps_clocks_and_replays(binary, reading, target, 
     line, = ir['track']['lines']
     assert (line['karaoke_anim'], line['entry_anim'], line['exit_anim']) == (effect, entry, exit_)
     times = [line['display_start_ms'] + 150, line['display_start_ms'] + 650, line['display_end_ms'] - 150]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)

@@ -40,7 +40,8 @@ def prepare_vertical_readings(track, style, styles, measured, *, dpr, resolve_fo
         intervals = measured.snapshot.resolve_intervals(rendered, style)
         prefix = len(rendered.chars) - len(line.chars)
         # Authored order owns the clocks when two readings cover the same cell.
-        targets = upper_ruby_targets(track, index, line, look, intervals[prefix:], annotation_indices)
+        targets = upper_ruby_targets(track, index, line, look, intervals[prefix:], annotation_indices,
+                                     rendered=rendered)
         if prefix:
             targets = [replace(target, indices=tuple(i + prefix for i in target.indices)) for target in targets]
         timing = prepare_ruby_target_timing(rendered, targets, look.ruby_main_progress_mode)

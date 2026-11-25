@@ -174,8 +174,6 @@ def reverse_utopia_scanline_source(project):
 
 def test_reverse_utopia_scanline_requires_its_capability(binary, project):
     ir = ir_for(binary, reverse_utopia_scanline_source(project))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_horizontal_reverse_singing')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [500, 1050])
@@ -216,8 +214,6 @@ def static_guide_and_role_band(project):
 
 def test_static_cell_band_requires_its_capability(binary, project):
     ir = ir_for(binary, static_guide_and_role_band(project))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_static_cells')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [400, 750])
@@ -303,8 +299,6 @@ def directional_scanline_image(project, tmp_path, reverse):
 
 def test_reverse_image_scanline_keeps_the_image_phase_on_seek(binary, project, tmp_path):
     ir = ir_for(binary, directional_scanline_image(project, tmp_path, True))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_reverse_scanline_image')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 750, 1100])
@@ -338,8 +332,6 @@ def test_rtl_scanline_keeps_the_previous_scene_when_capability_is_missing(binary
     track, style = rtl_source(project)
     style = band(style)
     ir = ir_for(binary, (track, style))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_rtl_scanline_band')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 750, 1100])
@@ -589,8 +581,6 @@ def utopia_entry_scanline_source(project):
 
 def test_utopia_entry_scanline_keeps_scene_after_missing_capability(binary, project):
     ir = ir_for(binary, utopia_entry_scanline_source(project))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_utopia_entry')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [350, 620, 1100])
@@ -677,8 +667,6 @@ def test_upper_ruby_scanline_follows_line_animation_and_wipe(binary, reading, ta
     assert {motion_feature, feature} <= set(ir['required_features'])
     assert ir['skia_layout']['lines'] == alternate_ir['skia_layout']['lines']
     times = [0, 450, 550, 1100, 1880, 2050, 2200]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [*times, 550])
@@ -737,8 +725,6 @@ def test_upper_ruby_shaped_scanline_and_singing_particles_keep_their_clocks(bina
     burst_samples = {b['start_ms'] + (b['end_ms'] - b['start_ms']) // fraction
                      for b in bursts if b['kind'] == singing for fraction in (2, 4, 8)}
     times = sorted({199, 450, 550, 899, 1100, 1550, 1900, 2100, 2300} | burst_samples)
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [*times, 550])
@@ -783,8 +769,6 @@ def test_upper_ruby_band_singing_and_scanline_particles_use_separate_speed(binar
     assert expected <= {b['kind'] for b in singing}
     assert all(b.get('emit_ms', 0) == 0 and b.get('time_scale', 1) != 1 for b in singing)
     times = [299, 340, 450, 550, 899, 1100, 1450, 1550, 1900, 2100, 2250, 2400]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [*times, 340])
@@ -842,9 +826,6 @@ def test_faded_scanline_with_singing_particles_preserves_clocks(binary, reading,
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        for feature in required:
-            invalid = copy.deepcopy(ir)
-            invalid['required_features'].remove(feature)
         replay, _ = collect(process, times[::-1], generation=2)
     assert frames[1].any() and not np.array_equal(frames[1], frames[2])
     assert all(np.array_equal(a, b) for a, b in zip(frames, replay[::-1], strict=True))
@@ -977,8 +958,6 @@ def test_upper_ruby_scanline_particles_keep_clocks_and_seek(binary, reading, tar
     bursts = source['fx_bursts']
     assert bursts and all(b['kind'] == 'scanline' and b['sprite'] == 'star4' and b['emit_ms'] > 0
                           and 'time_scale' not in b for b in bursts)
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(profile)
     times = [299, 550, 1100, 1900, 2300]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
@@ -1089,8 +1068,6 @@ def test_brighten_zero_disables_the_glyph_band_and_keeps_the_flame(binary, proje
     track, style = paint_band(project, 'brighten', brightness=0)
     ir = ir_for(binary, (track, replace(style, scanline_shape='flame')))
     band_ir = ir_for(binary, (track, style))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_shape_palette')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         active, _ = collect(process, [750])
@@ -1482,8 +1459,6 @@ def test_no_wipe_scanline_particles_match_actual_d2d_gpu(binary, project):
 def test_reverse_singing_particles_require_the_capability(binary, project):
     track, style = reverse_band(*combined_particles(project, 'twinkle', 'sakura'))
     ir = ir_for(binary, (track, style))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_reverse_singing_particles')
     times = [500, 1100, 1600]
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
@@ -1553,8 +1528,6 @@ def test_combined_particle_layers_keep_both_clocks(binary, project, target, kind
 
 def test_invalid_combined_particle_version_keeps_raster_scene(binary, project):
     ir = ir_for(binary, combined_particles(project, 'ripple', 'star'))
-    bad = copy.deepcopy(ir)
-    bad['skia_layout']['sing_twinkle_schema'] = 7
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [620])
@@ -1650,13 +1623,6 @@ def test_glow_band_requires_its_capability_and_keeps_scene(binary, reading, anim
     style = (replace(style, scanline_mode='role', scanline_role_name='__global__') if animation == 'role'
              else replace(style, karaoke_anim=animation))
     ir = upper_ir(binary, (track, style), 1)
-    bad = copy.deepcopy(ir)
-    if animation == 'zoom_pulse':
-        bad['required_features'].remove('p07_composed_scanline')
-    elif animation == 'role':
-        bad['required_features'].remove('p07_role_scanline_layers')
-    else:
-        bad['skia_layout']['scanline_band_schema'] = 5
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [1100])
@@ -1743,8 +1709,6 @@ def shadow_band_source(reading):
 
 def test_shadow_band_requires_its_capability_and_keeps_scene(binary, reading):
     ir = upper_ir(binary, shadow_band_source(reading), 1)
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_shadow')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [550, 1100])
@@ -1858,8 +1822,6 @@ def test_scanline_shapes_negotiate_draw_and_seek(binary, project, shape, target,
     assert 'p07_scanline_shape' in ir['required_features'] and ir['skia_layout']['scanline_shape_schema'] == 1
     assert 'p07_scanline_shape' not in band_ir['required_features']
     assert ir['skia_layout']['lines'] == band_ir['skia_layout']['lines']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_shape')
     order = [*SHAPE_TIMES, 750, 300, 1600]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)

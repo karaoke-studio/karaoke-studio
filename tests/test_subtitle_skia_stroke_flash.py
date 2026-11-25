@@ -266,8 +266,6 @@ def test_composed_flash_preserves_ruby_clocks_and_replays(binary, reading, targe
     assert profile in ir['required_features']
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     assert ir['track']['lines'][0]['resolved_intervals'] == plain['track']['lines'][0]['resolved_intervals']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(profile)
     times = [299, 300, 340, 540, 340]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)

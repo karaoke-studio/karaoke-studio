@@ -78,12 +78,19 @@ def _main_box_ascent(line, style, measured, targets):
                for i in indices)
 
 
-def upper_ruby_targets(track, index, line, appearance, clock, annotation_indices):
+def upper_ruby_targets(track, index, line, appearance, clock, annotation_indices, rendered=None):
     # Keep loader ownership even for hand-built tracks lacking a source index.
     owner = line if line.track_line_index is not None else replace(line, track_line_index=index)
+    # Like the GPU, a reading searches the drawn text: a guide that replaces its
+    # base characters leaves no match, so that reading is omitted.
+    search = line
+    if rendered is not None:
+        drawn = rendered.chars[len(rendered.chars) - len(line.chars):]
+        if any(a.text != r.text for a, r in zip(line.chars, drawn, strict=True)):
+            search = replace(line, chars=[replace(a, text=r.text) for a, r in zip(line.chars, drawn, strict=True)])
     targets = []
     for ruby in active_rubies_for_line(track.rubies, owner, intervals=clock):
-        indices = ruby_target_indices(ruby, line, clock)
+        indices = ruby_target_indices(ruby, search, clock)
         if not indices:
             continue
         effective = effective_ruby_for_target(ruby, indices, clock)
@@ -117,7 +124,8 @@ def prepare_ruby_geometry(track, style, line_styles, measured, *, resolve_font, 
         intervals.append(clock)
         # Resolve annotation ownership in authored cells before projecting the
         # span into render cells. Repeated lyrics can match at the old index.
-        line_targets = upper_ruby_targets(track, index, authored, appearance, clock[prefix:], annotation_indices)
+        line_targets = upper_ruby_targets(track, index, authored, appearance, clock[prefix:], annotation_indices,
+                                          rendered=line)
         if prefix:
             line_targets = [replace(target, indices=tuple(i + prefix for i in target.indices))
                             for target in line_targets]

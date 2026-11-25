@@ -253,8 +253,6 @@ def test_lower_decoration_keeps_its_clocks_under_line_animation(binary, glowing_
                else 'p07_lower_ruby_unscaled_line_animation')
     assert feature in ir['required_features'] and feature not in still['required_features']
     assert ir['skia_layout']['lines'] == still['skia_layout']['lines']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     source, = ir['track']['lines']
     start, end = source['display_start_ms'], source['display_end_ms']
     entry_ms, exit_ms = source['entry_duration_ms'], source['exit_duration_ms']
@@ -310,8 +308,6 @@ def test_lower_decoration_no_wipe_switches_only_at_clock_boundaries(binary, glow
                          *(knot['time_ms'] for cell in final['cells'] for knot in cell.get('wipe_points', ()))})
     times = [time for start, end in zip(boundaries, boundaries[1:]) if end - start > 2
              for time in (start + 1, end - 1)]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -353,8 +349,6 @@ def test_lower_scanline_follows_the_romanized_reading_clock(binary, glowing_lowe
     top = int(min(unit['baseline_y'] + unit['metrics']['ink'][1] for unit in units))
     samples = {t for unit in units for t in [sum(unit['interval_ms']) // 2]}
     times = sorted({199, 2200, *samples})
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
@@ -746,8 +740,6 @@ def test_lower_reading_image_rejects_invalid_phase_and_preserves_scene(binary, i
     track, style, resolve = independent
     tile = write_png(tmp_path / 'ローマ音.png', pattern('transparent'))
     ir = ir_for(binary, (track, lower_image_style(style, tile), resolve))
-    missing = copy.deepcopy(ir)
-    missing['required_features'].remove('p06_lower_ruby_static_image')
     invalid = copy.deepcopy(ir)
     group = next(g for g in invalid['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower'))
     group['static_fill_image']['before']['scale_pct'] = 0
@@ -788,8 +780,6 @@ def test_lower_reading_gradient_keeps_existing_scene_after_invalid_paint(binary,
     valid = ir_for(binary, (track, lower_gradient_style(style, True), resolve))
     feature = 'p06_lower_ruby_static_gradient'
     assert feature in valid['required_features']
-    missing = copy.deepcopy(valid)
-    missing['required_features'].remove(feature)
     invalid = copy.deepcopy(valid)
     group = next(group for group in invalid['skia_layout']['lines'][0]['ruby_groups'] if group.get('lower'))
     group['static_fill_gradient']['before']['stops'][0][0] = -1
@@ -818,8 +808,6 @@ def test_lower_reading_gradient_matches_actual_d2d_gpu(binary, application, tmp_
 def test_rtl_lower_reading_preserves_direction_and_scene(binary, independent):
     track, style, resolve = independent
     ir = ir_for(binary, (track, replace(style, right_to_left=True), resolve))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p05_rtl_lower_ruby')
     groups = ir['skia_layout']['lines'][0]['ruby_groups']
     assert any(group.get('lower') for group in groups)
     reading = next(group for group in groups if group.get('lower') and len(group['units']) > 1)

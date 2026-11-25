@@ -212,8 +212,6 @@ def directional_transform_source(project, direction, effect):
 
 def test_directional_character_transform_requires_capability(binary, project):
     ir = ir_for(binary, directional_transform_source(project, 'reverse', 'spin_flip'))
-    forged = copy.deepcopy(ir)
-    forged['required_features'].remove('p07_directional_character_transform')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [125, 400])
@@ -336,8 +334,6 @@ def test_animated_whole_cell_color_changes_match_actual_d2d_gpu(binary, project)
 def test_character_transform_scanline_keeps_scene_without_capability(binary, project):
     track, style = singing_overlap(project, 'char_drip')
     ir = ir_for(binary, (track, band(style)))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_scanline_character_transform')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [125, 400])
@@ -465,21 +461,6 @@ def test_transformed_outline_keeps_width_across_targets_and_seeks(binary, projec
         'line': ir['skia_layout']['lines'][0],
         'intervals': ir['track']['lines'][0]['resolved_intervals'],
     }, sort_keys=True), encoding='utf-8')
-
-
-@pytest.mark.parametrize('case', ['v2', 'missing_translucent_capability'])
-def test_unverified_animated_outline_keeps_the_previous_scene(binary, project, case):
-    good = ir_for(binary, outlined_transform(project, 'char_drip', 2, body_alpha=case != 'v2'))
-    bad = copy.deepcopy(good)
-    if case == 'v2':
-        bad['skia_layout']['character_transform_schema'] = 2
-    else:
-        bad['required_features'].remove('p07_translucent_character_outline')
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, good)
-        before, _ = collect(process, [125])
-        after, _ = collect(process, [125], generation=2)
-    assert np.array_equal(before, after)
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
@@ -668,8 +649,6 @@ def singing_transition(project, entry, exit_):
 def test_singing_character_transition_requires_its_capability(binary, project, entry, exit_):
     ir = ir_for(binary, singing_transition(project, entry, exit_))
     assert {'p07_singing_character_transform', 'p07_singing_scale'} <= set(ir['required_features'])
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p07_singing_character_transform')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
 
@@ -695,8 +674,6 @@ def rtl_singing(project, **changes):
 def test_rtl_singing_scale_requires_its_capability(binary, project):
     ir = ir_for(binary, rtl_singing(project))
     assert {'p07_rtl_singing_scale', 'p05_horizontal_rtl'} <= set(ir['required_features'])
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p07_rtl_singing_scale')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
 
@@ -725,8 +702,6 @@ def outlined_geometry(project, animation, double):
 def test_outlined_character_geometry_requires_its_capability(binary, project):
     ir = ir_for(binary, outlined_geometry(project, 'wave_in', True))
     assert 'p07_outlined_character_geometry' in ir['required_features']
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p07_outlined_character_geometry')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
 

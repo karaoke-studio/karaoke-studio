@@ -342,8 +342,6 @@ def energy_companion_source(project, companion):
 ])
 def test_energy_companion_keeps_scene_after_missing_capability(binary, project, companion, feature):
     ir = ir_for(binary, energy_companion_source(project, companion))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [1100, 1840, 2850])
@@ -390,8 +388,6 @@ def outlined_energy_source(project):
 
 def test_outlined_energy_transition_keeps_scene_after_missing_capability(binary, project):
     ir = ir_for(binary, outlined_energy_source(project))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_energy_transition_outlines')
     times = (1100, 1340, 2850)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
