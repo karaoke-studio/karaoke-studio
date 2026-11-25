@@ -287,9 +287,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && staticScanline && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty()
             && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
-        const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging && staticScanline
+        const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !hasLowerReading
-            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble") && source.fxBursts.empty();
+            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))

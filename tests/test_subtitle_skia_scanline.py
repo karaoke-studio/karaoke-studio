@@ -1916,3 +1916,21 @@ def test_shaped_scanlines_draw_through_transitions_and_particles_like_actual_gpu
     track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
     case = SimpleNamespace(track=track, style=style, case_id=f'shape-{shape}-{"-".join(extra.values())}')
     assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))
+
+
+# A pulsing (zoom) line keeps its flame or bubble scanline through particles
+# and character entries, as in Direct2D; the shape setting had no effect there.
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape', ['flame', 'bubble'])
+@pytest.mark.parametrize('extra', [{'sing_fx': 'feather'}, {'entry_anim': 'noise'}, {'scanline_effect': 'snow'}],
+                         ids=['feather', 'noise', 'snow'])
+def test_pulse_scanline_shapes_compose_with_particles_and_entries_like_actual_gpu(binary, project, shape, extra):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = rtl_source(project)
+    style = replace(band(style), right_to_left=False, scanline_shape=shape, karaoke_anim='zoom_pulse',
+                    reverse_karaoke_anim='inherit', entry_lead_ms=500, **extra)
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
+    case = SimpleNamespace(track=track, style=style, case_id=f'pulse-{shape}-{"-".join(extra.values())}')
+    assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))

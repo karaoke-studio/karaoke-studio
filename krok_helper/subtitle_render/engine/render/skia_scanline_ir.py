@@ -149,9 +149,10 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         image_during_transition = particle_entry and look.scanline_shape == 'image'
         shape_with_singing = (shape_style and (ordinary or image_during_transition) and has_readings and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
-        zoom_shape = (ordinary and look.scanline_shape in {'flame', 'bubble'} and shape_style
+        # Like the GPU, a pulsing line keeps its shape through transitions and particles.
+        zoom_shape = (look.scanline_shape in {'flame', 'bubble'} and shape_style
                       and line.get('karaoke_anim') == 'utopia' and line.get('zoom_pulse')
-                      and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled or bursts))
+                      and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled))
         solid_shape = (shape_style and (not source.wipe_reverse or image_reverse or reverse_procedural)
                        and (not line.get('zoom_pulse') or zoom_shape) and not line.get('stroke_flash'))
         faded_band = faded_band_singing_particles(line, look)
