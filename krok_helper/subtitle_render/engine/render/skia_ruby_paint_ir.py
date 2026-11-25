@@ -6,6 +6,17 @@ from krok_helper.subtitle_render.engine.ruby.style_semantics import ruby_stroke_
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 
 
+def _undecodable_image(paint):
+    """The GPU paints an image it cannot decode in the paint's own colour."""
+    if paint.mode != 'image':
+        return False
+    from PyQt6.QtGui import QImageReader
+
+    from .image_resource import image_file_signature
+    signature = image_file_signature(paint.image_path) if paint.image_path else None
+    return signature is None or not QImageReader(signature[0]).canRead()
+
+
 def ruby_outlines(style, *, allow_gradients=False, allow_split=False):
     colors = effective_ruby_karaoke_colors(style)
     outlines = {}
@@ -17,9 +28,9 @@ def ruby_outlines(style, *, allow_gradients=False, allow_split=False):
         if not width:
             continue
         before, after = getattr(colors.before, layer), getattr(colors.after, layer)
-        if before.mode not in modes or after.mode not in modes:
+        if not all(paint.mode in modes or _undecodable_image(paint) for paint in (before, after)):
             raise ValueError('Skia 注音描边的画笔或布局组合暂不支持')
-        gradients.update({before.mode, after.mode} - {'solid'})
+        gradients.update({before.mode, after.mode} - {'solid', 'image'})
         outlines[layer] = {'width': width, 'before': list(rgba(before.color)), 'after': list(rgba(after.color))}
     return outlines, gradients
 

@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <string_view>
 
+#include <QtGui/QImageReader>
+#include <map>
 namespace krok::subtitle::native {
 namespace {
 std::uint32_t argb(const RgbaColor& c) {
@@ -65,11 +67,34 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             90.f, {float(pivot.toDouble() * dpr), (glyph.top + glyph.bottom) * 0.5f}));
     }
 }
+// The GPU paints an image it cannot decode in the paint's own colour. Glow and
+// shadow paints carry no body protection, so they become plain solid paints.
+void solidUndecodableDecorationImages(RenderScene& scene) {
+    std::map<std::wstring, bool> readable;
+    const auto fix = [&](PaintStyle& paint) {
+        if (paint.mode != "image") return;
+        const auto [found, inserted] = readable.try_emplace(paint.imagePath, false);
+        if (inserted)
+            found->second = !paint.imagePath.empty()
+                && QImageReader(QString::fromStdWString(paint.imagePath)).canRead();
+        if (!found->second) paint.mode = "solid";
+    };
+    const auto fixStyle = [&](TextStyle& style) {
+        for (auto* paint : {&style.beforeDecorPaint, &style.afterDecorPaint,
+                            &style.rubyBeforeDecorPaint, &style.rubyAfterDecorPaint})
+            fix(*paint);
+    };
+    fixStyle(scene.style);
+    for (auto& style : scene.lineStyles) fixStyle(style);
+    for (auto& style : scene.charStyles) fixStyle(style);
+}
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaSource(
     const QJsonObject& ir, SkiaImageFillCache& imageCache, const ::subtitle::skia::LineBandTexture* sharedBand,
     bool staticTitle) {
     auto projected = scene::skiaSceneFromIr(ir, staticTitle);
+    solidUndecodableDecorationImages(projected);
+    solidUndecodableDecorationImages(projected);
     const auto features = ir.value("required_features").toArray();
     const int outlineLayers = features.contains("p06_secondary_solid_outline") ? 2
         : features.contains("p06_primary_solid_outline") ? 1 : 0;

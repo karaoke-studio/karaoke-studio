@@ -360,6 +360,32 @@ def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr,
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('case', ['inherited', 'independent'])
+def test_missing_glow_images_glow_in_their_solid_colour_like_actual_d2d_gpu(binary, reading, case, tmp_path):
+    """The GPU's glow brush falls back to the decoration paint's colour when its image is absent."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+
+    track, style = glowing_ruby(reading, case)
+    missing = str(tmp_path / 'ない.png')
+
+    def image(paint):
+        return replace(paint, mode='image', image_path=missing)
+
+    body, ruby = style.karaoke_colors, style.ruby_karaoke_colors
+    style = replace(style,
+        karaoke_colors=replace(body, before=replace(body.before, shadow=image(PaintFill(color='#CC20A0E0'))),
+                               after=replace(body.after, shadow=image(PaintFill(color='#B0E06020')))),
+        ruby_karaoke_colors=replace(ruby, before=replace(ruby.before, shadow=image(ruby.before.shadow)),
+                                    after=replace(ruby.after, shadow=image(ruby.after.shadow))))
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
+                                   width=640, height=360, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(360, 640, 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), 1), UPPER_TIMES)
+    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, ('missing_glow_image', case))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case_id', ['ordinary_dual_ruby_glow', 'font_variable_latin'])
 def test_p00_glow_matches_actual_d2d_and_gpu_raster(binary, application, case_id, tmp_path):
     from PyQt6.QtGui import QFontDatabase

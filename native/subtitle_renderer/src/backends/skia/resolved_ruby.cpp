@@ -52,8 +52,10 @@ OutlinePaint outlinePaint(const QJsonObject& outlines, const char* key) {
 bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const PaintStyle& after,
                     float width, double dpr, bool allowGradient, bool allowHorizontal, bool allowSplit) {
     if (std::abs(outline.width * dpr - width) > 1e-4) return false;
+    // An image outline reaches here only when its file cannot be decoded; the
+    // GPU then paints the paint's own colour (createPaintBrush).
     const auto supported = [allowGradient, allowHorizontal, allowSplit](const PaintStyle& paint) {
-        return paint.mode == "solid" || (allowGradient
+        return paint.mode == "solid" || paint.mode == "image" || (allowGradient
             && (paint.mode == "gradient_vertical" || (allowHorizontal && paint.mode == "gradient_horizontal")
                 || (allowSplit && paint.mode == "split_vertical")));
     };
@@ -459,7 +461,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变描边缺少能力声明或格式无效");
         const bool gradientOutlines = (primary.width || secondary.width)
             && (lower ? object.contains("lower_outline_gradient") : allowOutlineGradient);
-        const bool protectPrimary = primary.width && (primary.hasAlpha() || (gradientOutlines
+        // The GPU protects the body under any image paint, decoded or not.
+        const bool imageOutline = !lower && (paint.rubyBeforeStrokePaint.mode == "image"
+                                             || paint.rubyAfterStrokePaint.mode == "image");
+        const bool protectPrimary = primary.width && (primary.hasAlpha() || imageOutline || (gradientOutlines
             && (paintNeedsBodyProtection(paint.rubyBeforeStrokePaint) || paintNeedsBodyProtection(paint.rubyAfterStrokePaint))));
         const bool protectFill = imageFill || (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
             && (paintNeedsBodyProtection(beforeFill) || paintNeedsBodyProtection(afterFill)));
