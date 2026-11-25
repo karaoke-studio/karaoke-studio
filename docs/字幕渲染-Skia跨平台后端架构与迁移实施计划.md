@@ -5004,7 +5004,9 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 测得问题：同机原样工程整首 1080p60（CPU 上限 **80%**、`libx264 ultrafast`），Skia Vulkan **258.9s（55.7 帧/秒）**，D2D 4 worker **175.7s（82.0 帧/秒）**。原样式 12.2s 起 10 秒离屏：Skia 单 owner **80.7 帧/秒**，主机录制 P50 **7.3ms**、同步回读 **4.5ms** 串行相加；同段 D2D 单 worker **43.4 帧/秒**。差距来自串行，不在单帧绘制。
 - `render_range` 改用 `SkiaBackend::renderSequence`：GPU 目标把帧画到场景面后，以 Ganesh 同步 `readPixels` 相同的反预乘表达式转换到两块交替的直通 RGBA 面，异步传输并提交；下一帧录制完成后才等待上一帧，再按序写共享内存。异步传输不可用时本会话改回同步回读。只清屏的帧（`PreparedScene::hasContent` 与 `draw` 共用标题、行带与正文可见判定）不进 GPU，直接交付零帧。Raster 保持同步回读。单帧 `render_frame` 不变。
 - 结果：同段离屏 **80.7 → 97.2 帧/秒**，回读等待 P50 **0ms**，录制含转换与提交 P50 **9.6ms**，成为新瓶颈。整首导出 **258.9 → 184.6s（78.1 帧/秒）**。前后两份整首 MP4 的 SHA-256 相同。
-- `test_pipelined_range_matches_synchronous_frames` 在 GPU/Raster、有无光晕下比较空白与有字帧交错的区间和同步 `render_frame` 逐字节一致。Windows Skia 测试文件与 native 导出共 **4357 通过、64 跳过**；纯 CPU sidecar 构建及其 Raster 专项通过。Mac Metal 待阶段 CI。
+- `test_pipelined_range_matches_synchronous_frames` 在 GPU/Raster、有无光晕下比较空白与有字帧交错的区间和同步 `render_frame` 逐字节一致。Windows Skia 测试文件与 native 导出共 **4357 通过、64 跳过**；纯 CPU sidecar 构建及其 Raster 专项通过。
+- Mac CI（含 §14.423、§14.424）在两种架构上都运行了本节等价用例的 GPU/Raster 四组，结果均通过，托管 Metal 的异步回读与同步回读逐字节一致。[Mac CI 45679400521](https://github.com/karaoke-studio/karaoke-studio/actions/runs/45679400521)
+- 同轮产品套件 Apple Silicon **5 失败、2355 通过**，Intel **7 失败、2353 通过**。失败都在 11-23 至 11-24 新增、此前未在 Mac 运行过的 4 个 Metal/Raster 对照中：信号灯/音量转场光晕边界差 12–15px，图片导唱符 Utopia、信号单元入场与行内矢量导唱符光晕的 IoU 为 0.93–0.97。是否为既有差异尚未在改动前的提交上复验确认。
 
 ### 14.423 P11.7 正文光晕在不变帧复用模糊结果（2026-11-26）
 
