@@ -407,6 +407,29 @@ def test_real_reverse_mp4(binary, project, monkeypatch, tmp_path, gpu, missing_l
     run_mp4(binary, monkeypatch, tmp_path, source(project), gpu, missing_loader)
 
 
+# Shared-span clocks are weighted by the existing GPU path's integer Painter
+# metrics (rounded pixel bearings), not by the canonical cell box it draws.
+# Real-font cases stay single-character: a string's Painter advance includes
+# kerning the canonical nominal advance does not carry.
+@pytest.mark.parametrize('font,texts', [
+    ('project', ('A', '字', '한', 'W')), ('project', ('á', 'AW', '字 ', 'W')),
+    ('meiryo', ('A', '字', 'W', 'の')), ('meiryo', ('か', 'き', 'ょ', 'う')),
+    ('meiryo', ('g', 'j', 'Q', '、'))])
+@pytest.mark.parametrize('size', [50, 37])
+def test_shared_span_clocks_use_gpu_interval_weights(binary, project, font, texts, size):
+    from krok_helper.subtitle_render.engine.layout.line.qt_geometry import resolved_char_intervals_for_line
+    from pathlib import Path
+    track, style = source(project, 'shared')
+    if font == 'meiryo':
+        if not Path('C:/Windows/Fonts/meiryo.ttc').is_file(): pytest.skip('Meiryo fixture')
+        style = replace(style, font_family='Meiryo')
+    line = track.lines[0]
+    line = replace(line, chars=[replace(c, text=t) for c, t in zip(line.chars, texts)])
+    track, style = replace(track, lines=[line]), replace(style, font_size_px=size)
+    expected = [list(i) for i in resolved_char_intervals_for_line(line, style)]
+    assert ir_for(binary, (track, style))['track']['lines'][0]['resolved_intervals'] == expected
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('kind', ['plain', 'shared', 'pause', 'zero', 'all_zero', 'one'])
 @pytest.mark.parametrize('effect', ['none', 'no_wipe'])

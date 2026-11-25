@@ -518,7 +518,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     };
     // Accumulate faint fill, outline and halo contributions before rounding
     // the final pixel to the destination's 8-bit channels.
-    const bool hasGlow = !line.glow.empty() || line.hasRubyGlow();
+    const bool hasGlow = !line.glow.empty() || !line.roleGlows.empty() || line.hasRubyGlow();
     const bool utopiaExitGlow = line.utopiaTransition.leave
         && (line.hasRubyGlow() || !line.bodyGlowTransitionBounds.isEmpty());
     const bool opacityTransition = (line.characterFade.active() || rubyGeometryPhase || utopiaExitGlow)
@@ -605,7 +605,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return visible(state) && !moving(state) && !(shapeTransition && state.transform.transformed);
             };
             if (std::ranges::any_of(group.cells, [&](std::size_t index) { return grouped(states[index]); })) {
-                const auto source = layer.createSource(canvas);
+                // A Utopia exit halo stays inside the fixed line rectangle, as the line glow does.
+                const auto source = layer.createSource(canvas, line.bodyGlowTransitionBounds);
                 if (source.surface) {
                     for (std::size_t local = 0; local < group.cells.size(); ++local) {
                         const auto index = group.cells[local];

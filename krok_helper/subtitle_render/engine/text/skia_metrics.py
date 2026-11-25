@@ -10,7 +10,7 @@ import json
 from .skia_batch import TextMeasurementBatch
 from .font_slots import font_style_for_cell, main_script_stroke_style
 from .metric_snapshot import CellMetric, LineMetric, TextMetricSnapshot
-from .skia_width import cell_geometry
+from .skia_width import cell_geometry, interval_width
 from ..layout.line.skia_rows import RowFrame, source_row_frames
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role_in_layout
 from krok_helper.subtitle_render.engine.guide.skia_vector import vector_guide_metrics
@@ -93,8 +93,10 @@ def measure_track(track, style, line_styles, *, resolve_font, measure) -> Measur
         # uses the existing integer guide width for both timing weights.
         timing_widths = tuple(
             bitmap_guide_timing_width(char.vector_glyph, selected) if guide_symbol_is_bitmap(char.vector_glyph)
-            else max(round(width), 1) if char.vector_glyph is not None else width
-            for char, width, (_, _, selected) in zip(line.chars, widths, references, strict=True))
+            else max(round(width), 1) if char.vector_glyph is not None
+            else interval_width(char.text, cell, selected, edge_size=edge)
+            for char, width, cell, (_, _, selected), edge
+            in zip(line.chars, widths, cells, references, edge_sizes, strict=True))
         lines.append(MeasuredLine(cells, tuple(r for r, _, _ in references), widths,
                                   tuple(g[1] for g in geometry), edge_sizes, measured[main]['font_metrics'],
                                   slot_metrics=tuple(measured[r]['font_metrics'] for r, _, _ in references)))

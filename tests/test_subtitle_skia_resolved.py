@@ -95,10 +95,10 @@ def test_canonical_metrics_allocate_shared_timing_and_emit_final_geometry(binary
     intervals = ir['track']['lines'][0]['resolved_intervals']
     assert intervals[0][0] == 200 and intervals[-1][1] == 1400
     assert intervals[0][1] - intervals[0][0] > intervals[1][1] - intervals[1][0]
-    # Timing must use integer cell widths, not raw font advances.
+    # Timing uses the GPU path's integer interval weights, not raw font advances.
     cells = ir['skia_layout']['lines'][0]['cells']
-    from krok_helper.subtitle_render.engine.text.skia_width import cell_geometry
-    widths = [cell_geometry(c.text, m['metrics'], style)[0] for c, m in zip(chars, cells)]
+    from krok_helper.subtitle_render.engine.text.skia_width import interval_width
+    widths = [interval_width(c.text, m['metrics'], style) for c, m in zip(chars, cells)]
     from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
     assert intervals == [list(v) for v in compute_char_intervals(track.lines[0], widths)]
     assert [m['metrics']['advance'] for m in cells] != widths

@@ -693,6 +693,30 @@ def test_faded_solid_replacement_guides_match_actual_gpu(binary, application, tm
     assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style), times)
 
 
+# Role-coloured guides on Utopia lines declare role singing for every entry/exit
+# animation (the narrower none/fade-only declaration made other lines unconfigurable).
+@GPU
+@pytest.mark.parametrize('entry', ['slide_in', 'spin_flip', 'noise', 'rise'])
+def test_role_guides_compose_with_any_line_animation_like_actual_gpu(binary, application, tmp_path, entry):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case, track = p00_guide(tmp_path, count=3)
+    line = track.lines[0]
+    guide = replace(line.guide_symbol, replacement_prefix=tuple(char.text for char in line.chars[:3]),
+                    role_labels=('lead',) * 3)
+    exit_anim = {'slide_in': 'slide_out'}.get(entry, entry)
+    style = replace(case.style, karaoke_anim='utopia', entry_anim=entry, exit_anim=exit_anim)
+    palette = style.karaoke_colors
+    role = SubtitleStyleScheme(font_size_px=style.font_size_px, stroke_width_px=style.stroke_width_px,
+                               font_family=style.font_family, font_family_latin=style.font_family_latin,
+                               karaoke_colors=replace(palette, before=replace(palette.before, text=PaintFill(color='#FFD890F0'))))
+    style = replace(style, custom_style_schemes={'lead': role})
+    track = replace(track, lines=[replace(line, guide_symbol=guide)])
+    assert 'p05_role_vector_guides' in ir_for(binary, (track, style))['required_features']
+    assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style),
+                                      (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500))
+
+
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'ink', 'advance', 'metrics_id', 'different_id',
                                       'inline_outline', 'wipe_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

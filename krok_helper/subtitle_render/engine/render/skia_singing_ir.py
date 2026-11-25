@@ -5,7 +5,7 @@ from ..layout.line.skia_geometry import write_horizontal_pivots
 from ..style.style_semantics import effective_karaoke_colors, style_for_role_in_layout, uses_authored_decoration
 from .skia_line_animation_ir import is_noise_animation, ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
-from .skia_scanline_ir import fixed_faded_utopia_band, reverse_singing_scale, utopia_entry_band
+from .skia_scanline_ir import reverse_singing_scale, utopia_entry_band
 
 
 def _reverse_role_scale(source, style):
@@ -55,7 +55,6 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
     reverse_glowing_singing = False
     with_line_animation = False
     rtl_plain_singing = False
-    role_guides = {'p08_inline_bitmap_guides', 'p05_role_vector_guides'}.intersection(ir['required_features'])
     for index, (final, item) in enumerate(zip(ir['skia_layout']['lines'], plan.lines, strict=True)):
         source = ir['track']['lines'][item.track_index]
         scales = source.get('karaoke_anim') == 'utopia'
@@ -106,14 +105,9 @@ def write_utopia_pivots(ir, plan, measured, transition_lines, particle_band_trac
                          and reverse_singing_scale(source, style, allow_outline=allow_reverse_outline,
                                                    allow_glow=allow_reverse_glow, allow_particles=allow_reverse_particles)
                          and reverse_guide_cells)
-        static_role_scale = animations == {'none'} and not (
-            source.get('zoom_pulse') or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts'))
-        faded_role_scale = ('p07_inline_role_faded_scanline' in ir['required_features']
-                            and fixed_faded_utopia_band(source, style))
-        guide_role_scale = (bool(role_guides) and 'fade' in animations
-                             and animations <= {'none', 'fade'} and not any(
-                                 source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts')))
-        role_scale = inline_roles and scales and (static_role_scale or faded_role_scale or guide_role_scale)
+        # Any Utopia line with inline roles declares role singing; native picks
+        # the per-line pose (role guide contracts require the declaration).
+        role_scale = inline_roles and scales
         # Right-to-left cell order only moves the cell boxes; the singing pose is per cell.
         plain_rtl_singing = scales and not annotated and not item.line.wipe_reverse and not source.get('zoom_pulse')
         rtl_singing = scales and (plain_rtl_singing or (annotated and 'p07_rtl_ruby_singing_scale' in ir['required_features']))
