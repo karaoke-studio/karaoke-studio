@@ -737,6 +737,23 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                           std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients),
                           dripComposition});
         groups.back().utopiaExitSpan = utopiaExitSpan;
+        // Image-painted outlines use the GPU's device-anchored bitmap brush.
+        if (!lower)
+            for (const bool after : {false, true}) {
+                const auto& stroke = after ? paint.rubyAfterStrokePaint : paint.rubyBeforeStrokePaint;
+                const auto& stroke2 = after ? paint.rubyAfterStroke2Paint : paint.rubyBeforeStroke2Paint;
+                if (primary.width && stroke.mode == "image")
+                    groups.back().outlineImages[after] = imageCache.fill(stroke, scene.layoutReferenceScale);
+                if (secondary.width && stroke2.mode == "image")
+                    groups.back().outerOutlineImages[after] = imageCache.fill(stroke2, scene.layoutReferenceScale);
+            }
+        // The GPU strokes an image-painted glow with its bitmap brush.
+        if (hasGlow && !lower)
+            for (const bool after : {false, true}) {
+                const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
+                if ((after ? glow.after : glow.before).radius > 0 && decor.mode == "image")
+                    groups.back().glowImages[after] = imageCache.fill(decor, scene.layoutReferenceScale);
+            }
     }
     return groups;
 }

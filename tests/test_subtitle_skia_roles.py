@@ -253,6 +253,33 @@ def test_role_static_glow_matches_actual_d2d_gpu(binary, application, tmp_path, 
     assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 3500, 3900, 4499))
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('ruby,karaoke', [(False, 'none'), (True, 'none'), (True, 'utopia')])
+def test_role_image_glow_matches_actual_d2d_gpu(binary, application, tmp_path, ruby, karaoke):
+    """A role glow painted with an image blurs the image brush like the GPU."""
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    image = str(write_png(tmp_path / 'role_glow.png', pattern('transparent')))
+    case = ruby_role_paints_case(tmp_path, 'gradient_horizontal', True)
+    style = role_static_glow_style(case.style)
+
+    def textured(appearance):
+        palette = appearance.karaoke_colors
+        ruby_palette = appearance.ruby_karaoke_colors or palette
+        paint = PaintFill(mode='image', image_path=image, image_scale_pct=137, color='#B0F02440')
+        return replace(appearance,
+                       karaoke_colors=replace(palette, after=replace(palette.after, shadow=paint)),
+                       ruby_karaoke_colors=replace(ruby_palette, before=replace(ruby_palette.before, shadow=paint)))
+
+    roles = dict(style.custom_style_schemes)
+    roles['a'] = textured(roles['a'])
+    style = replace(style, custom_style_schemes=roles, karaoke_anim=karaoke)
+    track = case.track if ruby else replace(case.track, rubies=[])
+    case = replace(case, case_id=f'role_image_glow_{ruby}_{karaoke}', track=track, style=style)
+    assert_ruby_transition_gpu_parity(binary, case, (300, 1200, 1500, 1950, 2600, 3500, 3900, 4499))
+
+
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 @pytest.mark.parametrize('karaoke', ['none', 'utopia'])
 def test_ruby_role_glow_preserves_other_groups_and_seek(binary, project, tmp_path, target, karaoke):

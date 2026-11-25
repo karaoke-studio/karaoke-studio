@@ -107,8 +107,15 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine&
             line.cells[index].bodyPaintIndex = bounds.roles.at(source.chars[index].styleIndex).paintIndex;
 }
 
+bool usesImageGlow(const TextStyle& style) {
+    const auto glow = skiaStaticGlow(style);
+    return (glow.before.radius > 0 && style.beforeDecorPaint.mode == "image")
+        || (glow.after.radius > 0 && style.afterDecorPaint.mode == "image");
+}
+
 void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
-                      std::span<const TextStyle> styles, const RolePaintBounds* gradientBounds, bool bitmapGradients) {
+                      std::span<const TextStyle> styles, const RolePaintBounds* gradientBounds, bool bitmapGradients,
+                      SkiaImageFillCache& images, float layoutScale) {
     auto horizontalBitmapSpan = SkRect::MakeEmpty();
     if (bitmapGradients)
         for (const auto& cell : line.cells)
@@ -135,8 +142,13 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
                     if (glow.before.radius > 0) gradients[0] = shader(style.beforeDecorPaint);
                     if (glow.after.radius > 0) gradients[1] = shader(style.afterDecorPaint);
                 }
+                ::subtitle::skia::GlowImages glowImages;
+                if (glow.before.radius > 0 && style.beforeDecorPaint.mode == "image")
+                    glowImages[0] = images.fill(style.beforeDecorPaint, layoutScale);
+                if (glow.after.radius > 0 && style.afterDecorPaint.mode == "image")
+                    glowImages[1] = images.fill(style.afterDecorPaint, layoutScale);
                 it->second = int(line.roleGlows.size());
-                line.roleGlows.push_back({glow, {}, std::move(gradients)});
+                line.roleGlows.push_back({glow, {}, std::move(gradients), std::move(glowImages)});
             }
         }
         if (it->second < 0) continue;

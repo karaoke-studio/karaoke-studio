@@ -98,7 +98,8 @@ PreparedWipeGroup::PreparedWipeGroup(const ResolvedRubyGroup& group, bool noWipe
       drip_(group.drip),
       fillGradients_(group.fillGradients), fillImages_(group.fillImages),
       outlineGradients_(group.outlineGradients), outerOutlineGradients_(group.outerOutlineGradients),
-      scanlineGradients_(group.scanlineGradients) {
+      scanlineGradients_(group.scanlineGradients),
+      outlineImages_(group.outlineImages), outerOutlineImages_(group.outerOutlineImages) {
     if (cells_.empty() || cells_.size() > 4096) throw std::runtime_error("Skia 注音组单元数量无效");
     int previousEnd = -172800000;
     bounds_ = SkRect::MakeEmpty();
@@ -132,6 +133,14 @@ sk_sp<SkShader> PreparedWipeGroup::fillShader(const SkCanvas& canvas, bool after
     return fillImages_[after] ? fillImages_[after].shaderAt(canvas.getTotalMatrix()) : fillGradients_[after];
 }
 
+std::array<sk_sp<SkShader>, 3> PreparedWipeGroup::layerShaders(const SkCanvas& canvas, bool after) const {
+    const auto pick = [&](const std::array<ImageFill, 2>& images, const std::array<sk_sp<SkShader>, 2>& gradients) {
+        return images[after] ? images[after].shaderAt(canvas.getTotalMatrix()) : gradients[after];
+    };
+    return {pick(outerOutlineImages_, outerOutlineGradients_), pick(outlineImages_, outlineGradients_),
+            fillShader(canvas, after)};
+}
+
 void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingScale& scale,
                                    float originX, bool afterVisible, float opacity, float viewportHeight,
                                    const UtopiaTransition* exit, int followingDone, std::optional<float> entryScale) const {
@@ -149,7 +158,7 @@ void PreparedWipeGroup::drawSinging(SkCanvas& canvas, int timeMs, const SingingS
     }
     for (bool after : {false, true}) {
         if (after && !afterVisible) break;
-        const std::array shaders{outerOutlineGradients_[after], outlineGradients_[after], fillShader(canvas, after)};
+        const auto shaders = layerShaders(canvas, after);
         for (std::size_t index = 0; index < cells_.size(); ++index) {
             const auto& cell = animated[index] ? *animated[index] : cells_[index];
             if (cell.path.isEmpty()) continue;
@@ -356,7 +365,7 @@ void PreparedWipeGroup::draw(SkCanvas& canvas, int timeMs, const SingingScale& s
     SkPaint paint;
     paint.setAntiAlias(true);
     const auto draw = [&](bool after) {
-        const std::array shaders{outerOutlineGradients_[after], outlineGradients_[after], fillShader(canvas, after)};
+        const auto shaders = layerShaders(canvas, after);
         for (const auto& cell : cells_) {
             const auto singing = scale.at(timeMs, cell.startMs, cell.endMs, cell.pivot);
             if (pose.isIdentity()) {

@@ -359,30 +359,41 @@ def test_ruby_glow_matches_actual_d2d_and_gpu_raster(binary, reading, case, dpr,
     assert_glow_parity(times, refs, gpu, raster, (case, animation, dpr))
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-@pytest.mark.parametrize('case', ['inherited', 'independent'])
-def test_missing_glow_images_glow_in_their_solid_colour_like_actual_d2d_gpu(binary, reading, case, tmp_path):
-    """The GPU's glow brush falls back to the decoration paint's colour when its image is absent."""
-    from test_subtitle_render_gpu_backend import _render_g1_frames
-
+def image_glow(reading, case, image):
+    """Body and annotation glows painted with an image paint (``image`` may be missing)."""
     track, style = glowing_ruby(reading, case)
-    missing = str(tmp_path / 'ない.png')
 
-    def image(paint):
-        return replace(paint, mode='image', image_path=missing)
+    def textured(paint, color):
+        return replace(paint, mode='image', image_path=str(image), image_scale_pct=137, color=color)
 
     body, ruby = style.karaoke_colors, style.ruby_karaoke_colors
-    style = replace(style,
-        karaoke_colors=replace(body, before=replace(body.before, shadow=image(PaintFill(color='#CC20A0E0'))),
-                               after=replace(body.after, shadow=image(PaintFill(color='#B0E06020')))),
-        ruby_karaoke_colors=replace(ruby, before=replace(ruby.before, shadow=image(ruby.before.shadow)),
-                                    after=replace(ruby.after, shadow=image(ruby.after.shadow))))
+    return track, replace(style,
+        karaoke_colors=replace(body, before=replace(body.before, shadow=textured(body.before.shadow, '#CC20A0E0')),
+                               after=replace(body.after, shadow=textured(body.after.shadow, '#B0E06020'))),
+        ruby_karaoke_colors=replace(ruby, before=replace(ruby.before, shadow=textured(ruby.before.shadow, '#CCAA5820')),
+                                    after=replace(ruby.after, shadow=textured(ruby.after.shadow, '#B03084D0'))))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('present', [True, False], ids=['image', 'missing'])
+@pytest.mark.parametrize('case,dpr,animation', [
+    ('inherited', 1, 'none'), ('independent', 1, 'none'),
+    ('inherited', 1.5, 'utopia'), ('independent', 1.5, 'utopia'), ('inherited', 1, 'zoom_pulse'),
+])
+def test_image_glows_match_actual_d2d_gpu(binary, reading, case, dpr, animation, present, tmp_path):
+    """The GPU blurs the glow outline drawn with the image brush; a missing image falls back to the paint colour."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    image = write_png(tmp_path / 'glow.png', pattern('transparent')) if present else tmp_path / 'ない.png'
+    track, style = image_glow(reading, case, image)
+    style = replace(style, karaoke_anim=animation)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, tuple(UPPER_TIMES), force_warp=False, track=track,
-                                   width=640, height=360, realization_enabled=False)
-    refs = [np.frombuffer(p, np.uint8).reshape(360, 640, 4) for p in raw]
-    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), 1), UPPER_TIMES)
-    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, ('missing_glow_image', case))
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(p, np.uint8).reshape(round(360*dpr), round(640*dpr), 4) for p in raw]
+    gpu, raster = render_skia(binary, upper_ir(binary, (track, style), dpr), UPPER_TIMES)
+    assert_glow_parity(UPPER_TIMES, refs, gpu, raster, ('image_glow', case, dpr, animation, present))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

@@ -31,7 +31,10 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine&, const TextLine&, con
                           std::span<const TextStyle>, RolePaintBounds&, SkiaImageFillCache&, float layoutScale,
                           bool outlineGradients, bool outlinePaints);
 void resolveRoleGlows(::subtitle::skia::ResolvedLine&, const TextLine&, const TextStyle&,
-                      std::span<const TextStyle>, const RolePaintBounds* gradientBounds, bool bitmapGradients);
+                      std::span<const TextStyle>, const RolePaintBounds* gradientBounds, bool bitmapGradients,
+                      SkiaImageFillCache&, float layoutScale);
+// True when a glow of this style paints with an image brush.
+bool usesImageGlow(const TextStyle&);
 void resolveRoleShadows(::subtitle::skia::ResolvedLine&, const TextLine&, std::span<const TextStyle>,
                         const RolePaintBounds*, SkiaImageFillCache&, float layoutScale);
 void splitLatinOutlineStyles(RenderScene&, bool primary, bool secondary);

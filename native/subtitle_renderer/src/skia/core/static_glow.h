@@ -6,6 +6,7 @@
 #include "include/core/SkPath.h"
 #include "include/core/SkShader.h"
 #include "include/core/SkSurface.h"
+#include "image_fill.h"
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -29,6 +30,8 @@ struct StaticGlow {
 };
 
 using GlowGradients = std::array<sk_sp<SkShader>, 2>;
+// Image paints draw the glow outline with the GPU's device-anchored bitmap brush.
+using GlowImages = std::array<ImageFill, 2>;
 
 class PreparedGlow {
 public:
@@ -40,7 +43,8 @@ public:
 
     static std::vector<PreparedGlow> prepare(const StaticGlow&, bool mergeMatchingPhases = true);
     void prepareBytePasses();
-    void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I(), const GlowGradients& gradients = {});
+    void appendCell(const SkPath&, const SkMatrix& peak = SkMatrix::I(), const GlowGradients& gradients = {},
+                    const GlowImages& images = {});
     bool visible(bool after) const;
     SkRect sourceBounds() const;
     Source createSource(SkCanvas&, const SkRect& transitionBounds = SkRect::MakeEmpty(),
@@ -65,9 +69,13 @@ private:
     std::optional<bool> phase_;
     std::vector<sk_sp<SkImageFilter>> filters_;
     std::vector<sk_sp<SkImageFilter>> byteFilters_;
-    struct Cell { SkPath path; GlowGradients gradients; };
+    struct Cell { SkPath path; GlowGradients gradients; GlowImages images; };
     std::vector<Cell> cells_;
     std::array<bool, 2> hasGradient_{};
     SkRect ink_ = SkRect::MakeEmpty();
+    // Device transform of the line coordinates the current source is drawn in;
+    // image brushes tile on the device grid like the destination fills.
+    mutable SkMatrix imageDevice_ = SkMatrix::I();
+    sk_sp<SkShader> cellShader(const Cell&, bool after) const;
 };
 }

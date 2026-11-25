@@ -48,7 +48,7 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
                 && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
         // Ganesh's pinned blur image filter clamps larger sigmas.
         const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;
-        return caps.staticGlow && kind == "glow" && supportsSkiaGlowPaint(paint, caps.glowPaints)
+        return caps.staticGlow && kind == "glow" && (supportsSkiaGlowPaint(paint, caps.glowPaints) || paint.mode == "image")
             && std::isfinite(radius) && radius <= 532.f;
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")

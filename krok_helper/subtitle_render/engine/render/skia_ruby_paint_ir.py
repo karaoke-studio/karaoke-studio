@@ -17,13 +17,15 @@ def _undecodable_image(paint):
     return signature is None or not QImageReader(signature[0]).canRead()
 
 
-def ruby_outlines(style, *, allow_gradients=False, allow_split=False):
+def ruby_outlines(style, *, allow_gradients=False, allow_split=False, allow_images=False):
     colors = effective_ruby_karaoke_colors(style)
     outlines = {}
     gradients = set()
     modes = {'solid', 'gradient_horizontal', 'gradient_vertical'} if allow_gradients else {'solid'}
     if allow_gradients and allow_split:
         modes.add('split_vertical')
+    if allow_images:
+        modes.add('image')
     for layer, width in (('stroke', ruby_stroke_width(style)), ('stroke2', ruby_stroke2_width(style))):
         if not width:
             continue

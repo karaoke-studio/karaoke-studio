@@ -69,7 +69,8 @@ SkPaint PreparedGlow::strokePaint() const {
     return stroke;
 }
 
-void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak, const GlowGradients& gradients) {
+void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak, const GlowGradients& gradients,
+                              const GlowImages& images) {
     if (path.isEmpty()) {
         cells_.emplace_back();
         return;
@@ -83,8 +84,8 @@ void PreparedGlow::appendCell(const SkPath& path, const SkMatrix& peak, const Gl
     // outline bounds the fixed-width stroke of the scaled glyph from outside.
     if (!peak.isIdentity()) ink_.join(peak.mapRect(bounds));
     for (std::size_t phase = 0; phase < gradients.size(); ++phase)
-        hasGradient_[phase] |= bool(gradients[phase]);
-    cells_.push_back({std::move(outline), gradients});
+        hasGradient_[phase] |= bool(gradients[phase]) || bool(images[phase]);
+    cells_.push_back({std::move(outline), gradients, images});
 }
 
 SkRect PreparedGlow::sourceBounds() const {
@@ -93,8 +94,14 @@ SkRect PreparedGlow::sourceBounds() const {
     return ink_.isEmpty() ? ink_ : ink_.makeOutset(margin, margin);
 }
 
+sk_sp<SkShader> PreparedGlow::cellShader(const Cell& cell, bool after) const {
+    if (cell.gradients[after]) return cell.gradients[after];
+    return cell.images[after] ? cell.images[after].shaderAt(imageDevice_) : nullptr;
+}
+
 PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas, const SkRect& transitionBounds,
                                                bool canonical) const {
+    imageDevice_ = canvas.getTotalMatrix();
     auto source = sourceBounds();
     const float margin = 3.f * radius_ + 2.f;
     auto sampled = canvas.getLocalClipBounds().makeOutset(margin, margin);
@@ -145,13 +152,14 @@ void PreparedGlow::drawCell(SkCanvas& canvas, std::size_t index, bool after, std
     }
     auto paint = posed ? strokePaint() : SkPaint{};
     paint.setAntiAlias(true);
-    paint.setColor(cell.gradients[after] ? SK_ColorWHITE : after ? after_ : before_);
-    paint.setShader(cell.gradients[after]);
+    auto shader = cellShader(cell, after);
+    paint.setColor(shader ? SK_ColorWHITE : after ? after_ : before_);
     if (opacity < 1.f) paint.setAlphaf(paint.getAlphaf() * opacity);
-    if (sampleCoverage && posed && !cell.gradients[after]) {
+    if (sampleCoverage && posed && !shader) {
         paint.setStyle(SkPaint::kFill_Style);
         drawSamplePatternPath(canvas, prepareOutlinePath(*posed, strokeWidth_), paint, true);
     } else {
+        paint.setShader(std::move(shader));
         canvas.drawPath(path, paint);
     }
 }
@@ -256,6 +264,7 @@ void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index,
     const bool opaqueShear = opacity == 1.f && transform.getScaleX() == 1.f && transform.getSkewY() != 0.f;
     const bool byteSource = usesSoftwareCanvas(canvas) && !opaqueShear;
     // Blur in glyph space before applying the animation transform.
+    imageDevice_ = canvas.getTotalMatrix();
     auto mask = makeSource(canvas, bounds, byteSource ? kN32_SkColorType : kRGBA_F16_SkColorType, true);
     drawCell(*mask.surface->getCanvas(), index, after, edge, nullptr, byteSource ? 1.f : opacity);
     auto blurred = makeSource(canvas, bounds, kRGBA_F16_SkColorType);

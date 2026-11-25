@@ -267,34 +267,40 @@ def test_horizontal_annotation_outline_matches_actual_d2d_gpu(binary, reading, s
     assert_annotated_parity(times, gpu, raster, ('horizontal_ruby_outline', shared, 'raster'), 2)
 
 
-def missing_image_ruby_paints(reading, tmp_path):
-    """Annotation fill and outlines name an image that is not on disk."""
+def image_ruby_paints(reading, image):
+    """Annotation fill and outlines painted with an image paint (``image`` may be missing)."""
     track, style = upper_source(reading, 2)
     style = annotated_paint(style, 2)
     colors = style.ruby_karaoke_colors
-    missing = str(tmp_path / 'ない.png')
 
-    def image(color):
-        return PaintFill(mode='image', image_path=missing, color=color)
+    def textured(color, scale=100):
+        return PaintFill(mode='image', image_path=str(image), image_scale_pct=scale, color=color)
 
-    before = replace(colors.before, text=image('#FFE04418'), stroke=image('#FF2040E0'), stroke2=image('#FF30C0C0'))
-    after = replace(colors.after, stroke=image('#FFFFCC00'), stroke2=image('#FFCC30CC'))
+    before = replace(colors.before, text=textured('#FFE04418'), stroke=textured('#FF2040E0', 137),
+                     stroke2=textured('#FF30C0C0', 61))
+    after = replace(colors.after, stroke=textured('#FFFFCC00', 61), stroke2=textured('#FFCC30CC', 137))
     return track, replace(style, ruby_karaoke_colors=replace(colors, before=before, after=after))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
-def test_missing_annotation_images_paint_their_solid_colour_like_actual_d2d_gpu(binary, reading, tmp_path):
+@pytest.mark.parametrize('present', [True, False], ids=['image', 'missing'])
+@pytest.mark.parametrize('karaoke', ['none', 'utopia'])
+def test_annotation_image_paints_match_actual_d2d_gpu(binary, reading, tmp_path, present, karaoke):
+    """Image outlines tile the GPU's bitmap brush; a missing image paints the paint's colour."""
     from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_image_fills import pattern, write_png
 
-    track, style = missing_image_ruby_paints(reading, tmp_path)
+    image = write_png(tmp_path / 'outline.png', pattern('opaque')) if present else tmp_path / 'ない.png'
+    track, style = image_ruby_paints(reading, image)
+    style = replace(style, karaoke_anim=karaoke)
     times = (550, 1100, 1700, 2300)
     with NativeRendererProcess() as process:
         _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
                                    width=640, height=360, realization_enabled=False)
     refs = [np.frombuffer(p, np.uint8).reshape(360, 640, 4) for p in raw]
     gpu, raster = render_skia(binary, upper_ir(binary, (track, style), 1), times)
-    assert_annotated_parity(times, refs, gpu, 'missing_image_ruby_paints', 2)
-    assert_annotated_parity(times, gpu, raster, ('missing_image_ruby_paints', 'raster'), 2)
+    assert_annotated_parity(times, refs, gpu, ('image_ruby_paints', present, karaoke), 2)
+    assert_annotated_parity(times, gpu, raster, ('image_ruby_paints', present, karaoke, 'raster'), 2)
 
 
 def test_vertical_gradient_on_both_annotation_outline_layers(binary, reading):

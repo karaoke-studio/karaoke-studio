@@ -195,7 +195,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 if (index >= line.cells.size()) throw std::runtime_error("Skia 角色光晕单元索引无效");
                 const auto& cell = line.cells[index];
                 const auto peak = line.singingScale.peakMatrix(cell.pivot);
-                for (auto& layer : layers) layer.appendCell(cell.path, peak, group.gradients);
+                for (auto& layer : layers) layer.appendCell(cell.path, peak, group.gradients, group.images);
             }
             line.roleGlows.push_back({std::move(layers), group.cells});
         }
@@ -248,7 +248,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                 preparedGlow.readings.push_back(line.rubyGroups.size());
                 for (auto& layer : preparedGlow.phases)
                     for (const auto& cell : group.cells)
-                        layer.appendCell(cell.path, glowPeak(cell.pivot), group.glowGradients);
+                        layer.appendCell(cell.path, glowPeak(cell.pivot), group.glowGradients, group.glowImages);
             }
             if (group.utopiaExitOwner && (!line.utopiaTransition.leave || *group.utopiaExitOwner >= line.followingDone.size()))
                 throw std::runtime_error("Skia 上注音 Utopia 退场归属无效");

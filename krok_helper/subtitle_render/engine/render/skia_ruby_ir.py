@@ -77,7 +77,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             indices = group.target.indices
             style_cell = next((i for i in indices if item.render_line.chars[i].role_label), indices[0])
             # Upper outline gradients span the reading's own ink on any line.
-            outlines, gradients = ruby_outlines(group.target.style, allow_gradients=True, allow_split=True)
+            outlines, gradients = ruby_outlines(group.target.style, allow_gradients=True, allow_split=True,
+                                                allow_images=not group.target.lower)
             if not group.target.lower:
                 outline_gradients.update(gradients)
             # The existing GPU floors a half-width in reference pixels, then

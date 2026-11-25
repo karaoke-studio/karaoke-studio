@@ -64,6 +64,8 @@ struct ResolvedRubyGroup {
     bool drip = false;
     // Owner cells under this reading leave together, after its last cell (GPU clamp).
     std::optional<std::pair<std::size_t, std::size_t>> utopiaExitSpan;
+    GlowImages glowImages{};
+    std::array<ImageFill, 2> outlineImages{}, outerOutlineImages{};
 };
 enum class ParticleEntryGlow { None, Standard, SampledSymbols };
 
@@ -91,7 +93,7 @@ struct ResolvedLine {
     std::vector<StaticShadow> cellShadows;
     StaticGlow glow;
     SkRect bodyGlowTransitionBounds = SkRect::MakeEmpty();
-    struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; GlowGradients gradients; };
+    struct RoleGlow { StaticGlow glow; std::vector<std::size_t> cells; GlowGradients gradients; GlowImages images{}; };
     std::vector<RoleGlow> roleGlows;
     NoiseTransition noise;
     CharacterFade characterFade;

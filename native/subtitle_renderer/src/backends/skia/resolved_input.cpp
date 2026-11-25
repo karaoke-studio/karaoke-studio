@@ -855,10 +855,16 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const bool lineGradientGlow = gradientGlow
             && ((prepared.glow.before.radius > 0 && style.beforeDecorPaint.mode != "solid")
                 || (prepared.glow.after.radius > 0 && style.afterDecorPaint.mode != "solid"));
-        if (lineGradientGlow || ((roleStaticGlow || ((latinPrimaryOutline || latinSecondaryOutline) && staticGlow))
+        // Image-painted glows are drawn per style group with the image brush.
+        const bool imageGlow = (usesImageGlow(style) && (prepared.glow.before.radius > 0 || prepared.glow.after.radius > 0))
+            || std::ranges::any_of(line.chars, [&](const auto& cell) {
+                return cell.styleIndex >= 0 && usesImageGlow(projected.charStyles[cell.styleIndex]);
+            });
+        if (lineGradientGlow || imageGlow || ((roleStaticGlow || ((latinPrimaryOutline || latinSecondaryOutline) && staticGlow))
             && (hasInlineRoles || roleFadedScanline))) {
             resolveRoleGlows(prepared, line, style, projected.charStyles,
-                             gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr, bitmapGradientGlow);
+                             gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr, bitmapGradientGlow,
+                             imageCache, projected.layoutReferenceScale);
             prepared.glow = {};
         }
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;

@@ -531,6 +531,26 @@ def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project,
 
 
 @GPU
+@pytest.mark.parametrize('rtl', [False, True])
+def test_bitmap_guide_image_glow_matches_actual_d2d_gpu(binary, project, tmp_path, rtl):
+    """The GPU tints a guide's glow with the image paint's colour; the text glow uses the image brush."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = shadowed_bitmap_guide(project, tmp_path, paint_mode='image')
+    style = replace(style, right_to_left=rtl, decoration_kind='glow', glow_before_radius_px=5,
+                    glow_after_radius_px=6)
+    times, dpr = (250, 450, 750, 1100, 1550, 1950), 2
+    with NativeRendererProcess() as process:
+        _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                   width=640, height=360, dpr=dpr, realization_enabled=False)
+    refs = [np.frombuffer(frame, np.uint8).reshape(360*dpr, 640*dpr, 4) for frame in raw]
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    assert_glow_parity(times, refs, gpu, raster, ('bitmap_guide_image_glow', rtl), check_p00_edges=True)
+
+
+@GPU
 @pytest.mark.parametrize('decoration', ['shadow', 'glow'])
 def test_rtl_bitmap_guide_decoration_matches_actual_d2d_gpu(binary, project, tmp_path, decoration):
     from test_subtitle_render_gpu_backend import _render_g1_frames
