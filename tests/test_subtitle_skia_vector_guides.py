@@ -721,6 +721,28 @@ def test_role_guides_compose_with_any_line_animation_like_actual_gpu(binary, app
                                       (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500))
 
 
+# A posed role guide's halo stays inside the rest boxes of its role group's
+# visible cells, as the GPU's per-style glow group clips it; a Utopia exit
+# flies the guide out of those boxes.
+@GPU
+def test_role_guide_utopia_exit_glow_is_clipped_like_actual_gpu(binary, application, tmp_path):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case, track = p00_guide(tmp_path, count=3)
+    line = track.lines[0]
+    guide = replace(line.guide_symbol, replacement_prefix=tuple(char.text for char in line.chars[:3]),
+                    role_labels=('lead',) * 3)
+    style = replace(case.style, karaoke_anim='utopia', entry_anim='utopia', exit_anim='utopia')
+    palette = style.karaoke_colors
+    role = SubtitleStyleScheme(font_size_px=style.font_size_px, stroke_width_px=style.stroke_width_px,
+                               font_family=style.font_family, font_family_latin=style.font_family_latin,
+                               karaoke_colors=replace(palette, before=replace(palette.before, text=PaintFill(color='#FFD890F0'))))
+    style = replace(style, custom_style_schemes={'lead': role})
+    track = replace(track, lines=[replace(line, guide_symbol=guide)])
+    assert_ruby_transition_gpu_parity(binary, replace(case, track=track, style=style),
+                                      (300, 450, 650, 1500, 2400, 2500, 2600, 3700))
+
+
 @pytest.mark.parametrize('mutation', ['ink', 'advance', 'metrics_id', 'different_id', 'inline_outline', 'wipe_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_native_vector_guide_rejects_forgeries_and_keeps_scene(binary, project, mutation, target):

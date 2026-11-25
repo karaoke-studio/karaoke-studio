@@ -605,8 +605,16 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 return visible(state) && !moving(state) && !(shapeTransition && state.transform.transformed);
             };
             if (std::ranges::any_of(group.cells, [&](std::size_t index) { return grouped(states[index]); })) {
-                // A Utopia exit halo stays inside the fixed line rectangle, as the line glow does.
-                const auto source = layer.createSource(canvas, line.bodyGlowTransitionBounds);
+                // Like the GPU's per-style glow group, a posed cell's halo stays inside the
+                // rest boxes of the group's visible cells (a Utopia exit flies out of them).
+                SkRect content = SkRect::MakeEmpty();
+                bool posed = false;
+                for (const auto index : group.cells) {
+                    if (!grouped(states[index])) continue;
+                    posed |= states[index].transform.transformed;
+                    if (!line.cells[index].path.isEmpty()) content.join(line.cells[index].path.computeTightBounds());
+                }
+                const auto source = layer.createSource(canvas, posed ? content : line.bodyGlowTransitionBounds);
                 if (source.surface) {
                     for (std::size_t local = 0; local < group.cells.size(); ++local) {
                         const auto index = group.cells[local];
