@@ -1332,3 +1332,40 @@ def test_p00_bitmap_guide_matches_actual_gpu(binary, application, tmp_path, vari
             return frame
         diff = abs(premultiplied(ref) - premultiplied(gpu))
         assert diff.mean() <= 5 and np.percentile(diff, 95) <= 24, (variant, t, diff.mean())
+
+
+@GPU
+@pytest.mark.parametrize('decoration', ['glow', 'shadow'])
+def test_reverse_bitmap_guide_line_keeps_role_decoration_and_unsung_clip_like_d2d_gpu(
+        binary, application, tmp_path, decoration):
+    """Reverse lines remap per-cell role decoration after reordering, and clip the waiting guide to the row."""
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
+    from scripts.subtitle_render_corpus import _base_style
+    from test_subtitle_skia_character_fade import render_ruby_transition_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    guide = GuideSymbol(kind='bitmap', count=1, duration_ms=600,
+                        bitmap_before_path=image(tmp_path / 'before.png', 48, 48),
+                        bitmap_after_path=image(tmp_path / 'after.png', 48, 48, '#3080FF'))
+    line = TimingLine(chars=[TimingChar('漢', 200), TimingChar('字', 700, role_label='accent'), TimingChar('か', 1100)],
+                      end_ms=1600, wipe_reverse=True, guide_symbol=guide)
+    fill = PaintFill(mode='gradient_vertical', start_color='#2050E0', end_color='#E0A020')
+    style = _base_style(decoration_kind=decoration, entry_lead_ms=500, exit_fade_ms=500)
+    palette = style.karaoke_colors
+    style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, shadow=fill),
+                                                  after=replace(palette.after, shadow=fill)),
+                    custom_style_schemes={'accent': SubtitleStyleScheme(
+                        decoration_kind=decoration, karaoke_colors=colors('#FFFF40FF', '#FF40FFFF'))})
+    times = (150, 450, 700, 1000, 1300)
+    case = SimpleNamespace(track=TimingTrack(lines=[line]), style=style)
+    reference, gpu, raster = render_ruby_transition_frames(binary, case, times)
+
+    def recoloured(expected, rendered):
+        both = (expected[..., 3] > 200) & (rendered[..., 3] > 200)
+        delta = np.abs(expected[..., :3].astype(int) - rendered[..., :3].astype(int)).max(-1)
+        return round(float((delta[both] > 40).mean()), 4)
+
+    shares = [[recoloured(*pair) for pair in zip(reference, frames, strict=True)] for frames in (gpu, raster)]
+    assert max(map(max, shares)) < .01, shares
+    assert_glow_parity(times, reference, gpu, raster, f'reverse_bitmap_role_{decoration}', check_p00_edges=True)

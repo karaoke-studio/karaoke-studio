@@ -269,12 +269,12 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
                     for (const auto& layer : group.phases) line.paintBounds.join(layer.sourceBounds());
         }
         if (!line.paintBounds.isEmpty()) line.paintBounds.outset(1.f, 1.f);
-        if (source.vertical && std::ranges::any_of(source.cells, [](const auto& cell) {
+        if (std::ranges::any_of(source.cells, [](const auto& cell) {
                 return cell.bitmap && cell.bitmap->decorate;
             })) {
             for (const auto& cell : line.cells) {
-                if (cell.bitmap) line.verticalBitmapClipInk.join(cell.bitmap->box());
-                else if (!cell.path.isEmpty()) line.verticalBitmapClipInk.join(cell.path.computeTightBounds());
+                if (cell.bitmap) line.bitmapClipInk.join(cell.bitmap->box());
+                else if (!cell.path.isEmpty()) line.bitmapClipInk.join(cell.path.computeTightBounds());
             }
         }
         if (std::ranges::any_of(line.cells, [](const auto& cell) {

@@ -308,17 +308,23 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         if (opacity <= 0) return;
         const auto phase = states[index].phase;
         if (!guide.wipes() || phase != Phase::Wiping) {
-            if (guide.wipes() && phase == Phase::Before && !line.verticalBitmapClipInk.isEmpty()
+            if (guide.wipes() && phase == Phase::Before && !line.bitmapClipInk.isEmpty()
                 && tMs > wipeStart(line.cells.front())) {
                 // Before tiles are still bounded by the owner's wipe once
                 // singing has started in another cell of this column.
-                const auto& ink = line.verticalBitmapClipInk;
+                const auto& ink = line.bitmapClipInk;
                 const float pad = guide.clipPad();
-                const float start = line.wipeRightToLeft ? ink.bottom() : ink.top();
-                const float edge = lineWipeFront(line.cells, tMs, start, line.scanline.restingPad,
-                                                 line.wipeRightToLeft, true);
-                const auto clip = SkRect::MakeLTRB(ink.left() - pad, line.wipeRightToLeft ? -1e6f : edge,
-                                                  ink.right() + pad, line.wipeRightToLeft ? edge : 1e6f);
+                const bool rtl = line.wipeRightToLeft;
+                const float start = line.vertical ? (rtl ? ink.bottom() : ink.top()) : (rtl ? ink.right() : ink.left());
+                const float edge = lineWipeFront(line.cells, tMs, start, line.scanline.restingPad, rtl, line.vertical);
+                if (!line.vertical && (rtl ? edge >= start : edge <= start)) {
+                    guide.draw(canvas, false, opacity, tMs);
+                    return;
+                }
+                // Like the GPU, a horizontal row clips its unsung side to the line's ink and pad.
+                const auto clip = line.vertical
+                    ? SkRect::MakeLTRB(ink.left() - pad, rtl ? -1e6f : edge, ink.right() + pad, rtl ? edge : 1e6f)
+                    : band(rtl ? ink.left() - pad : edge, rtl ? edge : ink.right() + pad);
                 SkAutoCanvasRestore keep(&canvas, true);
                 canvas.clipRect(clip, SkClipOp::kIntersect, true);
                 guide.draw(canvas, false, opacity, tMs);

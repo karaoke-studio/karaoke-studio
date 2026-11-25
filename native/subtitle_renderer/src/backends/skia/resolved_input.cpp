@@ -1139,7 +1139,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         }
         if (!roleBodyPaints && !gradient && source.contains("body_gradient_bounds"))
             throw BackendError("Skia 实色正文携带了未声明的渐变范围");
-        if (line.wipeReverse) std::reverse(prepared.cells.begin(), prepared.cells.end());
+        if (line.wipeReverse) {
+            std::reverse(prepared.cells.begin(), prepared.cells.end());
+            // Per-cell role glows and shadows were resolved in source order.
+            const auto last = prepared.cells.size() - 1;
+            for (auto& group : prepared.roleGlows)
+                for (auto& index : group.cells) index = last - index;
+            std::reverse(prepared.cellShadows.begin(), prepared.cellShadows.end());
+        }
         out.lines.push_back(std::move(prepared));
     }
     return out;

@@ -100,7 +100,7 @@ private:
         std::vector<int> followingDone;
         std::optional<float> characterMotionCenter;
         std::optional<float> bitmapLineFrontOrigin;
-        SkRect verticalBitmapClipInk = SkRect::MakeEmpty();
+        SkRect bitmapClipInk = SkRect::MakeEmpty();
         bool transformedWipe = false;
         ScanlineBand scanline;
         std::optional<ShapeSignal> shapeSignal;
