@@ -379,6 +379,27 @@ def test_rtl_singing_reading_shadow_and_band_match_actual_gpu(binary, applicatio
     assert_glow_parity(times, reference, gpu, raster, f'rtl_singing_reading_shadow_{effect}', check_p00_edges=True)
 
 
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('transition', ['entry', 'exit'])
+def test_rtl_reading_spin_turns_about_its_run_centre_like_actual_gpu(binary, application, transition):
+    """An RTL reading lists its rightmost unit first; its spin still pivots on the whole run."""
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingChar, TimingLine, TimingTrack
+    from scripts.subtitle_render_corpus import _base_style
+    from test_subtitle_skia_character_fade import render_ruby_transition_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    line = TimingLine(chars=[TimingChar('漢', 200), TimingChar('字', 700), TimingChar('か', 1100)], end_ms=1600)
+    ruby = RubyAnnotation(kanji='漢字', reading='かんじ', reading_parts=['か', '', 'んじ'],
+                          reading_part_ms=[450, 950], pos_start_ms=200, pos_end_ms=1100)
+    style = _base_style(right_to_left=True, entry_lead_ms=500, exit_fade_ms=500,
+                        **{f'{transition}_anim': 'spin_flip'})
+    times = (50, 100, 150, 200) if transition == 'entry' else (2200, 2300, 2400, 2500)
+    case = SimpleNamespace(track=TimingTrack(lines=[line], rubies=[ruby]), style=style)
+    reference, gpu, raster = render_ruby_transition_frames(binary, case, times)
+    assert_glow_parity(times, reference, gpu, raster, f'rtl_reading_spin_{transition}', check_p00_edges=True)
+
 _RTL_RUBY_LINE_PHASES = [('fade', 'fade'), ('slide_in', 'slide_out'), ('rise', 'rise')]
 
 

@@ -112,7 +112,9 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
             if line_index in spin_lines:
                 if group.zoom_center_offset is None:
                     raise ValueError('Skia 注音翻转缺少规范字体轴心')
-                center_x = (group.cells[0]['layout_left'] + group.cells[-1]['layout_right']) / 2
+                # The run's layout span; RTL readings list their rightmost unit first.
+                center_x = (min(cell['layout_left'] for cell in group.cells)
+                            + max(cell['layout_right'] for cell in group.cells)) / 2
                 serialized['spin_pivot'] = [position.offset_x + center_x,
                     position.baseline_y + group.baseline_offset + group.zoom_center_offset]
             if line_index in affine_lines:
