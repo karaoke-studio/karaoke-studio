@@ -949,20 +949,26 @@ def test_same_ir_gpu_and_skia_raster(binary):
 @pytest.mark.parametrize("target", ["gpu", "raster"])
 def test_pipelined_range_matches_synchronous_frames(binary, target, decorated, tmp_path):
     """Export ranges overlap recording with the previous transfer and skip
-    frames that only clear; every frame must equal the synchronous readback."""
+    frames that only clear; every frame must equal the synchronous readback.
+    Unchanged halos reuse their blurred passes, so a repeated or waiting
+    line must equal the same frame drawn with an empty cache."""
     _, style = sample()
     track = TimingTrack(lines=[TimingLine(chars=[TimingChar(c, 4000 + i * 100) for i, c in enumerate("Skia P04")],
                                           end_ms=5000)])
     if decorated:
         style = replace(style, stroke_width_px=4, decoration_kind="glow")
-    # Empty frames before and after the line interleave with drawn ones.
-    times = [0, 3500, 4250, 4260, 9000, 4600, 5500, 4250, 11900]
+    # Empty frames before and after the line interleave with drawn ones;
+    # 3500/3600 (waiting) and the repeated 4600 reuse the previous halo.
+    times = [0, 3500, 3600, 4250, 4260, 9000, 4600, 4600, 5500, 4250, 11900]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=641, height=360, fps=60, duration_ms=12000)
         frames, events = collect(process, times)
         expected = []
         for index, t_ms in enumerate(times):
             path = tmp_path / f"{index}.png"
+            # An off-screen line releases its cached halo first.
+            process._send({"cmd": "render_frame", "t_ms": 9000})
+            process._expect_ok(process._read_until_event("frame_ready"))
             process._send({"cmd": "render_frame", "t_ms": t_ms, "output_path": str(path)})
             process._expect_ok(process._read_until_event("frame_ready"))
             image = QImage(str(path)).convertToFormat(QImage.Format.Format_RGBA8888)
@@ -973,8 +979,8 @@ def test_pipelined_range_matches_synchronous_frames(binary, target, decorated, t
     assert [e["t_ms"] for e in events] == times
     for index, (actual, wanted) in enumerate(zip(frames, expected)):
         assert np.array_equal(actual, wanted), f"frame {index} at {times[index]}ms differs"
-    assert [int(frame[..., 3].max() > 0) for frame in frames] == [0, 1, 1, 1, 0, 1, 1, 1, 0]
-    assert np.array_equal(frames[2], frames[7])
+    assert [int(frame[..., 3].max() > 0) for frame in frames] == [0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0]
+    assert np.array_equal(frames[1], frames[2]) and np.array_equal(frames[3], frames[9])
 
 
 @pytest.mark.parametrize("target", ["gpu", "raster"])

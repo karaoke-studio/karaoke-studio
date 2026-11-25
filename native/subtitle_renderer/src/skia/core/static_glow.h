@@ -1,6 +1,8 @@
 #pragma once
 
+#include "include/core/SkImage.h"
 #include "include/core/SkImageFilter.h"
+#include "include/core/SkRect.h"
 #include "include/core/SkMatrix.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
@@ -29,6 +31,26 @@ struct StaticGlow {
     bool operator==(const StaticGlow&) const = default;
 };
 
+// One drawCell() call into a glow source, as recorded for the composite cache.
+struct GlowDraw {
+    std::size_t index = 0;
+    bool after = false;
+    std::optional<float> edge;
+    float opacity = 1.f;
+    bool vertical = false, reverse = false, sampleCoverage = false;
+    bool operator==(const GlowDraw&) const = default;
+};
+
+// Every input that determines a cached glow composite in device space.
+struct GlowCompositeKey {
+    std::vector<GlowDraw> draws;
+    SkMatrix matrix;
+    SkIRect deviceClip = SkIRect::MakeEmpty();
+    SkRect localClip = SkRect::MakeEmpty();
+    SkRect transitionBounds = SkRect::MakeEmpty();
+    bool operator==(const GlowCompositeKey&) const = default;
+};
+
 using GlowGradients = std::array<sk_sp<SkShader>, 2>;
 // Image paints draw the glow outline with the GPU's device-anchored bitmap brush.
 using GlowImages = std::array<ImageFill, 2>;
@@ -54,6 +76,13 @@ public:
                   bool sampleCoverage = false) const;
     void drawCellWithShader(SkCanvas&, std::size_t index, bool after, const sk_sp<SkShader>&, float opacity = 1.f) const;
     void composite(SkCanvas&, const Source&, bool bytePasses = false, bool cropRaster = false) const;
+    // The plain composite under an integer translation, keeping each blurred
+    // pass in device space. A later frame with the same key blits the passes
+    // instead of redrawing and blurring the source.
+    static bool cacheable(const SkCanvas&);
+    bool compositeCached(SkCanvas&, const GlowCompositeKey&) const;
+    void compositeCapturing(SkCanvas&, const Source&, GlowCompositeKey) const;
+    void releaseCache() const;
     void compositeCanonical(SkCanvas&, const Source&) const;
     void compositeTransformedCell(SkCanvas&, std::size_t index, bool after, std::optional<float> edge,
                                   const SkMatrix&, float opacity) const;
@@ -77,5 +106,9 @@ private:
     // image brushes tile on the device grid like the destination fills.
     mutable SkMatrix imageDevice_ = SkMatrix::I();
     sk_sp<SkShader> cellShader(const Cell&, bool after) const;
+    struct CachedPass { sk_sp<SkImage> image; SkIPoint origin; };
+    struct CachedComposite { GlowCompositeKey key; std::vector<CachedPass> passes; };
+    mutable std::optional<CachedComposite> cache_;
+    static void blit(SkCanvas&, const std::vector<CachedPass>&);
 };
 }

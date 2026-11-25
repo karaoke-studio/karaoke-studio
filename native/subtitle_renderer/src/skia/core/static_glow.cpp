@@ -218,6 +218,67 @@ void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePa
     }
 }
 
+bool PreparedGlow::cacheable(const SkCanvas& canvas) {
+    // Only an integer translation keeps the blurred passes on the device
+    // pixel grid, so blitting them repeats the direct composite exactly.
+    const auto& matrix = canvas.getTotalMatrix();
+    return matrix.isTranslate() && matrix.getTranslateX() == std::floor(matrix.getTranslateX())
+        && matrix.getTranslateY() == std::floor(matrix.getTranslateY());
+}
+
+void PreparedGlow::blit(SkCanvas& canvas, const std::vector<CachedPass>& passes) {
+    SkAutoCanvasRestore restore(&canvas, true);
+    canvas.resetMatrix();
+    // Source-over each pass in order, as composite() blends each filter.
+    for (const auto& pass : passes)
+        if (pass.image) canvas.drawImage(pass.image, float(pass.origin.x()), float(pass.origin.y()));
+}
+
+bool PreparedGlow::compositeCached(SkCanvas& canvas, const GlowCompositeKey& key) const {
+    if (!cache_ || !(cache_->key == key)) return false;
+    blit(canvas, cache_->passes);
+    return true;
+}
+
+void PreparedGlow::compositeCapturing(SkCanvas& canvas, const Source& source, GlowCompositeKey key) const {
+    cache_.reset();
+    SkAutoCanvasRestore restore(&canvas, source.outputClip.has_value());
+    if (source.outputClip) canvas.clipRect(*source.outputClip);
+    auto image = source.surface->makeImageSnapshot();
+    if (!image) throw std::runtime_error("Skia 字幕光晕临时表面无法取样");
+    const auto matrix = canvas.getTotalMatrix();
+    const auto deviceImage = matrix.mapRect(SkRect::MakeXYWH(float(source.origin.x()), float(source.origin.y()),
+                                                              float(image->width()), float(image->height()))).roundOut();
+    const auto clip = canvas.getDeviceClipBounds();
+    // Evaluate each filter into a transparent device-aligned target with the
+    // canvas transform, so the pass equals the filter output of a direct draw.
+    const auto info = canvas.imageInfo();
+    std::vector<CachedPass> passes;
+    passes.reserve(filters_.size());
+    for (const auto& filter : filters_) {
+        auto output = filter->filterBounds(deviceImage, matrix, SkImageFilter::kForward_MapDirection);
+        if (!output.intersect(clip)) {
+            passes.push_back({});
+            continue;
+        }
+        auto target = canvas.makeSurface(info.makeWH(output.width(), output.height()));
+        if (!target) throw std::runtime_error("Skia 字幕光晕缓存表面分配失败");
+        auto& layer = *target->getCanvas();
+        layer.clear(SK_ColorTRANSPARENT);
+        layer.setMatrix(SkMatrix::Translate(float(-output.left()), float(-output.top())) * matrix);
+        SkPaint paint;
+        paint.setImageFilter(filter);
+        layer.drawImage(image, float(source.origin.x()), float(source.origin.y()), SkSamplingOptions(), &paint);
+        auto pixels = target->makeImageSnapshot();
+        if (!pixels) throw std::runtime_error("Skia 字幕光晕缓存表面无法取样");
+        passes.push_back({std::move(pixels), output.topLeft()});
+    }
+    blit(canvas, passes);
+    cache_ = CachedComposite{std::move(key), std::move(passes)};
+}
+
+void PreparedGlow::releaseCache() const { cache_.reset(); }
+
 void PreparedGlow::compositeCanonical(SkCanvas& canvas, const Source& mask) const {
     const float x = float(mask.origin.x()), y = float(mask.origin.y());
     auto local = SkIRect::MakeWH(mask.surface->width(), mask.surface->height());

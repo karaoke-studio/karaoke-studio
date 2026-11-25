@@ -417,6 +417,10 @@ int PreparedScene::bodyLevel(const Line& line, int tMs) {
     return line.noise.levelAt(tMs, line.startMs, line.endMs);
 }
 
+void PreparedScene::releaseGlowCaches(const Line& line) {
+    for (const auto& layer : line.glow) layer.releaseCache();
+}
+
 bool PreparedScene::hasContent(int tMs) const {
     // Mirrors draw(): a frame that only receives the transparent clear is
     // empty. Line bands count while any band's line is on screen.
@@ -442,6 +446,7 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     for (const auto& line : lines_) {
         if (line.titleWindows.empty()) break;
         if (const float opacity = titleOpacity(line, tMs); opacity > 0.f) drawLine(canvas, line, 0, true, opacity, tMs);
+        else releaseGlowCaches(line);
     }
     SkAutoCanvasRestore restore(&canvas, !viewport_.isIdentity());
     if (!viewport_.isIdentity()) canvas.concat(viewport_);
@@ -449,7 +454,11 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
         if (!line.titleWindows.empty()) continue;
         const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
         const int level = bodyLevel(line, tMs);
-        if (level == 0) continue;
+        if (level == 0) {
+            // Cached halos are kept only for lines on screen.
+            releaseGlowCaches(line);
+            continue;
+        }
         if (level == 64) {
             drawLine(canvas, line, tMs, textVisible);
             continue;

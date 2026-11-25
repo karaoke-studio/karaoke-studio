@@ -119,6 +119,7 @@ private:
     void drawLineBands(SkCanvas&, int time) const;
     static float titleOpacity(const Line&, int tMs);
     static int bodyLevel(const Line&, int tMs);
+    static void releaseGlowCaches(const Line&);
     int width_, height_;
     SkMatrix viewport_ = SkMatrix::I();
     LineBandTexture lineBand_;

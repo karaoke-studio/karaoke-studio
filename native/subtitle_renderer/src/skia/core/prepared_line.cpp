@@ -144,7 +144,11 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     // Signals, particles and stroke flashes can extend outside the text paint bounds.
     const bool dynamicPaint = movingCells || line.volumeSignal || (line.shapeSignal && !decoratedLamp)
         || !line.particles.empty() || line.hasStrokeFlash;
+    // A glow composited into a layer is not cached: the blurred passes take
+    // the layer's format, which the cache does not reproduce.
+    bool layered = false;
     if ((lineOpacity < 1.f || line.isolateVerticalDecoration) && (dynamicPaint || !line.paintBounds.isEmpty())) {
+        layered = true;
         const auto* bounds = dynamicPaint ? nullptr : &line.paintBounds;
         // Keep the same bounded destination-format layer at every opacity
         // for vertical decoration. Raster edge coverage depends on the target
@@ -543,6 +547,7 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     });
     if (opacityTransition && !particleExitFade && !particleEntryGlow && (!rubyExitFade || subByteFade)) {
         const auto* bounds = line.characterFade.transforms() || rubyGeometryPhase || utopiaExitGlow ? nullptr : &line.paintBounds;
+        layered = true;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
     // Tracking and wave restore static glow as each unit settles. Spin keeps
@@ -646,27 +651,42 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                 && !((movingGlow || rubyGeometryPhase || shapeTransition) && state.transform.transformed)
                 && ((before && state.phase != Phase::After) || (after && state.phase != Phase::Before));
         };
-        const auto source = std::ranges::any_of(states, usesStaticGlow)
+        // Record the source draws first: an unchanged frame reuses the blurred passes.
+        std::vector<GlowDraw> draws;
+        bool posedDraw = false;
+        inPhaseOrder([&](std::size_t index, Phase phase) {
+            if (!usesStaticGlow(states[index])) return;
+            posedDraw |= states[index].animatedInk.has_value();
+            const float opacity = glowOpacity(states[index].transform.opacity * titleOpacity);
+            const bool sample = rubyUtopiaEntry && opacity < .125f;
+            if (phase == Phase::Wiping) {
+                const float edge = utopia && !line.vertical ? transformedEdge(index) : states[index].edge;
+                draws.push_back({index, false, edge, opacity, line.vertical, line.wipeRightToLeft, sample});
+                draws.push_back({index, true, edge, opacity, line.vertical, line.wipeRightToLeft, sample});
+            } else {
+                draws.push_back({index, phase == Phase::After, std::nullopt, opacity, false, false, sample});
+            }
+        });
+        const bool canonicalComposite = canonicalFadeGlow || canonicalUtopiaGlow || reverseSingingGlow;
+        const bool bytePasses = particleEntryGlow || rubyUtopiaEntry;
+        std::optional<GlowCompositeKey> key;
+        if (!draws.empty() && !posedDraw && !canonicalComposite && !bytePasses && !compositingSpin && !layered
+            && PreparedGlow::cacheable(canvas))
+            key = GlowCompositeKey{draws, canvas.getTotalMatrix(), canvas.getDeviceClipBounds(),
+                                   canvas.getLocalClipBounds(), line.bodyGlowTransitionBounds};
+        const bool cached = key && layer.compositeCached(canvas, *key);
+        const auto source = !cached && !draws.empty()
             ? layer.createSource(canvas, line.bodyGlowTransitionBounds, canonicalFadeGlow) : PreparedGlow::Source{};
         if (source.surface) {
             auto& glowCanvas = *source.surface->getCanvas();
-            inPhaseOrder([&](std::size_t index, Phase phase) {
-                if (!usesStaticGlow(states[index])) return;
-                const auto& ink = states[index].animatedInk;
-                const auto* posed = ink ? &*ink : nullptr;
-                const float opacity = glowOpacity(states[index].transform.opacity * titleOpacity);
-                const bool sample = rubyUtopiaEntry && opacity < .125f;
-                if (phase == Phase::Wiping) {
-                    const float edge = utopia && !line.vertical ? transformedEdge(index) : states[index].edge;
-                    layer.drawCell(glowCanvas, index, false, edge, posed, opacity, line.vertical, line.wipeRightToLeft, sample);
-                    layer.drawCell(glowCanvas, index, true, edge, posed, opacity, line.vertical, line.wipeRightToLeft, sample);
-                } else {
-                    layer.drawCell(glowCanvas, index, phase == Phase::After, std::nullopt, posed, opacity,
-                                   false, false, sample);
-                }
-            });
-            if (canonicalFadeGlow || canonicalUtopiaGlow || reverseSingingGlow) layer.compositeCanonical(canvas, source);
-            else layer.composite(canvas, source, particleEntryGlow || rubyUtopiaEntry, compositingSpin);
+            for (const auto& draw : draws) {
+                const auto& ink = states[draw.index].animatedInk;
+                layer.drawCell(glowCanvas, draw.index, draw.after, draw.edge, ink ? &*ink : nullptr, draw.opacity,
+                               draw.vertical, draw.reverse, draw.sampleCoverage);
+            }
+            if (canonicalComposite) layer.compositeCanonical(canvas, source);
+            else if (key) layer.compositeCapturing(canvas, source, std::move(*key));
+            else layer.composite(canvas, source, bytePasses, compositingSpin);
         }
         if (movingGlow)
             inPhaseOrder([&](std::size_t index, Phase phase) {
