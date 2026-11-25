@@ -945,6 +945,38 @@ def test_same_ir_gpu_and_skia_raster(binary):
     assert np.mean(np.max(delta, axis=-1) > 16) < 0.003
 
 
+@pytest.mark.parametrize("decorated", [False, True])
+@pytest.mark.parametrize("target", ["gpu", "raster"])
+def test_pipelined_range_matches_synchronous_frames(binary, target, decorated, tmp_path):
+    """Export ranges overlap recording with the previous transfer and skip
+    frames that only clear; every frame must equal the synchronous readback."""
+    _, style = sample()
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar(c, 4000 + i * 100) for i, c in enumerate("Skia P04")],
+                                          end_ms=5000)])
+    if decorated:
+        style = replace(style, stroke_width_px=4, decoration_kind="glow")
+    # Empty frames before and after the line interleave with drawn ones.
+    times = [0, 3500, 4250, 4260, 9000, 4600, 5500, 4250, 11900]
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(track, style, width=641, height=360, fps=60, duration_ms=12000)
+        frames, events = collect(process, times)
+        expected = []
+        for index, t_ms in enumerate(times):
+            path = tmp_path / f"{index}.png"
+            process._send({"cmd": "render_frame", "t_ms": t_ms, "output_path": str(path)})
+            process._expect_ok(process._read_until_event("frame_ready"))
+            image = QImage(str(path)).convertToFormat(QImage.Format.Format_RGBA8888)
+            pointer = image.constBits()
+            pointer.setsize(image.sizeInBytes())
+            pixels = np.frombuffer(pointer, np.uint8).reshape(image.height(), image.bytesPerLine() // 4, 4)
+            expected.append(pixels[:, :image.width()].copy())
+    assert [e["t_ms"] for e in events] == times
+    for index, (actual, wanted) in enumerate(zip(frames, expected)):
+        assert np.array_equal(actual, wanted), f"frame {index} at {times[index]}ms differs"
+    assert [int(frame[..., 3].max() > 0) for frame in frames] == [0, 1, 1, 1, 0, 1, 1, 1, 0]
+    assert np.array_equal(frames[2], frames[7])
+
+
 @pytest.mark.parametrize("target", ["gpu", "raster"])
 def test_bgra_premultiplied_and_rgba_straight_agree(binary, target):
     from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir

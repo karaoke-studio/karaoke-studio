@@ -38,6 +38,8 @@ public:
     explicit PreparedScene(const SubtitleInput& input);
     explicit PreparedScene(const ResolvedSubtitleInput& input);
     void draw(SkCanvas& canvas, int tMs) const;
+    // False when draw() would only clear the canvas to transparent.
+    bool hasContent(int tMs) const;
     int width() const { return width_; }
     int height() const { return height_; }
 private:
@@ -115,6 +117,8 @@ private:
     void drawLine(SkCanvas&, const Line&, int time, bool textVisible, float titleOpacity = 1.f,
                   int mediaTimeMs = 0) const;
     void drawLineBands(SkCanvas&, int time) const;
+    static float titleOpacity(const Line&, int tMs);
+    static int bodyLevel(const Line&, int tMs);
     int width_, height_;
     SkMatrix viewport_ = SkMatrix::I();
     LineBandTexture lineBand_;

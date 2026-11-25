@@ -400,6 +400,38 @@ void PreparedScene::drawLineBands(SkCanvas& canvas, int timeMs) const {
     }
 }
 
+float PreparedScene::titleOpacity(const Line& line, int tMs) {
+    float opacity = 0.f;
+    for (const auto& window : line.titleWindows) {
+        if (tMs < window.startMs || tMs > window.endMs) continue;
+        const float head = window.fadeInMs ? float(tMs - window.startMs) / window.fadeInMs : 1.f;
+        const float tail = window.fadeOutMs ? float(window.endMs - tMs) / window.fadeOutMs : 1.f;
+        opacity = std::max(opacity, std::min({1.f, head, tail}));
+    }
+    return opacity;
+}
+
+int PreparedScene::bodyLevel(const Line& line, int tMs) {
+    const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
+    if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs)) return 0;
+    return line.noise.levelAt(tMs, line.startMs, line.endMs);
+}
+
+bool PreparedScene::hasContent(int tMs) const {
+    // Mirrors draw(): a frame that only receives the transparent clear is
+    // empty. Line bands count while any band's line is on screen.
+    if (lineBand_.image && lineBand_.opacity > 0)
+        for (const auto& line : lines_)
+            if (tMs >= line.startMs && tMs < line.endMs && !line.lineBand.isEmpty()) return true;
+    for (const auto& line : lines_) {
+        if (line.titleWindows.empty()) break;
+        if (titleOpacity(line, tMs) > 0.f) return true;
+    }
+    for (const auto& line : lines_)
+        if (line.titleWindows.empty() && bodyLevel(line, tMs) != 0) return true;
+    return false;
+}
+
 void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     canvas.clear(SK_ColorTRANSPARENT);
     if (lineBand_.image) {
@@ -409,23 +441,14 @@ void PreparedScene::draw(SkCanvas& canvas, int tMs) const {
     }
     for (const auto& line : lines_) {
         if (line.titleWindows.empty()) break;
-        float opacity = 0.f;
-        for (const auto& window : line.titleWindows) {
-            if (tMs < window.startMs || tMs > window.endMs) continue;
-            const float head = window.fadeInMs ? float(tMs - window.startMs) / window.fadeInMs : 1.f;
-            const float tail = window.fadeOutMs ? float(window.endMs - tMs) / window.fadeOutMs : 1.f;
-            opacity = std::max(opacity, std::min({1.f, head, tail}));
-        }
-        if (opacity > 0.f) drawLine(canvas, line, 0, true, opacity, tMs);
+        if (const float opacity = titleOpacity(line, tMs); opacity > 0.f) drawLine(canvas, line, 0, true, opacity, tMs);
     }
     SkAutoCanvasRestore restore(&canvas, !viewport_.isIdentity());
     if (!viewport_.isIdentity()) canvas.concat(viewport_);
     for (const auto& line : lines_) {
         if (!line.titleWindows.empty()) continue;
         const bool textVisible = line.startMs <= tMs && tMs < line.endMs;
-        if (!textVisible && !line.particleVisibility.outside(line.particles, tMs, line.startMs))
-            continue;
-        const int level = line.noise.levelAt(tMs, line.startMs, line.endMs);
+        const int level = bodyLevel(line, tMs);
         if (level == 0) continue;
         if (level == 64) {
             drawLine(canvas, line, tMs, textVisible);

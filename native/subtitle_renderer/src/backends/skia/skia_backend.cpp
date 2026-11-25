@@ -3,7 +3,9 @@
 #include "raster/raster_surface.h"
 #include "scene_input.h"
 #include "include/core/SkColorSpace.h"
+#include <array>
 #include <chrono>
+#include <deque>
 #ifdef KROK_SKIA_GPU_ENABLED
 #include "gpu/gpu_session.h"
 #endif
@@ -15,7 +17,11 @@ struct SkiaBackend::Impl {
     BackendCaps caps;
 #ifdef KROK_SKIA_GPU_ENABLED
     std::unique_ptr<::subtitle::skia::GpuSession> gpu;
+    // Straight-RGBA conversion targets for the pipelined export readback.
+    std::array<sk_sp<SkSurface>, 2> straight;
+    bool asyncReadUnsupported = false;
 #endif
+    std::vector<std::uint8_t> zeros;
     // Reverse destruction: prepared paths, surface, then the owning GPU session.
     sk_sp<SkSurface> surface;
     std::unique_ptr<::subtitle::skia::PreparedScene> prepared;
@@ -76,6 +82,7 @@ void SkiaBackend::configure(const RenderScene& scene) {
     impl_->surface = std::move(surface);
     impl_->prepared = std::move(prepared);
     impl_->profile = "p04_ascii_solid_wipe";
+    resetSequenceTargets();
 }
 const char* SkiaBackend::profile() const { requireOwner(); return impl_->profile; }
 void SkiaBackend::configureResolved(const ::subtitle::skia::ResolvedSubtitleInput& input) {
@@ -90,6 +97,7 @@ void SkiaBackend::configureResolved(const ::subtitle::skia::ResolvedSubtitleInpu
     impl_->surface = std::move(surface);
     impl_->prepared = std::move(prepared);
     impl_->profile = "p05_resolved_horizontal";
+    resetSequenceTargets();
 }
 ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
     requireOwner();
@@ -121,6 +129,110 @@ ProbeResult SkiaBackend::renderFrame(int tMs, bool compactBands) {
     result.readbackMs = std::chrono::duration<double, std::milli>(Clock::now() - rendered).count();
     return result;
 }
+void SkiaBackend::resetSequenceTargets() {
+#ifdef KROK_SKIA_GPU_ENABLED
+    // Pending reads never outlive renderSequence(), so the targets are idle here.
+    impl_->straight = {};
+#endif
+    impl_->zeros.clear();
+}
+
+void SkiaBackend::renderSequence(const std::vector<int>& times, const std::function<bool()>& cancelled,
+                                 const std::function<void(std::size_t, const SequenceFrame&)>& sink) {
+    requireOwner();
+    if (!impl_->prepared) throw BackendError("Skia scene is not configured");
+    const auto& prepared = *impl_->prepared;
+    const int width = prepared.width(), height = prepared.height();
+    const std::size_t stride = std::size_t(width) * 4;
+    using Clock = std::chrono::steady_clock;
+    const auto elapsed = [](Clock::time_point from) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - from).count();
+    };
+    // A frame that only receives the transparent clear reads back as zeros.
+    const auto emitEmpty = [&](std::size_t index) {
+        if (impl_->zeros.size() != stride * std::size_t(height)) impl_->zeros.assign(stride * std::size_t(height), 0);
+        sink(index, {impl_->zeros.data(), width, height, stride, 0, 0, true});
+    };
+    const auto emitSynchronous = [&](std::size_t index, int tMs) {
+        auto result = renderFrame(tMs);
+        const auto& surface = result.surface;
+        sink(index, {surface.bytes.data(), surface.width, surface.height, std::size_t(surface.stride),
+                     result.renderMs, result.readbackMs, false});
+    };
+#ifdef KROK_SKIA_GPU_ENABLED
+    if (impl_->gpu && !impl_->asyncReadUnsupported) {
+        auto& gpu = *impl_->gpu;
+        for (auto& target : impl_->straight)
+            if (!target || target->width() != width || target->height() != height)
+                target = gpu.makeSurface(width, height);
+        struct Pending {
+            std::size_t index;
+            int tMs;
+            bool empty;
+            int slot;
+            double renderMs;
+        };
+        std::array<::subtitle::skia::AsyncStraightRead, 2> reads;
+        // Outstanding callbacks reference `reads`; complete them on every exit.
+        struct Drain {
+            ::subtitle::skia::GpuSession& gpu;
+            ~Drain() {
+                try { gpu.drain(); } catch (...) {}
+            }
+        } drain{gpu};
+        std::deque<Pending> pending;
+        int nextSlot = 0;
+        const auto deliver = [&](const Pending& frame) {
+            if (frame.empty) return emitEmpty(frame.index);
+            auto& read = reads[std::size_t(frame.slot)];
+            const auto waiting = Clock::now();
+            gpu.wait(read);
+            const double waited = elapsed(waiting);
+            if (!read.result || read.result->count() != 1) {
+                // Transfer buffers unavailable: keep the synchronous readback.
+                read = {};
+                impl_->asyncReadUnsupported = true;
+                return emitSynchronous(frame.index, frame.tMs);
+            }
+            sink(frame.index, {static_cast<const std::uint8_t*>(read.result->data(0)), width, height,
+                               read.result->rowBytes(0), frame.renderMs, waited, false});
+            read = {};
+        };
+        for (std::size_t index = 0; index < times.size(); ++index) {
+            if (cancelled()) return;
+            Pending frame{index, times[index], !prepared.hasContent(times[index]), -1, 0};
+            if (!frame.empty) {
+                const auto begin = Clock::now();
+                prepared.draw(*impl_->surface->getCanvas(), frame.tMs);
+                frame.slot = nextSlot;
+                nextSlot ^= 1;
+                gpu.readStraightAsync(*impl_->surface, *impl_->straight[std::size_t(frame.slot)],
+                                      reads[std::size_t(frame.slot)]);
+                frame.renderMs = elapsed(begin);
+            }
+            pending.push_back(frame);
+            // Record this frame before waiting on the previous transfer.
+            if (pending.size() > 1) {
+                const auto oldest = pending.front();
+                pending.pop_front();
+                deliver(oldest);
+            }
+        }
+        while (!pending.empty()) {
+            const auto oldest = pending.front();
+            pending.pop_front();
+            deliver(oldest);
+        }
+        return;
+    }
+#endif
+    for (std::size_t index = 0; index < times.size(); ++index) {
+        if (cancelled()) return;
+        if (!prepared.hasContent(times[index])) emitEmpty(index);
+        else emitSynchronous(index, times[index]);
+    }
+}
+
 NativePreviewResult SkiaBackend::presentFrame(int, const NativePreviewTarget&, int) { unavailable(); }
 NativeRenderOnlyResult SkiaBackend::renderFrameOnly(int, int) { unavailable(); }
 NativePreviewResult SkiaBackend::presentRendered(const NativePreviewTarget&, int, int) { unavailable(); }
