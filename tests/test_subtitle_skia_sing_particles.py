@@ -1612,3 +1612,34 @@ def test_singing_energy_matches_actual_d2d_and_gpu_raster(binary, project, kind,
     for time, d2d, gpu, raster in zip(times, reference, *frames, strict=True):
         assert_particle_region(d2d, gpu, (kind, speed, time), check_contour=False)
         assert_particle_region(gpu, raster, (kind, speed, time, 'raster'), check_contour=False)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_particle_decoration_gradient_spans_each_sprite_like_d2d_gpu(binary, application, decoration):
+    """Only fill and stroke layers sample a horizontal gradient along the line; decoration spans the sprite."""
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
+    from scripts.subtitle_render_corpus import _base_style
+    from test_subtitle_skia_character_fade import render_ruby_transition_frames
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    line = TimingLine(chars=[TimingChar('漢', 200), TimingChar('字', 700), TimingChar('か', 1100)], end_ms=1600)
+    style = _base_style(decoration_kind=decoration, sing_fx='snow_solid', fx_particle_color_mode='follow_before',
+                        fx_particle_color_layers='all', entry_lead_ms=500, exit_fade_ms=500)
+    fill = PaintFill(mode='gradient_horizontal', start_color='#2050E0', end_color='#E0A020')
+    palette = style.karaoke_colors
+    style = replace(style, karaoke_colors=replace(palette, before=replace(palette.before, shadow=fill),
+                                                  after=replace(palette.after, shadow=fill)))
+    times = (700, 1000, 1300)
+    case = SimpleNamespace(track=TimingTrack(lines=[line]), style=style)
+    reference, gpu, raster = render_ruby_transition_frames(binary, case, times)
+
+    def recoloured(expected, rendered):
+        both = (expected[..., 3] > 200) & (rendered[..., 3] > 200)
+        delta = np.abs(expected[..., :3].astype(int) - rendered[..., :3].astype(int)).max(-1)
+        return round(float((delta[both] > 40).mean()), 4)
+
+    shares = [[recoloured(*pair) for pair in zip(reference, frames, strict=True)] for frames in (gpu, raster)]
+    assert max(map(max, shares)) < .01, shares
+    assert_glow_parity(times, reference, gpu, raster, f'particle_decoration_gradient_{decoration}')
